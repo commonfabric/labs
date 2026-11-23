@@ -28,7 +28,10 @@
  *
  * The path of the caption in the rendered tree is found before the steps
  * by a third client that reads the tree down to the first card and is then
- * disposed, so the two measured clients hold no query over the tree.
+ * disposed, so the two measured clients hold no query over the tree. The
+ * reader then holds, beside the sink of each step, a sink on the caption of
+ * each of the first 20 cards, as a reader that shows the first screen of
+ * the board does.
  *
  * With `SCALE_TAKEOVER` set, another serving loop then takes the space
  * over: `takeover` holds the time until a client that holds nothing reads
@@ -40,20 +43,24 @@
  * With `SCALE_PROFILE_STEP` naming a step and `SCALE_CPU_PROFILE` a file,
  * the sampling profile of the process over that step is written there.
  *
- * The topics and the inputs are under no label and the serving runtime
- * stores no flow labels, as in `../serving-path.ts`, so the figures are not
- * those of the arm `runner`, which stores labels.
+ * The serving runtime and the clients run with the runtime's default dials
+ * of Contextual Flow Control, under which flow labels are stored. Without
+ * `ServingBoard.labels` the topics and the inputs are under no label, so
+ * nothing the board derives has a label to store. With it, which
+ * `SCALE_SERVING_LABELS` gives, each topic and each input is written under
+ * the schema with the clause the arm `runner` writes it under.
  *
  * The crate's check refuses the two measured boards (a handle declared as
  * a view of the type the cell holds), so the serving runtime of the arm
- * compiles with `emit` and not with `emit --accepted`, as the arm `runner`
- * does.
+ * compiles with `emit --unchecked` and not with `emit --accepted`, as the
+ * arm `runner` does.
  */
 // deno-lint-ignore no-external-import -- The sampling profiler is reached through this Node builtin alone.
 import inspector from "node:inspector";
 import { Identity } from "@commonfabric/identity";
 import { dirname, fromFileUrl, join } from "@std/path";
 
+import { getTimingStatsBreakdown } from "../../../logger/src/logger.ts";
 import type { JSONSchema } from "../../../../runtime/runner/src/builder/types.ts";
 import type { Cell, MemorySpace } from "../../../../runtime/runner/src/cell.ts";
 import type { CompiledPiece } from "../../../../runtime/runner/src/compiled/piece.ts";
@@ -67,6 +74,7 @@ import type {
   PatternProgram,
 } from "../../../../runtime/runner/src/compiled/serving.ts";
 import { setUpCompiledPiece } from "../../../../runtime/runner/src/compiled/setup.ts";
+import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
 import type { NormalizedFullLink } from "../../../../runtime/runner/src/link-types.ts";
 import {
   isCellLink,
@@ -96,6 +104,16 @@ export type ServingBoard = {
   created: (turn: number) => unknown;
   /** The topics whose titles the edits write. */
   edited: number[];
+  /**
+   * With it, the inputs are written under labels, as the arm `runner`
+   * writes them: the identity whose space the board is in, the schema each
+   * topic is written under, and the schema of the cell of each input.
+   */
+  labels?: {
+    signer: Identity;
+    topic: (index: number) => JSONSchema;
+    input: (name: string) => JSONSchema;
+  };
 };
 
 /** One measured step of a serving arm. */
@@ -113,6 +131,25 @@ export type ServingStep = {
   compiled?: Record<string, number>;
   /** The reason of each commit of the piece the storage refused so far. */
   refusals?: string[];
+  /**
+   * The preparations of Contextual Flow Control that the process made in
+   * the step, the clients' and the serving runtime's together, and their
+   * time in milliseconds.
+   */
+  preparations: number;
+  prepareMs: number;
+  /**
+   * After the load: how many entries of a label the storage holds for the
+   * result document, for the first row of `mentionable` and for the first
+   * topic.
+   */
+  storedLabels?: { result: number; row: number; topic: number };
+  /**
+   * With `SCALE_COMMITS` set: each document a change of which the reader
+   * was delivered in the step, with the size of what the reader holds of
+   * it as JSON text, largest first.
+   */
+  documents?: { id: string; bytes: number }[];
 };
 
 /** What another serving loop that takes the space over did. */
@@ -153,7 +190,7 @@ const emitProgram: CompilePatternProgram = async (program: PatternProgram) => {
     }
     const { success, stdout, stderr } = await new Deno.Command(
       `${repository}base/pattern-compiler/target/release/pattern-compiler`,
-      { args: ["emit", ...names], cwd: directory },
+      { args: ["emit", "--unchecked", ...names], cwd: directory },
     ).output();
     if (!success) throw new Error(new TextDecoder().decode(stderr));
     const modules = JSON.parse(new TextDecoder().decode(stdout)) as {
@@ -229,6 +266,9 @@ const startProfile = async (file: string): Promise<() => Promise<void>> => {
     await Deno.writeTextFile(file, JSON.stringify(profile));
   };
 };
+
+/** How many cards a reader of the board holds: one screen of them. */
+const FIRST_SCREEN = 20;
 
 /** The mark of the caption of a card (`cardTextOf` of `card-text.ts`). */
 const CAPTION = " comments · by ";
@@ -356,17 +396,31 @@ export const runServing = async (
   record: (step: ServingStep | ServingTakeover) => void,
 ): Promise<void> => {
   const size = board.topics.length;
-  const signer = await Identity.fromPassphrase(`topics-serving ${size}`);
+  const signer = board.labels?.signer ??
+    await Identity.fromPassphrase(`topics-serving ${size}`);
   const space: MemorySpace = signer.did();
   const resumed: ResumedPiece[] = [];
   const failures: string[] = [];
+  const failure = Promise.withResolvers<never>();
+  failure.promise.catch(() => {});
   const serving: CompiledServingMemoryServer =
     await listenCompiledServingMemoryServer({
       compile: emitProgram,
+      // The serving runtime reads its space from the store, as a toolshed's
+      // does by default. `SCALE_READ_THROUGH=off` has it read over its
+      // session.
+      ...(Deno.env.get("SCALE_READ_THROUGH") === "off"
+        ? {}
+        : { policy: { storeReadThrough: true } }),
       pieces: {
         piece: { now: 1_000_000 },
         resumed: (_result, piece) => resumed.push(piece),
-        failed: (_result, error) => failures.push(`${error}`),
+        failed: (_result, error) => {
+          failures.push(`${error}`);
+          failure.reject(
+            new Error(`The serving runtime failed: ${error}`),
+          );
+        },
       },
     });
   const client = () =>
@@ -386,12 +440,14 @@ export const runServing = async (
     const { error } = await tx.commit().settled;
     if (error !== undefined) throw error;
   };
+  /** What ends the sinks the reader holds on the first screen of cards. */
+  const screenSinks: (() => void)[] = [];
   try {
     // Every cell exists before any is set, since a topic may mention one
     // after it.
     // deno-lint-ignore no-explicit-any
     const cells: any[] = board.topics.map((_, index) =>
-      sender.getCell(space, `topic ${index}`)
+      sender.getCell(space, `topic ${index}`, board.labels?.topic(index))
     );
     for (let from = 0; from < size; from += TOPICS_PER_TRANSACTION) {
       await commit((tx) => {
@@ -417,7 +473,11 @@ export const runServing = async (
     const argument: Record<string, Cell<unknown>> = {};
     await commit((tx) => {
       for (const [name, value] of Object.entries(held)) {
-        const input = sender.getCell(space, { scaleInput: name });
+        const input = sender.getCell(
+          space,
+          { scaleInput: name },
+          board.labels?.input(name),
+        );
         input.withTx(tx).set(value as never);
         argument[name] = input;
       }
@@ -436,6 +496,52 @@ export const runServing = async (
         recordsGiven: running.transactions.counts.recordsGiven,
       };
     };
+    /** The preparations the process made so far, and their time. */
+    const prepared = (): { count: number; ms: number } => {
+      const stats = getTimingStatsBreakdown()["extended-storage-transaction"]
+        ?.["prepareCfc"];
+      return { count: stats?.count ?? 0, ms: stats?.totalTime ?? 0 };
+    };
+    /** How many entries of a label the store holds for a document. */
+    const labelEntriesOf = (id: string): number => {
+      const [runtime] = serving.runtimes();
+      if (runtime === undefined) return 0;
+      const tx = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(tx, {
+          space,
+          id: id as `${string}:${string}`,
+          scope: "space",
+        });
+        return metadata?.labelMap.entries.length ?? 0;
+      } finally {
+        tx.abort();
+      }
+    };
+    const storedLabels = () => {
+      const [runtime] = serving.runtimes();
+      const at = result.getAsNormalizedFullLink();
+      let row = 0;
+      if (runtime !== undefined) {
+        const tx = runtime.edit();
+        try {
+          const first = tx.readValueOrThrow({
+            ...at,
+            path: ["mentionable", "0"],
+          });
+          if (isCellLink(first)) {
+            row = labelEntriesOf(parseLink(first, at).id ?? "");
+          }
+        } finally {
+          tx.abort();
+        }
+      }
+      return {
+        result: labelEntriesOf(at.id),
+        row,
+        topic: labelEntriesOf(cells[0].getAsNormalizedFullLink().id),
+      };
+    };
     const measure = async (
       step: string,
       path: readonly (string | number)[],
@@ -443,15 +549,38 @@ export const runServing = async (
       change: () => void | Promise<void>,
     ) => {
       const before = countsOf();
+      const preparedBefore = prepared();
       const stopProfile = Deno.env.get("SCALE_PROFILE_STEP") === step
         ? await startProfile(Deno.env.get("SCALE_CPU_PROFILE") ?? "")
         : undefined;
+      // With `SCALE_COMMITS` set: the documents whose changes the reader
+      // was delivered in the step.
+      const delivered = new Set<string>();
+      const deliveries = {
+        next(
+          notification: Parameters<
+            Parameters<Runtime["storageManager"]["subscribe"]>[0]["next"]
+          >[0],
+        ) {
+          if (notification.type === "reset") return undefined;
+          for (const { address } of notification.changes) {
+            delivered.add(address.id);
+          }
+          return undefined;
+        },
+      };
+      const logged = Deno.env.get("SCALE_COMMITS") !== undefined;
+      if (logged) reader.storageManager.subscribe(deliveries);
       const visible = [sender, reader].map((runtime) =>
         seen(runtime, result, path, test)
       );
       const began = performance.now();
       await change();
-      const [first, second] = await Promise.all(visible);
+      // A piece the serving runtime did not start never shows the value.
+      const [first, second] = await Promise.race([
+        Promise.all(visible),
+        failure.promise,
+      ]);
       await serving.host.whenQuiescent();
       const quiescent = performance.now();
       await stopProfile?.();
@@ -459,13 +588,33 @@ export const runServing = async (
         throw new Error(`The serving runtime failed: ${failures[0]}`);
       }
       const after = countsOf();
+      const preparedAfter = prepared();
+      if (logged) reader.storageManager.unsubscribe?.(deliveries);
+      const documents = [...delivered].map((id) => {
+        const tx = reader.edit();
+        try {
+          const held = tx.readValueOrThrow({
+            space,
+            id: id as `${string}:${string}`,
+            path: [],
+            scope: "space",
+          });
+          return { id, bytes: JSON.stringify(held ?? null).length };
+        } finally {
+          tx.abort();
+        }
+      }).sort((a, b) => b.bytes - a.bytes);
       record({
         arm,
         size,
         step,
+        ...(logged ? { documents } : {}),
         sender: round(first - began),
         reader: round(second - began),
         quiescent: round(quiescent - began),
+        preparations: preparedAfter.count - preparedBefore.count,
+        prepareMs: round(preparedAfter.ms - preparedBefore.ms),
+        ...(step === "load" ? { storedLabels: storedLabels() } : {}),
         ...(after === undefined ? {} : {
           compiled: Object.fromEntries(
             Object.entries(after).map(([name, value]) => [
@@ -526,6 +675,24 @@ export const runServing = async (
       );
     } finally {
       await probe.dispose();
+    }
+
+    // The reader holds what a reader of the board holds: the result
+    // document, and the first screen of cards, each by a sink on its
+    // caption, which follows the link to the card's document and no link
+    // of the card. It holds no topic and no query over every card.
+    if (captionAt !== undefined) {
+      const screen = Math.min(size, FIRST_SCREEN);
+      for (let card = 0; card < screen; card++) {
+        // deno-lint-ignore no-explicit-any
+        let caption: any = reader.getCellFromLink(
+          result.getAsNormalizedFullLink(),
+        ).key("$UI" as never);
+        for (
+          const segment of [...captionAt.cards, card, ...captionAt.caption]
+        ) caption = caption.key(segment);
+        screenSinks.push(caption.sink(() => {}));
+      }
     }
 
     // The sender holds the marker of the stream, by which a send to the
@@ -608,6 +775,58 @@ export const runServing = async (
       );
     }
 
+    // With `SCALE_PROFILE_EDITS` naming a kind of edit, that edit is made
+    // `SCALE_PROFILE_ROUNDS` times on the middle topic, each awaited as a
+    // step is, under one sampling profile written to `SCALE_CPU_PROFILE`.
+    const profiled = Deno.env.get("SCALE_PROFILE_EDITS");
+    if (profiled !== undefined) {
+      const rounds = Number(Deno.env.get("SCALE_PROFILE_ROUNDS") ?? 20);
+      const file = Deno.env.get("SCALE_CPU_PROFILE");
+      const stopProfile = file === undefined
+        ? undefined
+        : await startProfile(file);
+      for (let turn = 0; turn < rounds; turn++) {
+        if (profiled === "title") {
+          await measure(
+            `repeated title ${turn}`,
+            ["mentionable", middle, "title"],
+            (value) => value === `Repeated ${turn}`,
+            () =>
+              commit((tx) => {
+                cells[middle].withTx(tx).key("title").set(`Repeated ${turn}`);
+              }),
+          );
+        } else if (profiled === "shortName") {
+          await measure(
+            `repeated shortName ${turn}`,
+            ["mentionable", middle, "shortName"],
+            (value) => value === `again-${turn}`,
+            () =>
+              commit((tx) => {
+                cells[middle].withTx(tx).key("shortName").set(`again-${turn}`);
+              }),
+          );
+        } else if (profiled === "mentions") {
+          // The mention of the first topic is taken away and given back.
+          const gone = turn % 2 === 0;
+          await measure(
+            `repeated mentions ${turn}`,
+            ["crossrefs", 0, "mentionedBy", 2],
+            (value) => (value === undefined || value === null) === gone,
+            () =>
+              commit((tx) => {
+                cells[middle].withTx(tx).key("mentions").set(
+                  gone ? [] : [cells[0]],
+                );
+              }),
+          );
+        } else {
+          throw new Error(`SCALE_PROFILE_EDITS names no edit: ${profiled}.`);
+        }
+      }
+      await stopProfile?.();
+    }
+
     if (Deno.env.get("SCALE_TAKEOVER") !== undefined) {
       await serving.host.whenQuiescent();
       const restarted = performance.now();
@@ -650,6 +869,7 @@ export const runServing = async (
       }
     }
   } finally {
+    for (const cancel of screenSinks.splice(0)) cancel();
     await serving.host.close();
     await sender.dispose();
     await reader.dispose();

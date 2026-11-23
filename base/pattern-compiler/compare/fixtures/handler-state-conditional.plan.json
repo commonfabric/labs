@@ -1,0 +1,303 @@
+[
+  {
+    "module": "compare/fixtures/handler-state-conditional.tsx",
+    "patterns": [
+      {
+        "line": 14,
+        "name": "Bound",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/4",
+              "handler": {
+                "body": 0
+              },
+              "name": "bump",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "target"
+                  ],
+                  "place": {
+                    "output": 0
+                  },
+                  "template": {
+                    "op": "output",
+                    "output": 0
+                  },
+                  "through": "reference"
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [
+                {
+                  "handle": {
+                    "slot": 0
+                  }
+                }
+              ],
+              "kind": "handler",
+              "name": "bump",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "target"
+                  ],
+                  "handle": true,
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "target"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 0
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      },
+                      {
+                        "op": "dynamic",
+                        "reads": 0
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/handler-state-conditional.tsx",
+                "start": 549
+              },
+              "bodies": [],
+              "entry": "target",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                2,
+                3
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [
+            {
+              "why": {
+                "body": 0,
+                "handle": 0,
+                "kind": "handle"
+              }
+            }
+          ],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "target",
+              "kept": false,
+              "path": [],
+              "template": {
+                "branches": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 2
+                },
+                "op": "select",
+                "selector": 0
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:c710dae26b741923d493ece8b12f2ff5f6087e5d39e7827cd4efc16262a595b6"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "target"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "inPlace": true,
+              "observes": "shape",
+              "path": [
+                "target"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "own"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "counter"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "counter": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "properties": {
+                    "n": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "n"
+                  ],
+                  "type": "object"
+                },
+                "own": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "own",
+                "counter"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "go": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "type": "unknown"
+                }
+              },
+              "required": [
+                "go"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "n": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "n"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "type": "unknown"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

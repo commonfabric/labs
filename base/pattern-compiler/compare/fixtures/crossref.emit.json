@@ -1070,12 +1070,7 @@
             }
           }
         ],
-        "unsupported": [
-          {
-            "kind": "the key of an index whose type is not resolved",
-            "start": 1622
-          }
-        ]
+        "unsupported": []
       }
     ]
   }

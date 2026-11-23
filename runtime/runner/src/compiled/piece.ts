@@ -123,6 +123,18 @@ export type CompiledPieceOptions = {
    * confines nothing is for a measurement of what the compartment costs.
    */
   evaluate?: ModuleEvaluator;
+  /**
+   * What each `wish` of the piece resolves to, by its operands: a harness's
+   * stand-in for the runtime's own resolution, which a compiled piece does
+   * not call yet. Without it a `wish` holds an error.
+   */
+  wishes?: NonNullable<Instance["options"]["wishes"]>;
+  /**
+   * What the value code imports from `commonfabric` under each name here,
+   * for a built-in the executor does not have: a harness's stand-in for
+   * what the runtime answers, such as the acting principal.
+   */
+  builtins?: Record<string, unknown>;
 };
 
 /** What a compiled piece did, counted. */
@@ -323,6 +335,10 @@ export class CompiledPiece {
           events: "queue",
           transactions,
           evaluate: options.evaluate ?? compartmentEvaluator(),
+          ...(options.wishes === undefined ? {} : { wishes: options.wishes }),
+          ...(options.builtins === undefined
+            ? {}
+            : { builtins: options.builtins }),
           ...(rowDocuments === undefined ? {} : { rowDocuments }),
           ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
           load: (id) => transactions.load(id),
@@ -435,6 +451,9 @@ export class CompiledPiece {
       this.#counts.events += 1;
       const began = performance.now();
       let outcome: ReturnType<Instance["handleEvent"]>;
+      // The events the handler sent to streams of the piece, each with the
+      // entity of the marker of its stream.
+      const queued: { entity: URI; event: unknown }[] = [];
       try {
         // The frame of a handler, under which the gated `Date` and `Math`
         // of the value code give the time of the event and a random draw.
@@ -444,11 +463,22 @@ export class CompiledPiece {
             eventTime: tx.dispatchedEventTime ?? Date.now(),
           }),
           () =>
-            transactions.within(
-              tx,
-              () =>
-                this.instance.handleEvent(stream, transactions.decode(event)),
-            ),
+            transactions.within(tx, () => {
+              const handled = this.instance.handleEvent(
+                stream,
+                transactions.decode(event),
+              );
+              // A stream that no stored value links has no marker yet: the
+              // transaction of the handler that first sends to it writes
+              // the marker.
+              for (const sent of this.instance.takeQueued()) {
+                queued.push({
+                  entity: transactions.markedStream(sent.stream),
+                  event: sent.event,
+                });
+              }
+              return handled;
+            }),
         );
       } finally {
         this.#counts.ownMs += performance.now() - began;
@@ -462,19 +492,15 @@ export class CompiledPiece {
       // transaction, so it is stored with what the handler wrote and
       // withdrawn with it, and a serving loop that takes the space over
       // before the event was handled finds it. On every other runtime it
-      // is an event of the scheduler's queue.
-      for (const sent of this.instance.takeQueued()) {
-        const target = transactions.entityOfStream(sent.stream);
-        if (target === undefined) {
-          throw new Error(
-            "A handler sent an event to a stream the storage has no marker of.",
-          );
-        }
+      // is an event of the scheduler's queue. The marker of the stream is
+      // in the storage or written by this transaction (`markedStream`
+      // above), so the cell of the stream reads it.
+      for (const { entity, event: sent } of queued) {
         this.#runtime.getCellFromLink(
-          { space, id: target, path: [], scope: "space" },
+          { space, id: entity, path: [], scope: "space" },
           undefined,
           tx,
-        ).send(transactions.encode(sent.event) as never);
+        ).send(transactions.encode(sent) as never);
       }
       this.#invalidate();
     };

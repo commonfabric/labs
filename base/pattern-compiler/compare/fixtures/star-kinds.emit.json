@@ -2131,7 +2131,12 @@
             "schema": {
               "additionalProperties": {},
               "properties": {
-                "presses": {}
+                "presses": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "number"
+                }
               },
               "required": [
                 "presses"

@@ -1279,3 +1279,35 @@ export const P = pattern<{ glaze: string }>(({ glaze }) => {
         "{text}"
     );
 }
+
+/// A conditional written in the state of a handler binding is a value the
+/// instance computes, so it has a value function as one bound to a name
+/// has: the binding reads the output, and nothing else renders the
+/// expression.
+#[test]
+fn a_conditional_in_the_state_of_a_binding_has_a_value_function() {
+    let (plan, code) = emitted(
+        r#"import { type Cell, handler, pattern, type Stream } from "commonfabric";
+const bump = handler<unknown, { target?: Cell<{ n: number }> }>(
+  (_event, { target }) => {
+    if (target === undefined) return;
+    target.set({ n: target.get().n + 1 });
+  },
+);
+export const Bound = pattern<
+  { own: boolean; counter: Cell<{ n: number }> },
+  { go: Stream<unknown> }
+>(({ own, counter }) => ({
+  go: bump({ target: own ? undefined : counter }),
+}));
+"#,
+        "Bound",
+    );
+    assert_eq!(
+        plan["bindings"][0]["state"][0]["place"],
+        json!({ "output": 0 })
+    );
+    assert_eq!(code["values"][0]["output"], json!(0));
+    assert_eq!(code["values"][0]["function"], json!(true), "{code}");
+    assert!(source(&code).contains("$rt.value(0, "), "{}", source(&code));
+}

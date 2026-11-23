@@ -27,12 +27,14 @@ import {
 import {
   argumentOf,
   canonical,
+  copyOfData,
   declaredMembers,
   type ElementPart,
   type ErrorState,
   errorState,
   type Handed,
   identifierOf,
+  isDataPrimitive,
   isErrorState,
   isKeySegment,
   isLink,
@@ -700,6 +702,40 @@ const splits = (form: unknown): boolean =>
 
 /** Stands, in a stored form, for rows that are stored already. */
 const KEPT = Symbol("kept");
+
+/** Whether a stored form has `KEPT` at or below it. */
+const holdsKept = (form: unknown): boolean =>
+  form === KEPT ||
+  (Array.isArray(form)
+    ? form.some(holdsKept)
+    : isRecord(form) && Object.values(form).some(holdsKept));
+
+/**
+ * Whether two arrays of one length, longer than one member, hold another
+ * value at every position, as a window of the newest members of a list
+ * does when a member enters the list: such an array is written whole, as
+ * one of another length is, and not member by member, which is a write
+ * and a record for each differing member of each position. The form holds
+ * no `KEPT`, so what is written is the form. The first and the last
+ * position are compared before the others, so that an array that kept its
+ * first member, as nearly every one that is compared has, costs the text
+ * of that one member.
+ */
+const differsThroughout = (
+  form: readonly unknown[],
+  held: readonly unknown[],
+): boolean => {
+  const differs = (index: number) =>
+    !holdsKept(form[index]) &&
+    canonical(form[index]) !== canonical(held[index]);
+  if (form.length < 2 || !differs(0) || !differs(form.length - 1)) {
+    return false;
+  }
+  for (let index = 1; index < form.length - 1; index++) {
+    if (!differs(index)) return false;
+  }
+  return true;
+};
 
 /** A memo entry, brought up to date for the element keys of a context. */
 type Lazy = (context: Context) => Entry;
@@ -1542,7 +1578,7 @@ export class Handle {
     const held = Array.isArray(located.value)
       ? located.value
       : Array.isArray(declared)
-      ? structuredClone(declared)
+      ? copyOfData(declared)
       : [];
     const recorded = this.#instance.written(this.key("*"), decided);
     try {
@@ -2067,7 +2103,11 @@ export class Host {
       if (below !== undefined) {
         return this.at(this.value(below.value), below.path);
       }
-      throw new Unsupported("an output that no value function computes");
+      throw new Unsupported(
+        `an output that no value function computes: output ${index}, ${
+          JSON.stringify(output).slice(0, 300)
+        }`,
+      );
     }
     const held = this.value(value);
     if (Array.isArray(held)) {
@@ -2354,7 +2394,7 @@ export class Host {
    */
   withDefault(value: unknown, fallback: unknown): unknown {
     if (value instanceof Ref) return value.withDefault(fallback);
-    return value === undefined ? structuredClone(fallback) : value;
+    return value === undefined ? copyOfData(fallback) : value;
   }
 
   /**
@@ -3777,6 +3817,15 @@ export class Instance {
       /** What the clock holds when the executor starts. */
       now?: number;
       /**
+       * What a module of compiled code imports from `commonfabric` under
+       * each name here, for a built-in the executor does not have: a
+       * harness's stand-in for what the runtime answers, such as the
+       * acting principal or the access list of a space. A name the
+       * executor has is not replaced. Each member is frozen in place as
+       * module data is, so that no body changes what the next one reads.
+       */
+      builtins?: Record<string, unknown>;
+      /**
        * What the value code reads under each name here in place of the
        * realm's global of that name, as `Date` and `crypto`: a caller
        * that needs two runs to hold the same values gives the sources of
@@ -4727,7 +4776,7 @@ export class Instance {
       ) {
         this.store.write(
           new Ref(id, [], schema),
-          structuredClone(schema.default),
+          copyOfData(schema.default),
         );
       }
     }
@@ -5335,7 +5384,14 @@ export class Instance {
       return members;
     }
     if (typeof value === "object" && value !== null) {
-      throw new Unsupported("a value that is no plain data");
+      // A primitive of the data model, such as a time, is stored as it
+      // is.
+      if (isDataPrimitive(value)) return value;
+      throw new Unsupported(
+        `a value that is no plain data: ${
+          Object.getPrototypeOf(value)?.constructor?.name ?? "an object"
+        } at ${path.join("/")}`,
+      );
     }
     return value;
   }
@@ -5555,7 +5611,7 @@ export class Instance {
         }
         const located = this.store.locate(named, true);
         return inside({ doc: located.ref.doc, path: [...located.ref.path] })
-          ? structuredClone(located.value)
+          ? copyOfData(located.value)
           : member;
       }
       if (Array.isArray(member)) return member.map((inner) => copy(inner));
@@ -6215,7 +6271,7 @@ export class Instance {
       inside: Map<string, Unit> | undefined,
     ): unknown => {
       if (inside === undefined || inside.size === 0) return value;
-      const copy = structuredClone(value);
+      const copy = copyOfData(value);
       const holder = { value: copy } as Record<string, unknown>;
       for (const [id, unit] of inside) {
         const at = JSON.parse(id) as string[];
@@ -6293,7 +6349,7 @@ export class Instance {
     const path = at.slice(0, nearest.path.length);
     const key = this.#recordKey(nearest.output, path);
     if (root.#givenNow.has(key)) return;
-    root.#namedIndex.clear();
+    if (!root.#placing) root.#namedIndex.clear();
     const write = this.#outputRecord(this.id, nearest.output, [...path]);
     root.#noteRecord(key, this.id, write);
     hooks.unchanged(
@@ -6335,8 +6391,17 @@ export class Instance {
         inside?.delete(id);
       }
     }
-    const { store, id: doc } = this;
+    const { store, id: doc, root } = this;
     const bucketPaths = this.#bucketRecordPaths();
+    // The form is whole: from here to the end of the comparison nothing is
+    // evaluated, and each write forgets the inputs formed before it
+    // (`#writesOf`), so the records of the places that are left as they
+    // are name the inputs of a cone instance that were formed once.
+    const outermost = !root.#placing;
+    if (outermost) {
+      root.#namedIndex.clear();
+      root.#placing = true;
+    }
     // What a place holds, where the form has `KEPT` at or below it.
     const filled = (form: unknown, held: unknown): unknown => {
       if (form === KEPT) return held;
@@ -6362,7 +6427,7 @@ export class Instance {
       if (
         Array.isArray(form) && Array.isArray(held) &&
         form.length === held.length && form.length > 0 &&
-        !shiftedScalars(form, held)
+        !shiftedScalars(form, held) && !differsThroughout(form, held)
       ) {
         form.forEach((member, index) =>
           put([...at, `${index}`], member, held[index])
@@ -6419,8 +6484,19 @@ export class Instance {
         }
       }
     };
-    put(path, form, store.peek(doc, path));
+    try {
+      put(path, form, store.peek(doc, path));
+    } finally {
+      if (outermost) root.#placing = false;
+    }
   }
+
+  /**
+   * On the root: a place of a result document is being compared with its
+   * form (`#place`), and the inputs formed for the records of the places
+   * left as they are, are kept from one such record to the next.
+   */
+  #placing = false;
 
   /**
    * Brings the stored rows of a unit up to date with its assembly
@@ -10706,11 +10782,8 @@ export class Instance {
     const star = record.path.indexOf("*");
     if (star < 0) return undefined;
     const above = canonical([record.root, record.path.slice(0, star)]);
-    for (const [other, { root, path, observes }] of this.plan.slots.entries()) {
-      // An `identity` slot stops at the link to the collection's cell, and
-      // its last position is not the array's.
-      if (other === slot || observes === "identity") continue;
-      if (canonical([root, path]) !== above) continue;
+    for (const other of this.#valueSlotsAt(above)) {
+      if (other === slot) continue;
       const bound = boundOf(other);
       if (bound === undefined || !("at" in bound)) continue;
       // An `enumeration` slot of one container observes the container,
@@ -11431,6 +11504,29 @@ export class Instance {
 
   /** The result of `#slotsAtPosition()` for every slot, made once. */
   #atPosition: number[][] | undefined;
+
+  /**
+   * The slots of the plan at a root and path, given as the canonical text
+   * of the pair, in the order of the plan, without those of the class
+   * `identity`: such a slot stops at the link to the cell at its path, and
+   * its last position is not that of the value there.
+   */
+  #valueSlotsAt(position: string): readonly number[] {
+    if (this.#valueSlots === undefined) {
+      this.#valueSlots = new Map();
+      this.plan.slots.forEach(({ root, path, observes }, index) => {
+        if (observes === "identity") return;
+        const key = canonical([root, path]);
+        const held = this.#valueSlots!.get(key);
+        if (held === undefined) this.#valueSlots!.set(key, [index]);
+        else held.push(index);
+      });
+    }
+    return this.#valueSlots.get(position) ?? [];
+  }
+
+  /** The result of `#valueSlotsAt()` for every position, made once. */
+  #valueSlots: Map<string, number[]> | undefined;
 
   /**
    * The slots the membership of a collection reaches: those of its
@@ -14159,11 +14255,24 @@ const commonfabric = (instance: Instance): unknown => {
   // import adds or replaces no member.
   for (const member of Object.values(known)) hardenFunction(member);
   Object.freeze(known);
+  // The same holds of what a harness gives (`options.builtins`): each
+  // member is frozen as module data is, in place, so a function or a
+  // class given here holds no property a body can set and a record given
+  // here keeps its members. The names are read from a frozen copy, and
+  // the import has no member to set, since `known` takes none.
+  const given: Record<string, unknown> = Object.freeze(
+    Object.fromEntries(
+      Object.entries(instance.root.options.builtins ?? {}).map((
+        [name, member],
+      ) => [name, freezeModuleData(member)]),
+    ),
+  );
   return new Proxy(known, {
     get: (target, name) => {
       if (typeof name !== "string" || name in target) {
         return target[name as string];
       }
+      if (Object.hasOwn(given, name)) return given[name];
       // At module scope a built-in the executor does not have gives a
       // value nothing of a run reads, such as a declaration of policy.
       return absent(instance, name);

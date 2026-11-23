@@ -1192,11 +1192,19 @@ impl<'a> Resolver<'_, 'a> {
                     }
                 }
                 let right = self.typed_at(module, &logical.right, next)?;
+                // The result is the right operand, or the left one where
+                // it decided: without `null` and `undefined` for `??`, the
+                // part of it that can be truthy for `||`, and the part
+                // that can be falsy for `&&`.
                 let left = match logical.operator {
-                    LogicalOperator::Coalesce | LogicalOperator::Or => self.present(left),
-                    LogicalOperator::And => left,
+                    LogicalOperator::Coalesce => Some(self.present(left)),
+                    LogicalOperator::Or => self.deciding_part(true, self.present(left)),
+                    LogicalOperator::And => self.deciding_part(false, left),
                 };
-                Ok(self.union_distinct(vec![left, right]))
+                Ok(match left {
+                    Some(left) => self.union_distinct(vec![left, right]),
+                    None => right,
+                })
             }
             Expression::ConditionalExpression(conditional) => {
                 let consequent = self.typed_at(module, &conditional.consequent, next)?;
@@ -1204,6 +1212,32 @@ impl<'a> Resolver<'_, 'a> {
                 Ok(self.union_distinct(vec![consequent, alternate]))
             }
             _ => Err(Origin::Operator),
+        }
+    }
+
+    /// The part of the type of a left operand that can be truthy
+    /// (`sense`) or falsy, and `None` where no value of the type is: an
+    /// object is never falsy, and `false` never truthy.
+    fn deciding_part(&self, sense: bool, ty: TypeId) -> Option<TypeId> {
+        let never = |shape: &Shape| match shape {
+            Shape::Null | Shape::Undefined | Shape::Void => sense,
+            Shape::Literal(text) => crate::narrow::is_falsy_literal(text) == sense,
+            Shape::Object(..)
+            | Shape::Array(_)
+            | Shape::Tuple(_)
+            | Shape::Handle(..)
+            | Shape::Function
+            | Shape::Code(_)
+            | Shape::NonPrimitive => !sense,
+            _ => false,
+        };
+        match self.shape(ty) {
+            Shape::Union(members) => members
+                .iter()
+                .any(|member| !never(&self.shape(*member)))
+                .then(|| self.assume_truthy(sense, ty)),
+            shape if never(&shape) => None,
+            _ => Some(self.assume_truthy(sense, ty)),
         }
     }
 

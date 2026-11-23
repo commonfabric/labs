@@ -34,7 +34,9 @@
  *   which makes it the one last active.
  * - `serving` and `serving-today`: the board under the serving loop, as a
  *   compiled piece and as today's piece, timed on two clients
- *   (`./serving.ts`).
+ *   (`./serving.ts`). With `SCALE_SERVING_LABELS` set, the topics and the
+ *   inputs are written under the clauses the arm `runner` writes them
+ *   under, in the space of the same identity.
  * - `today`: today's runtime, with no label stored.
  * - `today-labeled`: today's runtime with `cfcFlowLabels` at `persist` and
  *   the same clauses on the topics and the inputs.
@@ -1827,6 +1829,19 @@ const startProfile = async (file: string): Promise<() => Promise<void>> => {
 if (import.meta.main) {
   const [arm, ...given] = Deno.args;
   const stopProfile = await profiled();
+  // With `SCALE_SERVING_LABELS` set, the serving arms write the topics and
+  // the inputs under the labels the arm `runner` writes them under.
+  const servingAudience = Deno.env.get("SCALE_SERVING_LABELS") === undefined
+    ? undefined
+    : await scenarioAudience();
+  const servingLabels = servingAudience === undefined ? undefined : {
+    signer: await labeledSigner(),
+    topic: (index: number) => topicSchemaOf(index, servingAudience),
+    input: (name: string) =>
+      ({
+        ifc: { confidentiality: [inputClause(name, servingAudience)] },
+      }) as JSONSchema,
+  };
   const boards = given[0] === "--seed" && given[1] !== undefined
     ? [await seeded(given[1])]
     : (given.length > 0 ? given.map(Number) : [100, 1_000, 2_000]).map(
@@ -1850,6 +1865,7 @@ if (import.meta.main) {
           names: board.names,
           created: CREATED,
           edited: edited(board.topics.length),
+          ...(servingLabels === undefined ? {} : { labels: servingLabels }),
         },
         arm,
         (step) => console.log(JSON.stringify(step)),

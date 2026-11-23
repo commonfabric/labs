@@ -15868,6 +15868,619 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    content where a reference by key is stored: the question exists without this
    change for every kept key, and the change makes more keys kept.
 
+## Crate round: FabriChat and Home
+
+The round of 2026-11-23 on the checker and the translation, from the commit
+`e86377cca0`. Its tables are in the folder of the round, `r9-crate/`.
+
+720. **What the checker refused, classed.** Note 809 counted 39 errors in the
+     program of Home. The count is 38: 33 in the 16 modules of FabriChat and 5
+     more in the other 10 (`subset-type:any` 3 in `agent-queue.tsx`,
+     `subset-type:mismatch` 1 each in `favorites-manager.tsx` and
+     `shared-space-interface.ts`). By class:
+
+     | Diagnostic and site                                                                                                                                        | Errors | Class                                                                                                         |
+     | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------- |
+     | `schema:unknown-type-access`, `commitAttach` of `room-records.tsx`                                                                                         | 5      | Defect of the crate: the type parameter of `attachRequests` was not bound (note 721)                          |
+     | `subset-type:mismatch`, `changeSharedSpaceMembershipIn` of `shared-space-catalog.ts`                                                                       | 3      | Defect of the crate: narrowing (note 722)                                                                     |
+     | `subset-type:mismatch`, `sharedSpaceProfileViewOf` of `shared-space-interface.ts`                                                                          | 1      | Defect of the crate: narrowing (note 722)                                                                     |
+     | `subset-type:any`, `profile-home.tsx` 8, `shared-space-catalog.ts` 3, `agent-queue.tsx` 3                                                                  | 14     | The language has no `any` (`language-subset.md` §7.8). The pattern changes                                    |
+     | `subset-type:overload`, `manager.tsx` 5, `private-inbox.tsx` 1                                                                                             | 6      | The language has no overload. The pattern changes as §12.4 says                                               |
+     | `opaque-get:invalid-call`, `takesOffers` of `manager.tsx`                                                                                                  | 1      | A `Stream` has no `get`. The pattern changes as §12.9 says                                                    |
+     | `subset-type:mismatch`, a `Cell<T>` where `Cell<T \| undefined>` is declared or the reverse: `room.tsx` 3, `room-records.tsx` 1, `favorites-manager.tsx` 1 | 5      | Rule of the language (§7.5.1, §7.5.2, §7.5.4, which names the site of `ensureFileStore`). The pattern changes |
+     | `subset-type:mismatch`, a cell where `{ get(): T }` is declared, `rosterProfiles`                                                                          | 1      | Rule of the language (§7.5.1). The pattern changes                                                            |
+     | `subset-type:mismatch`, a `Cell<Message>` where a `Cell` of a view of it is declared, `room-records.tsx`                                                   | 2      | Rule of the language (§7.5.1). The pattern changes                                                            |
+
+     So 9 of the 38 were defects of the crate, and 29 are forms the language
+     does not have or refuses by rule. The untranslated constructs of the
+     emitter, by site and not by pattern (note 809 counted each once for each
+     pattern that holds it):
+
+     | Construct                                                                                                                      | Sites | Class                                                                                     |
+     | ------------------------------------------------------------------------------------------------------------------------------ | ----- | ----------------------------------------------------------------------------------------- |
+     | A guard in the block body of the callback of a collection method of a promoted `computed` ("a statement in the reactive tier") | 3     | Gap of the crate: §6.1 admits the body. Not built, the copies changed (note 724)          |
+     | `resolveAsCell` in a promoted `computed`                                                                                       | 2     | Gap of the crate: §4.7 and §6.1 admit it in tier R. Not built, the copies changed         |
+     | `elementById` with a constant key in a promoted `computed`                                                                     | 1     | The same                                                                                  |
+     | `P.asScope("user")(...)` in the body of a `map` ("a call form in the reactive tier")                                           | 3     | Gap of the crate: `builtin-inventory.md` names these sites. Not built, the copies changed |
+     | A call of a function with no footprint record                                                                                  | 2     | Follows from the overloads, and is gone with them                                         |
+     | A dynamic read of kind `space` whose operand the emitter cannot name                                                           | 3     | Gap of the crate, in the records of labels. Left as it is (deferred question 4)           |
+     | A write through a handle the emitter cannot name (new, after the overload of `inboxOf` is gone)                                | 1     | The same (deferred question 5)                                                            |
+
+721. **The walk of a type gave up at 12 steps.** `typed_at` of `src/declared.rs`
+     counts the steps from the expression asked for to the declaration that
+     types it, and returned no type past 12. In `commitAttach` the argument of
+     `attachRequests` is a name whose initializer is
+     `event?.detail?.files ?? []`, and the result is read two steps further on,
+     which is 13: the type parameter stayed unbound and each read of a file was
+     `schema:unknown-type-access`. The limit is 24 (P190). It is a limit of
+     depth and not a guard against a cycle, so a type still depends on how
+     deeply its initializer is nested, at a depth no module of the corpus
+     reaches. The corpus has 13 errors fewer and none more: the 5 of FabriChat,
+     3 in `showcase/wordsearch/generator.ts`, and with the fixes of note 722 the
+     4 of the shared space and one in `apps/food-recipe/recipe-logic.ts`. With
+     types evaluated further, two false refusals appeared that the limit had
+     hidden, and both are closed: the left operand of `&&` gives the result the
+     part of its type that can be falsy and the left operand of `||` the part
+     that can be truthy (`deciding_part` of `src/infer.rs`, P193), and a literal
+     position of a tuple has that element's type. The fixture test
+     `a_key_of_an_index_whose_type_is_not_resolved_is_reported_as_unsupported`
+     of `tests/plan.rs` had a key that was unresolved only by the limit, and now
+     has one from a module that is not given. The fixtures `crossref` and
+     `index-of-rows` now emit with nothing unsupported; their emitted files in
+     `compare/fixtures/` were not regenerated.
+722. **Three forms of narrowing** (`src/narrow.rs`, tests in
+     `tests/round9_gaps.rs`). An optional read of a discriminant compared with a
+     literal, `c?.status === "unavailable"`, narrows the union as the plain read
+     does, removes `undefined` in the true branch and keeps it in the false one
+     (`assume_equal`). A strict comparison of an ordinary value typed `unknown`
+     with `undefined` or `null` gives that type in the true branch, and not on a
+     data position (`assume_value`, P191), which is what the false branch of
+     `last !== undefined && (!isAction(last) || ...)` needs. A type predicate
+     narrows a value to the asserted type where no member of the value's type is
+     assignable to the asserted type and the asserted type is assignable to a
+     member (`assume_call`, P192): a `Record<string, unknown>` narrows to the
+     record type the predicate names, which `readSharedSpaceCatalog` needs once
+     its storage type has no `any`.
+723. **The copies.** `compare/fabrichat/` holds the 16 modules of the program of
+     FabriChat and `compare/home/` the other 10 of the program of Home, each in
+     the directory it has under `patterns/system/`, first unchanged but for the
+     imports between the two. The patterns under `patterns/` are untouched. Each
+     change is a commit that names what it stands in for. Both programs pass
+     `check` with no error. The changes for the rules of the language:
+     - No `any`: a stored reference is declared `unknown`, an open record
+       `Record<string, unknown>`, the records of the acting profiles
+       `Record<string, SharedSpaceProfileRecord>`, an instantiation takes
+       `.for(cause)` with no cast, and the result of the agent queue declares
+       the types its cells hold.
+     - No overload: `inboxLinkOf` and `roomLinkOf` are deleted and the instance
+       is assigned to the declared cell type, `aboutRecordOf` keeps one
+       signature, and for `linkedRoom`, `joinStreamOf` and `inboxOf` the
+       position is declared with the type that is read: `room` positions are
+       `Cell<ChatRoomLink>`, `ChatRoomLink` declares `addParticipant`, and
+       `ShareInboxPiece` declares `receive`.
+     - A stream's presence is tested through
+       `ReadonlyCell<{ receive?: unknown }>`.
+     - A handle of `T | undefined` is declared so on both sides (the drafts of
+       the composers, the record of a thread's title), `ensureRootFileStore`
+       takes the handle `key` gives for the optional record, and the state of
+       `onRemoveFavorite` declares `favorites` optional.
+     - `rosterProfiles` declares `ReadonlyCell`.
+     - A link to a replied message is declared `Cell<MessageRecord>`, the type
+       the cell has. The type is recursive through the cell, which the checker
+       accepts. Not verified: that the copies still compile and run on today's
+       runtime. `P(...).for(tag)` with no cast is what the comment in
+       `profile-home.tsx` says the published typings refuse.
+724. **What the copies change because the crate does not translate it yet.**
+     Each stands in for a construct the language has:
+     - A guard in the callback of a collection method of a promoted `computed`
+       is written as a conditional expression (3 sites). The plan: `statements`
+       of `src/plan.rs` handles the block of such a callback and knows no `if`,
+       while `code_block` gives the block of the `computed` itself a `select`
+       for each guard. The callback needs the same, with the place of what it
+       returns in place of a template, and `src/emit.rs` the conditional it
+       renders for it.
+     - `elementById` and `resolveAsCell` in a promoted `computed` are called in
+       an authored function (`titleSetIn`, `resolvedMessage`, `resolvedKeyOf`),
+       which is a body with a footprint of its own. The label of the result is
+       then that of the whole body. The plan: `elementById` with a constant key
+       is a path projection by key, as `key` is, and `resolveAsCell` an
+       observation of class `identity` of the place its receiver names.
+     - `RoomRoster` and `NoticeTold` are instantiated with no `asScope("user")`.
+       The state the instance declares is then of the space and not of the user,
+       which is the same with one user and wrong with two. The plan: the
+       modifier sets `Child.scope` on the call-site record, which the plan has
+       for a call outside an element body.
+     - The room's result holds the stream `tellJoined` (note 727).
+     - `pattern` is given no schema made by hand (`agent-queue.tsx`,
+       `home.tsx`): the language has no such argument. After these, `emit` gives
+       every pattern of both programs value code with nothing unsupported, and
+       the plans of `FabriChatManager`, `FabriChatManagerCore` and `Home` keep 4
+       entries for 4 sites of the manager: 3 dynamic reads of kind `space` and 1
+       write through a handle, each with an operand that an authored function
+       returned.
+725. **A value written in the state of a binding had no function.** The state of
+     a handler applied in the reactive tier is read by the places of the plan,
+     so `src/emit.rs` rendered none of its expressions, and a conditional
+     written there, `container: ownSpace ? undefined : container`, had an output
+     and no value function. The first event of the room failed with "an output
+     that no value function computes". `binding_state` renders each member of
+     the state that is a value with no function yet
+     (`a_conditional_in_the_state_of_a_binding_has_a_value_function` of
+     `tests/emit.rs`, `exec/test/handler-state-conditional.test.ts`).
+726. **The executor and the values of the data model.** FabriChat stores every
+     time as a `FabricEpochNsec` and its policy as `FabricDurationNsec`. The
+     executor refused one as "a value that is no plain data". Once admitted, a
+     copy by `structuredClone` made the plain record `{}` of it, and its text as
+     JSON, by which the executor compares values, is `{}` whatever it holds:
+     every two times were equal. Now a primitive of the data model is a leaf
+     (P194): `stored` of `exec/executor.ts` keeps it, `copyOfData` of
+     `exec/store.ts` copies arrays and plain records alone and stands where
+     `structuredClone` stood, the walks of the store do not enter it, and
+     `canonical` gives it the text of the JSON codec of fabric values and a
+     `bigint` its digits. The adapter writes both to the storage as they are
+     (`#encode` of `runtime/runner/src/compiled/transactions.ts`). Not done: the
+     other places of the executor that form a text with `JSON.stringify` (41 in
+     `exec/executor.ts`) were not read one by one, so a comparison or a key
+     formed there from a value that holds a time may still see `{}`, and a
+     `bigint` there throws.
+727. **The built-ins of the runtime, and `wish`, are handed in.** The copies
+     import 25 names of `commonfabric` that the executor does not have. Some are
+     pure (`isWellFormedDID`, `parseDID`, `joinSpaceMembers`, the classes of the
+     data model) and the harness hands the runtime's own. The others read what
+     the runtime holds: the acting principal and the key of the event
+     (`currentPrincipal`, `eventKey`), the owner a label attests
+     (`profileOwnerOf`, `principalOf`, `writtenPrincipalOf`, `resultOwnerOf`),
+     and the access list of a space (`spaceAccess`, `spaceMembers`,
+     `spaceDeleted`, `spaceOfLink`). The option `builtins` of the instance
+     (P195), which `CompiledPieceOptions` passes on, answers a name the executor
+     lacks, and `compare/fabrichat/scale.ts` answers these for one fixed user
+     who owns every space. A `wish` is answered by the table of
+     `compare/wish-home.ts` through the option `wishes`, which
+     `CompiledPieceOptions` now passes on as well: `#profile` is a reference to
+     a seeded profile, and `#default` and `#chatManager` have no answer and hold
+     an error. This is the stub the brief allows, and nothing of the runtime's
+     own `wish` runs. The plan for the real thing:
+     - `wish`: the piece resolves the operands in its derivation transaction
+       with the functions `runtime/runner/src/builtins/wish.ts` resolves a
+       target with (`parseWishTarget`, the resolution of a space target and of a
+       home target), stores the outcome in the operation's state document with
+       the reads the resolution made as the entry of `dynamicReads`, and
+       launches a sidecar as the `Child` the plan already has for it
+       (`callee: { compiled: null }` today: the two sidecar patterns are not
+       compiled into the program).
+     - The built-ins: each is an observation with a class of its own in
+       `builtin-inventory.md`. The executor needs the acting principal and the
+       key of the event from the transaction it runs in, which the adapter has,
+       and for the others a read of the label or of the access list through the
+       adapter, recorded as a dynamic read.
+     - A document of another space: the profile of the seeded home is in a space
+       of its own, and a compiled piece on the runner path reads no document of
+       another space, so the send was refused with "Your profile hasn't loaded
+       yet". The harness seeds the profile in the room's space. The adapter has
+       `external(doc, space)` for a document of another space that it is handed,
+       and `load` reads the piece's own space alone: `load` needs the space of
+       the link it follows.
+     - A stream that the state of a binding alone holds: the room's send sends
+       to `tellJoined`, which no stored value links to, so the storage has no
+       marker of it and the piece throws "A handler sent an event to a stream
+       the storage has no marker of". The copy holds the stream in its result.
+       The piece needs to make the marker when a handler first sends to such a
+       stream, inside the transaction of that handler.
+728. **FabriChat and Home run, with those stand-ins.** `scale.ts` starts the
+     room, sends and reads back, and starts the manager and Home. On the
+     executor in memory and as a compiled piece in the runner (emulated storage,
+     value code in a compartment), one run of each cell, on an Apple M5 Max with
+     18 cores at a load of about 6 from other work:
+
+     | Arm      | Messages held | Start, ms | Send, ms (3)     | Evaluations | Element bodies | Positions read | Writes staged | Records given |
+     | -------- | ------------- | --------- | ---------------- | ----------- | -------------- | -------------- | ------------- | ------------- |
+     | executor | 10            | 31        | 8.0, 8.5, 9.1    | 27          | 11             |                |               |               |
+     | executor | 100           | 7         | 44.6, 44.6, 44.4 | 27          | 11             |                |               |               |
+     | executor | 1,000         | 10        | 299, 295, 292    | 27          | 11             |                |               |               |
+     | runner   | 10            | 162       | 179, 186, 179    | 27          | 11             | 91 to 101      | 10            | 145 to 155    |
+     | runner   | 100           | 71        | 938, 981, 999    | 27          | 11             | 541 to 551     | 208 to 210    | 797 to 807    |
+
+     The start is of an empty room, and the messages are sent one by one before
+     the timed sends: 75 ms, 2.5 s and 155 s on the executor, 1.7 s and 27 s in
+     the runner. A send evaluates the same 27 cones and 11 element bodies at
+     every size, and its time grows with the room in both arms. On the executor
+     it is about 0.3 ms for each message held. In the runner it is about 9 ms
+     for each message held, of which the piece's own handlers and derivation are
+     four fifths (`ownMs` 767 to 810 of 938 to 999 ms at 100), and each message
+     held adds 5 positions read, 2 writes staged and 7 write records to a send.
+     Which part of this is the body of `facts`, which walks every message by the
+     pattern's design, and which the executor's and the adapter's, was not
+     measured: no profile was taken. The runner arm was not run at 1,000, where
+     the sends that fill the room would take about an hour at this slope.
+     Today's runtime was not run beside it: the original patterns need the
+     runtime's `wish`, a home and a profile, which the pattern tests set up and
+     this harness does not.
+
+     The manager starts in 27 ms on the executor and 115 ms in the runner (38
+     evaluations, 20 members of the result). Home starts in 34 ms and 258 ms
+     (101 evaluations, 16 element bodies, 43 members), with two cones in an
+     error state on both arms, `$UI` and one `map`, because the stand-in for
+     `SELF` is a key the result does not hold. One event that adds a space to
+     Home's list commits on both arms and evaluates 4 cones: 4.8 ms on the
+     executor, and 690 ms in the runner, 643 ms of them in the piece, for 4
+     writes staged, 6 positions read and 63 write records in 3 transactions.
+     That event's time is not explained by what it writes and was not profiled.
+729. **Three refusals of Contextual Flow Control that the harness steps
+     around.** With the schemas as the crate emits them, no send of the room
+     commits and Home's first commit is refused: a write policy names its
+     handler as `{ body: { binding, module } }`, which the preparation refuses
+     as "malformed writePolicyAnyOf"; integrity of the current principal
+     "requires the run's actor", which an event this harness queues does not
+     carry; and `writeAuthorizedBy` is an "unsupported trust-sensitive claim".
+     `scale.ts` gives the schemas without those three members unless
+     `SCALE_POLICIES` is `keep` (P196). They are deferred questions 1 to 3.
+730. **The corpus on the runner path.** `compare/runner-corpus.ts` answers a
+     `wish` from the seeded home through `wishes` (P197) and no longer leaves a
+     module out for having one, except under `--resume` and `--serving`, where
+     nothing hands the table to the piece that takes over. Against the run of
+     milestone 6 (`corpus-plain-final.jsonl` of its folder), 194 modules start,
+     take every event and hold the values of the executor in memory, where 183
+     did. Of the 40 modules that were left out for a `wish`, 28 now start: 11
+     take every event and hold equal values, and 17 start and either differ from
+     the executor in memory, at `$UI` in most, or have an event with no stored
+     stream or one whose handler did not commit. Of the other 12, 6 are left out
+     because they request an effect, 1 because the home does not simulate
+     `#summaryIndex`, and 5 do not start, 2 of them for the built-in
+     `spaceMembers`. Why the 17 differ was not looked into: the executor in
+     memory reads the home from documents it is given and the piece from the
+     storage, under other identifiers. Outside those 40 one line changed:
+     `apps/redactor/vault.tsx` holds the same refusal of writer fit 3 times
+     where it held it once, and its events and values are as before. The cause
+     was not looked for. Two modules have a line where they had none, both
+     "exports no pattern": `showcase/wordsearch/generator.ts` and
+     `system/shared-space/shared-space-interface.ts`, which the crate now
+     accepts. The lines that changed are in `corpus-changes.txt` of the folder
+     of the round.
+731. **Provisional decisions of the round.** P190: the walk of a type gives up
+     at 24 steps (note 721). P191: a strict comparison of an ordinary `unknown`
+     with `undefined` or `null` narrows it, and a data position is left as it is
+     (note 722). P192: a type predicate narrows to the asserted type where it is
+     assignable to the value's (note 722). P193: the left operand of `&&` and
+     `||` gives the result the part of its type that decides (note 721). P194: a
+     primitive of the data model is a leaf of the executor's values, compared by
+     the text of the JSON codec, and a `bigint` by its digits (note 726). P195:
+     the instance takes built-ins from the harness under names it does not have,
+     and never in place of one it has (note 727). P196: the harness of FabriChat
+     runs with the write policies, the added integrity and the write
+     authorizations removed from the schemas (note 729). P197: the corpus run
+     answers a `wish` from a table (note 730). Not done: the three constructs of
+     note 724 in the emitter; the runtime's own `wish`, the built-ins that read
+     a label or an access list, a read of another space and a send to a stream
+     no value links (note 727); today's runtime beside the harness, the runner
+     arm at 1,000 messages and a profile of a send (note 728); the remaining
+     texts of JSON in the executor (note 726).
+
+### CFC questions deferred, crate round
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. A write policy of a compiled pattern names the handler that may write as the
+   module and the binding of its body. The preparation reads the form today's
+   compiler emits and refuses this one as malformed. Which identity of a
+   compiled handler a policy names, and how the preparation checks a commit of a
+   compiled piece against it (`builtin-inventory.md`, "The send gate").
+2. A schema that adds integrity of the current principal needs the actor of the
+   run. An event queued for a compiled piece on a runtime in the serving posture
+   carries none in this harness. Which actor a handler of a compiled piece runs
+   under on the runner path, and where the piece takes it from.
+3. Home's first commit declares `writeAuthorizedBy`, which the preparation
+   refuses as an unsupported trust-sensitive claim for a compiled piece.
+4. A suspected under-label. Three bodies of the manager read the access list of
+   a space whose operand an authored function returned (`deliverOffers`, and
+   `performManagerAct` through `commitStart` and `commitManager`). The emitter
+   cannot name the operand, so the plan has no entry of `dynamicReads` for the
+   read, and what the body writes has a label without it.
+5. The same for a write: `deliverOffers` sends through
+   `pointer.resolveAsCell().key("receive")`, where `pointer` is an element of
+   what `distinctInboxes()` returned. The plan has no write target for it, so no
+   template covers the write.
+6. `profileOwnerOf`, `principalOf`, `writtenPrincipalOf` and `resultOwnerOf`
+   read what a label attests, and `spaceAccess`, `spaceMembers` and
+   `spaceDeleted` read an access list. The harness answers each with a constant.
+   What each observes, in the classes of `plan-and-label-templates.md`, and what
+   the label of its result is.
+7. With `asScope("user")` removed, the copies keep per-user state of the manager
+   in the space. That is a copy's stand-in and no proposal, and a run with two
+   users would show one user's rosters to the other.
+8. A `computed` whose body moved into an authored function (note 724) has the
+   label of the whole body where the promoted form had one for each path of its
+   result. That is an over-label, and the paths it widens were not listed.
+
+## FabriChat round two: what a send costs
+
+The round of 2026-11-23 on what the FabriChat room and Home cost on the runner
+path, from the commit `8bd945fc66`. Its tables, profiles and traces are in the
+folder of the round, `r10-fabrichat/`.
+
+732. **What the round did.** In order: a profile and the counters of a send and
+     of Home's event, with each piece of work that follows the messages held
+     named by function (notes 733 to 735); four changes of the executor and the
+     adapter that the profiles asked for (note 736); two changes of the copy of
+     the room (note 737); today's runtime beside the harness (note 738); the two
+     gaps of the runner path that note 727 named (note 739); and the tables
+     (note 740). Not reached: a send that does not grow with the room. A send
+     into a room of 1,000 messages takes 1.7 to 1.8 s on the runner path, from
+     about 9 s by the slope of note 728, and 0.28 s on the executor in memory,
+     as before. What is left follows the messages held in the pattern's own body
+     `facts`, in the executor's assembly of a `map` over the result of a body,
+     and in the records of the labels of each row. Stubbed with a plan: `facts`
+     on the constructs (note 737), the assembly of a `map` over the result of a
+     body by its keys (note 735), and the sync of a document of another space
+     (note 739).
+733. **Structure and scale: why Home's event took 643 ms in the piece, and a
+     send 180 ms at 10 messages.** `Instance.#elementsBound` of
+     `exec/executor.ts` binds a slot below the elements of a collection that no
+     element was read for. For each such slot it formed the canonical text of
+     the root and path of every slot of the plan, so the work of one record was
+     the square of the number of slots of the plan. Home's plan is large and its
+     event gives 63 records: 630 of the 700 ms of the profile were in that
+     function and in `canonical`. A send into the room spent 310 ms of about
+     1,000 there at 100 messages. `Instance.#valueSlotsAt` now holds the slots
+     at each root and path, made once for an instance. Home's event takes 93 ms
+     on the runner path (47 ms in the piece), from 690 to 850. The 5 commits of
+     a send are the design and not a defect: the handler of `sendMessage`, the
+     handler of the stream `tellJoined` that it sends to, the first derivation
+     of the row instance the handler made (ruling Z87), and two derivations. The
+     seed took 270 ms for each message because each of its sends is a send into
+     the room as it stands, so the seed of N messages is the square of N.
+734. **Soundness: a place of the result that held a time of the data model was
+     not written when the time changed.** `put` in `Instance.#place` compared a
+     place with what it holds by the text of JSON, which is `{}` for every
+     `FabricEpochNsec` (note 726 left 41 such places unread). The window
+     `messages.latest.messages` of the room, which holds the 100 newest messages
+     by value, kept at each position the `sentAt` of the message that stood
+     there before the window moved. The comparison is now by `canonical`. Test:
+     `exec/test/window.test.ts` over `compare/fixtures/window.tsx`, "holds the
+     time of each record after the window moved by one", seen to fail on the
+     times `0n, 1n, 2n` where `3n,
+     4n, 5n` were expected. The other 40
+     texts of JSON in `exec/executor.ts` are still unread.
+735. **What follows the messages held, by function.** Measured with
+     `SCALE_CPU_PROFILE` and `SCALE_TRACE` of `compare/fabrichat/scale.ts`, at
+     the commit `61ec40d489` for the runner arm at 1,000 messages (three sends,
+     6.3 s of samples) and for the executor in memory (three sends, 0.77 s).
+     - _The pattern's own._ `facts` (`messageFacts` and `messageEntries` of the
+       copies) reads every message at each send: the record, `sentAt` and `body`
+       again by their own cells, and the author through the link
+       `authorProfile`, the outcome of the `wish` and the profile. That is 5
+       positions read for each message, and it is the design of the pattern.
+       `rowFactsForSession` reads the rights of every message and forms a record
+       with an entry for each. `threadMessages`, `participants` and the members
+       of the result under `messages` read what `facts` returns.
+     - _The executor's, on both arms._ (a) A read of a value copies what it
+       reads, each link followed (`Host.v`, `Store.read`, `Store.#deep`,
+       `Store.#copy`): 115 ms of a send of 257 ms in memory at 1,000. Note 666
+       has the plan for a read without a copy; it is not built. (b) The `map`
+       over `facts.main` that makes the rows of the conversation has the result
+       of a body as its source, and `Instance.#reassemble` brings an assembly up
+       to date only over a stored array or over another collection: this one is
+       formed whole at each send, which checks the dependencies of every row and
+       its state cells (`dependEntry`, `stateCellDocument`; 42 ms of a send in
+       memory at 1,000). The plan: a third branch of `#reassemble` for a source
+       that an output computes, which takes the keys of the array the output
+       holds now, finds the one run that differs from the keys of the table
+       (`spliceBetween` of the adapter does this for values), and applies it as
+       the splices of a stored array are applied. (c) The canonical text of what
+       `facts` returns, formed to see whether it changed, and the registration
+       of each position it read (`canonical`, `Instance.#watch`,
+       `Instance.#register`): 70 ms of a send in memory at 1,000.
+     - _The executor's and the adapter's, on the runner path alone._ (d) A send
+       stores another label on the document of the messages, at the position of
+       the message appended. `Instance.labelsChanged` then finds every record
+       that read that document, and `Instance.#readsChangedLabel` asks the
+       adapter for each position of each record whether it consumes another
+       label (`RuntimeTransactions.#labelIn`, twice for each of three classes):
+       480 ms of a send at 1,000. The adapter now answers each path and class
+       once for a change (note 736). (e) The records of the rows of
+       `messageRights` are among those that read a changed label: the record of
+       a row names the position `*` below the messages for a slot that no
+       evaluation bound (`Instance.#elementsBound`), and a path that names every
+       element is taken to have changed. So `Instance.#relabel` gives the 4
+       records of every row again at each send (177 ms at 1,000), and the
+       preparation instantiates their templates (`planLabelsFor`, 65 ms of the
+       244 ms of the preparation). This is the same finding as CFC question 4 of
+       the sixth round of milestone 3 for the rows of the pivot, and is deferred
+       question 1 below. (f) `Instance.#unchangedOutput` gives a record for
+       every place of the result that a comparison left as it was (160 ms at
+       1,000), each time the result is stored. (g) Every stored link to a
+       message carries the schema of the message, 1.5 KB, where the handle that
+       the body returned was typed (`Instance.stored` for a `Ref` with a
+       schema): the result document of a room of 203 messages is 1.29 MB in the
+       executor's store, 335 KB of it `messageRights`, 496 KB `$VIEWS` and 428
+       KB `$UI`, so about 6 KB for each message held. The storage interns the
+       schemas of links (`runtime/memory/v2/schema-table-links.ts`); the
+       executor and the adapter form the text of each, compare it and encode it.
+       Whether a stored link to a typed handle has to carry the schema was not
+       decided.
+736. **Four changes of the executor and the adapter.**
+     - `Instance.#valueSlotsAt` (note 733). No test was written first: the
+       values are the same, and the existing tests of the records pass.
+     - `put` of `Instance.#place` compares by `canonical` (note 734), and an
+       array that holds another value at every position is written once
+       (provisional decision P200, `differsThroughout`): the window of the room
+       was written member by member, 100 writes of `body` and 100 records,
+       twice, for each send into a room of 100 messages or more. A send at 100
+       took 620 ms with them and 265 ms without. Test:
+       `exec/test/window.test.ts`, "writes the window once where every position
+       holds another record", seen to fail on the three writes `latest/0/text`
+       to `latest/2/text`.
+     - `Instance.#place` forms the inputs of a cone instance once for the
+       records of the places it leaves as they are (`#placing`), where
+       `#unchangedOutput` forgot them for each place. A write in between forgets
+       them as before (`#writesOf`). No test was written first.
+     - `RuntimeTransactions.#reportLabels` answers `LabelChange.unchanged` once
+       for a path and a class. Under `labelsChanged`, three sends at 200
+       messages take 4 ms, from 62. No test was written first.
+737. **The copy of the room: two changes, and `facts` stubbed with a plan.**
+     - `messageRightsForSession` is a `map` over the stored messages
+       (`messages.map((record, index) => ...)`, with the cell of the message
+       from `storedMessageAt`), where a `computed` mapped `facts.entries`. That
+       `map` was over the result of a body, was formed whole at each send, and
+       held a copy of each message in the result. Over the stored array the
+       assembly takes the splice of the message sent, and a row holds a link to
+       its message. A message the room cannot read has a row here, where the
+       entries left it out. The time of a send did not change by this alone,
+       because of (d) and (e) of note 735.
+     - `indexesOf` reads the length of a list at its member `length`
+       (`list.key("length").get()`), where it read the list whole for it: the
+       executor copied every message through its link for that read. A send in
+       memory at 100 takes 39 ms, from 44.
+     - Declaring the messages as an array of cells, so that `map` gives the cell
+       of each (`Cell<MessageCell[]>` assigned from `messages`), is refused by
+       the checker as it has to be: a cell that can be read and written holds
+       one type.
+     - _`facts` on the constructs: not done, a plan._ The entries are a `map`
+       over the stored messages, each entry from its own message (`key`,
+       `sentAt`, the keys of what it replies to, `inMain`, `live`, `authorKey`).
+       `main` is a `filter` of them by `inMain` and a `map` to the cell, which
+       is an array of references that the rows of the conversation are a `map`
+       over. `places` is a `groupBy` of the entries by the key of their thread,
+       and a row reads `lookup(key)` for the count of replies and the newest of
+       them. `authors` is the keys of a `groupBy` by `authorKey`, in the order
+       the buckets came to exist. `count` is the length of the messages.
+       `latest` is the last 100 of `main`, which needs a construct the language
+       does not have, a window of the newest members of a collection that is
+       brought up to date by the splice of its source; until then a body reads
+       `main` whole. `threads` is a `flatMap` over `main` with the bucket of
+       each root. `legacyReplies` is the length of a `filter`.
+       `rowFactsForSession` goes away: a row derives its own controls from its
+       message and from what the session holds, as a row of `messageRights` does
+       now. What the emitter lacks for this is in note 724: a guard in the
+       callback of a collection method, and `elementById` and `resolveAsCell` in
+       the reactive tier.
+738. **Today's runtime beside it.**
+     `patterns/integration/fabrichat-room-send-scale.ts` runs the room of
+     `patterns/system/fabrichat/room.tsx` in the fixture
+     `fabrichat-room-profile-wish` on `MultiRuntimeHarness`: the person's home
+     lists a profile, the person's runtime runs the room in a Deno worker on an
+     in-process storage server, with the labels and the write policies the
+     pattern declares and server execution off. A send is timed from the event
+     to the end of `MultiRuntimeHarness.settle()`. The comparison is not like
+     with like in four respects. The compiled arm runs with the write policies,
+     the added integrity and the write authorizations removed from the schemas
+     (P196), so its preparation checks no policy. It answers `wish` and about 20
+     built-ins with constants. Its storage is in the thread of the runtime,
+     where today's arm has two runtimes of the person in workers, the one that
+     set the profile up and the one that sends, and both run the room; a settle
+     is at least two rounds over both. And today's arm keeps the links to the
+     messages as links, where the compiled arm holds the schema of the message
+     in each. So today's figures are an upper bound of what a send costs today
+     in one runtime, and the compiled figures a lower bound of what the compiled
+     path will cost with policies checked. With that said: today's send grows
+     with the room as the compiled one does, and steeper.
+739. **Two gaps of the runner path, built small.**
+     - _A handler that sends to a stream which the state of a binding alone
+       holds._ `RuntimeTransactions.markedStream` writes the marker of such a
+       stream into the handed transaction of the handler that first sends to it,
+       and `CompiledPiece.#registerStream` takes the queued events inside that
+       transaction. Test:
+       `runtime/runner/test/compiled/state-held-stream.test.ts` over
+       `compare/fixtures/state-held-stream.tsx`, seen to fail on the aborted
+       transaction. The copy of the room still holds `tellJoined` in its result;
+       it no longer has to. Not verified: a resume of a piece whose marker was
+       written this way.
+     - _A document of another space._ `RuntimeTransactions.#decode` keeps, for
+       the document a link leads to, the space the link names where it is
+       another than the piece's; `load` and every read then address the document
+       there, and the subscription takes the commits of that space for the
+       documents it holds of it. Test:
+       `runtime/runner/test/compiled/foreign-space.test.ts` over
+       `compare/fixtures/foreign-read.tsx`: the read, a change of the document,
+       and the result stored in the piece's space alone; the first seen to fail
+       on `hello undefined`. What the adapter still needs: (1) the sync of a
+       document the replica does not hold, which is not a synchronous read:
+       `load` finds nothing, the piece asks the storage for the document and
+       derives again when it is there, as the runner's pre-sync does; (2) the
+       space of a link that names none inside a document of another space, which
+       is that document's space, so `#decode` needs the document it decodes; (3)
+       an identifier of the executor for a document that includes its space,
+       since two spaces can hold documents of one entity and the executor names
+       a document by its entity alone; (4) the read recorded for the basis with
+       its space (`PieceBasis.source` takes the name of the document), so that a
+       resume asks the right replica for its sequence number. The harness of
+       FabriChat still seeds the profile in the room's space.
+740. **Measured.** One run of each cell, three sends, on an Apple M5 Max with 18
+     cores at a load average of 6 to 12 from other work, at the commit
+     `676f1c6f3d`. Milliseconds.
+
+     | Step                         | Messages held | Executor in memory | Compiled piece in the runner | In the piece | Today's runtime    |
+     | ---------------------------- | ------------- | ------------------ | ---------------------------- | ------------ | ------------------ |
+     | Room, send                   | 10            | 8.5 to 9.7         | 72 to 74                     | 31 to 33     | 690 to 757         |
+     | Room, send                   | 100           | 45 to 49           | 236 to 244                   | 116 to 119   | 1,654 to 1,770     |
+     | Room, send                   | 256           |                    |                              |              | 4,188 to 4,231     |
+     | Room, send                   | 1,000         | 259 to 285         | 1,690 to 1,802               | 892 to 974   | not reached        |
+     | Room, the sends that fill it | 100           | 2,404              | 15,174                       |              | 106,284            |
+     | Room, the sends that fill it | 1,000         | 151,924            | 900,644                      |              | 256 in ten minutes |
+     | Home, start                  |               | 45                 | 221                          |              |                    |
+     | Home, one event              |               | 5.8                | 83                           | 26           |                    |
+     | Manager, start               |               | 25                 | 129                          |              |                    |
+
+     A send on the runner path at 10, 100 and 1,000 messages reads 93, 543 and
+     5,043 positions, stages 10 writes at each, gives 137, 499 and 4,099
+     records, and is 5 commits. At the head the round started from, a send took
+     180 ms at 10 and 940 to 1,000 ms at 100, and Home's event 690 ms. The
+     compiled path is below today's runtime in this harness at each size both
+     reached, by 9 times at 10 messages and 7 times at 100, with the caveats of
+     note 738. It is not below the owner's own 1.2 s at 30 messages on a
+     deployment at every size: it passes that between 500 and 1,000 messages. It
+     grows with the room, by about 1.7 ms for each message held, so the owner's
+     rule is not met. The corpus on the runner path (`corpus.jsonl` of the
+     folder): 258 modules start, 219 take every event, 228 hold the values of
+     the executor in memory, as against 258, 219 and 226. Six lines changed, all
+     by the marker of note 739: `apps/bookmarks/bookmarks.tsx` and
+     `apps/contacts/contact-book.tsx` hold equal values and no refusal;
+     `examples/nested-counter/nested-counter.tsx` has no refusal;
+     `product/primitives/demo/atoms-demo.tsx` handles 7 of 20 events where it
+     handled 10, and `showcase/inductor/pool/inductor-pool.tsx` 0 of 3 where it
+     handled 1, each with "the handler did not commit" where a transaction was
+     aborted before; and `apps/redactor/vault.tsx` holds its refusal of writer
+     fit twice where it held it 3 times. Why the two handle fewer was not looked
+     into.
+741. **Provisional decision of the round, and what was not done.** P200: a place
+     of the result that holds an array of the same length with another value at
+     every position is written once, at the path of the array (note 736). Not
+     done: `facts` on the constructs (note 737); the assembly of a `map` over
+     the result of a body by its keys, a read without a copy, and the schema in
+     each stored link to a typed handle (note 735); the records of every row
+     given again at each send (deferred question 1); the sync of a document of
+     another space (note 739); tests written first for the three changes of note
+     736 that change no value; today's runtime at 1,000 messages and under
+     server execution.
+
+### CFC questions deferred, FabriChat round two
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. The record of a row of a `map` over a stored array names the position `*`
+   below the array for a slot that no evaluation bound
+   (`Instance.#elementsBound`). An append to the array stores a label at the new
+   position, and every row's record is then given again, since a path that names
+   every element is taken to consume another label
+   (`Instance.#readsChangedLabel`). Whether the label of a row has to follow the
+   labels of the other members of the array, and if not, which position such a
+   slot is bound to. Until then a send gives 4 records for each message held.
+2. `put` of `Instance.#place` writes an array whole where every position differs
+   (P200). The record given is then that of the output at the path of the array
+   and no longer one for each member. Whether the label entries below the array
+   that the member writes stored are the ones the write of the array has to
+   store.
+3. A row of `messageRights` exists for a message the room cannot read, where the
+   entries of `facts` left such a message out (note 737). The row holds a link
+   to the message and the rights computed from what the read of it gave.
+4. The marker of a stream that the state of a binding alone holds is written by
+   the transaction of the handler that first sends to the stream (note 739),
+   under no record of the plan. Which label the marker and its link in the
+   result have.
+5. A compiled piece that reads a document of another space reads it through its
+   own transaction (note 739). The read is of another space than the one the
+   commit writes; what the preparation takes of the labels of that document, and
+   what the basis of the piece records for it, were not read.
+
 ## Milestone 6, third round: Topics under the serving loop, and the open items of resume
 
 The third round of milestone 6 of
@@ -16910,3 +17523,491 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    and of its frozen state is keyed by an object the executor made. Nothing of a
    label is involved; it is recorded because a value of the storage is now
    reachable from a store that value code is handed values of.
+
+## Milestone 6, fourth round: why an edit followed the board under the serving loop, and what a takeover still costs
+
+The fourth round of milestone 6 of
+`docs/plans/compiled-pattern-language-integration.md` (2026-11-23), on the
+branch `claude/compiled-pattern-serving-m6` from the commit `233996ca69`. The
+notes are numbered from 838. The provisional decisions are numbered from P210.
+Whenever a note says `map`, it names the case.
+
+838. **What the round did, by step.**
+     - _Why an edit follows the board under the serving loop (step 1), done for
+       the edit of a title, measured and left for the edits that write a long
+       document._ The cause was the posture of the memory server of the harness
+       and not the piece (notes 839 and 840). The edits that still follow the
+       board are in note 841.
+     - _The first event after a takeover (step 2), stubbed._ Nothing of the
+       executor changed. Note 842 says what the first event costs now and what a
+       reader observes, and note 843 has the plan, which this round makes more
+       specific.
+     - _The load under the serving loop in bounded transactions (step 3),
+       stubbed._ Note 844.
+     - _Labels under the serving loop (step 4), done as a measurement._ The
+       serving arms stored labels all along. What they lacked was a label on the
+       inputs (note 845).
+     - _The tables (step 5)._ Notes 846 to 848.
+     - _With the experimental option off._ The one change of the runtime is in
+       `runtime/runner/src/compiled/serving-memory-server.deno.ts`, a helper for
+       tests that nothing loads without the option. The other changes are in
+       `base/pattern-compiler/compare/topics/`.
+839. **Step 1: an edit of a title followed the board because the serving runtime
+     of the harness read its space over a session.** The profile of the edit of
+     the title of the last of 2,000 topics on `filing-order`
+     (`SCALE_PROFILE_STEP`, one step of 95 ms): 69 ms are the memory server
+     evaluating the queries of a session again (`refreshTrackedGraph`,
+     `evaluateTrackedDocument` of `memory/v2/query.ts`, and the traversal below
+     them in `runner/src/traverse.ts`), 3 ms the piece
+     (`RuntimeTransactions.within`), 2 ms the commit of the wave.
+     - _Whose query._ The serving runtime's. `start` of `compiled/serving.ts`
+       brings the argument document with a sync under a schema that declares no
+       structure, which follows every link and stays a query of the session of
+       the serving runtime. Each topic of the generated board links to the two
+       before it, so from the last topic the query reaches every topic, and the
+       memory server walks that again when the topic changes. The first edit of
+       the first, the middle and the last topic took 35, 66 and 95 ms at 2,000
+       topics in that run.
+     - _A second edit of the same topic did not follow the board._ Twenty edits
+       of the title of the middle topic, one after the other
+       (`SCALE_PROFILE_EDITS=title`), took 19 ms at 1,000 topics and 22 ms at
+       2,000, each the median. The server keeps what a walk found, and a second
+       change of the same document walks less. The tables of the rounds before
+       timed the first edit of each topic.
+     - _Why the harness had it and a toolshed does not._ A serving runtime reads
+       its home space straight from the store where the policy of its loop says
+       so (`SpaceServerPolicy.storeReadThrough`): a document its replica does
+       not hold is read from the store when it is first read, a sync is answered
+       from the store with no query of a session, and the loop brings the
+       documents the replica holds up to date from the commits the store takes.
+       The bootstrap of a toolshed turns that on unless
+       `SERVER_EXECUTION_STORE_READ_THROUGH` is `false`.
+       `listenCompiledServingMemoryServer` passed no policy, so the serving
+       runtimes of every test and of every measurement of milestone 6 read over
+       a session, which is not what a toolshed runs.
+840. **Step 1, built: the compiled serving memory server reads from the store
+     (provisional decision P210).** `listenCompiledServingMemoryServer` gives
+     its serving loop `storeReadThrough: true` where the caller's policy leaves
+     it unset.
+     - _What it removes._ The serving runtime holds no query over the inputs of
+       a piece and none over what the piece wrote. An edit of a title takes 16
+       to 20 ms at 2,000 topics at any place of the board.
+     - _What it makes of the plan of note 836._ That plan was to bring the
+       inputs under the argument schema of the plan and to have
+       `RuntimeTransactions.load` wait for a document the replica lacks. With
+       the read-through neither is needed: `load` reads through a transaction of
+       the runtime, the replica reads a document it does not hold from the store
+       in that read, and the store says whether the document exists. A member
+       that another writer adds to an input is read the same way when the
+       executor first follows the reference. Nothing was built for a serving
+       runtime that reads over a session: there the query that follows every
+       link is still how the documents of the inputs arrive, and `load` still
+       takes a document the replica does not hold as empty.
+     - _Test._ `runtime/runner/test/compiled/compiled-serving.test.ts`, "has the
+       serving runtime read the documents of the piece from the store, where no
+       policy says otherwise": the loop counts reads from the store
+       (`ServingLoopStats.storeReads`). It read 0 before the change.
+     - _The reader of the harness._ The second client of
+       `compare/topics/serving.ts` now holds, beside the sink of each step, a
+       sink on the caption of each of the first 20 cards, which is what a reader
+       that shows the first screen of the board holds: the result document and
+       20 documents of cards. It holds no topic. The sinks of the steps were on
+       one path each before, so the clients held no query that follows the links
+       of the board in the rounds before either.
+     - _A defect of the harness, closed._ `emit` prints no artifact for a module
+       the check refuses unless `--unchecked` asks for it (since the merge of
+       the sandbox round). The serving arm compiled with `emit`, so the serving
+       runtime started no board and the run waited without end for the value of
+       the load, with nothing printed. The arm passes `--unchecked`, and a
+       failure of the serving runtime now rejects the step that waits. The run
+       of note 833 that did not start may have been of this kind, a refusal with
+       nothing that ends the wait. That was not shown.
+841. **Step 1, measured and left: an edit that changes a long document follows
+     the board on every holder.** After note 840 an edit of the `shortName`
+     takes 39, 118 and 198 ms at 100, 1,000 and 2,000 topics on `filing-order`,
+     the first edit of the mentions 38, 109 and 198 ms, and a create 79, 185 and
+     348 ms, with 3, 3 and 48 ms in the piece at 2,000.
+     - _Which document._ With `SCALE_COMMITS` the harness lists the documents a
+       change of which the reader was delivered in a step. Each of those three
+       steps delivers the result document, 1.1 MB as JSON text at 1,000 topics
+       and 2.2 MB at 2,000. An edit of a title delivers one row document of 300
+       bytes. The result document holds, in place, six members that have one
+       link for each topic: the children of the board in `$UI` (187 bytes for a
+       topic), the arrays `mentionable`, `crossrefs` and `namesTable` (163
+       each), and the records of the buckets of `crossrefIndex` (171) and of
+       `mentionIndex` (324). An edit of the `shortName` removes one member of
+       the record of the buckets of `crossrefIndex` and adds one, which is a
+       change of the result document.
+     - _Where the time goes._ Twenty edits of the `shortName` of the middle
+       topic at 2,000 topics, 165 ms each (`SCALE_PROFILE_EDITS=shortName`, 4.0
+       s sampled, of which 0.4 s is the profiler's own): the two clients parse
+       and freeze the document they are delivered, 1.1 s
+       (`SpaceSession.#onMessage`, `parseWireText`, `deepFreeze`); the server
+       encodes it, 0.43 s (`encodePlainObject`), and compresses it for the
+       websocket, 0.39 s; the comparison of the document before and after, 0.24
+       s; the table of the link schemas of the document, 0.28 s
+       (`mapRecordChildren`, `mapLinkSchemas` of
+       `memory/v2/schema-table-links.ts`); the piece 0.06 s; the commit of the
+       wave 0.11 s. The queries of the sessions are 0.15 s.
+     - _Edits of the mentions that change no bucket do not follow the board:_
+       twenty of them at 1,000 and at 2,000 topics take 41 and 43 ms each. The
+       first edit of the mentions of the tables empties one bucket and so
+       changes the record of the buckets.
+     - _Why it is left._ A holder is delivered a changed document whole, and the
+       server walks it whole. That is the memory server's and the protocol's
+       cost for a change of one link in a long document, which another branch
+       works on. A reader of the board holds the result document, since `$UI` is
+       a member of it, so a reader that shows the first screen pays it as the
+       reader of the harness does.
+     - _What the compiled path could do about it, not built:_ keep each array of
+       row links and each record of bucket links of the result in a document of
+       its own, with a link at its member of the result, as the rows and the
+       buckets themselves are kept. A reader of the first screen then holds the
+       result document and the document of the children of the board and is
+       delivered neither the record of the buckets of an index nor the arrays it
+       does not read. The write of a changed record would still follow the
+       board, at a sixth of the bytes on this board. It changes the places of
+       `RuntimeTransactions` (`#rowArraysOf`, `#bucketRecordsOf`, `#placeOf`)
+       and the targets of the write records, so it was not started beside the
+       branch that changes the store.
+842. **Step 2, not built: the first event after a takeover is still the whole
+     derivation. What it costs now, and what a reader observes.**
+     - _What it costs._ The first edit after a takeover takes 545, 4,451 and
+       8,543 ms at 100, 1,000 and 2,000 topics on `filing-order` (note 846),
+       from 748, 5,485 and 12,258, and 24,032 evaluations at 2,000. Today's
+       board takes 132, 1,066 and 2,296 ms. In the profile of that step at 1,000
+       topics (4.6 s sampled): 2.4 s are the derivation (`startCompiledPiece`,
+       of which `Instance.#ensure` with the value code 1.0 s, the adapter's
+       `change` with the write records 0.6 s, and the comparison of each value
+       with its stored text, `stored` and `canonical`, 0.7 s), 0.4 s the read of
+       every document the result reaches (`bringReached`, which the store
+       answers), 0.5 s the commit of the wave and 0.35 s its preparation. The
+       derivation ran once: the second derivation of note 830 was not seen.
+     - _What a reader observes._ After the takeover a reader reads the stored
+       result, which the basis found current, in 37, 140 and 229 ms. When an
+       input changes or an event arrives, the serving loop wakes the piece: its
+       thread runs the whole derivation in one cycle, and until that cycle's
+       wave commits the reader sees the result of before the change. Every other
+       piece that the same thread serves waits for that cycle. A reader sees no
+       partial result: the wake writes the paths that differ in one transaction
+       of one wave.
+843. **Step 2, the plan, made specific by what the executor holds.** The plan of
+     notes 817 and 831 stands. This round read the memo of the executor for what
+     a basis per unit has to hold, and adds:
+     1. _The dependencies of an entry are data, by name._ `Entry.reads` is a
+        list of positions, each a document with a path, and `Entry.dependencies`
+        names the entries it used (`Dependency.on`). `Instance.#register` forms
+        the index from them: `#watch` for each position and `uses` for each
+        entry named. So the skeleton of the memo can be stored as it is: for an
+        entry, by its name, the positions it read and the names it used. What
+        cannot be stored is the value as the value code returned it, the
+        closures of `Dependency.stamp` and of `Entry.writers`, and the tables of
+        an assembly (`Entry.members`, `Entry.rows`).
+     2. _The basis has to be by position and kept in reverse._ A basis that
+        names a document and its sequence number makes every unit stale that
+        read any path of the document: the index over the mentions and a sort by
+        `lastActivityAt` read one path of every topic, so an edit of a title
+        would make them stale and their evaluation reads every row. And a basis
+        kept with each unit has to be read for every unit before the stale ones
+        are known, which follows the board. So: for each source document, a
+        document named from it that lists the entries that read it, each with
+        the paths it read (the stored form of `#watch`), and with each stored
+        unit the names of the entries that used it (the stored form of `uses`).
+        A wake that a change of a source caused then reads the list of that one
+        source, marks the entries whose paths the change touches, and follows
+        the users upward, which reads a number of documents that follows what
+        the change reaches.
+     3. _When the lists are written._ An evaluation whose positions and whose
+        used entries are those of the evaluation before writes nothing. The load
+        writes one list for each source document: at 2,000 topics that is 2,000
+        more documents, or fewer where the lists are spread over parts as the
+        numbers of the basis are (P120). A piece that was found stale at a
+        resume, because a source changed while no loop served it, knows the
+        documents that changed and not the paths, and marks every entry the
+        lists of those documents name.
+     4. _What the executor needs, in the order it can be built._ (a) An entry
+        that stands for a stored unit: `Instance.#ensure` returns, for a name
+        the memo does not hold and the lists did not mark, an entry whose value
+        is the stored one, decoded as `RuntimeTransactions.load` decodes a held
+        document, with no reads and no dependencies of its own, and registers
+        nothing. That is sound only for a value that the stored form gives back:
+        a record or a view node of plain values and references. A value that
+        holds a handle, a stream or an index is evaluated. (b) The table of a
+        collection from the stored array and the keys of its rows
+        (`Instance.#stored` does this for an input array), with no body run, and
+        an assembly whose entry holds the keys and leaves the rows it did not
+        evaluate as stored (`Instance.#reassemble` writes each row it holds
+        today). (c) The marks from the lists: a marked name is evaluated when
+        the result demands it, and the entries that used it are marked by the
+        stored users where its value changed. (d) A fold, a sort and an index
+        are entries over every row. Each is one unit whose stored value is the
+        bucket or the array, and it is evaluated only where a path it read
+        changed, which then reads every row it reads. An edit of a title marks
+        none of them on Topics.
+     5. _The write records._ A unit that is not evaluated gives no record, and
+        none is needed while nothing is written for it. The groups a fold label
+        is formed from (`Instance.#regroup`) need the labels of the members,
+        which the storage holds (item 4 of the plan of note 817).
+     6. _The instances a handler made_ are started at a wake, each a root of
+        such units (note 829). They are started the same way: no derivation
+        until a list marks one of their entries or an event names one of their
+        streams.
+     - _Why it was not built in this round._ Items (a) to (d) change
+       `Instance.#ensure`, `#table`, `#reassemble`, the assembly of an index and
+       the adapter's write path, in `exec/executor.ts` and `exec/store.ts`,
+       which two other branches change in this round and where this round was to
+       stay small and local. The reverse lists alone, with nothing that reads
+       them, would add writes to every load and nothing else.
+     - _What would shorten the wake before that, not built:_ under the store
+       read-through the read of every document the result reaches before the
+       derivation (`bringReached`, 0.4 s of 4.6 s at 1,000 topics) is not
+       needed, since the replica reads from the store what the derivation reads.
+       The storage manager says nowhere that a read-through is installed, so the
+       resume cannot tell.
+844. **Step 3, not built: the load under the serving loop in bounded
+     transactions. The ruling it needs.** The load is one transaction of one
+     wave, 3.2 and 6.0 s at 1,000 and 2,000 topics, in which a reader sees
+     nothing of the board. The two ways of note 820 stand, and neither was
+     taken:
+     - _A transaction of the load that commits ahead of the wave._
+       `SpaceServer.#stampRun` refuses `ServerRunInfo.directCommit` for a run
+       that is no `bookkeeping` run, and a bookkeeping run carries no acting
+       principal and no record of a plan. _The ruling needed:_ whether a
+       derivation may commit the rows of a first load directly, each transaction
+       with the write records of its rows, under the basis `#commitDirect`
+       takes, and what a reader may conclude from a board that holds some of its
+       rows. Without it the rows of a load would be stored by a run of the kind
+       the loop uses for its own bookkeeping.
+     - _A first derivation that stops and goes on in the next cycle._ It is the
+       executor change of note 843, item 4 (b): an assembly that holds the rows
+       it evaluated and leaves the others. Not built, for the same reason.
+845. **Step 4: labels under the serving loop. The serving arms stored labels all
+     along, and their inputs had none.**
+     - _What was there._ `servingRuntimeFactory` passes no dial of Contextual
+       Flow Control, and the default of a runtime stores flow labels
+       (`RUNTIME_CFC_DIAL_DEFAULTS` of `cfc/posture-report.ts`: `cfcFlowLabels`
+       at `persist`, enforcement at `enforce-strict`). The harness now reads the
+       stored labels after the load (`readStoredCfcMetadata` on the serving
+       runtime): with the inputs under no label, as in the rounds before, the
+       result document of the compiled board holds 53 label entries and the
+       first row of `mentionable` 10, and a topic none. So the sentence of note
+       826, "no label is stored", was wrong: labels of the templates were
+       stored, over inputs that had no label. No option was added to the
+       factory.
+     - _What is built._ With `SCALE_SERVING_LABELS` the serving arms write each
+       topic and each input under the schema the arm `runner` writes it under
+       (`topicSchemaOf`, `inputClause`), in the space of the identity the arm
+       `runner` uses, whose audience the clauses name. The dials are the
+       defaults on the serving runtime and on both clients. Each step reports
+       the preparations of the process in it, the clients' and the serving
+       runtime's together, with their time
+       (`extended-storage-transaction/prepareCfc`).
+     - _The schema of a topic matters to the time._ A topic written under a
+       schema that declares a label and no structure has the memory server
+       follow every link of the topic when it is written: the first labeled run
+       had an edit of the title of the middle topic at 22, 43 and 75 ms and of
+       the last at 21, 56 and 121 ms. With the mentions declared as references
+       (`SCALE_TOPIC_SCHEMA=mentions-as-cells`, as note 667 ran the arm
+       `runner`) they are 20, 22 and 24 ms and 16, 17 and 23 ms. The table below
+       is of that second run.
+     - _The compiled board, labeled, one run_ (`filing-order`; the reader's time
+       in milliseconds at 100, 1,000 and 2,000 topics, and the time of the
+       preparations in the step): load 494, 3,268, 6,729 with 85, 726 and 1,483
+       in five preparations; edit of a title, middle topic 20, 22, 24 with 3 in
+       eight preparations; first edit of the mentions 41, 97, 190 with 9 to 10;
+       edit of the `shortName` 50, 114, 198 with 9 to 11; edit of
+       `lastActivityAt` 8, 11, 10 with 4 to 6; a create 132, 359, 761 with 21,
+       40 and 79; the first edit after a takeover 672, 4,576, 9,584 with 83, 663
+       and 1,212; the second 31, 437 (one run, not repeated), 37. The result
+       document holds 68 label entries, a row 10 and a topic 1.
+       `sorted-references` is within an eighth of these but for the result
+       document, 70 entries. Nothing was refused on either board: the piece
+       lists no refused commit and the serving runtime reported no failure.
+     - _Against the same boards with no label on the inputs_ (note 846): the
+       load is 0.7 s longer at 2,000 topics, an edit of a title 4 ms, and a
+       create twice as long, 761 against 348 ms, of which the preparations are
+       79 ms. Where the rest of the create goes was not profiled.
+     - _Today's board, labeled, one run_ (`main.tsx`): load 2,850, 16,164,
+       40,819 with 295, 7,388 and 25,832 in 219, 2,020 and 4,019 preparations;
+       edit of a title, middle topic 218, 2,498, 5,004 with 60, 751 and 2,003;
+       edit of the `shortName` 428, 3,783, 7,192; a create 1,019, 8,788, 15,372
+       with 452, 4,180 and 9,392; the first edit after a takeover 349, 3,362,
+       8,204. The harness read no label entry on the result document of today's
+       board and one on a topic. Where today's runtime keeps the labels of what
+       it derives under the serving loop was not looked for, so that zero says
+       nothing of whether it stores them. Nothing was refused.
+     - _So with labels stored the first edit after a takeover is the one step of
+       the compiled board that is not below today's by a wide margin:_ 9.6 s
+       against 8.2 s at 2,000 topics.
+846. **Step 5: Topics under the serving loop, measured.** As in note 833: the
+     arms `serving` and `serving-today` with `SCALE_TAKEOVER`, one process for
+     each board, size and run, one at a time, on the 18-core machine at load
+     averages of 6.1 to 8.4 (1 minute) from other sessions. Each cell is the
+     time in milliseconds until the second client reads the value, at 100, 1,000
+     and 2,000 topics. The compiled boards have the median of three runs, with a
+     create as the median of three creates in each run. Today's board has one
+     run. The inputs are under no label. The serving runtimes read from the
+     store (note 840), today's as well, and the reader holds the first screen of
+     cards.
+
+     | Step                                  | `filing-order`, compiled | `sorted-references`, compiled | `main.tsx`, today, one run |
+     | ------------------------------------- | ------------------------ | ----------------------------- | -------------------------- |
+     | load                                  | 546, 3,204, 6,047        | 549, 3,090, 5,956             | 2,320, 6,929, 13,266       |
+     | edit of a title, first topic          | 34, 39, 39               | 34, 35, 38                    | 106, 737, 1,475            |
+     | edit of a title, middle topic         | 17, 18, 20               | 18, 17, 18                    | 82, 1,005, 1,429           |
+     | edit of a title, last topic           | 16, 17, 16               | 15, 20, 15                    | 84, 754, 1,550             |
+     | edit of the mentions                  | 38, 109, 198             | 42, 106, 193                  | 87, 696, 1,393             |
+     | edit of the `shortName`               | 39, 118, 198             | 40, 111, 209                  | 146, 1,242, 2,573          |
+     | edit of `lastActivityAt`              | 8, 11, 9                 | 12, 26, 39 (the sender)       | 397, 2,685, 5,958          |
+     | create                                | 79, 185, 348             | 80, 194, 339                  | 521, 2,460, 8,967          |
+     | takeover: a client reads `topicCount` | 37, 140, 229             | 39, 123, 223                  | 123, 724, 1,536            |
+     | takeover: the loop is quiescent       | 38, 140, 230             | 44, 128, 224                  | 636, 4,115, 12,612         |
+     | first edit after the takeover         | 545, 4,451, 8,543        | 548, 4,191, 8,316             | 132, 1,066, 2,296          |
+     | second edit after the takeover        | 18, 20, 21               | 17, 18, 18                    | 125, 1,671, 2,991          |
+
+     The lowest and the highest of the three runs at 2,000 topics on
+     `filing-order`: load 5,910 to 6,318, the edit of the middle title 20 to 21,
+     the edit of the `shortName` 196 to 204, a create 344 to 356, the first edit
+     after the takeover 8,361 to 8,730. The basis found the compiled board
+     current in every run, after the comparison of 223, 1,280 and 2,284
+     documents, and the serving runtime evaluated nothing before the first edit.
+     The piece's own time is 2 ms for an edit of a title, 3 for an edit of the
+     `shortName` and 18, 33 and 48 ms for a create, as before. The tables with
+     every row are `tables-after.md` of the round's raw output.
+
+     - _Against note 833._ An edit of a title no longer follows the board or the
+       place of the topic: 20 and 16 ms at 2,000 topics for the middle and the
+       last topic, from 55 and 83. The first edit of a board is 34 to 39 ms at
+       every size and was not taken apart. The edits that change the result
+       document are lower and still follow the board (note 841): the `shortName`
+       198 ms from 307, the mentions 198 from 250, a create 348 from 523. The
+       takeover is read in 229 ms from 509. The first edit after it is 8.5 s
+       from 12.3 s, still the whole derivation (note 842).
+     - _Today's board changed too,_ since its serving runtime also reads from
+       the store now: its load is 13.3 s from 18.7 s and the loop is quiescent
+       after a takeover in 12.6 s from 20.4 s, in one run each.
+     - _A cell that is not the reader's._ On `sorted-references` the reader's
+       sink for the edit of `lastActivityAt` resolved before the edit in every
+       run, so the cell holds the sender's time. The step reads the caption of
+       the first card, which the reader also holds in its first screen. Why the
+       reader's value differed from the caption the sender read before the edit
+       was not found. It is a defect of the harness or a stale read of one of
+       the two clients, not followed.
+847. **Step 5: the list of `compare/serving-path.ts` again.** One process for
+     each run, the compiled arm three times and today's once, 7 events for each
+     figure, load averages 6.3 to 11.1. The pattern and the columns are those of
+     note 818, the cells the median of the runs, in milliseconds.
+
+     |   Rows | Arm      | Runs |   Load | `rename`, sender | `rename`, reader | `add`, sender | `add`, reader |
+     | -----: | -------- | ---: | -----: | ---------------: | ---------------: | ------------: | ------------: |
+     |    100 | compiled |    3 |    127 |             15.9 |             16.3 |          26.9 |          27.2 |
+     |    100 | today    |    1 |    811 |              4.1 |             17.8 |          11.8 |          40.2 |
+     |  1,000 | compiled |    3 |    352 |             15.4 |             15.7 |          39.9 |          40.7 |
+     |  1,000 | today    |    1 |  2,003 |              4.0 |             20.3 |          59.5 |           189 |
+     | 10,000 | compiled |    3 |  3,153 |             26.4 |             26.9 |           226 |           227 |
+     | 10,000 | today    |    1 | 53,228 |              5.7 |             29.1 |           654 |         2,344 |
+
+     After another serving loop takes the space over, from the restart:
+
+     |   Rows | Arm      | A client reads the last row | The loop is quiescent | Documents the comparison read | Evaluations before an event | First event, reader | Evaluations by then | Second event, reader |
+     | -----: | -------- | --------------------------: | --------------------: | ----------------------------: | --------------------------: | ------------------: | ------------------: | -------------------: |
+     |    100 | compiled |                        25.6 |                  29.2 |                           199 |                           0 |                48.2 |                 113 |                 12.0 |
+     |    100 | today    |                         122 |                   158 |                             – |                           – |                14.5 |                   – |                 15.3 |
+     |  1,000 | compiled |                        79.3 |                  81.2 |                         1,263 |                           0 |                 223 |               1,013 |                 13.1 |
+     |  1,000 | today    |                       1,093 |                 1,551 |                             – |                           – |                18.1 |                   – |                 17.7 |
+     | 10,000 | compiled |                         658 |                   662 |                        10,268 |                           0 |               2,134 |              10,013 |                 14.9 |
+     | 10,000 | today    |                      33,162 |                69,899 |                             – |                           – |                25.7 |                   – |                 26.2 |
+
+     The three runs of the compiled arm: load 123 to 140, 336 to 356 and 3,073
+     to 3,306; `add` at the reader 26.8 to 29.0, 37.6 to 42.0 and 220 to 234;
+     the first event after the takeover 42.5 to 49.9, 218 to 226 and 2,131 to
+     2,291. Against note 834, with the serving runtime reading from the store:
+     the load at 10,000 rows is 3.2 s from 4.7 s, an append 227 ms from 525, the
+     read of the sources at a takeover 0.66 s from 1.67 s, and the first event
+     after it 2.1 s from 3.7 s.
+848. **Step 5: the corpus on the runner path, under the serving loop and after a
+     resume.** `compare/runner-corpus.ts`, one run of each over the 376 modules
+     the crate emits on the measurement branch, of which 239 are run. On the
+     runner path 183 pass, with 230 that start, 200 that handle every event, 215
+     with no commit refused and 210 equal to the executor in memory. Under the
+     serving loop (`--serving`), whose runtimes now read from the store, the
+     same 183 pass. After a resume (`--resume`) 182 of the 183 pass: 131 modules
+     were resumed, the basis of all 131 matched, and the wake wrote no document
+     for 93 of them. The one that does not pass is
+     `dev/gideon-tests/test-idempotent-side-effects.tsx`, as in note 835. No
+     module changed against the round before.
+849. **Findings on structure, scale and soundness.**
+     - _Structure, found and closed: the serving memory server of every test and
+       measurement of milestone 6 ran its serving runtimes without the store
+       read-through that a toolshed has on by default_ (notes 839 and 840). The
+       edit of a title that followed the board, the query that the wake kept
+       (note 830) and the plan of note 836 were all consequences of a posture a
+       toolshed does not run.
+     - _Scale, closed: under the serving loop an edit of one title of a board
+       followed the board and the place of the topic_ (note 840). It is 16 to 20
+       ms at 2,000 topics.
+     - _Scale, not closed: a step that changes a member of the result document
+       follows the board on every holder_ (note 841): an edit of the
+       `shortName`, an edit of the mentions that empties or makes a bucket, and
+       a create are 198, 198 and 348 ms at 2,000 topics. The cost is the
+       delivery and the walk of a long document for a change of one link.
+     - _Structure, not closed: the unit of the basis is the piece_ (notes 842
+       and 843). The first event after a takeover is the whole derivation, 8.5 s
+       at 2,000 topics, and with labels on the inputs it is longer than today's
+       first edit after a takeover.
+     - _Structure, not closed: the load on a serving runtime is one transaction
+       of one wave_ (note 844), 6.0 s at 2,000 topics.
+     - _Scale, an observation: a topic written under a schema that declares a
+       label and no structure makes each write of it follow the links of the
+       topic_ (note 845). An input a user writes may be under such a schema.
+       That is the memory server's.
+     - _Soundness, not closed, for a serving runtime that reads over a session:_
+       `RuntimeTransactions.load` takes a document the replica does not hold as
+       empty (note 840). Under the store read-through the replica reads it from
+       the store.
+     - _A defect of the harness, closed: a serving runtime that started no piece
+       left the run waiting without end_ (note 840).
+     - _A defect of the harness or of a client, not closed: the reader's sink on
+       the caption of the first card of `sorted-references` resolves before the
+       edit_ (note 846).
+     - _Not in the gate of the type check:_ `compare/topics/scale.ts` has a type
+       error at the member `at` of a document of a commit, from before this
+       round. `deno task check` does not check the file, and the harness is run
+       with `--no-check`.
+850. **Provisional decisions of the round, and what was not done.** P210: the
+     serving loop of `listenCompiledServingMemoryServer` reads the space of its
+     runtimes from the store where the caller's policy leaves `storeReadThrough`
+     unset, as a toolshed does (note 840). Not done: a basis per unit and a wake
+     that evaluates what an event reaches (notes 842 and 843); the bounded load
+     under the serving loop (note 844); the arrays of row links and the records
+     of bucket links of the result in documents of their own (note 841); the
+     inputs brought under the argument schema of the plan, and a `load` that
+     waits, for a serving runtime that reads over a session (note 840); the read
+     of every reached document before a wake left out under the read-through
+     (note 843); the profile of a create with labels on the inputs (note 845);
+     where today's board keeps its labels under the serving loop (note 845); the
+     reader's sink of note 846; more than one run of today's arms and of the
+     labeled arms; a machine with no other load.
+
+### CFC questions deferred, milestone 6, fourth round
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. A serving runtime that reads from the store reads every document of its space
+   with no query of a session (note 840). The reads are still those of the
+   serving identity. Whether the read ceiling of a session, which bounds what a
+   query delivers, bounds a read from the store in the same way was not examined
+   for a compiled piece.
+2. The plan of note 843 stores, for each source document, the names of the
+   entries that read it and the paths they read, and with each unit the names of
+   the entries that used it. Those lists say which positions of an input a
+   derivation depends on. Which label such a list has, and whether a reader of
+   the piece may read it, is of the kind of CFC question 3 of the second round
+   on the document of the basis.
+3. The ruling of note 844: whether a derivation may commit the rows of a first
+   load ahead of its wave, each transaction under the write records of its rows,
+   and what a reader may conclude from a board that holds some of its rows.
+4. With labels on the inputs, the harness read no label entry on the result
+   document of today's board under the serving loop and 68 on the compiled
+   board's (note 845). Whether the two arms store labels of the same strength
+   for the same derived values was not compared under the serving loop.
