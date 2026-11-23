@@ -26,7 +26,6 @@ import {
   type PerUser,
   type RepresentsCurrentUser,
   type Stream,
-  toSchema,
   UI,
   type VNode,
   wish,
@@ -163,11 +162,6 @@ export const withAgentQueueRunLinkSchema = (
   };
 };
 
-const agentQueueArgumentSchema = toSchema<Record<string, never>>();
-const agentQueueResultSchema = __cf_data(
-  withAgentQueueRunLinkSchema(toSchema<AgentQueueOutput>()),
-);
-
 const AgentQueue = pattern(
   (_: Record<string, never>): AgentQueueOutput => {
     const entries = new Writable<MaterializedAgentQueueEntry[]>([]).for(
@@ -255,8 +249,6 @@ const AgentQueue = pattern(
       setAgentRunner: setAgentRunner({ agentRunner }),
     };
   },
-  agentQueueArgumentSchema,
-  agentQueueResultSchema,
 ) as PatternFactory<Record<string, never>, AgentQueueOutput>;
 
 export default AgentQueue;

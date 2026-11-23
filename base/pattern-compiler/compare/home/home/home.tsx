@@ -17,14 +17,12 @@ import {
   SELF,
   spaceOf,
   Stream,
-  toSchema,
   UI,
   type VNode,
   Writable,
 } from "commonfabric";
 import AgentQueue, {
   type AgentQueueOutput,
-  withAgentQueueRunLinkSchema,
 } from "../agent-queue/agent-queue.tsx";
 import FabriChatManager, {
   type FabriChatManagerOutput,
@@ -441,11 +439,6 @@ const renameSpaceHandler = handler<
   entry.set({ name: name ?? "", did });
   spaces.addUnique(entry);
 });
-
-const homeArgumentSchema = toSchema<Record<string, never>>();
-const homeResultSchema = __cf_data(
-  withAgentQueueRunLinkSchema(toSchema<HomeOutput>()),
-);
 
 const Home = pattern(
   // The return is checked as `pattern()` checks any pattern's result, against
@@ -932,8 +925,6 @@ const Home = pattern(
       createOwnPrivateInbox: createOwnPrivateInboxOnly({ ownPrivateInbox }),
     };
   },
-  homeArgumentSchema,
-  homeResultSchema,
 ) as PatternFactory<Record<string, never>, HomeOutput>;
 
 export default Home;
