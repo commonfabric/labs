@@ -1,0 +1,957 @@
+[
+  {
+    "module": "compare/fixtures/window-construct.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/window-construct.tsx",
+              "source": "const { \"handler\": handler, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst add = $rt.data(handler(\n  (event, { items }) => {\n    items.push({ text: event.text, shown: event.shown ?? true });\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:0ed50c60e17fc2c307b6f5ea24f3dc792119d447fb638144f813247b3e3e8844\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\n$rt.element(1, ($h) => ((3)));\n$rt.element(2, ($h) => ((2)));\n$rt.element(3, ($h) => ((3)));\n{\n$rt.element(4, ($h) => ($h.slot(6)));\n}\n{\n$rt.element(5, ($h) => ($h.slot(7)));\n}\n$rt.element(6, ($h) => ((2)));\nreturn $rt.thunk(($h) => (({ latest: $h.output(2), oldest: $h.output(4), latestShown: $h.output(6), texts: $h.output(8), lastTexts: $h.output(12), add: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { items }) => {\n    items.push({ text: event.text, shown: event.shown ?? true });\n  })($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "collection": 0,
+              "cone": 0,
+              "output": 0
+            },
+            {
+              "collection": 1,
+              "cone": 1,
+              "output": 2
+            },
+            {
+              "collection": 2,
+              "cone": 2,
+              "output": 4
+            },
+            {
+              "collection": 3,
+              "cone": 3,
+              "output": 6
+            },
+            {
+              "collection": 4,
+              "cone": 4,
+              "output": 8
+            },
+            {
+              "collection": 5,
+              "cone": 5,
+              "output": 10
+            },
+            {
+              "collection": 6,
+              "cone": 6,
+              "output": 12
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 23,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 0
+              },
+              "name": "add",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "items"
+                  ],
+                  "place": {
+                    "slot": 12
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 12
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "add",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "shown"
+                  ],
+                  "slot": 9
+                },
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 10
+                },
+                {
+                  "at": [
+                    "binding",
+                    "items"
+                  ],
+                  "handle": true,
+                  "slot": 11
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 11
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 9
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 10
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 11
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "filter",
+              "membership": {
+                "op": "shared",
+                "template": 0
+              },
+              "name": "shown",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "last",
+              "membership": {
+                "op": "shared",
+                "template": 1
+              },
+              "name": "latest",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "first",
+              "membership": {
+                "op": "shared",
+                "template": 2
+              },
+              "name": "first",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "last",
+              "membership": {
+                "op": "shared",
+                "template": 3
+              },
+              "name": {
+                "name": "last",
+                "ordinal": 1
+              },
+              "source": {
+                "collection": 0,
+                "via": "last"
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 2
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
+              "source": {
+                "collection": 1,
+                "via": "map"
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "last",
+              "membership": {
+                "op": "shared",
+                "template": 4
+              },
+              "name": {
+                "name": "last",
+                "ordinal": 2
+              },
+              "source": {
+                "collection": 5,
+                "via": "last"
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/window-construct.tsx",
+                "start": 927
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1,
+                2
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/window-construct.tsx",
+                "start": 967
+              },
+              "bodies": [],
+              "entry": "latest",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/window-construct.tsx",
+                "start": 1017
+              },
+              "bodies": [],
+              "entry": "first",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/window-construct.tsx",
+                "start": 1050
+              },
+              "bodies": [],
+              "entry": "last",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/window-construct.tsx",
+                "start": 1087
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [
+                {
+                  "element": 4
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/window-construct.tsx",
+                "start": 1134
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [
+                {
+                  "element": 5
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/window-construct.tsx",
+                "start": 1124
+              },
+              "bodies": [],
+              "entry": "last",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8
+              ],
+              "within": [
+                {
+                  "element": 6
+                }
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "collection": 0,
+              "cone": 0,
+              "constraints": [],
+              "interim": "shown",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "shown",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "latest"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 1
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "latest",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "oldest"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 2
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "oldest",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            },
+            {
+              "collection": 3,
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "latestShown"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 3
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "latestShown",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "collection": 4,
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "texts"
+              ],
+              "template": {
+                "op": "output",
+                "output": 2
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "texts",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "collection": 5,
+              "cone": 5,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 7
+              }
+            },
+            {
+              "collection": 6,
+              "cone": 6,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "lastTexts"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 4
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "lastTexts",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 8
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:0ed50c60e17fc2c307b6f5ea24f3dc792119d447fb638144f813247b3e3e8844"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "shown"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "collection": 4,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "collection": 5,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 6,
+                "kind": "element"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "shown"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "op": "slot",
+                "slot": 1
+              },
+              "collection": 0,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "op": "const"
+              },
+              "collection": 1,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "op": "const"
+              },
+              "collection": 2,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "op": "const"
+              },
+              "collection": 3,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "op": "const"
+              },
+              "collection": 6,
+              "op": "fold"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "items": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "shown": {
+                        "type": "boolean"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text",
+                      "shown"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "t1": {
+                  "items": {
+                    "properties": {
+                      "shown": {
+                        "type": "boolean"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text",
+                      "shown"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "properties": {
+                "add": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "shown": {
+                      "type": "boolean"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "lastTexts": {
+                  "$ref": "#/$defs/t0"
+                },
+                "latest": {
+                  "$ref": "#/$defs/t1"
+                },
+                "latestShown": {
+                  "$ref": "#/$defs/t1"
+                },
+                "oldest": {
+                  "$ref": "#/$defs/t1"
+                },
+                "texts": {
+                  "$ref": "#/$defs/t0"
+                }
+              },
+              "required": [
+                "latest",
+                "oldest",
+                "latestShown",
+                "texts",
+                "lastTexts",
+                "add"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "properties": {
+                  "shown": {
+                    "type": "boolean"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text",
+                  "shown"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "properties": {
+                "shown": {
+                  "type": "boolean"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "shown"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "properties": {
+                "shown": {
+                  "type": "boolean"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

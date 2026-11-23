@@ -968,7 +968,7 @@ impl<'a> Resolver<'_, 'a> {
             // The result of a `filter` holds elements of its receiver, each
             // with the upstream key, so its type declares the key fields
             // that the type of the receiver declares.
-            "filter" => {
+            "filter" | "last" | "first" => {
                 let result = self.intern(Shape::Array(element));
                 Ok(self.with_key_fields_of(array, result))
             }

@@ -557,7 +557,27 @@ const encodeIndexKey = (
 /** Whether a construct assembles an array of rows. */
 const assemblesRows = (construct: string): boolean =>
   construct === "map" || construct === "filter" || construct === "flatMap" ||
-  construct === "sortBy";
+  construct === "sortBy" || construct === "last" || construct === "first";
+
+/**
+ * How many elements a window holds, from what the function of its count
+ * returned: a whole number that is not negative, and otherwise none.
+ */
+const windowCount = (count: unknown): number =>
+  typeof count === "number" && count > 0 ? Math.floor(count) : 0;
+
+/**
+ * The positions `[start, end)` of the `length` elements of its source that
+ * a window of `count` elements holds.
+ */
+const windowOf = (
+  construct: "last" | "first",
+  length: number,
+  count: number,
+): [number, number] =>
+  construct === "last"
+    ? [Math.max(0, length - count), length]
+    : [0, Math.min(count, length)];
 
 /**
  * The order of two keys of a sort (note 614 of `SPEC-NOTES.md`): numbers
@@ -767,7 +787,7 @@ const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
  * formed again (`#reassemble`).
  */
 type Rows = {
-  construct: "map" | "filter" | "flatMap" | "sortBy";
+  construct: "map" | "filter" | "flatMap" | "sortBy" | "last" | "first";
   /**
    * For a collection over a stored array: the reference that the array
    * was found through, its name, and of the keys of the array the
@@ -816,6 +836,11 @@ type Rows = {
    * the element. `members` holds the elements in the sorted order.
    */
   sortKeys?: Map<string, unknown>;
+  /**
+   * For a window (`last`, `first`): the count its elements were taken by.
+   * `members` holds the elements of the window.
+   */
+  window?: number;
 };
 
 /**
@@ -1227,6 +1252,11 @@ export type Counts = {
   elementEvaluations: number;
   /** Of those, the assemblies of a collection, which no cone computes. */
   assemblies: number;
+  /**
+   * Of the assemblies, those formed whole, from every element of the
+   * source, and not brought up to date from the changes of the source.
+   */
+  assembliesFormed: number;
   /**
    * Segments of a `flatMap` formed: one for each element of the source
    * where the assembly is formed whole, and one for each element whose
@@ -3120,6 +3150,7 @@ export class Instance {
     evaluations: 0,
     elementEvaluations: 0,
     assemblies: 0,
+    assembliesFormed: 0,
     slotsNotListed: 0,
     readsWithoutSlot: 0,
     outputsWithoutEdge: 0,
@@ -6700,7 +6731,10 @@ export class Instance {
     }
     this.counts.evaluations += 1;
     if (kind === "element") this.counts.elementEvaluations += 1;
-    if (kind === "assembly") this.counts.assemblies += 1;
+    if (kind === "assembly") {
+      this.counts.assemblies += 1;
+      this.counts.assembliesFormed += 1;
+    }
     const entryName = cone === undefined
       ? "result"
       : this.plan.cones[cone].entry;
@@ -7208,7 +7242,7 @@ export class Instance {
           });
           // What a later change of the array or of one row is applied to.
           const rows = (
-            construct: "map" | "filter" | "flatMap" | "sortBy",
+            construct: Rows["construct"],
             members: Element[],
             flags?: boolean[],
             segmentDependencies = 0,
@@ -7366,6 +7400,27 @@ export class Instance {
                 }
               }
               return keyed(sorted.map(given));
+            }
+            case "last":
+            case "first": {
+              // A window (note 921 of `SPEC-NOTES.md`): the last or the
+              // first elements of the source, by the count the function
+              // returned, each passed through with its key.
+              const count = windowCount(host.v(results[0]));
+              const [start, end] = windowOf(
+                record.construct,
+                elements.length,
+                count,
+              );
+              const held = elements.slice(start, end);
+              host.members = numbered(held);
+              // A later change of the source moves the window
+              // (`#reassemble`), where every element gave the one count.
+              if (results.every((result) => windowCount(result) === count)) {
+                rows(record.construct, host.members);
+                if (host.rows !== undefined) host.rows.window = count;
+              }
+              return keyed(held.map(given));
             }
             case "flatMap": {
               // An element of the result has the key of its source
@@ -8086,6 +8141,50 @@ export class Instance {
         rows.members = rowsNow;
         value = sorted;
         delta = { ops: spliced, rows: [] };
+      }
+    } else if (rows.construct === "last" || rows.construct === "first") {
+      // A window: the elements at the positions of the window now, against
+      // those it held, as one splice. The work is the count of the window,
+      // and no element outside it is looked at. Another count, and an
+      // element of the window that is no reference, form the assembly
+      // whole.
+      const count = rows.window;
+      if (count === undefined || !Array.isArray(held.value)) return undefined;
+      for (const key of changed) {
+        const element = byKey.get(key);
+        if (
+          element !== undefined &&
+          windowCount(results[element.index]) !== count
+        ) return undefined;
+      }
+      const [start, end] = windowOf(rows.construct, elements.length, count);
+      const now = elements.slice(start, end);
+      const [were, length] = [members.length, now.length];
+      let head = 0;
+      while (
+        head < were && head < length && members[head].key === now[head].key
+      ) head += 1;
+      let tail = 0;
+      while (
+        tail < were - head && tail < length - head &&
+        members[were - 1 - tail].key === now[length - 1 - tail].key
+      ) tail += 1;
+      differs = head !== were || head !== length;
+      if (differs) {
+        if (now.some(({ source }) => !(source instanceof Ref))) {
+          return undefined;
+        }
+        rowsNow = now.map((element, index) => ({ ...element, index }));
+        rows.members = rowsNow;
+        value = now.map(({ source }) => source);
+        delta = {
+          ops: [{
+            start: head,
+            removed: members.slice(head, were - tail).map(({ key }) => key),
+            inserted: now.slice(head, length - tail).map(({ key }) => key),
+          }],
+          rows: [],
+        };
       }
     } else if (rows.construct === "flatMap") {
       const { segments } = rows;
