@@ -20,13 +20,12 @@
  * as a change by another writer, which marks what read the outcome, and a
  * resume finds the outcome stored where it finds the request.
  *
- * - Where the cell sent is of the scope `space`, the outcome is a link to
- *   it, which the executor follows.
- * - Where it is of the scope `user` or `session`, the outcome is the value
- *   the cell holds in that transaction, each link in it written with its
- *   document and its space. The executor names a document by its entity,
- *   with no scope, and holds one outcome for every principal: see the
- *   notes of round thirteen in `base/pattern-compiler/SPEC-NOTES.md`.
+ * The outcome is a link to the cell sent, with the scope of the cell,
+ * which the executor follows to the instance of the principal a run is
+ * for. The state document of an operation the plan gives the scope `user`
+ * is of that scope, so the request and the outcome of each principal are
+ * in the instance of that principal, and the scheduler runs the action
+ * once for each principal that demands the piece.
  */
 import { isWalkableObjectNotArray } from "@commonfabric/data-model";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -60,6 +59,12 @@ export type RuntimeWishesOptions = {
   resultCell: Cell<unknown>;
   /** The entity that holds a document of the executor. */
   entityOf: (doc: string) => URI;
+  /**
+   * The runtime's address of a document of the executor, in the scope the
+   * executor names it for. Without it every state document is the
+   * space's.
+   */
+  linkOf?: (doc: string) => NormalizedFullLink;
   /**
    * The principal a run of a `wish` acts for where the runtime is in the
    * serving posture and nothing stamped the run
@@ -112,9 +117,12 @@ export class RuntimeWishes {
   answer(state: string, builtin: "wish" | keyof typeof EFFECTS = "wish"): void {
     if (this.#registered.has(state)) return;
     const runtime = this.#runtime;
-    const { resultCell, entityOf } = this.#options;
+    const { resultCell, entityOf, linkOf } = this.#options;
     const { space, id: result } = resultCell.getAsNormalizedFullLink();
-    const document: NormalizedFullLink = {
+    // The state document of an operation the plan gives a scope is of that
+    // scope: each principal the action runs for reads the request and
+    // writes the outcome of its own instance.
+    const document: NormalizedFullLink = linkOf?.(state) ?? {
       space,
       id: entityOf(state),
       path: [],
@@ -183,7 +191,10 @@ export class RuntimeWishes {
     stampWaveRunContext(tx, {
       actionId: `compiled-piece:wish:${state}`,
       kind: "derivation",
-      scopeKeyIdentity: { principal: actsFor },
+      scopeKeyIdentity: {
+        principal: actsFor,
+        sessionId: this.#runtime.scopeKeyIdentity.sessionId,
+      },
     });
   }
 
@@ -218,41 +229,11 @@ export class RuntimeWishes {
       path: [...link.path],
       scope: link.scope ?? "space",
     } as NormalizedFullLink;
+    // The link says the scope of the cell, and no principal: the executor
+    // follows it to the instance of the identity each run carries.
     tx.writeValueOrThrow(
       { ...document, path: ["outcome"] },
-      at.scope === "space"
-        ? createSigilLinkFromParsedLink(at) as FabricValue
-        : this.#absolute(tx, at, tx.readValueOrThrow(at)),
+      createSigilLinkFromParsedLink(at) as FabricValue,
     );
-  }
-
-  /**
-   * A stored value read at `base`, with each link in it written with the
-   * document and the space it leads to, and with no schema: the value is
-   * stored in another document than the one it was read from.
-   */
-  #absolute(
-    tx: IExtendedStorageTransaction,
-    base: NormalizedFullLink,
-    value: FabricValue | undefined,
-  ): FabricValue | undefined {
-    if (isPrimitiveCellLink(value)) {
-      const { schema: _schema, ...link } = parseLink(value, base);
-      return createSigilLinkFromParsedLink(link) as FabricValue;
-    }
-    if (Array.isArray(value)) {
-      return value.map((member) =>
-        this.#absolute(tx, base, member as FabricValue)
-      ) as FabricValue;
-    }
-    if (isWalkableObjectNotArray(value)) {
-      return Object.fromEntries(
-        Object.entries(value).map(([name, member]) => [
-          name,
-          this.#absolute(tx, base, member as FabricValue),
-        ]),
-      ) as FabricValue;
-    }
-    return value;
   }
 }

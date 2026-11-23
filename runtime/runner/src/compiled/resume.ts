@@ -47,6 +47,7 @@ import {
   type CompiledPieceOptions,
   startCompiledPiece,
 } from "./piece.ts";
+import { linkOfDocument } from "./scopes.ts";
 
 /**
  * A schema that declares no structure, under which a sync follows every
@@ -68,10 +69,11 @@ const heldAt = (
   runtime: Runtime,
   space: MemorySpace,
   id: URI,
+  scope: NormalizedFullLink["scope"] = "space",
 ): unknown => {
   const tx = runtime.edit();
   try {
-    return tx.readValueOrThrow({ space, id, path: [], scope: "space" });
+    return tx.readValueOrThrow({ space, id, path: [], scope });
   } finally {
     tx.abort();
   }
@@ -93,12 +95,7 @@ const syncBasis = async (
   made = false,
 ): Promise<StoredBasis | undefined> => {
   const at = (document: string) =>
-    runtime.getCellFromLink({
-      space,
-      id: entityOf(document),
-      path: [],
-      scope: "space",
-    }, NOTHING_BELOW);
+    runtime.getCellFromLink(linkOfDocument(space, document), NOTHING_BELOW);
   const document = basisDocumentOf(id);
   await at(document).sync();
   const root = heldAt(runtime, space, entityOf(document));
@@ -138,14 +135,26 @@ const bringReached = async (
   space: MemorySpace,
   roots: readonly string[],
 ): Promise<void> => {
-  const seen = new Set<URI>(roots.map(entityOf));
-  let level = [...seen];
-  const linksOf = (value: unknown, base: NormalizedFullLink, found: URI[]) => {
+  // A document is brought in the scope its name or the link to it says:
+  // the instance of the identity of the runtime.
+  const textOf = ({ id, scope }: NormalizedFullLink) => `${scope}\n${id}`;
+  let level = roots.map((root) => linkOfDocument(space, root));
+  const seen = new Set<string>(level.map(textOf));
+  const linksOf = (
+    value: unknown,
+    base: NormalizedFullLink,
+    found: NormalizedFullLink[],
+  ) => {
     if (typeof value !== "object" || value === null) return;
     if (isCellLink(value)) {
       const link = parseLink(value, base);
       if (link.space === space && link.id !== undefined) {
-        found.push(link.id as URI);
+        found.push({
+          space,
+          id: link.id as URI,
+          path: [],
+          scope: link.scope ?? base.scope,
+        });
       }
       return;
     }
@@ -153,26 +162,17 @@ const bringReached = async (
   };
   while (level.length > 0) {
     await Promise.all(
-      level.map((id) =>
-        runtime.getCellFromLink(
-          { space, id, path: [], scope: "space" },
-          NOTHING_BELOW,
-        ).sync()
-      ),
+      level.map((link) => runtime.getCellFromLink(link, NOTHING_BELOW).sync()),
     );
-    const found: URI[] = [];
-    for (const id of level) {
-      linksOf(
-        heldAt(runtime, space, id),
-        { space, id, path: [], scope: "space" },
-        found,
-      );
+    const found: NormalizedFullLink[] = [];
+    for (const link of level) {
+      linksOf(heldAt(runtime, space, link.id, link.scope), link, found);
     }
     level = [];
-    for (const id of found) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      level.push(id);
+    for (const link of found) {
+      if (seen.has(textOf(link))) continue;
+      seen.add(textOf(link));
+      level.push(link);
     }
   }
 };
@@ -214,12 +214,10 @@ export const syncCompiledPiece = async (
       ...states,
       ...further,
     ].map((document) =>
-      runtime.getCellFromLink({
-        space,
-        id: entityOf(document),
-        path: [],
-        scope: "space",
-      }, document === id && !rows ? NOTHING_BELOW : EVERYTHING).sync()
+      runtime.getCellFromLink(
+        linkOfDocument(space, document),
+        document === id && !rows ? NOTHING_BELOW : EVERYTHING,
+      ).sync()
     ),
   );
 };

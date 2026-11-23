@@ -215,6 +215,11 @@ export class CompiledPiece {
   readonly #arrived = new Set<string>();
   /** The documents the piece asked the storage for (`#bring`). */
   readonly #asked = new Set<string>();
+  /**
+   * Whether the basis is no longer recorded, because the piece has
+   * documents of a scope narrower than the space.
+   */
+  #basisOfEveryKey = false;
   /** The reason of the last commit refused, and `#changes` then. */
   #refusedLast: { reason: string; changes: number } | undefined;
   #stopped = false;
@@ -334,11 +339,17 @@ export class CompiledPiece {
       this.#bring();
       // The basis is of a derivation that brought everything up to date.
       if (first) this.#invalidate();
-      else {
+      else if (!this.#basisOfEveryKey) {
         this.#basis.record(
           given,
           (given.getWriteAttemptLog?.().length ?? 0) > 0,
         );
+        // A piece that has documents of a scope is derived once for each
+        // principal that demands it, and no run brings it up to date for
+        // all of them. The basis recorded last names a document of a
+        // scope as a source, which has no number, so a resume from it
+        // starts the executor, and no later run writes the basis.
+        if (this.transactions.scoped) this.#basisOfEveryKey = true;
       }
     };
     // The runtime's `wish` answers each `wish` operation the instance
@@ -347,6 +358,7 @@ export class CompiledPiece {
     const wishes = new RuntimeWishes(runtime, {
       resultCell: resultCell.withTx(),
       entityOf: (doc) => transactions.entityOf(doc),
+      linkOf: (doc) => transactions.linkOf(doc, []),
       ...(options.actsFor === undefined ? {} : { actsFor: options.actsFor }),
     });
     this.#cancels.push(() => wishes.stop());
@@ -424,6 +436,9 @@ export class CompiledPiece {
               ...(rowDocuments === undefined ? {} : { rowDocuments }),
               ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
               load: (id) => transactions.load(id),
+              // A document of the scope `user` or `session` stands for the
+              // instance of the identity of the transaction of the run.
+              scopes: { keyOf: (scope) => transactions.scopeKey(scope) },
             },
           ), { loadRows: resumed ? Infinity : options.loadRows ?? 250 }),
     );
@@ -439,7 +454,18 @@ export class CompiledPiece {
       runtime.scheduler.subscribe(
         this.#derive,
         { reads: [], shallowReads: [], writes: [] },
-        { isEffect: true },
+        {
+          isEffect: true,
+          // The piece the derivation is of. A serving loop runs an action
+          // that names its piece once for each principal that demands the
+          // piece, and each session of one, from the run on in which it
+          // read a document of that scope.
+          observationIdentity: {
+            space,
+            pieceId: `space:${result.id}`,
+            pieceRootId: result.id,
+          },
+        },
       ),
     );
     // The scheduler delays an action whose runs take long on average, so
@@ -598,7 +624,12 @@ export class CompiledPiece {
         : {
           actionId: `compiled-piece:${what}:${this.#result}`,
           kind: "derivation",
-          scopeKeyIdentity: { principal: actsFor },
+          // The session of the runtime: a document of the scope `session`
+          // has an instance for a session of the principal alone.
+          scopeKeyIdentity: {
+            principal: actsFor,
+            sessionId: this.#runtime.scopeKeyIdentity.sessionId,
+          },
         },
     );
   }
@@ -709,7 +740,12 @@ export class CompiledPiece {
   #refused(reason: string, restored: Restored[]): void {
     this.#refusals.push(reason);
     if (!this.#started || this.#stopped) return;
-    for (const { doc, value } of restored) this.instance.restore(doc, value);
+    for (const { doc, value, acting } of restored) {
+      this.transactions.actingFor(
+        acting,
+        () => this.instance.restore(doc, value),
+      );
+    }
     // A derivation from the same documents writes the same and is refused
     // the same way. Where the storage refused a commit for the reason it
     // gave for the one before, and the piece handled no event and took no
@@ -728,18 +764,23 @@ export class CompiledPiece {
   #changedByOthers(changes: ChangeByOther[]): void {
     if (!this.#started || this.#stopped) return;
     this.#changes += 1;
-    for (const { doc, path, value, splice } of changes) {
+    for (const { doc, path, value, splice, scoped } of changes) {
       this.#counts.changesByOthers += 1;
       const ref = new Ref(doc, path);
-      if (splice === undefined) this.instance.store.write(ref, value);
-      else {
-        this.instance.store.splice(
-          ref,
-          splice.start,
-          splice.removed,
-          splice.members,
-        );
-      }
+      const apply = () => {
+        if (splice === undefined) this.instance.store.write(ref, value);
+        else {
+          this.instance.store.splice(
+            ref,
+            splice.start,
+            splice.removed,
+            splice.members,
+          );
+        }
+      };
+      // A change of an instance of a scope is applied to that instance.
+      if (scoped === undefined) apply();
+      else this.transactions.actingAs(scoped, apply);
     }
     this.#invalidate();
   }

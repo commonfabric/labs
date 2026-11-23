@@ -83,6 +83,13 @@ import { readMaybeLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
 import { documentIn, placeOfDocument } from "./names.ts";
+import {
+  ByDocumentInstance,
+  cellScopeOf,
+  DocumentInstances,
+  instanceNameOf,
+  scopeKeyOf,
+} from "./scopes.ts";
 import type {
   IExtendedStorageTransaction,
   IReadActivity,
@@ -115,6 +122,17 @@ import {
   type Store,
   type StreamPosition,
 } from "../../../../base/pattern-compiler/exec/store.ts";
+import {
+  type Scope,
+  scopedDocument,
+  scopeOfDocument,
+} from "../../../../base/pattern-compiler/exec/scope-instances.ts";
+import {
+  type CellScope,
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 
 /** What the runtime's transactions were given, counted. */
 export type RuntimeCounts = {
@@ -222,6 +240,11 @@ export type ChangeByOther = {
    * the array lost there, and the members it holds there now.
    */
   splice?: { start: number; removed: number; members: unknown[] };
+  /**
+   * For a change of an instance of a document of the scope `user` or
+   * `session`: the scope key of the instance.
+   */
+  scoped?: string;
 };
 
 /**
@@ -336,7 +359,15 @@ export type SourceObserver = {
  * wrote it was refused, as the executor holds a value: `undefined` where
  * the storage holds nothing.
  */
-export type Restored = { doc: string; value: unknown };
+export type Restored = {
+  doc: string;
+  value: unknown;
+  /**
+   * The identity whose instance of the document `value` is, where the
+   * transaction that wrote it carried one (`RuntimeTransactions.actingFor`).
+   */
+  acting?: ScopeKeyIdentity;
+};
 
 /** Keeps the documents of one executor in one space of a runtime. */
 export class RuntimeTransactions implements TransactionHooks {
@@ -347,7 +378,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * The documents whose creation by the executor is the value the storage
    * holds, which the adapter gave it (`heldArgument`).
    */
-  readonly #heldWhole = new Set<string>();
+  readonly #heldWhole = new DocumentInstances((doc) => this.#instanceOf(doc));
   /** The `result` link the documents the executor makes are given. */
   #resultLink: unknown;
   /**
@@ -451,7 +482,7 @@ export class RuntimeTransactions implements TransactionHooks {
   /** Whether `RuntimeCounts.recordBytes` is counted. */
   readonly #countRecordBytes: boolean;
   /** The identifier of each document the storage holds. */
-  readonly #documents = new Set<string>();
+  readonly #documents = new DocumentInstances((doc) => this.#instanceOf(doc));
   /** The document of the executor that each entity holds. */
   readonly #byEntity = new Map<string, string>();
   /** The space of each document that is in another space than `#space`. */
@@ -470,15 +501,19 @@ export class RuntimeTransactions implements TransactionHooks {
    * The label entries of each document `labelOf` read, each as text by the
    * text of its path, which a change of the document is compared against.
    */
-  readonly #entries = new Map<string, Map<string, string>>();
+  readonly #entries = new ByDocumentInstance<Map<string, string>>((doc) =>
+    this.#instanceOf(doc)
+  );
   /**
    * The stored labels of each document of `#entries` as they were when
    * the entries were taken, which a change is compared against by the
    * label a read consumes (`LabelChange.unchanged`).
    */
-  readonly #entriesOf = new Map<string, CfcMetadata | undefined>();
+  readonly #entriesOf = new ByDocumentInstance<CfcMetadata | undefined>((
+    doc,
+  ) => this.#instanceOf(doc));
   /** The documents of `#entries` that a commit changed since. */
-  readonly #touched = new Set<string>();
+  readonly #touched = new DocumentInstances((doc) => this.#instanceOf(doc));
   /** What the executor registered to hear of changed labels. */
   #labelsChanged:
     | ((
@@ -580,7 +615,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * held when the instance was resumed and that this runtime has not
    * written.
    */
-  readonly #heldBefore = new Set<string>();
+  readonly #heldBefore = new DocumentInstances((doc) => this.#instanceOf(doc));
   readonly #sources: SourceObserver | undefined;
   /**
    * The documents the transaction in progress wrote in a transaction of
@@ -747,11 +782,20 @@ export class RuntimeTransactions implements TransactionHooks {
           for (const { address, before, after } of notification.changes) {
             // Two spaces can hold documents of one entity: a document of
             // another space is held under a name that names the space.
-            const doc = this.#byEntity.get(
+            const named = this.#byEntity.get(
               this.#keyOf(notification.space, address.id),
             );
-            if (doc === undefined) continue;
-            if (this.#spaceOf(doc) !== notification.space) continue;
+            if (named === undefined) continue;
+            if (this.#spaceOf(named) !== notification.space) continue;
+            // A change of an instance of a scope is of one scope key: the
+            // one the change names, and the runtime's own where it names
+            // none.
+            const changed = address.scope === undefined ||
+                address.scope === "space"
+              ? undefined
+              : address.scopeKey ??
+                resolveScopeKey(address.scope, this.#runtime.scopeKeyIdentity);
+            const doc = changed === undefined ? named : `${named}~${changed}`;
             // A document the executor asked for and the replica held none
             // of now has one: the piece reads it again.
             if (this.wanted.has(doc) && !this.#documents.has(doc)) {
@@ -775,7 +819,6 @@ export class RuntimeTransactions implements TransactionHooks {
             const row = this.#rowDocuments.get(doc);
             if (
               own || this.#onChanges === undefined ||
-              address.scope !== "space" ||
               (!this.#documents.has(doc) && row === undefined) ||
               (address.path.length > 0 && address.path[0] !== "value")
             ) continue;
@@ -809,7 +852,14 @@ export class RuntimeTransactions implements TransactionHooks {
             const stored = row === undefined
               ? { doc, path: at }
               : this.#addressOfStored(doc, at);
-            const place = { doc: stored.doc, path: [...stored.path] };
+            // The executor names the instances of a scope by one name.
+            const place = {
+              doc: changed === undefined
+                ? stored.doc
+                : scopedDocument(named, address.scope as Scope),
+              path: [...stored.path],
+              ...(changed === undefined ? {} : { scoped: changed }),
+            };
             if (row !== undefined && !row.array.keys.includes(row.key)) {
               continue;
             }
@@ -833,7 +883,12 @@ export class RuntimeTransactions implements TransactionHooks {
             if (!Array.isArray(now) || !Array.isArray(then)) {
               byOther.push({
                 ...place,
-                value: this.#decode(now, undefined, notification.space),
+                value: this.#decode(
+                  now,
+                  undefined,
+                  notification.space,
+                  address.scope ?? "space",
+                ),
               });
               continue;
             }
@@ -844,7 +899,12 @@ export class RuntimeTransactions implements TransactionHooks {
                 start: splice.start,
                 removed: splice.removed,
                 members: splice.members.map((member) =>
-                  this.#decode(member, undefined, notification.space)
+                  this.#decode(
+                    member,
+                    undefined,
+                    notification.space,
+                    address.scope ?? "space",
+                  )
                 ),
               },
             });
@@ -1017,8 +1077,9 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** The space a document of the executor is in. */
   #spaceOf(doc: string): MemorySpace {
-    return placeOfDocument(doc).space as MemorySpace | undefined ??
-      this.#spaces.get(doc) ?? this.#space;
+    const of = doc.indexOf("~") < 0 ? doc : scopeOfDocument(doc).base;
+    return placeOfDocument(of).space as MemorySpace | undefined ??
+      this.#spaces.get(of) ?? this.#space;
   }
 
   /**
@@ -1160,7 +1221,7 @@ export class RuntimeTransactions implements TransactionHooks {
     return readStoredCfcMetadata(tx, {
       space: this.#spaceOf(doc),
       id: this.entityOf(doc),
-      scope: "space",
+      scope: cellScopeOf(doc),
     });
   }
 
@@ -1494,8 +1555,20 @@ export class RuntimeTransactions implements TransactionHooks {
    * of row documents are those of the links the storage holds there.
    */
   #restored(handed: Handed): Restored[] {
+    // What the transaction wrote of a document of a scope, it wrote of the
+    // instance of the identity it carried.
+    const acting = handed.tx?.tx.scopeKeyIdentity;
+    return this.actingFor(acting, () => this.#restoredFor(handed, acting));
+  }
+
+  /** `#restored()`, with the documents standing for the instances of `acting`. */
+  #restoredFor(
+    handed: Handed,
+    acting: ScopeKeyIdentity | undefined,
+  ): Restored[] {
     const restored: Restored[] = [];
     const tx = this.#runtime.edit();
+    if (acting !== undefined) tx.tx.scopeKeyIdentity = acting;
     try {
       for (const doc of handed.created) this.#streams.delete(doc);
       for (const doc of handed.written) {
@@ -1522,7 +1595,13 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#metadata.delete(doc);
         restored.push({
           doc,
-          value: stored === undefined ? undefined : this.#decode(stored, tx),
+          value: stored === undefined ? undefined : this.#decode(
+            stored,
+            tx,
+            this.#spaceOf(doc),
+            cellScopeOf(doc),
+          ),
+          ...(acting === undefined ? {} : { acting }),
         });
       }
     } finally {
@@ -1726,7 +1805,9 @@ export class RuntimeTransactions implements TransactionHooks {
    * document. A `lift` over a whole list asks for the positions it read of
    * every member each time it runs.
    */
-  readonly #labelIds = new Map<string, Map<string, string>>();
+  readonly #labelIds = new ByDocumentInstance<Map<string, string>>((doc) =>
+    this.#instanceOf(doc)
+  );
 
   /**
    * The identifier `labelOf` found for a read of the value at or above an
@@ -2805,7 +2886,7 @@ export class RuntimeTransactions implements TransactionHooks {
           ? {
             space: this.#spaceOf(write.target.doc),
             id: this.entityOf(write.target.doc),
-            scope: "space",
+            scope: cellScopeOf(write.target.doc),
             path: write.target.path,
           }
           : this.#cfcAddress(write.target),
@@ -3147,7 +3228,7 @@ export class RuntimeTransactions implements TransactionHooks {
     return {
       space: this.#spaceOf(doc),
       id: this.entityOf(doc),
-      scope: "space",
+      scope: cellScopeOf(doc),
       path,
     };
   }
@@ -3281,16 +3362,18 @@ export class RuntimeTransactions implements TransactionHooks {
    * entity named here loaded until `close()`.
    */
   entityOf(doc: string): URI {
-    const { named, space } = placeOfDocument(doc);
+    // The instances of every scope of a document are of one entity.
+    const of = doc.indexOf("~") < 0 ? doc : scopeOfDocument(doc).base;
+    const { named, space } = placeOfDocument(of);
     const entity: URI = named.startsWith("of:") || named.startsWith("data:")
       ? named as URI
       : `of:${named}`;
     this.#byEntity.set(
       space === undefined ? entity : documentIn(entity, space),
-      doc,
+      of,
     );
     // The subscription takes the commits of each space named here.
-    if (space !== undefined) this.#spaces.set(doc, space as MemorySpace);
+    if (space !== undefined) this.#spaces.set(of, space as MemorySpace);
     return entity;
   }
 
@@ -3408,12 +3491,127 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The address of a path of a document of the executor. */
   #address(doc: string, path: readonly string[]): NormalizedFullLink {
     const place = this.#placeOf(doc, path);
+    const { scope, key } = scopeOfDocument(place.doc);
     return {
       space: this.#spaceOf(place.doc),
       id: this.entityOf(place.doc),
       path: place.path,
-      scope: "space",
+      // The transaction resolves the instance of a scope from the identity
+      // it carries. A name of the instance of another key than that
+      // identity's names the instance.
+      scope: scope ?? "space",
+      ...(scope !== undefined && key !== undefined &&
+          key !== this.scopeKey(scope)
+        ? { scopeKey: key as ScopeKey }
+        : {}),
     };
+  }
+
+  /**
+   * The scope keys that stand in the place of those of the identity of
+   * the transaction in progress (`actingAs`).
+   */
+  #actingKeys: Partial<Record<Scope, string>> | undefined;
+
+  /**
+   * The identity whose instances a document of a scope stands for now:
+   * that of the transaction in progress, which a serving loop stamped with
+   * the principal and the session of the run, and the runtime's own
+   * where the transaction carries none or none is open.
+   */
+  #actingIdentity(): ScopeKeyIdentity {
+    return this.#actingFor ??
+      (this.#tx ?? this.#given?.tx)?.tx.scopeKeyIdentity ??
+      this.#runtime.scopeKeyIdentity;
+  }
+
+  /** The identity that stands in the place of the transaction's (`actingFor`). */
+  #actingFor: ScopeKeyIdentity | undefined;
+
+  /**
+   * Runs `run` with the documents of a scope standing for the instances
+   * of `identity`, where it is one: for what a transaction that carried it
+   * wrote, taken up after the transaction ended.
+   */
+  actingFor<T>(identity: ScopeKeyIdentity | undefined, run: () => T): T {
+    if (identity === undefined) return run();
+    const outer = this.#actingFor;
+    this.#actingFor = identity;
+    try {
+      return run();
+    } finally {
+      this.#actingFor = outer;
+    }
+  }
+
+  /** Whether the piece has named a document of a scope narrower than the space. */
+  get scoped(): boolean {
+    return this.#scopes;
+  }
+
+  /**
+   * The scope key that a document of `scope` stands for now, as the
+   * storage forms it from the identity of the transaction in progress.
+   */
+  scopeKey(scope: Scope): string {
+    return this.#actingKeys?.[scope] ??
+      scopeKeyOf(scope, this.#actingIdentity());
+  }
+
+  /**
+   * Runs `run` with the documents of the scope of `key` standing for the
+   * instance of `key`: for a change that reached the adapter outside a
+   * transaction, as one another writer committed to one instance.
+   */
+  actingAs<T>(key: string, run: () => T): T {
+    const outer = this.#actingKeys;
+    this.#actingKeys = {
+      ...outer,
+      [key.startsWith("session:") ? "session" : "user"]: key,
+    };
+    try {
+      return run();
+    } finally {
+      this.#actingKeys = outer;
+    }
+  }
+
+  /**
+   * Whether the piece has named a document of the scope `user` or
+   * `session`. From then on a link it stores says the scope of its target
+   * (`#encodeOnce`).
+   */
+  #scopes = false;
+
+  /** The name of the instance that `doc` stands for now. */
+  #instanceOf(doc: string): string {
+    if (doc.indexOf("~") < 0) return doc;
+    if (!this.#scopes && scopeOfDocument(doc).scope !== undefined) {
+      this.#scopes = true;
+      // What was encoded before holds links that say no scope.
+      this.#encoded = new WeakMap();
+    }
+    return instanceNameOf(doc, (scope) => this.scopeKey(scope));
+  }
+
+  /**
+   * What the replica holds at `address`, read through a transaction of
+   * its own, which no commit depends on. For an address of a scope the
+   * transaction carries the identity of the transaction in progress, so
+   * it reads the instance that one reads.
+   */
+  #readStored(address: NormalizedFullLink): FabricValue | undefined {
+    const read = this.#runtime.edit();
+    try {
+      const acting = this.#actingFor ??
+        (this.#tx ?? this.#given?.tx)?.tx.scopeKeyIdentity;
+      if (address.scope !== "space" && acting !== undefined) {
+        read.tx.scopeKeyIdentity = acting;
+      }
+      return read.readValueOrThrow(address);
+    } finally {
+      read.abort();
+    }
   }
 
   /**
@@ -3460,7 +3658,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * the value is frozen once and is the same object at each write, which
    * the runtime compares and hashes by.
    */
-  readonly #encoded = new WeakMap<
+  #encoded = new WeakMap<
     object,
     { rowArrays: number; value: FabricValue }
   >();
@@ -3488,11 +3686,21 @@ export class RuntimeTransactions implements TransactionHooks {
       // the row has.
       const { doc, path } = this.#rowByKey(value.$link.doc, value.$link.path) ??
         value.$link;
+      const { scope } = scopeOfDocument(doc);
       return createSigilLinkFromParsedLink(
         {
           id: this.entityOf(doc),
           space: this.#spaceOf(doc),
           path,
+          // A link holds the name of the scope of its target and no
+          // principal. In a piece that has documents of a scope, a link
+          // to a document of the space says so: a link with no scope
+          // inherits the scope of the document it is stored in.
+          ...(scope !== undefined
+            ? { scope }
+            : this.#scopes
+            ? { scope: "space" as const }
+            : {}),
           // A schema of a plan is a JSON schema with the members the
           // executor reads typed (`Schema` of `exec/store.ts`).
           ...(schema === undefined ? {} : { schema: schema as JSONSchema }),
@@ -3593,13 +3801,8 @@ export class RuntimeTransactions implements TransactionHooks {
       return this.#resume ? this.#held(id) : undefined;
     }
     const address = this.#address(id, []);
-    const read = this.#runtime.edit();
-    let value: FabricValue | undefined;
-    try {
-      value = read.readValueOrThrow(address);
-    } finally {
-      read.abort();
-    }
+    const scope = cellScopeOf(id);
+    let value = this.#readStored(address);
     // A document that the transaction in progress wrote, as one handed with
     // the inputs staged in it, is read through that transaction.
     if (value === undefined && this.#tx !== undefined) {
@@ -3616,10 +3819,11 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     this.wanted.delete(id);
     this.#documents.add(id);
-    // A link of the document that names no space leads into its own.
+    // A link of the document that names no space leads into its own, and
+    // one that names no scope to an instance of its own scope.
     return {
       kind: "external",
-      value: this.#decode(value, undefined, this.#spaceOf(id)),
+      value: this.#decode(value, undefined, this.#spaceOf(id), scope),
     };
   }
 
@@ -3630,20 +3834,17 @@ export class RuntimeTransactions implements TransactionHooks {
    * written and not of the document whole.
    */
   #held(id: string): { kind: string; value: unknown } | undefined {
-    const read = this.#runtime.edit();
-    let value: FabricValue | undefined;
-    try {
-      value = read.readValueOrThrow(this.#address(id, []));
-    } finally {
-      read.abort();
-    }
+    const value = this.#readStored(this.#address(id, []));
     if (value === undefined) {
       this.absent.add(id);
       return undefined;
     }
     this.#documents.add(id);
     this.#heldBefore.add(id);
-    return { kind: "held", value: this.#decode(value) };
+    return {
+      kind: "held",
+      value: this.#decode(value, undefined, this.#space, cellScopeOf(id)),
+    };
   }
 
   /**
@@ -3750,6 +3951,9 @@ export class RuntimeTransactions implements TransactionHooks {
    * document of another space than the instance's.
    */
   confirmedSeqOf(doc: string): number | undefined {
+    // The replica's view of an instance of a scope is of one principal:
+    // a document of a scope has no number here, as one of another space.
+    if (cellScopeOf(doc) !== "space") return undefined;
     if (this.#spaceOf(doc) !== this.#space) return undefined;
     return this.#runtime.storageManager.open(this.#space).replica
       .confirmedDocumentSeq(this.entityOf(doc));
@@ -3790,18 +3994,28 @@ export class RuntimeTransactions implements TransactionHooks {
      * no space leads into that space.
      */
     within: MemorySpace = this.#space,
+    /**
+     * The scope of the document the value is of: a link in it that names
+     * no scope leads to an instance of that scope.
+     */
+    scope: CellScope = "space",
   ): unknown {
     if (isPrimitiveCellLink(value)) {
       const link = parseLink(value);
       const stream = this.#streams.get(link.id ?? "");
       if (stream !== undefined) return { $stream: stream };
+      const to = link.scope === undefined || link.scope === "inherit"
+        ? scope
+        : link.scope;
       // A link into another space than the piece's leads to a document of
       // that space, which the executor holds under a name that names the
-      // space (`documentAt`).
-      const row = this.documentAt({
+      // space (`documentAt`), and a link of the scope `user` or `session`
+      // to the document the executor names for that scope.
+      const at = this.documentAt({
         space: link.space ?? within,
         id: link.id ?? "",
       });
+      const row = to === "space" ? at : scopedDocument(at, to);
       if (
         rows !== undefined &&
         (this.#rowDocuments.has(row) || this.#bucketDocuments.has(row))
@@ -3810,6 +4024,7 @@ export class RuntimeTransactions implements TransactionHooks {
           rows.readValueOrThrow(this.#address(row, [])),
           rows,
           within,
+          scope,
         );
       }
       return {
@@ -3823,13 +4038,13 @@ export class RuntimeTransactions implements TransactionHooks {
       };
     }
     if (Array.isArray(value)) {
-      return value.map((member) => this.#decode(member, rows, within));
+      return value.map((member) => this.#decode(member, rows, within, scope));
     }
     if (isWalkableObjectNotArray(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [
           name,
-          this.#decode(member, rows, within),
+          this.#decode(member, rows, within, scope),
         ]),
       );
     }

@@ -18464,7 +18464,8 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 ## Round fourteen: scopes, so that a compiled piece serves more than one user
 
 The round of 2026-11-23 on the branch `claude/compiled-pattern-sandbox-m5`, from
-the commit `1aa060a02b`. Its tables are in the folder of the round, `r14-scope/`.
+the commit `1aa060a02b`. Its tables are in the folder of the round,
+`r14-scope/`.
 
 880. **How scopes work in today's runtime, and what the compiled design says
      (step 1).** Written before the code of the round. The sources are
@@ -18475,73 +18476,71 @@ the commit `1aa060a02b`. Its tables are in the folder of the round, `r14-scope/`
        scope is no part of the entity: one entity has one instance for the
        space, one for each principal and one for each session of a principal.
        The storage keys an instance by the entity and a scope key, `space`,
-       `user:<principal>` or `session:<principal>:<session>`
-       (`resolveScopeKey` of `runtime/memory/v2.ts`). A link holds the name of
-       a scope and never a principal or a session; a link with no scope
-       inherits the scope of the document it is in. The transaction resolves
-       the key from the identity it carries: the runtime's own on a client,
-       and on a serving runtime the identity the serving loop stamped the run
-       with (`stampWaveRunContext` of `runtime/runner/src/executor/wave.ts`,
-       which sets `scopeKeyIdentity` on the storage transaction).
-     - _The documents of one pattern instance._ Per space: the result
-       document, the argument document, and each internal cell, as long as
-       nothing narrowed them. Per user or per session: the instance of an
-       internal cell whose constructor or schema declares the scope
-       (`Writable.perUser`, `PerSession<T>`), with a link of that scope at the
-       slot of the space instance (the declared-scope redirect of
-       `normalizeAndDiff`); the instance of the result cell of a computation
-       whose run read something of that scope, again behind a link at the
-       broad address (`sendValueToBindingInner` of `pattern-binding.ts`); and
-       every document of a child that was instantiated with `asScope`, whose
-       result cell is of that scope.
+       `user:<principal>` or `session:<principal>:<session>` (`resolveScopeKey`
+       of `runtime/memory/v2.ts`). A link holds the name of a scope and never a
+       principal or a session; a link with no scope inherits the scope of the
+       document it is in. The transaction resolves the key from the identity it
+       carries: the runtime's own on a client, and on a serving runtime the
+       identity the serving loop stamped the run with (`stampWaveRunContext` of
+       `runtime/runner/src/executor/wave.ts`, which sets `scopeKeyIdentity` on
+       the storage transaction).
+     - _The documents of one pattern instance._ Per space: the result document,
+       the argument document, and each internal cell, as long as nothing
+       narrowed them. Per user or per session: the instance of an internal cell
+       whose constructor or schema declares the scope (`Writable.perUser`,
+       `PerSession<T>`), with a link of that scope at the slot of the space
+       instance (the declared-scope redirect of `normalizeAndDiff`); the
+       instance of the result cell of a computation whose run read something of
+       that scope, again behind a link at the broad address
+       (`sendValueToBindingInner` of `pattern-binding.ts`); and every document
+       of a child that was instantiated with `asScope`, whose result cell is of
+       that scope.
      - _How a per-user value is found again._ By the same entity and the same
-       path, in the instance the reader's identity gives. The link at the
-       broad address is the same for every reader.
-     - _Who derives a scoped value, and when._ The scope of a computation is
-       not declared: it is the narrowest scope of what a run read (the
-       ratchet `getNarrowestReadScope` of the transaction, which a read of a
-       scoped address moves, and which resolving the home of the acting
-       principal moves to `user`). A client derives its own instances alone.
-       A serving loop derives every instance: an action of the scheduler that
-       names its piece (`observationIdentity`) runs once while it has read
-       nothing scoped, then once for each principal that demands the piece,
-       and once for each demanding session of a principal for whom a run read
-       something of the scope `session` (`runSchedulerAction` of
-       `scheduler/run.ts`, `scheduler/fan-out.ts`). The demand gives the
-       identity of the run. A handler runs once, as the actor of its event.
+       path, in the instance the reader's identity gives. The link at the broad
+       address is the same for every reader.
+     - _Who derives a scoped value, and when._ The scope of a computation is not
+       declared: it is the narrowest scope of what a run read (the ratchet
+       `getNarrowestReadScope` of the transaction, which a read of a scoped
+       address moves, and which resolving the home of the acting principal moves
+       to `user`). A client derives its own instances alone. A serving loop
+       derives every instance: an action of the scheduler that names its piece
+       (`observationIdentity`) runs once while it has read nothing scoped, then
+       once for each principal that demands the piece, and once for each
+       demanding session of a principal for whom a run read something of the
+       scope `session` (`runSchedulerAction` of `scheduler/run.ts`,
+       `scheduler/fan-out.ts`). The demand gives the identity of the run. A
+       handler runs once, as the actor of its event.
      - _A computation that mixes scopes_ reads each input in the instance its
        address and the identity give, and writes its output in the narrowest
-       scope it read. A write to a cell it was handed lands in the scope of
-       that cell, which is how a value moves from a narrow scope to a broad
-       one. A link to a narrower instance stored in a broad slot resolves to
-       another instance for each reader.
+       scope it read. A write to a cell it was handed lands in the scope of that
+       cell, which is how a value moves from a narrow scope to a broad one. A
+       link to a narrower instance stored in a broad slot resolves to another
+       instance for each reader.
      - _What another user may read._ The runtime does not read across scope
-       keys: a read of the scope `user` resolves to the instance of the
-       identity of the transaction and to no other. The memory server takes
-       the key of an authored commit and of a client's read from the
-       authenticated session, and an explicit key from the serving session of
-       the space alone. So a user reads the space instance and the instances
-       of the user's own principal and sessions. Scope is no label: a value
-       copied from a user instance into a space document is readable by
-       every member, and Contextual Flow Control decides that flow
-       separately.
+       keys: a read of the scope `user` resolves to the instance of the identity
+       of the transaction and to no other. The memory server takes the key of an
+       authored commit and of a client's read from the authenticated session,
+       and an explicit key from the serving session of the space alone. So a
+       user reads the space instance and the instances of the user's own
+       principal and sessions. Scope is no label: a value copied from a user
+       instance into a space document is readable by every member, and
+       Contextual Flow Control decides that flow separately.
      - _What the compiled design says._ `execution-and-storage.md` §1.8 and
-       §4.1: a cone instance has the narrowest scope among `Output.scope` of
-       the plan, the addresses its slots are bound to and the addresses its
+       §4.1: a cone instance has the narrowest scope among `Output.scope` of the
+       plan, the addresses its slots are bound to and the addresses its
        `dynamic` nodes read, and is evaluated once per scope key that demands
        it. A state cell document has scope instances by the declared scope of
        the cell, an operation state document by the scope of the operation's
-       cone instance, and the result document has the space's instance and
-       one for each user or session that a kept output of that scope was
-       evaluated for, which holds the paths of that scope alone, behind a
-       storage link with a declared scope at the path of the space's
-       instance. `Child.scope` (`asScope`) sets the scope of the state the
-       child declares.
+       cone instance, and the result document has the space's instance and one
+       for each user or session that a kept output of that scope was evaluated
+       for, which holds the paths of that scope alone, behind a storage link
+       with a declared scope at the path of the space's instance. `Child.scope`
+       (`asScope`) sets the scope of the state the child declares.
      - _What the plan the crate emits carries._ `stateCells[].scope` for each
        state cell, from the constructor (`X.perUser`, `X.perSession`), and
-       `operations[].scope`, `user` for a `wish` whose target resolves
-       through the home of the acting principal. It carries no `Output.scope`
-       and no `Child.scope`, and the emitter refuses `asScope` on a call in a
-       per-element body (note 724). The executor and the adapter read
-       neither member, and a link of the executor holds a document and a
-       path and no scope.
+       `operations[].scope`, `user` for a `wish` whose target resolves through
+       the home of the acting principal. It carries no `Output.scope` and no
+       `Child.scope`, and the emitter refuses `asScope` on a call in a
+       per-element body (note 724). The executor and the adapter read neither
+       member, and a link of the executor holds a document and a path and no
+       scope.
