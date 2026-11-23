@@ -51,6 +51,7 @@ import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import type { DID } from "@commonfabric/identity";
 import {
   basisDocumentOf,
   basisPartDocumentOf,
@@ -64,6 +65,7 @@ import {
   type StreamOfExecutor,
 } from "./transactions.ts";
 import { compartmentEvaluator } from "./value-code.ts";
+import { RuntimeWishes } from "./wish.ts";
 
 /** What `startCompiledPiece()` takes beside the compiled pattern. */
 export type CompiledPieceOptions = {
@@ -125,10 +127,18 @@ export type CompiledPieceOptions = {
   evaluate?: ModuleEvaluator;
   /**
    * What each `wish` of the piece resolves to, by its operands: a harness's
-   * stand-in for the runtime's own resolution, which a compiled piece does
-   * not call yet. Without it a `wish` holds an error.
+   * table in the place of the runtime's own `wish`, which answers without
+   * this option (`RuntimeWishes`).
    */
   wishes?: NonNullable<Instance["options"]["wishes"]>;
+  /**
+   * The principal the runs of the piece act for where the runtime is in
+   * the serving posture and no serving loop stamped the transaction of the
+   * run: a harness's stand-in for the identity a serving loop takes from
+   * the demand or from the event. A run a serving loop stamped keeps its
+   * stamp.
+   */
+  actsFor?: DID;
   /**
    * What the value code imports from `commonfabric` under each name here,
    * for a built-in the executor does not have: a harness's stand-in for
@@ -297,6 +307,16 @@ export class CompiledPiece {
         );
       }
     };
+    // The runtime's `wish` answers each `wish` operation the instance
+    // evaluates, unless a harness gave a table.
+    const wishes = options.wishes === undefined
+      ? new RuntimeWishes(runtime, {
+        resultCell: resultCell.withTx(),
+        entityOf: (doc) => transactions.entityOf(doc),
+        ...(options.actsFor === undefined ? {} : { actsFor: options.actsFor }),
+      })
+      : undefined;
+    if (wishes !== undefined) this.#cancels.push(() => wishes.stop());
     const resumed = options.resume === true;
     const minted = resumed ? transactions.heldMinted() : undefined;
     if (minted !== undefined) this.#minted = minted;
@@ -335,7 +355,12 @@ export class CompiledPiece {
           events: "queue",
           transactions,
           evaluate: options.evaluate ?? compartmentEvaluator(),
-          ...(options.wishes === undefined ? {} : { wishes: options.wishes }),
+          wishes: options.wishes ?? ((_operands, of) => {
+            if (of === undefined) return undefined;
+            wishes!.answer(of.state);
+            // The action of the runtime's `wish` writes the outcome.
+            return { outcome: {} };
+          }),
           ...(options.builtins === undefined
             ? {}
             : { builtins: options.builtins }),

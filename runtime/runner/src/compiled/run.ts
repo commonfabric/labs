@@ -68,10 +68,11 @@ const isMissingCompiler = (error: unknown): boolean =>
 /**
  * Why a compiled program cannot run as a compiled piece in a runtime that
  * `Runtime.run` starts it in, where it cannot: a plan of the program
- * requests `wish` or an effect, and nothing answers a request of a
- * compiled piece outside the executor's own harness. Every pattern of the
- * program is looked at where the compiler gives them, since a function
- * body of the pattern may instantiate any of them.
+ * requests an effect, and nothing answers the request of an effect of a
+ * compiled piece outside the executor's own harness. A `wish` is answered
+ * by the runtime's own (`compiled/wish.ts`). Every pattern of the program
+ * is looked at where the compiler gives them, since a function body of the
+ * pattern may instantiate any of them.
  */
 const unansweredRequestOf = (
   compiled: Awaited<ReturnType<CompilePatternProgram>> & {
@@ -85,13 +86,10 @@ const unansweredRequestOf = (
   for (const { plan, name } of patterns) {
     const operations =
       (plan as { operations?: { kind?: string }[] }).operations ?? [];
-    const kind = operations.find(({ kind }) =>
-      kind === "wish" || kind === "effect"
-    )?.kind;
-    if (kind !== undefined) {
-      return `The plan of the pattern \`${name ?? "default"}\` requests ${
-        kind === "wish" ? "`wish`" : "an effect"
-      }, which a compiled piece does not answer in this runtime.`;
+    if (operations.some(({ kind }) => kind === "effect")) {
+      return `The plan of the pattern \`${
+        name ?? "default"
+      }\` requests an effect, which a compiled piece does not answer in this runtime.`;
     }
   }
   return undefined;
