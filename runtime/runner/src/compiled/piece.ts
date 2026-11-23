@@ -138,13 +138,14 @@ export class CompiledPiece {
       throw new Error("The result cell of a compiled piece is a whole entity.");
     }
     const { space } = result;
+    const rowDocuments = options.rows === "in-place"
+      ? undefined
+      : rowDocumentCollections(artifact);
     const transactions = new RuntimeTransactions(runtime, space, {
       owner: result.id,
       artifact,
       countRecordBytes: options.countRecordBytes,
-      ...(options.rows === "in-place"
-        ? {}
-        : { rowDocuments: rowDocumentCollections(artifact) }),
+      ...(rowDocuments === undefined ? {} : { rowDocuments }),
       stream: (entity, stream) => this.#registerStream(entity, stream),
       changes: (changes) => this.#changedByOthers(changes),
       labels: () => this.#invalidate(),
@@ -189,6 +190,7 @@ export class CompiledPiece {
           parts: false,
           events: "queue",
           transactions,
+          ...(rowDocuments === undefined ? {} : { rowDocuments }),
           load: (id) => transactions.load(id),
         },
       ), { loadRows: options.loadRows ?? 250 });

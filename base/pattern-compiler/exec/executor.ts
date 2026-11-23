@@ -1798,7 +1798,7 @@ export class Host {
       const assembled = instance.assembled(value.collection);
       const entry: Lazy = () => assembled(instance.freshContext(value.context));
       const index = this.done ? entry(this.context).value : this.depend(entry);
-      return instance.indexRecord(index as Index, this);
+      return instance.indexRecord(index as Index, this, value.collection);
     }
     if (!(value instanceof Assembled)) return value;
     const { instance } = this;
@@ -3332,6 +3332,13 @@ export class Instance {
        * instance the executor was started with are called.
        */
       transactions?: TransactionHooks;
+      /**
+       * The collections whose rows are stored as documents of their own
+       * (`rowDocumentCollections` of `row-documents.ts`). A bucket of an
+       * index that the result keeps over the rows of one of them holds a
+       * reference by key to each row, and a copy of the row otherwise.
+       */
+      rowDocuments?: ReadonlySet<number>;
       /**
        * Where an event that a handler sends to a stream of the executor
        * is kept. `documents`, the default: it is appended to the document
@@ -6789,19 +6796,57 @@ export class Instance {
    * An index as a value, in the shape of today's `CollectionIndexData`:
    * the occupied index keys and each bucket by its encoded key.
    */
-  indexRecord(index: Index, host: Host): Record<string, unknown> {
+  indexRecord(
+    index: Index,
+    host: Host,
+    collection: number,
+  ): Record<string, unknown> {
     const occupied = [...index.buckets].filter(([, { keys }]) =>
       keys.length > 0
     );
+    // Where the index is over the rows of another per-element construct
+    // that the result keeps and that are stored as documents of their own,
+    // a bucket holds a reference by key to each row at its place in the
+    // result, and no copy of the row (note 611 of `SPEC-NOTES.md`): the
+    // index is then written when a member enters or leaves a bucket and
+    // not when a row changes, and what reads a member reads the row where
+    // it is stored, under the row's label.
+    const rows = this.#keptRowsOf(collection);
+    const member = (key: string) =>
+      rows === undefined
+        ? this.indexMember(index, key, host)
+        : new Ref(this.id, [...rows, keySegment(key)]);
     return {
       kind: "collection-index",
       mode: index.mode,
       keys: occupied.map(([, { key }]) => key),
       buckets: Object.fromEntries(occupied.map(([encoded, { keys }]) => {
-        const members = keys.map((key) => this.indexMember(index, key, host));
+        const members = keys.map(member);
         return [encoded, index.mode === "group" ? members : members[0]];
       })),
     };
+  }
+
+  /**
+   * The path of the result at which the instance keeps the rows of the
+   * collection that the index of `collection` is over, where that source
+   * is another per-element construct whose rows are stored as documents
+   * of their own and whose assembled result is a kept output.
+   */
+  #keptRowsOf(collection: number): string[] | undefined {
+    const record = this.plan.collections[collection];
+    const source = record?.source.collection;
+    if (source === undefined || record.within.length > 0) return undefined;
+    // The collections named are those of the plan the executor was started
+    // with.
+    if (this !== this.root || this.options.rowDocuments?.has(source) !== true) {
+      return undefined;
+    }
+    const kept = this.plan.outputs.find((output) =>
+      output.kept === true && !output.path.includes("*") &&
+      (output.collection === source || output.passesCollection === source)
+    );
+    return kept === undefined ? undefined : [...kept.path];
   }
 
   /**

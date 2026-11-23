@@ -12,6 +12,7 @@ import {
   type CompiledPiece,
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
+import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 
@@ -214,6 +215,28 @@ describe("the stored labels of the inverse of a relation of references: a groupi
 
     expect(consumed(result, ["rows", "1", "name"])).toEqual(clauses("tb"));
     expect(consumed(result, ["count"])).toEqual([]);
+  });
+
+  it("files each row under its name in the index the result keeps, as a link to the document of the row", async () => {
+    const { result } = await crossed();
+
+    const byName = valueOf(result).byName as {
+      buckets: Record<string, { name: string; topic: { title: string } }[]>;
+    };
+    expect(byName.buckets["s:2"]).toMatchObject([{
+      name: "2",
+      topic: { title: "tb" },
+    }]);
+    const tx = runtime.edit();
+    try {
+      const [stored] = tx.readValueOrThrow({
+        ...result.getAsNormalizedFullLink(),
+        path: ["byName", "buckets", "s:2"],
+      }) as unknown[];
+      expect(isPrimitiveCellLink(stored)).toBe(true);
+    } finally {
+      tx.abort();
+    }
   });
 
   it("stores the clause of every topic of the array for a bucket of the index of the rows by name, and for its occupied keys", async () => {

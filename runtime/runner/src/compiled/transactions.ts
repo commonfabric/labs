@@ -99,6 +99,7 @@ import type {
 import {
   canonical,
   identifierOf,
+  isKeySegment,
   isLink,
   isStream,
   type Schema,
@@ -1704,6 +1705,26 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /**
+   * Where the storage holds what a reference by key into an array of row
+   * documents names: the document of the row of that key, and the path
+   * below the row. Nothing for any other path.
+   */
+  #rowByKey(doc: string, path: readonly string[]): Address | undefined {
+    for (const array of this.#rowArrays.get(doc) ?? []) {
+      const { length } = array.path;
+      if (
+        path.length <= length || !isPrefix(array.path, path) ||
+        !isKeySegment(path[length])
+      ) continue;
+      return {
+        doc: this.#rowDocument(array, path[length]),
+        path: path.slice(length + 1),
+      };
+    }
+    return undefined;
+  }
+
+  /**
    * The executor's address of a path of a document the storage holds: for a
    * row document, the path below the position of its row.
    */
@@ -2619,7 +2640,12 @@ export class RuntimeTransactions implements TransactionHooks {
       });
     }
     if (isLink(value)) {
-      const { doc, path, schema } = value.$link;
+      const { schema } = value.$link;
+      // A reference by key to a row that is a document of its own is a
+      // link to that document, which stays the row's whatever position
+      // the row has.
+      const { doc, path } = this.#rowByKey(value.$link.doc, value.$link.path) ??
+        value.$link;
       return createSigilLinkFromParsedLink(
         {
           id: this.entityOf(doc),

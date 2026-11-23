@@ -859,6 +859,26 @@ export class Store {
    */
   readonly rowCollections = new Map<string, number>();
 
+  /** The position of each key of a list of row keys, by the list. */
+  readonly #rowPositions = new WeakMap<
+    readonly string[],
+    Map<string, number>
+  >();
+
+  /**
+   * The position of the row of `key` among the rows whose keys are
+   * `keys`, or -1. The positions of a list are found once, so a lookup is
+   * no scan of the rows.
+   */
+  #rowPosition(keys: readonly string[], key: string): number {
+    let positions = this.#rowPositions.get(keys);
+    if (positions === undefined) {
+      positions = new Map(keys.map((each, index) => [each, index]));
+      this.#rowPositions.set(keys, positions);
+    }
+    return positions.get(key) ?? -1;
+  }
+
   /** The key of the row at a position of a stored array, where known. */
   #rowKey(
     doc: string,
@@ -1990,13 +2010,19 @@ export class Store {
         let key = segment;
         const held = value;
         const here = new Ref(doc, at);
+        // The rows of a collection that are stored under their element
+        // keys are found by those keys (`rowKeys`), and no key is formed
+        // from what a row holds.
+        const rows = this.rowKeys.get(JSON.stringify([doc, at]));
         const indexOf = (key: string) =>
-          Array.isArray(held)
-            ? this.#positionOf(
+          !Array.isArray(held)
+            ? -1
+            : rows !== undefined
+            ? this.#rowPosition(rows(), key)
+            : this.#positionOf(
               this.#keysOf(held, here, undefined, fieldsOfKey(key)),
               key,
-            )
-            : -1;
+            );
         let index = indexOf(key);
         for (let hops = 0; index < 0 && hops < MAX_LINKS; hops++) {
           const next = this.#rekeyed(doc, named_, key);
