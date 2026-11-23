@@ -598,6 +598,42 @@ export const runServing = async (
         tx.abort();
       }
     };
+    /**
+     * How the serving runtime holds the list at the member `name` of the
+     * result: the number of links of the list document, and where those
+     * link to chunks, the number of links of each chunk.
+     */
+    const layoutOf = (name: string): unknown => {
+      const [runtime] = serving.runtimes();
+      if (runtime === undefined) return "no serving runtime";
+      const at = result.getAsNormalizedFullLink();
+      const tx = runtime.edit();
+      try {
+        const follow = (link: unknown): unknown => {
+          const { id, path } = parseLink(link as never, at);
+          return tx.readValueOrThrow({
+            ...at,
+            id: id as typeof at.id,
+            path: [...(path ?? [])],
+          });
+        };
+        const held = tx.readValueOrThrow({ ...at, path: [name] });
+        if (!isCellLink(held)) {
+          return Array.isArray(held) ? { inPlace: held.length } : "no list";
+        }
+        const list = follow(held);
+        if (!Array.isArray(list)) return "no list document";
+        const members = list.slice(0, 4096).map((member) =>
+          isCellLink(member) ? follow(member) : undefined
+        );
+        return members.length > 0 &&
+            members.every((member) => Array.isArray(member))
+          ? { chunks: members.map((member) => (member as unknown[]).length) }
+          : { links: list.length };
+      } finally {
+        tx.abort();
+      }
+    };
     const storedLabels = () => {
       const [runtime] = serving.runtimes();
       const at = result.getAsNormalizedFullLink();
@@ -656,6 +692,15 @@ export const runServing = async (
       );
       const began = performance.now();
       await change();
+      // With `SCALE_LAYOUT` set: once the serving runtime is quiescent,
+      // how the list the step waits on is laid out, on the error stream.
+      if (Deno.env.get("SCALE_LAYOUT") !== undefined) {
+        void serving.host.whenQuiescent().then(() =>
+          console.error(
+            JSON.stringify({ step, path, layout: layoutOf(`${path[0]}`) }),
+          )
+        );
+      }
       // A piece the serving runtime did not start never shows the value.
       const [first, second] = await Promise.race([
         Promise.all(visible),

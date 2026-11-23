@@ -115,7 +115,11 @@
  * the links to the row documents and to the bucket documents of the board
  * in the result document, and otherwise in documents of their own
  * (`CompiledPieceOptions.lists`). `SCALE_LIST_WHOLE` is the most rows whose
- * links one list document holds (`CompiledPieceOptions.listWhole`).
+ * links one list document holds (`CompiledPieceOptions.listWhole`). With
+ * `SCALE_LAYOUT` set, the arm `serving` writes to the error stream, for
+ * each step, how the serving runtime holds the list the step waits on, once
+ * that runtime is quiescent: the links of the list document, or the links
+ * of each chunk.
  *
  * With `SCALE_LOAD_ROWS` set to a number, the arm `runner` loads the board
  * with at most that many row documents in one transaction
