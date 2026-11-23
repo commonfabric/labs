@@ -11206,17 +11206,28 @@ export class Instance {
     through = false,
   ): Address[] {
     const found: Address[] = [];
-    const seen = new Map<string, Address>();
+    // The addresses found, by their text, from the second one on: a slot
+    // bound to one position needs no text of it.
+    let seen: Map<string, Address> | undefined;
+    const textOfAddress = (doc: string, path: readonly string[]) =>
+      JSON.stringify([doc, path]);
     const add = (doc: string, path: readonly string[], stopped = false) => {
-      const id = JSON.stringify([doc, path]);
-      const held = seen.get(id);
-      if (held !== undefined) {
-        // A position one read stopped at and another crossed is crossed.
-        if (!stopped) stoppedAt.delete(held);
-        return;
+      if (found.length > 0) {
+        seen ??= new Map(
+          found.map((address) => [
+            textOfAddress(address.doc, address.path),
+            address,
+          ]),
+        );
+        const held = seen.get(textOfAddress(doc, path));
+        if (held !== undefined) {
+          // A position one read stopped at and another crossed is crossed.
+          if (!stopped) stoppedAt.delete(held);
+          return;
+        }
       }
       const address = { doc, path: [...path] };
-      seen.set(id, address);
+      seen?.set(textOfAddress(doc, path), address);
       if (stopped) stoppedAt.add(address);
       found.push(address);
     };
@@ -12870,14 +12881,11 @@ export class Instance {
       if (unit === undefined || key === undefined) break;
       // The body of a `flatMap` runs once for a source element, and each
       // member of the segment it gave has that element's key in its own.
-      const { source } = recordOfKey(key);
-      keys.push([
-        unit.collection,
-        this.plan.collections[unit.collection].construct === "flatMap" &&
-          source !== undefined
-          ? textOf(source)
-          : key,
-      ]);
+      const source =
+        this.plan.collections[unit.collection].construct === "flatMap"
+          ? recordOfKey(key).source
+          : undefined;
+      keys.push([unit.collection, source !== undefined ? textOf(source) : key]);
       inside = unit.inside.get(key);
       base = star + 1;
     }
