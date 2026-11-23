@@ -43,9 +43,12 @@
  * With `SCALE_PROFILE_STEP` naming a step and `SCALE_CPU_PROFILE` a file,
  * the sampling profile of the process over that step is written there.
  *
- * The topics and the inputs are under no label and the serving runtime
- * stores no flow labels, as in `../serving-path.ts`, so the figures are not
- * those of the arm `runner`, which stores labels.
+ * The serving runtime and the clients run with the runtime's default dials
+ * of Contextual Flow Control, under which flow labels are stored. Without
+ * `ServingBoard.labels` the topics and the inputs are under no label, so
+ * nothing the board derives has a label to store. With it, which
+ * `SCALE_SERVING_LABELS` gives, each topic and each input is written under
+ * the schema with the clause the arm `runner` writes it under.
  *
  * The crate's check refuses the two measured boards (a handle declared as
  * a view of the type the cell holds), so the serving runtime of the arm
@@ -57,6 +60,7 @@ import inspector from "node:inspector";
 import { Identity } from "@commonfabric/identity";
 import { dirname, fromFileUrl, join } from "@std/path";
 
+import { getTimingStatsBreakdown } from "../../../logger/src/logger.ts";
 import type { JSONSchema } from "../../../../runtime/runner/src/builder/types.ts";
 import type { Cell, MemorySpace } from "../../../../runtime/runner/src/cell.ts";
 import type { CompiledPiece } from "../../../../runtime/runner/src/compiled/piece.ts";
@@ -70,6 +74,7 @@ import type {
   PatternProgram,
 } from "../../../../runtime/runner/src/compiled/serving.ts";
 import { setUpCompiledPiece } from "../../../../runtime/runner/src/compiled/setup.ts";
+import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
 import type { NormalizedFullLink } from "../../../../runtime/runner/src/link-types.ts";
 import {
   isCellLink,
@@ -99,6 +104,16 @@ export type ServingBoard = {
   created: (turn: number) => unknown;
   /** The topics whose titles the edits write. */
   edited: number[];
+  /**
+   * With it, the inputs are written under labels, as the arm `runner`
+   * writes them: the identity whose space the board is in, the schema each
+   * topic is written under, and the schema of the cell of each input.
+   */
+  labels?: {
+    signer: Identity;
+    topic: (index: number) => JSONSchema;
+    input: (name: string) => JSONSchema;
+  };
 };
 
 /** One measured step of a serving arm. */
@@ -116,6 +131,19 @@ export type ServingStep = {
   compiled?: Record<string, number>;
   /** The reason of each commit of the piece the storage refused so far. */
   refusals?: string[];
+  /**
+   * The preparations of Contextual Flow Control that the process made in
+   * the step, the clients' and the serving runtime's together, and their
+   * time in milliseconds.
+   */
+  preparations: number;
+  prepareMs: number;
+  /**
+   * After the load: how many entries of a label the storage holds for the
+   * result document, for the first row of `mentionable` and for the first
+   * topic.
+   */
+  storedLabels?: { result: number; row: number; topic: number };
   /**
    * With `SCALE_COMMITS` set: each document a change of which the reader
    * was delivered in the step, with the size of what the reader holds of
@@ -368,7 +396,8 @@ export const runServing = async (
   record: (step: ServingStep | ServingTakeover) => void,
 ): Promise<void> => {
   const size = board.topics.length;
-  const signer = await Identity.fromPassphrase(`topics-serving ${size}`);
+  const signer = board.labels?.signer ??
+    await Identity.fromPassphrase(`topics-serving ${size}`);
   const space: MemorySpace = signer.did();
   const resumed: ResumedPiece[] = [];
   const failures: string[] = [];
@@ -418,7 +447,7 @@ export const runServing = async (
     // after it.
     // deno-lint-ignore no-explicit-any
     const cells: any[] = board.topics.map((_, index) =>
-      sender.getCell(space, `topic ${index}`)
+      sender.getCell(space, `topic ${index}`, board.labels?.topic(index))
     );
     for (let from = 0; from < size; from += TOPICS_PER_TRANSACTION) {
       await commit((tx) => {
@@ -444,7 +473,11 @@ export const runServing = async (
     const argument: Record<string, Cell<unknown>> = {};
     await commit((tx) => {
       for (const [name, value] of Object.entries(held)) {
-        const input = sender.getCell(space, { scaleInput: name });
+        const input = sender.getCell(
+          space,
+          { scaleInput: name },
+          board.labels?.input(name),
+        );
         input.withTx(tx).set(value as never);
         argument[name] = input;
       }
@@ -463,6 +496,52 @@ export const runServing = async (
         recordsGiven: running.transactions.counts.recordsGiven,
       };
     };
+    /** The preparations the process made so far, and their time. */
+    const prepared = (): { count: number; ms: number } => {
+      const stats = getTimingStatsBreakdown()["extended-storage-transaction"]
+        ?.["prepareCfc"];
+      return { count: stats?.count ?? 0, ms: stats?.totalTime ?? 0 };
+    };
+    /** How many entries of a label the store holds for a document. */
+    const labelEntriesOf = (id: string): number => {
+      const [runtime] = serving.runtimes();
+      if (runtime === undefined) return 0;
+      const tx = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(tx, {
+          space,
+          id: id as `${string}:${string}`,
+          scope: "space",
+        });
+        return metadata?.labelMap.entries.length ?? 0;
+      } finally {
+        tx.abort();
+      }
+    };
+    const storedLabels = () => {
+      const [runtime] = serving.runtimes();
+      const at = result.getAsNormalizedFullLink();
+      let row = 0;
+      if (runtime !== undefined) {
+        const tx = runtime.edit();
+        try {
+          const first = tx.readValueOrThrow({
+            ...at,
+            path: ["mentionable", "0"],
+          });
+          if (isCellLink(first)) {
+            row = labelEntriesOf(parseLink(first, at).id ?? "");
+          }
+        } finally {
+          tx.abort();
+        }
+      }
+      return {
+        result: labelEntriesOf(at.id),
+        row,
+        topic: labelEntriesOf(cells[0].getAsNormalizedFullLink().id),
+      };
+    };
     const measure = async (
       step: string,
       path: readonly (string | number)[],
@@ -470,6 +549,7 @@ export const runServing = async (
       change: () => void | Promise<void>,
     ) => {
       const before = countsOf();
+      const preparedBefore = prepared();
       const stopProfile = Deno.env.get("SCALE_PROFILE_STEP") === step
         ? await startProfile(Deno.env.get("SCALE_CPU_PROFILE") ?? "")
         : undefined;
@@ -508,6 +588,7 @@ export const runServing = async (
         throw new Error(`The serving runtime failed: ${failures[0]}`);
       }
       const after = countsOf();
+      const preparedAfter = prepared();
       if (logged) reader.storageManager.unsubscribe?.(deliveries);
       const documents = [...delivered].map((id) => {
         const tx = reader.edit();
@@ -531,6 +612,9 @@ export const runServing = async (
         sender: round(first - began),
         reader: round(second - began),
         quiescent: round(quiescent - began),
+        preparations: preparedAfter.count - preparedBefore.count,
+        prepareMs: round(preparedAfter.ms - preparedBefore.ms),
+        ...(step === "load" ? { storedLabels: storedLabels() } : {}),
         ...(after === undefined ? {} : {
           compiled: Object.fromEntries(
             Object.entries(after).map(([name, value]) => [
