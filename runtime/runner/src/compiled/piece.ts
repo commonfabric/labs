@@ -94,6 +94,15 @@ export type CompiledPieceOptions = {
    */
   rows?: "documents" | "in-place";
   /**
+   * Where the links to the row documents of an array, and the links to the
+   * bucket documents of an index the result keeps, are stored. `in-place`,
+   * the default: in the result document. `documents`: in documents of
+   * their own, a long array in chunks, with a link in the result document
+   * at the path of the array or of the record (`RuntimeTransactions` option
+   * `listDocuments`). With `rows` at `in-place` there are no such links.
+   */
+  lists?: "documents" | "in-place";
+  /**
    * The most row documents that one transaction of the load holds. The
    * load commits the documents the instance makes for itself, and then the
    * row documents in transactions of at most this many, before the caller
@@ -215,6 +224,8 @@ export class CompiledPiece {
       countRecordBytes: options.countRecordBytes,
       ...(rowDocuments === undefined ? {} : { rowDocuments }),
       ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
+      listDocuments: options.rows !== "in-place" &&
+        options.lists === "documents",
       stream: (entity, stream) => this.#registerStream(entity, stream),
       changes: (changes) => this.#changedByOthers(changes),
       labels: () => this.#invalidate(),
