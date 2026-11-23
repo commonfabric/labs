@@ -1,7 +1,9 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { Ref, Store, type Undo } from "../store.ts";
+import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
+
+import { Ref, sameStored, Store, type Undo } from "../store.ts";
 
 type Row = { id: string; title: string; tags: string[] };
 
@@ -155,6 +157,100 @@ describe("Store", () => {
         "c",
         "d",
       ]);
+    });
+  });
+
+  describe("a primitive of the data model", () => {
+    const stamped = (nsec: bigint) => {
+      const store = new Store({ parts: false });
+      store.create("doc", "stamp", {
+        at: new FabricEpochNsec(nsec),
+        count: nsec,
+        label: "a",
+      });
+      return store;
+    };
+
+    it("is held as the object it was given as, in a record that is frozen", () => {
+      const at = new FabricEpochNsec(7n);
+      const store = new Store({ parts: false });
+      store.create("doc", "stamp", { at, label: "a" });
+
+      const held = store.peek("doc", []) as { at: FabricEpochNsec };
+
+      expect(Object.isFrozen(held)).toBe(true);
+      expect(held.at).toBe(at);
+      expect(held.at.value).toBe(7n);
+    });
+
+    it("is read as a `FabricEpochNsec` of the same time", () => {
+      const store = stamped(7n);
+
+      const read = store.read(new Ref("doc", [])) as {
+        at: FabricEpochNsec;
+        count: bigint;
+      };
+
+      expect(read.at).toBeInstanceOf(FabricEpochNsec);
+      expect(read.at.value).toBe(7n);
+      expect(read.count).toBe(7n);
+    });
+
+    it("is replaced by a write of another time, and by a put of one", () => {
+      const store = stamped(7n);
+
+      store.write(new Ref("doc", ["at"]), new FabricEpochNsec(8n));
+      const written = (store.peek("doc", ["at"]) as FabricEpochNsec).value;
+      store.put("doc", ["at"], new FabricEpochNsec(9n));
+      const put = (store.peek("doc", ["at"]) as FabricEpochNsec).value;
+
+      expect([written, put]).toEqual([8n, 9n]);
+    });
+
+    it("is replaced by a write of another `bigint`", () => {
+      const store = stamped(7n);
+
+      store.write(new Ref("doc", ["count"]), 8n);
+      store.put("doc", ["label"], 9n);
+
+      expect(store.peek("doc", ["count"])).toBe(8n);
+      expect(store.peek("doc", ["label"])).toBe(9n);
+    });
+
+    it("copies no container for a write of an equal time", () => {
+      const store = stamped(7n);
+      const before = store.copiedByWrites;
+
+      store.write(new Ref("doc", ["at"]), new FabricEpochNsec(7n));
+
+      expect(store.copiedByWrites).toBe(before);
+    });
+  });
+
+  describe("sameStored()", () => {
+    it("takes two times of the data model as the same where they hold one time", () => {
+      const same = sameStored(
+        { at: new FabricEpochNsec(7n) },
+        { at: new FabricEpochNsec(7n) },
+      );
+      const other = sameStored(
+        { at: new FabricEpochNsec(7n) },
+        { at: new FabricEpochNsec(8n) },
+      );
+      const record = sameStored(new FabricEpochNsec(7n), {});
+
+      expect([same, other, record]).toEqual([true, false, false]);
+    });
+
+    it("takes a `bigint` as the same as an equal `bigint` only", () => {
+      const results = [
+        sameStored([7n], [7n]),
+        sameStored([7n], [8n]),
+        sameStored([7n], [7]),
+        sameStored([7n], ["7"]),
+      ];
+
+      expect(results).toEqual([true, false, false, false]);
     });
   });
 

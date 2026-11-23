@@ -310,14 +310,23 @@ const inStorageOrder = (names: readonly string[]): boolean => {
  * where the members of each record are taken in one order. Two values
  * that are one object are the same without a look at what they hold, so
  * the comparison of a value with a copy that shares most of its
- * containers does the work of the containers that differ.
+ * containers does the work of the containers that differ. A primitive of
+ * the data model is the same as another of the same text of the JSON codec
+ * of fabric values (`canonical`) and as nothing else: it has no member
+ * that holds what it stands for. A `bigint`, which plain JSON refuses, is
+ * the same as an equal `bigint` only.
  */
 export const sameStored = (a: unknown, b: unknown): boolean => {
   if (a === b) return true;
+  if (typeof a === "bigint" || typeof b === "bigint") return false;
   const left = typeof a === "object" && a !== null;
   const right = typeof b === "object" && b !== null;
   if (!left || !right) {
     return !left && !right && JSON.stringify(a) === JSON.stringify(b);
+  }
+  if (isDataPrimitive(a) || isDataPrimitive(b)) {
+    return isDataPrimitive(a) && isDataPrimitive(b) &&
+      canonical(a) === canonical(b);
   }
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
@@ -1491,8 +1500,11 @@ export class Store {
       this.#linksIn.set(Object.freeze(kept), links);
       return kept;
     }
-    // An object of a class is no value of a document. It is left as it is,
-    // and a read of what holds it copies as a read of a link does.
+    // An object of a class is left as it is, and a read of what holds it
+    // copies as a read of a link does. A primitive of the data model is
+    // such an object and a value of a document: it is immutable from its
+    // construction, and a copy of what holds it holds the same object
+    // (`#copy`).
     if (!isPlainRecord(value)) return value;
     const names = Object.keys(value);
     let kept: Record<string, unknown> = value;

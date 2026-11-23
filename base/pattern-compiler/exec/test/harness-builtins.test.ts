@@ -45,6 +45,21 @@ describe("a handler that calls built-ins the executor is handed", () => {
     expect(held.at.value).toBe(7n);
   });
 
+  it("stores the second time where the same handler stamps twice", async () => {
+    const instance = new Instance(await artifact(), {}, {
+      builtins: BUILTINS,
+    });
+    const [stream] = instance.streams();
+
+    instance.send(stream.binding, { nsec: 7 });
+    const outcome = instance.send(stream.binding, { nsec: 8 });
+
+    expect(outcome.committed).toBe(true);
+    const held = heldBy(instance) as { by: string; at: FabricEpochNsec };
+    expect(held.at).toBeInstanceOf(FabricEpochNsec);
+    expect(held.at.value).toBe(8n);
+  });
+
   it("freezes each built-in it is handed, and reads none under a name it has", async () => {
     const stamp = () => "did:key:ada";
     const limits = { most: 3, sizes: [1, 2] };
