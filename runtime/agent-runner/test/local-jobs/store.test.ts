@@ -25,6 +25,7 @@ const added = (
   result: ReturnType<LocalJobStore["enqueue"]>,
 ): { job: LocalJob; created: boolean } => {
   if ("conflict" in result) throw new Error(result.conflict);
+  if ("refusal" in result) throw new Error(result.refusal.error);
   return result;
 };
 
