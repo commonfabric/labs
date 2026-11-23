@@ -6596,8 +6596,8 @@ is relitigated.
   start takes 8.5 s on the compiled path and 2.3 s on today's. Question 430
   carries the plan for a basis by unit that it needs.
 
-- The goals are met because the compiled approach is generally better, not by
-  an optimization for the measured case (2026-11-23, Z91). The owner's words:
+- A goal is to be met because the compiled approach is generally better, not
+  by an optimization for the measured case (2026-11-23, Z91). The owner's words:
   "if we make optimizations like link-in-documents we should make sure we're
   not doing a point optimization to hit the goal, especially if main doesn't
   have the same corresponding idea", and of an outlier such as the first edit

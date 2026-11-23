@@ -364,6 +364,12 @@ these rules:
 - A decision the round takes is a provisional decision of the coordinator,
   numbered in a range given in the brief, never worded as an owner ruling.
 - Structural, scaling and soundness findings lead the report.
+- An optimization the round proposes says whether today's runtime has the
+  corresponding mechanism, and its figures are reported with and without
+  it. An outlier is studied as the sign of a general defect, and the fix
+  sought helps every pattern (Z91).
+- No method that regular JavaScript arrays lack is added to the language;
+  the crate recognizes the JavaScript form (Z92).
 - When writing about `map`, `filter` or another per-element construct, name
   the case: an array of references, an array of plain values in place, or
   the result of another per-element construct.
