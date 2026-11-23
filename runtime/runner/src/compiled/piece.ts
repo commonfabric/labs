@@ -217,11 +217,17 @@ export class CompiledPiece {
   readonly #arrived = new Set<string>();
   /** The documents the piece asked the storage for (`#bring`). */
   readonly #asked = new Set<string>();
+  /** Whether the derivation names its piece to the scheduler. */
+  #named = false;
+  /** What stops the derivation action. */
+  #unsubscribe: Cancel | undefined;
   /**
-   * Whether the basis is no longer recorded, because the piece has
-   * documents of a scope narrower than the space.
+   * Whether the basis is recorded by a run that made a document alone,
+   * because the piece has documents of a scope narrower than the space.
    */
   #basisOfEveryKey = false;
+  /** Whether the piece made a document since the basis was recorded. */
+  #madeSinceBasis = false;
   /** The reason of the last commit refused, and `#changes` then. */
   #refusedLast: { reason: string; changes: number } | undefined;
   #stopped = false;
@@ -284,7 +290,10 @@ export class CompiledPiece {
           this.#basis.wrote(handed, written, sources);
         },
         refused: (handed) => this.#basis.refused(handed),
-        made: (doc) => this.#basis.made(doc),
+        made: (doc) => {
+          this.#madeSinceBasis = true;
+          this.#basis.made(doc);
+        },
       },
     });
     this.transactions = transactions;
@@ -352,18 +361,36 @@ export class CompiledPiece {
       // A piece that has documents of a scope is never resumed without its
       // executor, which registers every action again.
       if (!first && !transactions.scoped) outside.flush(given);
+      // The piece names itself to the scheduler from the run on in which it
+      // first named a document of a scope, and derives the rest behind the
+      // first derivation of the instances a handler made. Both when the
+      // transaction of this run has ended: a serving loop runs an action
+      // that was invalidated during its run again at once, where the
+      // replica does not hold what this run wrote yet.
+      const names = transactions.scoped && !this.#named;
+      if (names || (first && this.#named)) {
+        given.addCommitCallback(() => {
+          if (this.#stopped) return;
+          if (transactions.scoped && !this.#named) this.#subscribe();
+          this.#invalidate();
+        });
+      } else if (first) this.#invalidate();
       // The basis is of a derivation that brought everything up to date.
-      if (first) this.#invalidate();
-      else if (!this.#basisOfEveryKey) {
+      if (first) return;
+      // A piece that has documents of a scope is derived once for each
+      // principal that demands it, and no run brings it up to date for
+      // all of them. Its basis names a document of a scope as a source,
+      // which has no number, so a resume from it starts the executor. The
+      // basis is still what lists the documents the piece made, which a
+      // resume brings: it is recorded by the run that made one, and not
+      // by every run, since the runs of one pass for several principals
+      // would each write it.
+      if (!this.#basisOfEveryKey || this.#madeSinceBasis) {
+        this.#madeSinceBasis = false;
         this.#basis.record(
           given,
           (given.getWriteAttemptLog?.().length ?? 0) > 0,
         );
-        // A piece that has documents of a scope is derived once for each
-        // principal that demands it, and no run brings it up to date for
-        // all of them. The basis recorded last names a document of a
-        // scope as a source, which has no number, so a resume from it
-        // starts the executor, and no later run writes the basis.
         if (this.transactions.scoped) this.#basisOfEveryKey = true;
       }
     };
@@ -490,29 +517,8 @@ export class CompiledPiece {
     this.#basis.record(tx, true);
     this.#started = true;
     this.#bring();
-    this.#cancels.push(
-      runtime.scheduler.subscribe(
-        this.#derive,
-        { reads: [], shallowReads: [], writes: [] },
-        {
-          isEffect: true,
-          // The piece the derivation is of. A serving loop runs an action
-          // that names its piece once for each principal that demands the
-          // piece, and each session of one, from the run on in which it
-          // read a document of that scope.
-          observationIdentity: {
-            space,
-            pieceId: `space:${result.id}`,
-            pieceRootId: result.id,
-          },
-        },
-      ),
-    );
-    // The scheduler delays an action whose runs take long on average, so
-    // that a slow computation does not run for each of a burst of changes.
-    // The derivation of a piece is one action for all of its cones, whose
-    // average says nothing of the next run, and an event waits for it.
-    runtime.scheduler.setNoDebounce(this.#derive, true);
+    this.#subscribe();
+    this.#cancels.push(() => this.#unsubscribe?.());
     this.#cancels.push(() => transactions.close());
   }
 
@@ -672,6 +678,41 @@ export class CompiledPiece {
           },
         },
     );
+  }
+
+  /**
+   * Registers the derivation with the scheduler, in the place of an
+   * earlier registration. A piece that has named a document of a scope
+   * names itself: a serving loop runs an action that names its piece once
+   * for each principal that demands the piece, and each session of one,
+   * from the run on in which it read a document of that scope. A piece
+   * with no such document is derived once for every principal, by an
+   * action that names no piece.
+   */
+  #subscribe(): void {
+    this.#unsubscribe?.();
+    this.#named = this.transactions.scoped;
+    this.#unsubscribe = this.#runtime.scheduler.subscribe(
+      this.#derive,
+      { reads: [], shallowReads: [], writes: [] },
+      {
+        isEffect: true,
+        ...(this.#named
+          ? {
+            observationIdentity: {
+              space: this.#space,
+              pieceId: `space:${this.#result}`,
+              pieceRootId: this.#result,
+            },
+          }
+          : {}),
+      },
+    );
+    // The scheduler delays an action whose runs take long on average, so
+    // that a slow computation does not run for each of a burst of changes.
+    // The derivation of a piece is one action for all of its cones, whose
+    // average says nothing of the next run, and an event waits for it.
+    this.#runtime.scheduler.setNoDebounce(this.#derive, true);
   }
 
   /** Has the scheduler run the derivation action. */

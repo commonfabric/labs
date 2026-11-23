@@ -47,7 +47,7 @@ import {
   type CompiledPieceOptions,
   startCompiledPiece,
 } from "./piece.ts";
-import { linkOfDocument } from "./scopes.ts";
+import { inSpaceOfPiece, linkOfDocument } from "./scopes.ts";
 
 /**
  * A schema that declares no structure, under which a sync follows every
@@ -292,9 +292,13 @@ export const resumeCompiledPiece = async (
       tx.abort(error);
       throw error;
     }
-    const missing = [...piece.transactions.absent].filter((id) =>
-      !brought.has(id)
-    );
+    // A place the executor found no document of, and a document of the
+    // space of the piece that a link led to and the replica held none of,
+    // as the cell a `wish` keeps for the principal.
+    const missing = [
+      ...piece.transactions.absent,
+      ...[...piece.transactions.wanted].filter(inSpaceOfPiece),
+    ].filter((id) => !brought.has(id));
     if (missing.length === 0) {
       runtime.prepareTxForCommit(tx);
       const { settled } = tx.commit();

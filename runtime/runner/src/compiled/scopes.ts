@@ -25,6 +25,7 @@ import {
 import type { MemorySpace } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { URI } from "../sigil-types.ts";
+import { placeOfDocument } from "./names.ts";
 
 /** The scope a name of a document of the executor is of. */
 export const cellScopeOf = (doc: string): CellScope =>
@@ -79,6 +80,13 @@ export const linkOfDocument = (
     scope: scope ?? "space",
   };
 };
+
+/**
+ * Whether the name `doc` of a document of the executor names no other
+ * space than that of its piece (`names.ts`).
+ */
+export const inSpaceOfPiece = (doc: string): boolean =>
+  placeOfDocument(scopeOfDocument(doc).base).space === undefined;
 
 /** A set of documents, each instance of a scoped document by itself. */
 export class DocumentInstances extends Set<string> {
