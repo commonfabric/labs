@@ -254,5 +254,13 @@ describe("a collection index that a compiled piece keeps, and a second piece tha
       "byTag/keys",
     ]);
     expect(consumed(result, ["byTag", "keys"])).toEqual(EVERY_ITEM);
+    // The buckets that stayed, the one that came to exist, and a key that
+    // has no bucket any more.
+    for (const key of ["s:t1", "s:t9", "s:t0"]) {
+      expect(consumed(result, ["byTag", "buckets", key])).toEqual(EVERY_ITEM);
+      expect(consumed(result, ["byTag", "buckets", key, "length"])).toEqual(
+        EVERY_ITEM,
+      );
+    }
   });
 });
