@@ -238,7 +238,12 @@ export const outOfFileForm = (value: unknown): unknown => {
 const show = (value: unknown): string =>
   (JSON.stringify(value) ?? "undefined").slice(0, 120);
 
-/** The first place two normalized values differ at, or `undefined`. */
+/**
+ * The first place two normalized values differ at, or `undefined`. Two
+ * arrays whose positions are equal differ at `length` where one has more
+ * positions than the other, which is the case where the further positions
+ * hold nothing.
+ */
 export const firstDifference = (
   a: unknown,
   b: unknown,
@@ -249,7 +254,7 @@ export const firstDifference = (
       const found = firstDifference(a[index], b[index], [...path, `${index}`]);
       if (found !== undefined) return found;
     }
-    return undefined;
+    return firstDifference(a.length, b.length, [...path, "length"]);
   }
   if (isRecord(a) && isRecord(b)) {
     for (const name of new Set([...Object.keys(a), ...Object.keys(b)])) {
