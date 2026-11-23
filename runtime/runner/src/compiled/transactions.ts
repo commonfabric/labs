@@ -3461,6 +3461,12 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #streamEntity(stream: StreamOfExecutor): URI {
     const entity = this.#entityOfStream(stream);
+    // A stream taken with a row left as stored has its marker where the
+    // stored row linked to it, which the first value that holds the stream
+    // here finds out with one read.
+    if (this.#streamsAssumed.delete(entity) && !this.#holdsMarker(entity)) {
+      this.#streams.delete(entity);
+    }
     if (!this.#streams.has(entity)) {
       this.#streams.set(entity, stream);
       this.#createdStreams.push(entity);
@@ -3470,9 +3476,56 @@ export class RuntimeTransactions implements TransactionHooks {
         { $stream: true },
       );
       this.#linkToResult(this.#open(), entity);
-      this.#onStream?.(entity, stream);
+      this.#handleStream(entity, stream);
     }
     return entity;
+  }
+
+  /**
+   * The streams of `heldStream` that no value this adapter encoded has
+   * held: whether the storage holds the marker of each was not read.
+   */
+  readonly #streamsAssumed = new Set<string>();
+
+  /** The entities of the streams whose handler was registered. */
+  readonly #streamsHandled = new Set<string>();
+
+  /** Registers the handler of a stream, once for each entity. */
+  #handleStream(entity: URI, stream: StreamOfExecutor): void {
+    if (this.#streamsHandled.has(entity)) return;
+    this.#streamsHandled.add(entity);
+    this.#onStream?.(entity, stream);
+  }
+
+  /** Whether the replica holds the runtime's stream marker in `entity`. */
+  #holdsMarker(entity: URI): boolean {
+    const read = this.#runtime.edit();
+    try {
+      const held = read.readValueOrThrow({
+        space: this.#space,
+        id: entity,
+        path: [],
+        scope: "space",
+      });
+      return isWalkableObjectNotArray(held) && held.$stream === true;
+    } finally {
+      read.abort();
+    }
+  }
+
+  /**
+   * Takes a stream of the executor as one of a row that the executor
+   * holds as stored: its handler is registered, and a link to its entity
+   * is read as the stream, with nothing written and nothing read. The run
+   * that stored the row wrote the marker where the row links to the
+   * stream.
+   */
+  heldStream(stream: StreamOfExecutor): void {
+    const entity = this.#entityOfStream(stream);
+    if (this.#streams.has(entity)) return;
+    this.#streams.set(entity, stream);
+    this.#streamsAssumed.add(entity);
+    this.#handleStream(entity, stream);
   }
 
   /**

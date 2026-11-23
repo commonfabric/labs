@@ -293,6 +293,13 @@ export class CompiledPiece {
           transactions.writeOwn(handed, doc, path, value as FabricValue),
         result: (rows) => transactions.heldResult(rows),
         rowsHeld: (path, keys) => transactions.rowsHeld(path, keys),
+        streamsHeld: (bindings, keys) => {
+          for (const key of keys) {
+            for (const binding of bindings) {
+              transactions.heldStream({ binding, keys: [key] });
+            }
+          }
+        },
       },
       options.resume === true ? options.stale : undefined,
     );

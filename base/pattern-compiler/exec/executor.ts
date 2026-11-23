@@ -87,6 +87,7 @@ import {
 } from "./plan-write.ts";
 import { freezeModuleData, hardenFunction } from "./frozen.ts";
 import {
+  boundInElement,
   STORED_ROW,
   storedRowCollections,
   type StoredUnits,
@@ -6999,6 +7000,8 @@ export class Instance {
       rows.map(({ doc }) => ({ $link: { doc, path: [] } })),
     );
     units.held(held.path, keys);
+    const bindings = boundInElement(this.artifact, collection);
+    if (bindings.length > 0) units.bound(bindings, keys);
     this.#seeds.set(name, { collection, path: held.path, on, targets });
     return value;
   }
@@ -7035,6 +7038,24 @@ export class Instance {
     };
     entry.rows.keyOf.set(name, key);
     this.uses(assembly, name);
+  }
+
+  /**
+   * Evaluates the body of each element of `context` that an `element`
+   * step of `within` names and whose row an assembly holds as stored: a
+   * handler that a body binds runs with the row of its element evaluated,
+   * as a whole derivation would have left it.
+   */
+  #evaluateStoredRows(within: readonly Step[], context: Context): void {
+    if (this.#seeds.size === 0) return;
+    for (const { element: collection } of within) {
+      if (collection === undefined) continue;
+      const element = context.get(collection);
+      const around = this.#keysIn(this.#outerOf(collection), context);
+      const assembly = this.#name("assembly", collection, around);
+      if (element === undefined || !this.#seeds.has(assembly)) continue;
+      this.#perElement(collection, element.key)(context);
+    }
   }
 
   /**
@@ -13952,6 +13973,7 @@ export class Instance {
         error: "no element holds the stream",
       };
     }
+    this.#evaluateStoredRows(record.within, context);
     const body = record.handler.body;
     const run = body === undefined
       ? undefined

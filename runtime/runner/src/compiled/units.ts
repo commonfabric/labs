@@ -79,6 +79,8 @@ export type UnitsStorage<Tx extends object> = {
   result: StoredUnits["result"];
   /** `StoredUnits.held`. */
   rowsHeld: StoredUnits["held"];
+  /** `StoredUnits.bound`. */
+  streamsHeld: StoredUnits["bound"];
 };
 
 /** Keeps the lists of the readers of one piece while a runtime runs it. */
@@ -209,6 +211,11 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
   /** @inheritDoc */
   held(path: readonly string[], keys: readonly string[]): void {
     this.#storage.rowsHeld(path, keys);
+  }
+
+  /** @inheritDoc */
+  bound(bindings: readonly number[], keys: readonly string[]): void {
+    this.#storage.streamsHeld(bindings, keys);
   }
 
   #note(doc: string, id: string, listed: Listed | undefined): void {

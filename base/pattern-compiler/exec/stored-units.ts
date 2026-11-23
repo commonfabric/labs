@@ -10,7 +10,9 @@
  * and from the links to the row documents that the stored result holds,
  * evaluates no body, and holds `STORED_ROW` in the place of each row. The
  * body of an element is evaluated when a document it read changes, which
- * the lists of `StoredUnits.readers` say, or when something reads the row.
+ * the lists of `StoredUnits.readers` say, when something reads the row, or
+ * when an event arrives for a stream that the body binds
+ * (`StoredUnits.bound`).
  *
  * Every other construct is evaluated whole by the resumed executor.
  */
@@ -87,6 +89,12 @@ export type StoredUnits = {
   readers(doc: string): readonly StoredReader[];
   /** The executor holds the rows of `keys` at `path` as stored. */
   held(path: readonly string[], keys: readonly string[]): void;
+  /**
+   * The executor holds as stored the rows of `keys`, whose element body
+   * binds each handler of `bindings`: the stream of each binding for each
+   * key takes events, though no evaluation of this executor formed it.
+   */
+  bound(bindings: readonly number[], keys: readonly string[]): void;
   /** An evaluation of the body of an element ended. */
   read(reads: ElementReads): void;
   /** The element of `key` left `collection`. */
@@ -100,10 +108,12 @@ export type StoredUnits = {
  * - its rows are documents of their own (`rows`, as
  *   `rowDocumentCollections` gives them), and its source is a slot that
  *   holds an array, so each element is a reference;
- * - nothing is declared inside its element body: no handler binding, no
+ * - nothing but a handler binding is declared inside its element body: no
  *   state cell, no instance, no operation and no other collection, and no
- *   cone of the body has side-writes. A row then holds no stream and names
- *   no document that exists only once the body ran;
+ *   cone of the body has side-writes. A row then names no document that
+ *   exists only once the body ran. The stream of a binding of the body is
+ *   named by the binding and the key of the element, so it is known with
+ *   no evaluation (`boundInElement`);
  * - no label template of the plan folds over it: the label of a fold is
  *   formed from the labels of the members, which the executor holds for
  *   the members it evaluated.
@@ -121,7 +131,6 @@ export const storedRowCollections = (
   const declaredIn = new Set<number>();
   for (
     const { within } of [
-      ...plan.bindings,
       ...plan.stateCells,
       ...plan.children ?? [],
       ...plan.operations,
@@ -160,3 +169,15 @@ export const storedRowCollections = (
   });
   return found;
 };
+
+/**
+ * The handler bindings of the plan of `artifact` that the element body of
+ * `collection` declares, by their position among the bindings.
+ */
+export const boundInElement = (
+  artifact: Artifact,
+  collection: number,
+): number[] =>
+  artifact.plan.bindings.flatMap(({ within }, binding) =>
+    within.some((step) => step.element === collection) ? [binding] : []
+  );
