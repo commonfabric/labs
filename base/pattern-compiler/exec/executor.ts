@@ -348,6 +348,30 @@ export type Code = {
   unsupported: { kind: string; file: string; start: number }[];
 };
 
+/**
+ * Makes a function of the text of a module of value code: the statements
+ * of `source` are its body, in strict mode, and `parameters` are the names
+ * of its parameters, which the statements read as free names. What other
+ * free names the statements can read is the evaluator's to decide.
+ */
+export type ModuleEvaluator = (
+  module: { path: string; source: string },
+  parameters: readonly string[],
+) => (...given: unknown[]) => void;
+
+/**
+ * The evaluator that confines nothing: the function is made in the realm
+ * the executor runs in, and its free names are the globals of that realm.
+ */
+export const evaluateWithFunction: ModuleEvaluator = (
+  { path, source },
+  parameters,
+) =>
+  new Function(
+    ...parameters,
+    `"use strict";\n${source}\n//# sourceURL=compiled:${path}`,
+  ) as (...given: unknown[]) => void;
+
 /** One pattern of the output of `pattern-compiler emit`. */
 export type Artifact = {
   name?: string;
@@ -3308,6 +3332,12 @@ export class Instance {
        */
       globals?: Record<string, unknown>;
       /**
+       * What makes a function of the text of a module of value code
+       * (`ModuleEvaluator`). The default is `evaluateWithFunction`, which
+       * gives the code the globals of the realm.
+       */
+      evaluate?: ModuleEvaluator;
+      /**
        * `patches`: a transaction does not count the bytes of each
        * document it wrote as a whole (`Transaction.bytes`), which costs
        * a pass over the document.
@@ -3848,7 +3878,8 @@ export class Instance {
   loading = false;
 
   #load() {
-    this.#runtimeObject = this.#runtime();
+    // Value code is handed this object and can replace none of its members.
+    this.#runtimeObject = Object.freeze(this.#runtime());
     this.loading = true;
     this.#module(this.code.main);
     for (const { module } of this.code.modules) this.#module(module);
@@ -3869,12 +3900,12 @@ export class Instance {
       throw new Unsupported("an import of a module the artifact does not hold");
     }
     const globals = Object.entries(this.root.options.globals ?? {});
-    const run = new Function(
+    const evaluate = this.root.options.evaluate ?? evaluateWithFunction;
+    const run = evaluate(text, [
       "$rt",
       "$exports",
       ...globals.map(([name]) => name),
-      `"use strict";\n${text.source}\n//# sourceURL=compiled:${text.path}`,
-    );
+    ]);
     run(this.#runtimeObject, exports, ...globals.map(([, value]) => value));
     return exports;
   }

@@ -9,7 +9,7 @@
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`:
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--evaluate=function]`
  * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report <results.jsonl>`
  *
  * `run` appends one line per module and leaves out a module the file
@@ -19,6 +19,10 @@
  * labels. An event is queued with the scheduler for the entity that holds
  * the stream's marker, which is where `Cell.send` on the member of the
  * result arrives.
+ *
+ * The value code of a piece is evaluated in a compartment
+ * (`compartmentEvaluator`), and with `--evaluate=function` in the realm of
+ * the harness, as the executor in memory evaluates it.
  *
  * A module that needs `wish` or requests an effect is left out: nothing
  * answers a request of a compiled piece on the runner path.
@@ -31,7 +35,11 @@ import {
 } from "../../../runtime/runner/src/compiled/piece.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
-import type { Artifact } from "../exec/executor.ts";
+import {
+  type Artifact,
+  evaluateWithFunction,
+  type ModuleEvaluator,
+} from "../exec/executor.ts";
 import {
   artifactsOf,
   type CorpusModule,
@@ -107,6 +115,7 @@ const needs = (plan: Artifact["plan"]): string | undefined => {
 const runOne = async (
   module: EmittedModule,
   artifacts: (id: string) => Artifact | undefined,
+  evaluate: ModuleEvaluator | undefined,
 ): Promise<Outcome> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -165,7 +174,7 @@ const runOne = async (
         artifact,
         argument,
         result.withTx(tx),
-        { artifacts, now },
+        { artifacts, now, ...(evaluate === undefined ? {} : { evaluate }) },
       );
     } catch (error) {
       tx.abort();
@@ -250,7 +259,11 @@ const readResults = async (file: string): Promise<Outcome[]> => {
   }
 };
 
-const run = async (file: string, part: string | undefined) => {
+const run = async (
+  file: string,
+  part: string | undefined,
+  evaluate: ModuleEvaluator | undefined,
+) => {
   const modules = await corpusModules() as EmittedModule[];
   const artifacts = artifactsOf(modules as unknown as CorpusModule[]);
   const done = new Set((await readResults(file)).map(({ module }) => module));
@@ -259,7 +272,7 @@ const run = async (file: string, part: string | undefined) => {
     if (part !== undefined && !module.module.includes(part)) continue;
     let outcome: Outcome;
     try {
-      outcome = await runOne(module, artifacts);
+      outcome = await runOne(module, artifacts, evaluate);
     } catch (error) {
       outcome = {
         module: module.module,
@@ -320,8 +333,13 @@ const report = async (file: string) => {
 };
 
 if (import.meta.main) {
-  const [command, file, part] = Deno.args;
-  if (command === "run" && file !== undefined) await run(file, part);
+  const [command, file, part] = Deno.args.filter((argument) =>
+    !argument.startsWith("--")
+  );
+  const evaluate = Deno.args.includes("--evaluate=function")
+    ? evaluateWithFunction
+    : undefined;
+  if (command === "run" && file !== undefined) await run(file, part, evaluate);
   else if (command === "report" && file !== undefined) await report(file);
   else {
     console.error(
