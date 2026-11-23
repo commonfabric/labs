@@ -75,8 +75,9 @@ merge is not finished when the conflicts are gone.
 Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
 and P350 to P360 sandbox and scopes, P310 to P316 write integrity, P410 and
-P411 specification review. Note numbers in `SPEC-NOTES.md` likewise: 692 to
-704 and 860 to 875 trunk, 742 to 752 and 880 to 891 sandbox, 760 to 772
+P411 specification review; P420 to P425 resume by units, fourth round. Note
+numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
+trunk, 940 to 944 carry, 742 to 752 and 880 to 891 sandbox, 760 to 772
 write integrity, 851 to 866 serving. The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
@@ -86,7 +87,8 @@ branches only and need a document round after the merges.
 Each line names the notes that hold its plan. The notes are in
 `base/pattern-compiler/SPEC-NOTES.md` on the branch named.
 
-**A piece loaded again in another process** (trunk; notes 843, 860 to 875).
+**A piece loaded again in another process** (trunk; notes 843, 860 to 875,
+960 to 975).
 "Takeover" in the notes and tables means that a serving runtime starts over
 a space that already holds a compiled piece: a restart or deploy of the
 server, or a move of the space to another process. It is not the first run
@@ -94,11 +96,19 @@ of a pattern. A piece whose sources did not change is found current from its
 basis and evaluates nothing. The first event afterwards evaluates the whole
 derivation unless the piece's collections are left as stored. Rows of a
 `map` over an array of references are left as stored, with or without
-handler bindings, at a named path or in a view node (47 of the corpus's 84
-row-document collections at the trunk commit `a467194a96`; 81 of 84 at
-`7b2a492b82`, which adds rows over the output of a `lift`, over a `filter`
-and over a `sortBy`, with the source evaluated once, and rows whose body
-holds a `computed`, another collection or a read of its position). Not
+handler bindings, at a named path or in a view node. By what the plan of
+each module says, the wake takes 47 of the corpus's 84 row-document
+collections at the trunk commit `a467194a96` and 81 of 84 at `7b2a492b82`,
+which adds rows over the output of a `lift` (the `lift` is evaluated once at
+the wake), over a `filter` and over a `sortBy` (the source evaluates one
+body and reads one item document per element at the wake, so the wake still
+follows the collection there), and rows whose body holds a `computed`,
+another collection or a read of its position. A collection the plan takes
+does not always leave its rows: in the corpus run with a takeover and
+arrays written as references, the plan takes a collection in all 19 modules
+that have row documents and an event behind the takeover, and 14 of them
+leave rows as stored (note 971); with plain values in the argument none
+does. Not
 built, each with a plan that names the functions to change and the tests to
 write first: the result of a body stored per element key, which the index,
 the sort, the `flatMap` and an upstream left as stored all need (note 966);
@@ -114,9 +124,10 @@ retained per row. Topics therefore still evaluates its whole
 derivation at the first edit after such a start: 8.5 s at 2,000 topics. The
 owner ruled on 2026-11-23 (Z90) that this step matters a lot: it is to be no
 slower than today's path for the same pattern, and tearing a worker down and
-bringing it back up is to be cheap. Peak memory of the step is to be
-measured too, so that a process does not run out at 2,000 topics or 10,000
-rows. This is the line of work with the largest gap to the owner's rule.
+bringing it back up is to be cheap. Peak memory is measured on the list
+fixture alone; on Topics at 2,000 topics it is still to be measured, so
+that a process is known not to run out there. This is the line of work with
+the largest gap to the owner's rule.
 
 **A step that changes a list as long as the collection** (serving branch;
 notes 851 to 866). Row links can be stored in chunked list documents
