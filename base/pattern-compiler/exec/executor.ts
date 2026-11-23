@@ -365,6 +365,29 @@ export class Unsupported extends Error {
 }
 
 /**
+ * Whether two arrays of one length hold scalars alone and differ at more
+ * than one position, as a list does that one member left and another
+ * entered: such an array is written whole, as one of another length is,
+ * and not position by position, which is a write and a record for each
+ * position behind the member that left.
+ */
+const shiftedScalars = (
+  form: readonly unknown[],
+  held: readonly unknown[],
+): boolean => {
+  let differing = 0;
+  for (let index = 0; index < form.length; index++) {
+    const [now, was] = [form[index], held[index]];
+    if (
+      (now !== null && typeof now === "object") ||
+      (was !== null && typeof was === "object") || typeof now === "symbol"
+    ) return false;
+    if (now !== was) differing += 1;
+  }
+  return differing > 1;
+};
+
+/**
  * The assembled result of a `map`, a `filter` or a `flatMap`, as value
  * code holds it where it places the result and observes nothing of it:
  * a reference to the collection for the element keys it was named
@@ -5780,7 +5803,8 @@ export class Instance {
       if (form === KEPT) return;
       if (
         Array.isArray(form) && Array.isArray(held) &&
-        form.length === held.length && form.length > 0
+        form.length === held.length && form.length > 0 &&
+        !shiftedScalars(form, held)
       ) {
         form.forEach((member, index) =>
           put([...at, `${index}`], member, held[index])
