@@ -34,6 +34,11 @@ import { typeScriptLanguage } from "./typescript/language.ts";
 import { markdownLanguage } from "./markdown/language.ts";
 import { jsonLanguage, jsonLinesLanguage } from "./json/language.ts";
 import { yamlLanguage } from "./yaml/language.ts";
+import {
+  bazelignoreLanguage,
+  dockerignoreLanguage,
+  gitignoreLanguage,
+} from "./ignore/language.ts";
 import { pythonLanguage } from "./python/language.ts";
 import { swiftLanguage } from "./swift/language.ts";
 import { kotlinLanguage } from "./kotlin/language.ts";
@@ -491,6 +496,9 @@ function allLanguages(): readonly Language[] {
     jsonLanguage,
     jsonLinesLanguage,
     yamlLanguage,
+    gitignoreLanguage,
+    dockerignoreLanguage,
+    bazelignoreLanguage,
     pythonLanguage,
     swiftLanguage,
     kotlinLanguage,

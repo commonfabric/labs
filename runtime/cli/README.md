@@ -641,6 +641,20 @@ and `github-known-hosts`), and keys and certificates (`.pem`, `.crt`, `.key`)
 are plain text by name, so a shebang or an XML declaration at the start of their
 content does not select another language.
 
+Ignore files are colored by the rules of the tool that reads each one, for its
+comments, negation, wildcards, and white space. `.gitignore` uses Git's
+patterns, and so do `.denoignore` and Claude Code's `.worktreeinclude`, which
+are written in Git's syntax. Each part of a Git pattern is colored: a leading
+`!` that negates it, the wildcards `*` and `?`, a bracket expression, the `/`
+between directories, and a backslash that makes the next character literal.
+`.dockerignore`, a Docker ignore file named after its Dockerfile, such as
+`Dockerfile.build.dockerignore`, and Podman's `.containerignore` use Docker's
+patterns, which differ from Git's in that white space before a pattern, after
+its `!`, and at its end, escaped or not, is not part of it, and in that bracket
+expressions follow Go's rules, where only `^` negates one. `.bazelignore` lists
+directories for Bazel to leave out, one literal path to a line, so `*` and `!`
+have no meaning there. In all of them, a line that starts with `#` is a comment.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
