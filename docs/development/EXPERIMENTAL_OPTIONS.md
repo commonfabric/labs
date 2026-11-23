@@ -1239,7 +1239,9 @@ holds the measurements and the conditions for revisiting.
   compiles the source of a pattern that a client wrote, evaluates the value
   code its own compile gave in a compartment, and reads no artifact from
   storage. Nothing installs it but `listenCompiledServingMemoryServer()`, a
-  helper for tests, and `runCompiledPatterns()`. The option also gates the
+  helper for tests whose serving runtimes read their space from the store
+  unless its policy says otherwise, and `runCompiledPatterns()`. The option
+  also gates the
   start of a pattern from its source: where
   `runCompiledPatterns()` of `runtime/runner/src/compiled/run.ts` gave the
   runtime a pattern compiler (`Runtime.compiledPatternRunner`),
