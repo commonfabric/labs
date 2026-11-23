@@ -1186,6 +1186,8 @@ type Writing = {
   };
   /** See `DeclaredWrite`. */
   declared?: DeclaredWrite;
+  /** The writes are those of a handler, and not of the body of a cone. */
+  handler?: true;
 };
 
 /**
@@ -3013,10 +3015,11 @@ export type TransactionHooks = {
    * in, as `change` has them. The value is not written
    * again; whoever stores labels stores the label of the records for the
    * value the path holds, since what the body read decided that the value
-   * stays (ruling Z67). `declared` is what the handler that made the write
-   * declares for the handle it wrote through, as `change` has it: the
-   * write was attempted, and whoever holds a write to a write policy holds
-   * the attempt to it.
+   * stays (ruling Z67). `attempt` is given where the write is one a
+   * handler made through a handle, with what the handler declares for the
+   * handle, as `change` has it: the write was attempted, and whoever holds
+   * a write to a write policy holds the attempt to it. A record that is
+   * given again for its label alone is no attempt.
    */
   unchanged?(
     doc: string,
@@ -3025,7 +3028,7 @@ export type TransactionHooks = {
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
     inputs: InputsTable,
-    declared?: DeclaredWrite,
+    attempt?: { declared?: DeclaredWrite },
   ): void;
 
   /**
@@ -3914,6 +3917,20 @@ export class Instance {
        */
       transactions?: TransactionHooks;
       /**
+       * What an instance stores as its argument document, given the
+       * argument it was made with, its artifact and its name: a host that
+       * stores the defaults an argument type declares returns the argument
+       * with them. Called for the instance the executor was started with
+       * and for each one a body or a handler makes, before the document
+       * exists. Without it the argument is stored as it was given, and a
+       * default is what a read gives where nothing is stored.
+       */
+      argumentStored?: (
+        argument: unknown,
+        artifact: Artifact,
+        instance: string,
+      ) => unknown;
+      /**
        * The collections whose rows are stored as documents of their own
        * (`rowDocumentCollections` of `row-documents.ts`). A bucket of an
        * index that the result keeps over the rows of one of them holds a
@@ -4043,7 +4060,9 @@ export class Instance {
               schema,
               writes,
               this.#inputsTable,
-              this.#writing.declared,
+              this.#writing.handler
+                ? { declared: this.#writing.declared }
+                : undefined,
             );
           }
         };
@@ -4063,7 +4082,14 @@ export class Instance {
     const creation = this.root.#tx === undefined
       ? this.root.#begin("creation")
       : undefined;
-    this.store.create(this.argument, "argument", this.stored(argument));
+    this.store.create(
+      this.argument,
+      "argument",
+      this.stored(
+        this.root.options.argumentStored?.(argument, artifact, this.id) ??
+          argument,
+      ),
+    );
     this.store.create(this.id, "result", undefined);
     if (creation !== undefined) this.root.#end(creation, true);
     this.#load();
@@ -12717,6 +12743,7 @@ export class Instance {
         undefined,
         writes,
         root.#inputsTable,
+        writing.handler ? { declared: writing.declared } : undefined,
       );
     }
   }
@@ -13466,7 +13493,9 @@ export class Instance {
           ? [{ record: { body: index, envelope }, template: undefined }]
           : [],
         members: { decided: decided ?? [] },
-        ...(this.#handling === undefined ? {} : this.#declaredWrite(through)),
+        ...(this.#handling === undefined
+          ? {}
+          : { handler: true as const, ...this.#declaredWrite(through) }),
       },
     );
   }

@@ -106,6 +106,40 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    // The room started with a value for a field its argument type names a
+    // writer for: the value is the write of whoever starts the room.
+    name: "writer-policy/main with a protected field supplied",
+    pieces: [{
+      name: "room",
+      module: "patterns/dev/test/writer-policy/main.tsx",
+      argument: () => ({ frozen: { seat: 7, digest: "supplied" } }),
+      as: "alice",
+    }],
+    steps: [],
+  },
+  {
+    // An argument field under a UI contract with a declared default, which
+    // a handler of an instance the body makes writes: the write of the
+    // default itself with no gesture, then the same as a gesture.
+    name: "cfc-authorized-save/main",
+    pieces: [{
+      name: "save",
+      module: "patterns/examples/cfc-authorized-save/main.tsx",
+      as: "alice",
+    }],
+    steps: [
+      { stream: "save", as: "alice" },
+      {
+        stream: "save",
+        trustedUi: {
+          surface: "TrustedSaveSurface",
+          action: "TrustedSaveTitle",
+        },
+        as: "bob",
+      },
+    ],
+  },
+  {
     name: "fixtures/made-write-policy",
     pieces: [{
       name: "outer",
@@ -193,9 +227,8 @@ export const SCENARIOS: Scenario[] = [
       name: "signed",
       module: "base/pattern-compiler/compare/fixtures/principal-integrity.tsx",
     }],
-    // No step: the piece does not exist on either path, and an event to a
-    // stream of it waits for a piece that never loads.
-    steps: [],
+    // The step is not sent on either path: the piece does not exist.
+    steps: [{ stream: "sign", event: { text: "from alice" }, as: "alice" }],
   },
   {
     name: "fixtures/principal-derived",

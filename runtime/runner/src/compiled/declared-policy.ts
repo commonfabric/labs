@@ -16,6 +16,7 @@
  * whole: a later write under the type's own schema is then a write under
  * the shape the envelope names, and no change of it.
  */
+import { deepFreeze } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../builder/types.ts";
@@ -40,7 +41,8 @@ const POLICY_KEYS = [
 
 /**
  * A copy of a schema in which each `ifc` record holds its write policies
- * and nothing else, and is left out where it holds none.
+ * and nothing else, and is left out where it holds none. The copy shares
+ * no object with the schema.
  */
 const withPoliciesAlone = (node: unknown): unknown => {
   if (Array.isArray(node)) return node.map(withPoliciesAlone);
@@ -51,8 +53,11 @@ const withPoliciesAlone = (node: unknown): unknown => {
       copy[name] = withPoliciesAlone(member);
       continue;
     }
+    // A policy is copied whole: the copy is frozen, and the schema it is
+    // made from is the caller's to change.
     const kept = Object.fromEntries(
-      Object.entries(member).filter(([key]) => POLICY_KEYS.includes(key)),
+      Object.entries(member).filter(([key]) => POLICY_KEYS.includes(key))
+        .map(([key, policy]) => [key, structuredClone(policy)]),
     );
     if (Object.keys(kept).length > 0) copy.ifc = kept;
   }
@@ -60,15 +65,29 @@ const withPoliciesAlone = (node: unknown): unknown => {
 };
 
 /**
+ * What `declaredBy` gave for each schema it was asked for, `null` for one
+ * that declares no write policy. A handler's write asks for the schema of
+ * its handle at every change, and the schemas of a plan are objects the
+ * executor keeps for as long as the instance runs.
+ */
+const DECLARED = new WeakMap<object, ResultPolicy | null>();
+
+/**
  * The write policies that `schema` declares, with the schema whole but for
- * its other labels, or `undefined` where it declares none.
+ * its other labels, or `undefined` where it declares none. The schema it
+ * gives is frozen, and is the same object each time for one `schema`.
  */
 export const declaredBy = (schema: unknown): ResultPolicy | undefined => {
+  if (!isObjectNotArray(schema)) return undefined;
+  const known = DECLARED.get(schema);
+  if (known !== undefined) return known ?? undefined;
   const policy = writePoliciesOf(schema);
-  return policy === undefined ? undefined : {
-    schema: withPoliciesAlone(schema) as JSONSchema,
+  const declared = policy === undefined ? null : {
+    schema: deepFreeze(withPoliciesAlone(schema)) as JSONSchema,
     claimed: policy.claimed,
   };
+  DECLARED.set(schema, declared);
+  return declared ?? undefined;
 };
 
 /** The schema of `artifact` that its plan names under `member`. */
@@ -109,3 +128,43 @@ export class DeclaredPolicies {
     return this.#byDocument.get(doc);
   }
 }
+
+/**
+ * The argument of an instance of `artifact` with the default its argument
+ * type declares for each field `argument` leaves out, and the names of the
+ * fields that were filled, where the argument type declares a write policy.
+ * For any other pattern, and where no field is filled, `argument` itself
+ * and no name. Only the fields of the argument are filled, and nothing
+ * below a field: a field the argument holds, a reference among them, is
+ * left as it is.
+ *
+ * Today's setup writes the defaults of an argument type into the argument
+ * document. A protected field then holds its default from the start, and a
+ * handler's write of that value is an attempt the field's policy decides,
+ * and no installation of a default
+ * (`writeInstallsInitialSchemaDefault` of `cfc/prepare.ts`).
+ */
+export const argumentWithDefaults = (
+  artifact: Artifact,
+  argument: unknown,
+): { argument: unknown; filled: string[] } => {
+  const schema = declaredBy(schemaOf(artifact, "argumentSchema"))?.schema;
+  if (
+    !isObjectNotArray(schema) || !isObjectNotArray(schema.properties) ||
+    (argument !== undefined && !isObjectNotArray(argument))
+  ) return { argument, filled: [] };
+  const held = (argument ?? {}) as Record<string, unknown>;
+  const with_: Record<string, unknown> = { ...held };
+  const filled: string[] = [];
+  for (const [name, member] of Object.entries(schema.properties)) {
+    if (
+      Object.hasOwn(held, name) && held[name] !== undefined ||
+      !isObjectNotArray(member) || member.default === undefined
+    ) continue;
+    with_[name] = structuredClone(member.default);
+    filled.push(name);
+  }
+  return filled.length === 0
+    ? { argument, filled }
+    : { argument: with_, filled };
+};

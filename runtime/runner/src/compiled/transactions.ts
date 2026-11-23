@@ -86,6 +86,7 @@ import { ignoreReadForScheduling } from "../scheduler.ts";
 import { markReadAsAttemptedWrite } from "../storage/reactivity-log.ts";
 import { handlerIdentityOf } from "./handler-identity.ts";
 import { appendedBehind, appendedBySplice } from "./appended.ts";
+import { recordNewDocumentProtectedDefaults } from "../cfc/default-initialization.ts";
 import { declaredBy, DeclaredPolicies } from "./declared-policy.ts";
 import { isStateCellSeed, recordStateCellSeed } from "./initialization.ts";
 import {
@@ -484,8 +485,6 @@ export class RuntimeTransactions implements TransactionHooks {
    * result documents of the instances a body or a handler made.
    */
   readonly #declared = new DeclaredPolicies();
-  /** The documents `#declared` was recorded for, by transaction. */
-  readonly #declaredIn = new WeakMap<object, Set<string>>();
   /** The paths the transaction in progress wrote, by document. */
   readonly #written = new Map<string, (readonly string[])[]>();
   /** The stored labels of each document `labelOf` read, per transaction. */
@@ -933,6 +932,22 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** See the option `attested` of the constructor. */
   readonly #attested: boolean;
+
+  /**
+   * The fields of each argument document that hold the default of the
+   * argument type, because the argument left them out (`filledDefaults`).
+   */
+  readonly #filledDefaults = new Map<string, readonly string[]>();
+
+  /**
+   * Notes that the argument document `doc`, which the executor is about to
+   * make, holds the default of its type at each field of `names`
+   * (`argumentWithDefaults`): the write that makes the document records
+   * each protected one among them as a seed.
+   */
+  filledDefaults(doc: string, names: readonly string[]): void {
+    this.#filledDefaults.set(doc, names);
+  }
 
   /** Registers a compiled pattern with the runtime, once. */
   #register(artifact: Artifact): string {
@@ -1982,6 +1997,27 @@ export class RuntimeTransactions implements TransactionHooks {
           buckets,
         );
         tx.writeValueOrThrow(this.#address(doc, []), whole);
+        // A protected field of an argument document that the argument left
+        // out, and that holds the default of its type, is a seed, and one
+        // the maker supplies is the maker's write
+        // (`recordNewDocumentProtectedDefaults`).
+        const filled = this.#filledDefaults.get(doc);
+        const declaredFor = this.#declared.of(doc);
+        if (
+          filled !== undefined && declaredFor !== undefined &&
+          isWalkableObjectNotArray(whole)
+        ) {
+          recordNewDocumentProtectedDefaults(
+            tx,
+            this.#address(doc, []),
+            declaredFor.policy.schema,
+            whole,
+            Object.fromEntries(
+              Object.entries(whole).filter(([name]) => !filled.includes(name)),
+            ),
+            whole,
+          );
+        }
         if (isStateCellSeed(document, path, schema, writes)) {
           const seeded = this.#address(doc, []);
           recordStateCellSeed(tx, seeded, whole);
@@ -2193,6 +2229,19 @@ export class RuntimeTransactions implements TransactionHooks {
     // labels, and otherwise the schema the document's stored labels name.
     // A schema of a plan is a JSON schema with the members the executor
     // reads typed (`Schema` of `exec/store.ts`).
+    // A handler's write of the value the storage holds logs no write: the
+    // executor can hold a place as absent that the storage holds with its
+    // default. The write was attempted all the same, and is marked as the
+    // attempt it is (`unchanged`).
+    if (
+      this.#cause === "event" && document !== undefined &&
+      attempts !== undefined &&
+      tx.getWriteAttemptLog?.().length === attempts
+    ) {
+      tx.readValueOrThrow(at(path), {
+        meta: { ...ignoreReadForScheduling, ...markReadAsAttemptedWrite },
+      });
+    }
     this.#recordSchema(tx, doc, path, schema, store);
     // A handler's write also answers to the write policies its own state
     // type declares for the handle, as a write through a cell of today's
@@ -2827,11 +2876,10 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /**
-   * Records, for a write at `path` of an argument document or of the
-   * result document of an instance a body or a handler made, the write
-   * policies the type of its pattern declares (`DeclaredPolicies`), once
-   * for each transaction and document, so that the write answers to them
-   * and the stored envelope names them. A reference at a path that
+   * Records, for the write that makes an argument document or the result
+   * document of an instance a body or a handler made, the write policies
+   * the type of its pattern declares (`DeclaredPolicies`), so that the
+   * write answers to them and the stored envelope names them. A reference at a path that
    * declares a writer claim is recorded as a binding the runtime staged
    * there where the write is the one that makes an argument document, in
    * which the maker hands the instance its cells, or a derivation's write
@@ -2850,13 +2898,12 @@ export class RuntimeTransactions implements TransactionHooks {
     const declared = this.#declared.of(doc);
     if (declared === undefined) return;
     const { policy, of } = declared;
-    let recorded = this.#declaredIn.get(tx);
-    if (recorded === undefined) {
-      recorded = new Set();
-      this.#declaredIn.set(tx, recorded);
-    }
-    if (!recorded.has(doc)) {
-      recorded.add(doc);
+    // The schema is recorded by the transaction that makes the document.
+    // A later write answers to the envelope that transaction stored, as a
+    // later write of today's path does, and the schema is not recorded
+    // again: the stored envelope is held to its shape, and a schema that
+    // requires a field would be read as a change of it.
+    if (creates) {
       recordRelevantSchemaWritePolicyInput(
         tx,
         this.#address(doc, []),
@@ -2934,7 +2981,7 @@ export class RuntimeTransactions implements TransactionHooks {
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
     inputs: InputsTable,
-    declared?: DeclaredWrite,
+    attempt?: { declared?: DeclaredWrite },
   ): void {
     if (this.#compiledPattern === undefined) return;
     const tx = this.#open();
@@ -2944,7 +2991,8 @@ export class RuntimeTransactions implements TransactionHooks {
     // write of an equal value marks its read (`diffAndUpdate`), and the
     // policies the handler's own state type declares are recorded as for
     // a change.
-    if (this.#cause === "event") {
+    if (this.#cause === "event" && attempt !== undefined) {
+      const { declared } = attempt;
       tx.readValueOrThrow(this.#address(doc, path), {
         meta: { ...ignoreReadForScheduling, ...markReadAsAttemptedWrite },
       });

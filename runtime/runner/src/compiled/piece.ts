@@ -73,6 +73,7 @@ import {
   type StreamOfExecutor,
 } from "./transactions.ts";
 import { RuntimeAnswers, runtimeBuiltins } from "./builtins.ts";
+import { argumentWithDefaults } from "./declared-policy.ts";
 import { compartmentEvaluator } from "./value-code.ts";
 import { RuntimeWishes } from "./wish.ts";
 
@@ -441,6 +442,19 @@ export class CompiledPiece {
               parts: false,
               events: "queue",
               transactions,
+              // An argument document holds the defaults of its type, as
+              // today's setup writes them, where the type declares a write
+              // policy (`argumentWithDefaults`).
+              argumentStored: (given, of, instance) => {
+                const { argument: stored, filled } = argumentWithDefaults(
+                  of,
+                  given,
+                );
+                if (filled.length > 0) {
+                  transactions.filledDefaults(argumentOf(instance), filled);
+                }
+                return stored;
+              },
               evaluate: options.evaluate ?? compartmentEvaluator(),
               wishes: options.wishes ?? ((_operands, of) => {
                 if (of === undefined) return undefined;

@@ -41,6 +41,10 @@
  * `base/pattern-compiler`:
  *
  * `deno run -A --no-check base/pattern-compiler/compare/both-paths.ts <results.jsonl> [part of a scenario name]`
+ *
+ * With `--corpus` in the place of the part of a name, or behind it, the
+ * scenarios are those of `both-paths-corpus.ts`: one for each module of
+ * `patterns/` that declares a write policy.
  */
 import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -63,6 +67,7 @@ import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
 import { setCfcTrustSnapshot } from "../../../runtime/runner/src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../../../runtime/runner/src/storage/interface.ts";
+import { corpusScenarios } from "./both-paths-corpus.ts";
 import { SCENARIOS } from "./both-paths-scenarios.ts";
 import { normalize } from "./values.ts";
 
@@ -232,39 +237,59 @@ const policyLines = (ifc: Record<string, unknown>): string[] => {
 /**
  * The write policies a schema declares at and below `path`, by the path of
  * the schema node from there, with `*` for the members of an array or of a
- * record. A `$ref` into `$defs` of the root is followed; any other is not.
+ * record. A `$ref` into `$defs` of the document a node is in is followed,
+ * and with `load` one into another schema document (`cid:<hash>#/$defs/…`),
+ * which `load` gives by its hash: today's path stores the definitions of a
+ * type in documents of their own.
  */
 export const policiesOf = (
   root: unknown,
   path: readonly string[],
+  load?: (hash: string) => unknown,
 ): Record<string, string[]> => {
   const found: Record<string, string[]> = {};
-  const defs = isObjectNotArray(root) && isObjectNotArray(root.$defs)
-    ? root.$defs
-    : {};
+  type Defs = Record<string, unknown>;
+  const defsOf = (document: unknown): Defs =>
+    isObjectNotArray(document) && isObjectNotArray(document.$defs)
+      ? document.$defs
+      : {};
   // A node that holds a `$ref` beside other members is the definition
-  // with those members in the place of its own.
-  const resolved = (node: unknown): unknown => {
+  // with those members in the place of its own. `defs` are the
+  // definitions of the document the node is in.
+  const resolved = (node: unknown, defs: Defs): [unknown, Defs] => {
     for (let hops = 0; hops < 16; hops++) {
       if (!isObjectNotArray(node) || typeof node.$ref !== "string") break;
-      const name = node.$ref.startsWith("#/$defs/")
-        ? node.$ref.slice("#/$defs/".length)
-        : undefined;
-      if (name === undefined || !Object.hasOwn(defs, name)) return node;
+      const ref = node.$ref;
+      let definition: unknown;
+      let within = defs;
+      if (ref.startsWith("#/$defs/")) {
+        definition = defs[ref.slice("#/$defs/".length)];
+      } else if (ref.startsWith("cid:") && load !== undefined) {
+        const [hash, pointer = ""] = ref.slice("cid:".length).split("#");
+        const document = load(hash);
+        within = defsOf(document);
+        definition = pointer.startsWith("/$defs/")
+          ? within[pointer.slice("/$defs/".length)]
+          : document;
+      }
+      if (definition === undefined) return [node, defs];
       const { $ref: _, ...beside } = node;
-      const definition = defs[name];
       node = isObjectNotArray(definition)
         ? { ...definition, ...beside }
         : definition;
+      defs = within;
     }
-    return node;
+    return [node, defs];
   };
-  const walk = (given: unknown, at: string, depth: number): void => {
-    const node = resolved(given);
+  const walk = (
+    given: unknown,
+    within: Defs,
+    at: string,
+    depth: number,
+  ): void => {
+    const [node, defs] = resolved(given, within);
     if (!isObjectNotArray(node) || depth > 12) return;
-    // A definition another schema document holds is not read: today's
-    // path stores the definitions of a type apart, and the compiled path
-    // in place, so only one of them would name it.
+    // A reference that names no definition that was found is not read.
     if (typeof node.$ref === "string") return;
     if (isObjectNotArray(node.ifc)) {
       const lines = policyLines(node.ifc);
@@ -272,29 +297,30 @@ export const policiesOf = (
     }
     if (isObjectNotArray(node.properties)) {
       for (const [name, member] of Object.entries(node.properties)) {
-        walk(member, `${at}/${name}`, depth + 1);
+        walk(member, defs, `${at}/${name}`, depth + 1);
       }
     }
-    walk(node.items, `${at}/*`, depth + 1);
-    walk(node.additionalProperties, `${at}/*`, depth + 1);
+    walk(node.items, defs, `${at}/*`, depth + 1);
+    walk(node.additionalProperties, defs, `${at}/*`, depth + 1);
     for (const key of ["anyOf", "oneOf"] as const) {
       const branches = node[key];
       if (Array.isArray(branches)) {
-        for (const branch of branches) walk(branch, at, depth + 1);
+        for (const branch of branches) walk(branch, defs, at, depth + 1);
       }
     }
   };
-  let node = resolved(root);
+  let [node, defs] = resolved(root, defsOf(root));
   for (const step of path) {
     if (!isObjectNotArray(node)) return found;
     const properties = isObjectNotArray(node.properties) ? node.properties : {};
-    node = resolved(
+    [node, defs] = resolved(
       Object.hasOwn(properties, step)
         ? properties[step]
         : node.items ?? node.additionalProperties,
+      defs,
     );
   }
-  walk(node, "", 0);
+  walk(node, defs, "", 0);
   return found;
 };
 
@@ -334,6 +360,8 @@ const runPath = async (
     otherRefusals: [],
   };
   const results: Record<string, Cell<unknown>> = {};
+  // The pieces whose start did not commit.
+  const notStarted = new Set<string>();
   const pieces: CompiledPiece[] = [];
   // The stand-in for the stamper of a serving loop: see the head of the
   // file.
@@ -417,7 +445,13 @@ const runPath = async (
         }
       }
       const schema = loadSchemaDocument(tx, link.space, metadata.schemaHash);
-      claims.policies = policiesOf(schema, at);
+      claims.policies = policiesOf(schema, at, (hash) => {
+        try {
+          return loadSchemaDocument(tx, link.space, hash);
+        } catch {
+          return undefined;
+        }
+      });
     } catch (error) {
       claims.policies = {
         "": [`not read: ${(error as Error).message.split("\n")[0]}`],
@@ -474,6 +508,7 @@ const runPath = async (
       const { error } = await tx.commit().settled;
       await runtime.scheduler.idleWithPendingCommits();
       results[piece.name] = result;
+      if (error !== undefined) notStarted.add(piece.name);
       outcome.compiled[piece.name] = pieces.length > before;
       outcome.starts.push({
         committed: error === undefined,
@@ -487,7 +522,18 @@ const runPath = async (
       }
     }
     for (const step of scenario.steps) {
-      const result = results[step.piece ?? scenario.pieces[0].name];
+      const of = step.piece ?? scenario.pieces[0].name;
+      // An event to a stream of a piece that does not exist waits for a
+      // piece that never loads, so none is sent.
+      if (notStarted.has(of)) {
+        outcome.steps.push({
+          committed: false,
+          message: "not sent: the start of the piece did not commit",
+          ...await held(),
+        });
+        continue;
+      }
+      const result = results[of];
       const payload = step.event;
       const sent = step.trustedUi === undefined ? payload : {
         type: "click",
@@ -646,16 +692,24 @@ export const runBothPaths = async (
 };
 
 if (import.meta.main) {
-  const [file, part] = Deno.args;
+  const [file, ...rest] = Deno.args;
+  const corpus = rest.includes("--corpus");
+  const part = rest.find((argument) => argument !== "--corpus");
   if (file === undefined) {
-    console.error("usage: both-paths.ts <results.jsonl> [part of a name]");
+    console.error(
+      "usage: both-paths.ts <results.jsonl> [part of a name] [--corpus]",
+    );
     Deno.exit(2);
   }
   const compiler = new PatternCompiler();
   const { warn, error, log } = console;
-  for (const scenario of SCENARIOS) {
+  for (const scenario of corpus ? await corpusScenarios(part) : SCENARIOS) {
     if (part !== undefined && !scenario.name.includes(part)) continue;
-    console.warn = console.error = console.log = () => {};
+    // What the runtimes log while a scenario runs is not the harness's
+    // output, unless `BOTH_PATHS_VERBOSE` is set.
+    if (Deno.env.get("BOTH_PATHS_VERBOSE") === undefined) {
+      console.warn = console.error = console.log = () => {};
+    }
     let outcome: BothPaths | { scenario: string; failure: string };
     try {
       outcome = await runBothPaths(scenario, compiler);

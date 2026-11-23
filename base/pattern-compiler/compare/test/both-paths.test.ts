@@ -17,31 +17,17 @@ import { SCENARIOS } from "../both-paths-scenarios.ts";
  * claim the compiled path does not store.
  */
 const OPEN: Record<string, string[]> = {
-  // Today's path writes the defaults of the argument type into the
-  // argument document when the piece starts, and the compiled path gives
-  // them where a read finds nothing stored, so the result holds no member
-  // for one until a handler wrote it. Today's path also stores, for a
-  // member the named handler wrote, the atom that names the handler as
-  // what transformed it, which the label templates of the compiled path
-  // do not give (`flow`).
+  // Today's path stores, for a member the named handler wrote, the atom
+  // that names the handler as what transformed it, which the label
+  // templates of the compiled path do not give (`flow`).
   "writer-policy/main": [
-    "start 0 values",
-    "start 1 values",
-    "step 0 values",
     "step 0 flow",
-    "step 1 values",
     "step 1 flow",
     "step 2 flow",
     "step 3 flow",
     "step 4 flow",
     "step 5 flow",
     "step 6 flow",
-  ],
-  "writer-policy/main forged first": [
-    "start 0 values",
-    "start 1 values",
-    "step 0 values",
-    "step 1 values",
   ],
   // The compiled path is the stricter one: it holds a computed output to
   // the claims its result type declares, and a derivation is no writer a
