@@ -216,6 +216,7 @@ import {
   planLabelPathKey,
   type PlanLabels,
 } from "./plan-labels.ts";
+import { compiledWriterOf } from "./compiled-writer.ts";
 import type { InternedLabel, LabelTable } from "./plan-template.ts";
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
 import { verdictReason } from "./verdict-reason.ts";
@@ -1378,6 +1379,23 @@ const writeAuthorizedByReason = (
     return `unsupported trust-sensitive claim writeAuthorizedBy at /${
       path.join("/")
     }`;
+  }
+  // A handler of a compiled pattern answers by `Body.code` of the plan the
+  // runtime registered, the pair of module identity and binding path that a
+  // claim holds (`compiledWriterOf()`). No succession of modules is read
+  // for it: a claim admits the module it names and no other.
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  if (identity?.kind === "compiled") {
+    const writer = compiledWriterOf(tx, identity);
+    if (writer === undefined) {
+      return `writeAuthorizedBy requires a trusted verified binding identity at /${
+        path.join("/")
+      }`;
+    }
+    return writer.moduleIdentity === bindingIdentity.moduleIdentity &&
+        arraysEqual(writer.bindingPath, bindingIdentity.path)
+      ? undefined
+      : `writeAuthorizedBy failed at /${path.join("/")}`;
   }
   if (!identity || identity.kind !== "verified" || !identity.bindingPath) {
     return `writeAuthorizedBy requires a trusted verified binding identity at /${

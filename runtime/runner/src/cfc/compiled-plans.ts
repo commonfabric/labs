@@ -34,6 +34,15 @@ export interface CompiledPlan {
     readonly kept?: boolean;
   }[];
   readonly bodies: readonly {
+    /**
+     * For a handler declared at a binding of module scope, what identifies
+     * it for a writer claim (`compiledWriterOf`): the content-addressed
+     * identity of its module and the path of its binding in that module.
+     */
+    readonly code?: {
+      readonly module: string;
+      readonly binding: readonly string[];
+    };
     readonly writes: readonly { readonly template: Template }[];
   }[];
   readonly cones: readonly {

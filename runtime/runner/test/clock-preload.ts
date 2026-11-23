@@ -214,6 +214,8 @@ installFakeClock({
     "compiled-serving-takeover-handlers",
     "compiled-serving-takeover-view",
     "compiled-serving-takeover-derived",
+    // The same, for the events of two principals in turn.
+    "compiled-serving-principals",
   ],
 });
 

@@ -55,7 +55,12 @@ import { stampWaveRunContext, waveRunContextOf } from "../executor/wave.ts";
 import { deriveEventKey } from "../scheduler/event-identity.ts";
 import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { runtimeWritePolicyAuthorization } from "../cfc/types.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 import {
@@ -74,6 +79,7 @@ import {
 } from "./transactions.ts";
 import { RuntimeAnswers, runtimeBuiltins } from "./builtins.ts";
 import { OutsideReads, outsideReadsDocumentOf } from "./outside-reads.ts";
+import { argumentWithDefaults } from "./declared-policy.ts";
 import { compartmentEvaluator } from "./value-code.ts";
 import { answersEffect, RuntimeWishes } from "./wish.ts";
 
@@ -166,6 +172,18 @@ export type CompiledPieceOptions = {
    * stamp.
    */
   actsFor?: DID;
+  /**
+   * Whether the artifact, and each artifact `artifacts` gives, is one the
+   * runtime's own compiler gave for a source (`runCompiledPatterns` and
+   * `serveCompiledPieces` set this), or one the caller vouches for: the
+   * caller is host code and says that `Body.code` of each handler names
+   * the module and the binding the handler is declared at. A harness that
+   * hands an artifact the crate emitted for a fixture sets it. Without it
+   * a handler of the piece has no identity a writer claim is checked by,
+   * so its write of a position that names a writer is refused: nothing
+   * checks `Body.code` of a handed artifact against a source.
+   */
+  attested?: boolean;
   /**
    * What the value code imports from `commonfabric` under each name here,
    * for a built-in the executor does not have, in the place of what the
@@ -289,6 +307,7 @@ export class CompiledPiece {
       owner: result.id,
       artifact,
       resume: options.resume,
+      attested: options.attested,
       countRecordBytes: options.countRecordBytes,
       ...(rowDocuments === undefined ? {} : { rowDocuments }),
       ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
@@ -334,6 +353,30 @@ export class CompiledPiece {
       },
     });
     this.transactions = transactions;
+    // A piece brought into being outside any scheduled action is the act
+    // of the principal its transaction acts for, as on today's path
+    // (`Runner.#setupInternal`): what the start initializes in the piece's
+    // own documents is attributed to them, so a first value whose type adds
+    // integrity of the current principal names them, and is refused where
+    // the transaction acts for no one. A piece that is resumed is not
+    // brought into being, and one started from a stored argument is started
+    // by a serving runtime for the client that set it up, whom the
+    // transaction of the start does not name: its first values are
+    // initialized on nobody's behalf.
+    if (
+      options.resume !== true && options.storedArgument !== true &&
+      tx.tx.sourceAction === undefined
+    ) {
+      // Where a harness names the principal the piece acts for, the start
+      // acts for them as a handler's run does.
+      this.#stamp(tx, "start");
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization, {
+        space,
+        id: result.id,
+        scope: result.scope,
+      });
+      transactions.attributeFirstValuesIn(tx);
+    }
     const basisDocument = basisDocumentOf(result.id);
     this.#basis = new PieceBasis(
       artifact,
@@ -551,6 +594,19 @@ export class CompiledPiece {
               parts: false,
               events: "queue",
               transactions,
+              // An argument document holds the defaults of its type, as
+              // today's setup writes them, where the type declares a write
+              // policy (`argumentWithDefaults`).
+              argumentStored: (given, of, instance) => {
+                const { argument: stored, filled } = argumentWithDefaults(
+                  of,
+                  given,
+                );
+                if (filled.length > 0) {
+                  transactions.filledDefaults(argumentOf(instance), filled);
+                }
+                return stored;
+              },
               evaluate: options.evaluate ?? compartmentEvaluator(),
               wishes: options.wishes ?? ((_operands, of) => {
                 if (of === undefined) return undefined;
@@ -715,7 +771,8 @@ export class CompiledPiece {
    * the serving posture and no serving loop stamped the transaction
    * (`CompiledPieceOptions.actsFor`): the runtime's built-ins and the
    * preparation of a commit read the principal of a run from its stamp.
-   * `what` is `handler` for the run of a handler, which acts as the
+   * `what` is `handler` for the run of a handler and `start` for the
+   * transaction that brings the piece into being, which act as the
    * principal, and anything else for a derivation, whose reads of a scoped
    * document are those of the principal.
    */
@@ -725,9 +782,16 @@ export class CompiledPiece {
       actsFor === undefined || !this.#runtime.servingPosture ||
       waveRunContextOf(tx) !== undefined
     ) return;
+    // The claims a handler's write makes about the current principal name
+    // the principal of the transaction's trust snapshot, which the stamper
+    // of a serving loop sets beside the actor.
+    const acts = what === "handler" || what === "start";
+    if (acts) {
+      setCfcTrustSnapshot(tx, this.#runtime.trustSnapshotForPrincipal(actsFor));
+    }
     stampWaveRunContext(
       tx,
-      what === "handler"
+      acts
         ? {
           actionId: `compiled-piece:${what}:${this.#result}`,
           kind: "event-handler",
@@ -821,6 +885,14 @@ export class CompiledPiece {
       // entity of the marker of its stream.
       const queued: { entity: URI; event: unknown }[] = [];
       this.#stamp(tx, "handler");
+      // What the handler stages is recorded under its identity, which a
+      // writer claim of a written position is checked against.
+      const writer = transactions.handlerOf(stream);
+      const before = tx.getCfcState().implementationIdentity;
+      if (writer !== undefined) setCfcImplementationIdentity(tx, writer);
+      // The principal invoked the handler, so what its run initializes is
+      // theirs, as on today's path (`Runner`, where it runs a handler).
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
       try {
         // The frame of a handler, under which the gated `Date` and `Math`
         // of the value code give the time of the event and a random draw,
@@ -860,6 +932,7 @@ export class CompiledPiece {
             }),
         );
       } finally {
+        if (writer !== undefined) setCfcImplementationIdentity(tx, before);
         this.#counts.ownMs += performance.now() - began;
       }
       if (!outcome.committed) this.#counts.eventsRefused += 1;

@@ -1209,6 +1209,23 @@ type Writing = {
     /** The first position a splice of these writes started at. */
     start?: number;
   };
+  /** See `DeclaredWrite`. */
+  declared?: DeclaredWrite;
+  /** The writes are those of a handler, and not of the body of a cone. */
+  handler?: true;
+};
+
+/**
+ * What a handler declares for a write it makes through a handle: the
+ * stored position the handle names, with every link on the way to it
+ * resolved, and the schema of the handle's declared type. A write policy
+ * the handler's own state type declares is in that schema and in no other
+ * the write is made under.
+ */
+export type DeclaredWrite = {
+  doc: string;
+  path: readonly string[];
+  schema: Schema;
 };
 
 /** A position of a document, as text. */
@@ -1616,7 +1633,12 @@ export class Handle {
       : Array.isArray(declared)
       ? copyOfData(declared)
       : [];
-    const recorded = this.#instance.written(this.key("*"), decided);
+    const recorded = this.#instance.written(
+      this.key("*"),
+      decided,
+      true,
+      this,
+    );
     try {
       // A record that is pushed gets a document of its own, as a record
       // in a list that is set does (`Instance.anchored`).
@@ -3034,7 +3056,10 @@ export type TransactionHooks = {
    * their inputs in, one for the transaction, which gains entries as
    * records are given. `made` is the splice of every change that is one,
    * whatever its records are of: whoever stores the rows of an array apart
-   * from the array needs it for each.
+   * from the array needs it for each. `declared` is what the handler that
+   * made the write declares for the handle it wrote through
+   * (`DeclaredWrite`): whoever holds a write to the write policies of a
+   * schema holds it to those of that one too.
    */
   change(
     doc: string,
@@ -3045,6 +3070,7 @@ export type TransactionHooks = {
     splice?: { start: number; removed: number; inserted: number },
     inputs?: InputsTable,
     made?: { start: number; removed: number; inserted: number },
+    declared?: DeclaredWrite,
   ): void;
 
   /**
@@ -3054,7 +3080,11 @@ export type TransactionHooks = {
    * in, as `change` has them. The value is not written
    * again; whoever stores labels stores the label of the records for the
    * value the path holds, since what the body read decided that the value
-   * stays (ruling Z67).
+   * stays (ruling Z67). `attempt` is given where the write is one a
+   * handler made through a handle, with what the handler declares for the
+   * handle, as `change` has it: the write was attempted, and whoever holds
+   * a write to a write policy holds the attempt to it. A record that is
+   * given again for its label alone is no attempt.
    */
   unchanged?(
     doc: string,
@@ -3063,6 +3093,7 @@ export type TransactionHooks = {
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
     inputs: InputsTable,
+    attempt?: { declared?: DeclaredWrite },
   ): void;
 
   /**
@@ -3689,6 +3720,7 @@ export class Instance {
           : undefined,
         this.#inputsTable,
         change.splice,
+        this.#writing?.declared,
       );
     }
     if (open !== undefined) {
@@ -3975,6 +4007,20 @@ export class Instance {
        */
       transactions?: TransactionHooks;
       /**
+       * What an instance stores as its argument document, given the
+       * argument it was made with, its artifact and its name: a host that
+       * stores the defaults an argument type declares returns the argument
+       * with them. Called for the instance the executor was started with
+       * and for each one a body or a handler makes, before the document
+       * exists. Without it the argument is stored as it was given, and a
+       * default is what a read gives where nothing is stored.
+       */
+      argumentStored?: (
+        argument: unknown,
+        artifact: Artifact,
+        instance: string,
+      ) => unknown;
+      /**
        * The collections whose rows are stored as documents of their own
        * (`rowDocumentCollections` of `row-documents.ts`). A bucket of an
        * index that the result keeps over the rows of one of them holds a
@@ -4128,6 +4174,9 @@ export class Instance {
               schema,
               writes,
               this.#inputsTable,
+              this.#writing.handler
+                ? { declared: this.#writing.declared }
+                : undefined,
             );
           }
         };
@@ -4147,7 +4196,14 @@ export class Instance {
     const creation = this.root.#tx === undefined
       ? this.root.#begin("creation")
       : undefined;
-    this.store.create(this.argument, "argument", this.stored(argument));
+    this.store.create(
+      this.argument,
+      "argument",
+      this.stored(
+        this.root.options.argumentStored?.(argument, artifact, this.id) ??
+          argument,
+      ),
+    );
     this.store.create(this.id, "result", this.#heldResult());
     if (creation !== undefined) this.root.#end(creation, true);
     this.#load();
@@ -13983,6 +14039,7 @@ export class Instance {
         undefined,
         writes,
         root.#inputsTable,
+        writing.handler ? { declared: writing.declared } : undefined,
       );
     }
   }
@@ -14659,6 +14716,20 @@ export class Instance {
   }
 
   /**
+   * What the handler being run declares for a write through `through`
+   * (`DeclaredWrite`), as the member of a `Writing`, or nothing where the
+   * handle has no declared type or names no stored position.
+   */
+  #declaredWrite(through: Handle): { declared?: DeclaredWrite } {
+    const { target, declared } = partsOf(through);
+    if (!(target instanceof Ref) || typeof declared !== "object") return {};
+    const located = this.store.locate(target, true);
+    if (located.missing) return {};
+    const { doc, path } = located.ref;
+    return { declared: { doc, path, schema: declared } };
+  }
+
+  /**
    * Counts a write of the handler being run against its record, and
    * makes the write edge that covers it, of the handler or of the body of
    * a cone being run, the record of the writes until the returned
@@ -14669,6 +14740,11 @@ export class Instance {
     decided?: Observed[],
     /** Whether a write is made, which is counted. */
     counted = true,
+    /**
+     * The handle whose declared type the write is made under, where that
+     * is another than `handle`: the list, for a write of its members.
+     */
+    through: Handle = handle,
   ): () => void {
     const invoking = this.#invoking.at(-1);
     const index = this.#handling ?? invoking?.body;
@@ -14713,6 +14789,9 @@ export class Instance {
           ? [{ record: { body: index, envelope }, template: undefined }]
           : [],
         members: { decided: decided ?? [] },
+        ...(this.#handling === undefined
+          ? {}
+          : { handler: true as const, ...this.#declaredWrite(through) }),
       },
     );
   }

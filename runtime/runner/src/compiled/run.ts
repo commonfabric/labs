@@ -33,6 +33,7 @@ import { type CompiledPiece, startCompiledPiece } from "./piece.ts";
 import {
   adoptCompiledPiece,
   type CompilePatternProgram,
+  forgetCompiledPiece,
   serveCompiledPieces,
   type ServeCompiledPiecesOptions,
 } from "./serving.ts";
@@ -179,6 +180,9 @@ export const runCompiledPatterns = (
           resultCell.withTx(within),
           {
             ...options.piece,
+            // The artifacts are what the compiler of the runtime gave
+            // for the program.
+            attested: true,
             artifacts: (identity) =>
               known.compiled.artifacts(identity) ??
                 options.piece?.artifacts?.(identity),
@@ -191,6 +195,16 @@ export const runCompiledPatterns = (
       started.set(id, piece);
       adoptCompiledPiece(runtime, id, piece);
       options.started?.(piece);
+      // A piece whose start did not commit does not exist: the storage
+      // holds no document of it, and its handlers and its derivation would
+      // write documents under none of the policies the start records.
+      const begun = piece;
+      within.addCommitCallback((_tx, { error }) => {
+        if (error === undefined || started.get(id) !== begun) return;
+        started.delete(id);
+        forgetCompiledPiece(runtime, id, begun);
+        begun.stop();
+      });
       if (own !== undefined) {
         runtime.prepareTxForCommit(own);
         own.commit();

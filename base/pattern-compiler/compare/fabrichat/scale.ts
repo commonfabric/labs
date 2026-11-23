@@ -36,6 +36,12 @@
  *
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
+ * With them kept, a send of the room is sent as a gesture on the send
+ * surface. The scheduler delivers a gesture as input of a renderer, one
+ * for each second after ten in a row
+ * (`runtime/runner/src/scheduler/wake-shaping.ts`); the harness queues it
+ * as an event that is not held back, so the time of a send is that of the
+ * piece and of the commit.
  *
  * On the arm `runner`, a `wish` is answered by the runtime's own `wish`
  * against the home `seedHome()` of `../wish-home.ts` writes, and the
@@ -61,6 +67,10 @@ import {
   startCompiledPiece,
 } from "../../../../runtime/runner/src/compiled/piece.ts";
 import { ACLManager } from "../../../../runtime/runner/src/acl-manager.ts";
+import {
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "../../../../runtime/runner/src/cfc/ui-contract.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { joinSpaceMembers } from "../../../../runtime/runner/src/space-members.ts";
 import {
@@ -198,7 +208,11 @@ type Started = {
   /** The counts of `SCALE_TRACE` since the last call. */
   trace?: () => Record<string, number>;
   /** Sends an event to the stream of a binding and waits for the piece. */
-  send: (binding: number, event: unknown) => Promise<boolean>;
+  send: (
+    binding: number,
+    event: unknown,
+    trusted?: { surface: string; action: string },
+  ) => Promise<boolean>;
   stop: () => Promise<void>;
 };
 
@@ -285,6 +299,9 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
   let piece: CompiledPiece;
   try {
     piece = startCompiledPiece(runtime, tx, artifact, {}, result.withTx(tx), {
+      // The harness is host code and vouches for the artifacts the crate
+      // emitted: their handlers then have the identity a claim names.
+      attested: true,
       artifacts: (id) =>
         artifacts.find(({ plan }) =>
           (plan as { patterns?: string[] }).patterns?.[0] === id
@@ -349,7 +366,11 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       traced = new Map();
       return counts;
     },
-    send: async (binding: number, event: unknown) => {
+    send: async (
+      binding: number,
+      event: unknown,
+      trusted?: { surface: string; action: string },
+    ) => {
       const stream = piece.instance.streams().find((held) =>
         held.binding === binding && held.instance === undefined
       );
@@ -361,17 +382,46 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         });
       if (entity === undefined) return false;
       const before = piece.counts;
+      const refusedBefore = piece.refusals.length;
+      const encoded = piece.transactions.encode(event);
+      // With the write policies kept, a send is a gesture on the send
+      // surface: the event carries the provenance a renderer attests for
+      // a click there and the renderer's mark, as the event of a test step
+      // with `trustedUi` does (`runtime/cli/lib/trusted-action-event.ts`).
+      const sent = trusted === undefined || typeof encoded !== "object" ||
+          encoded === null
+        ? encoded
+        : {
+          type: "click",
+          ...encoded,
+          provenance: reviewedActionProvenance("dom", trusted),
+        };
+      if (sent !== encoded) markRendererTrustedEvent(sent);
+      // A gesture is queued as an event the scheduler does not hold back:
+      // it delivers the eleventh gesture in a row and each one behind it
+      // once a second (`scheduler/wake-shaping.ts`), and the time of a send
+      // would be that of the wait. The last argument is the one the
+      // scheduler's own requeue of an event passes, which is not shaped.
       runtime.scheduler.queueEvent(
         { space, id: entity, path: [], scope: "space" },
-        piece.transactions.encode(event),
+        sent,
+        true,
+        undefined,
+        sent !== encoded,
       );
       await runtime.scheduler.idleWithPendingCommits();
       const after = piece.counts;
-      if (after.eventsRefused > before.eventsRefused) {
+      if (
+        after.eventsRefused > before.eventsRefused ||
+        piece.refusals.length > refusedBefore
+      ) {
         console.error([...piece.refusals].at(-1)?.slice(0, 400));
       }
+      // An event is committed where its handler ran and the storage
+      // refused no commit of the piece behind it.
       return after.events > before.events &&
-        after.eventsRefused === before.eventsRefused;
+        after.eventsRefused === before.eventsRefused &&
+        piece.refusals.length === refusedBefore;
     },
     adapter: () => {
       const { reads, writes, recordsGiven, committed, byCause } =
@@ -419,6 +469,15 @@ const counted = (instance: Instance, before: Instance["counts"]) => ({
     before.elementEvaluations,
   assemblies: instance.counts.assemblies - before.assemblies,
 });
+
+/**
+ * The gesture a send of the room is made with where the write policies are
+ * kept: `CHAT_SEND_SURFACE` and `CHAT_SEND_ACTION` of
+ * `./fabrichat/schemas.tsx`.
+ */
+const SEND_GESTURE = Deno.env.get("SCALE_POLICIES") === "keep"
+  ? { surface: "ChatSendSurface", action: "ChatSend" }
+  : undefined;
 
 const [arm, which, sizes] = Deno.args;
 const name = PATTERNS[which];
@@ -498,7 +557,9 @@ for (
     began = performance.now();
     let refused = 0;
     for (let index = 0; index < size; index++) {
-      if (!await send(binding, { body: `message ${index}` })) refused += 1;
+      if (!await send(binding, { body: `message ${index}` }, SEND_GESTURE)) {
+        refused += 1;
+      }
     }
     print({ ...base, step: "seed", ms: performance.now() - began, refused });
     const stopProfile = await profiled(size);
@@ -507,7 +568,11 @@ for (
       const adapter = started.adapter?.();
       started.trace?.();
       began = performance.now();
-      const committed = await send(binding, { body: `timed ${index}` });
+      const committed = await send(
+        binding,
+        { body: `timed ${index}` },
+        SEND_GESTURE,
+      );
       if (Deno.env.get("SCALE_TRACE") !== undefined && index === 2) {
         print({ ...base, step: "trace", ...started.trace?.() });
       }

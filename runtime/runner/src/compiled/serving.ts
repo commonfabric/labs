@@ -264,6 +264,9 @@ const start = async (
   const ofProgram = compiled.artifacts;
   const pieceOptions = {
     ...options,
+    // The artifacts are what the compiler of the runtime gave for the
+    // stored source.
+    attested: true,
     artifacts: (identity: string) =>
       ofProgram(identity) ?? options.artifacts?.(identity),
   };
@@ -403,4 +406,20 @@ export const adoptCompiledPiece = (
 ): void => {
   loading.get(runtime)?.set(result, Promise.resolve(piece));
   running.get(runtime)?.push(piece);
+};
+
+/**
+ * Has the loader of `runtime` forget `piece` as the running piece of the
+ * result document `result` (`adoptCompiledPiece`): the transaction that
+ * started it did not commit, so the storage holds nothing of it.
+ */
+export const forgetCompiledPiece = (
+  runtime: Runtime,
+  result: string,
+  piece: CompiledPiece,
+): void => {
+  loading.get(runtime)?.delete(result);
+  const list = running.get(runtime);
+  const at = list?.indexOf(piece) ?? -1;
+  if (at >= 0) list!.splice(at, 1);
 };
