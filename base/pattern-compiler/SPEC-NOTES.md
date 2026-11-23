@@ -20128,3 +20128,63 @@ The tables and logs are in the folder `work/carry` of the session.
        slot alone, the test reads the value of the operand through that slot,
        before the fix and after. Whether the label of the result then covers the
        test was not examined.
+
+## The resume by units and the six carried fixes merged with the scope instances
+
+Merged on 2026-11-23 on the branch `claude/compiled-pattern-sandbox-m5`: the
+commit `a467194a96` of `claude/compiled-pattern-runner-m3` (notes 692 to 704 and
+860 to 875), then the branch `claude/compiled-pattern-carry` (notes 940 to 944).
+The logs are in the folder `merge-r16/` of the session.
+
+892. **What holds after the merge.**
+     - _A piece that has named a document of a scope resumes whole._ Its basis
+       names a source that has no number (P354), so no resume finds it current,
+       and `resumeCompiledPieceFromBasis` wakes a piece whose basis names a
+       source of a scope with `resumeCompiledPiece`, not by units: no row is
+       left as stored. Such a piece also writes no list of readers
+       (`PieceUnits.record` is not called for it), since the runs of one pass
+       for several principals would each write what the bodies read for their
+       principal. It was not shown that leaving the rows of a collection of the
+       space as stored is sound beside a memo for each principal: a body of a
+       row left as stored is evaluated when a document it read changes, and that
+       evaluation can find the row to be of a scope, which moves its place. A
+       piece with no document of a scope is woken by units as on the trunk.
+     - _An assembly that holds rows as stored is asked for its scope without
+       evaluating a row._ `scopedOutput` and `#scopedRows` ask
+       `assembled(collection, true)`, and `#scopedRows` asks nothing of an
+       assembly that has no entry yet in a piece started with rows left as
+       stored, since the unit that says where the rows stand is placed first.
+       Before this, every row was evaluated at a wake.
+     - _`Instance.restore` and the entries set aside._ The carried fix drops the
+       entry of each cone instance that wrote a restored document. Where the
+       memo holds the entry of another scope key than the one the restore is
+       for, that entry stays and the one set aside for the key of the restore is
+       marked as not current.
+     - _`Host.operand` with a left operand of a scope_ gives the reference to
+       the instance of the acting principal or the right operand, and the entry
+       is of the scope, since it read the left operand
+       (`fixtures/scoped-operand.tsx`).
+     - _The subscription of `RuntimeTransactions`_ finds a document by the space
+       and the entity and by the scope key of the change, and reports an entity
+       the executor holds no document of for a change of the space scope alone.
+       The stored result, the streams and the rows left as stored are documents
+       of the space.
+     - _The corpus under the serving loop reads as the client._ `runServed` of
+       `compare/runner-corpus.ts` read the streams and the result of the
+       executor with no transaction open, which gave the instances of the
+       serving identity. Read as the client, `topic-workbench/main` and
+       `wordsearch/play` hold the values of the executor in memory under the
+       serving loop, where note 889 has them as different.
+     - _Measured,_ one run each at a load average of 11 to 13:
+       `compare/serving-path.ts` at 1,000 rows finds the piece current after a
+       takeover with no evaluation, and the first event after it takes 47 ms
+       with 6 evaluations at the wake (the trunk: about 31 ms, 6 evaluations); a
+       send of the FabriChat room at 10 messages takes 103 to 117 ms with the
+       counts of note 889. The corpus, as started, every event handled, equal,
+       and all three with no commit refused: runner path 264, 223, 232, 199;
+       serving 232, 200, 211, 183; after a resume 264, 221, 230, 197; serving
+       with a resume 232, 199, 210, 182, with 71 pieces found current where the
+       trunk found 80. `apps/redactor/vault.tsx` does not resume under the
+       serving loop: it has state of a scope, so it resumes whole, and the
+       commit of its whole resume is refused for writer fit, as on the runner
+       path since round thirteen.
