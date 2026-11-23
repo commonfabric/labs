@@ -863,6 +863,13 @@ const handleVariant = (schema: Schema | undefined): Schema | undefined => {
 const membersUnread = (schema: Schema | undefined): Schema =>
   typeof schema === "object" ? { ...schema, items: {} } : { items: {} };
 
+/**
+ * The schema of a read of a container that gives which children it has,
+ * of an array or of a record, and follows no link a child holds: it types
+ * each element as `unknown` and declares no member.
+ */
+const CHILDREN_UNREAD: Schema = { items: {} };
+
 /** Brings the instances of a side-writing cone up to date. */
 type Writer = (context: Context) => void;
 
@@ -12941,9 +12948,16 @@ export class Instance {
           error: `the handler reads a failed value: ${found.$error.message}`,
         };
       }
+      // An `enumeration` or a `shape` entry gives way to a handle the
+      // state holds at or above its path (`gives`): the body reaches each
+      // child through that handle. The read is then of which children the
+      // container has, and follows no link a child holds.
+      const givesWay = read.observes !== "identity" &&
+        read.observes !== "value" &&
+        this.gives(read.observes, state, read.path);
       let given = read.observes === "identity"
         ? this.handleOf(found, undefined, slot)
-        : host.v(found);
+        : host.v(found, givesWay ? CHILDREN_UNREAD : undefined);
       // A write through a handle to a value the instance computes fails
       // (PL §3.11).
       if (reference && given instanceof Handle) {
