@@ -753,6 +753,34 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     setup.cancel();
   });
 
+  it("(n2) the serving runtime's own start of a piece owning a per-session default seeds no instance of its own, while a session that arrives still finds its default seeded", async () => {
+    // The serving runtime starts the piece for Bob's demand with no actor
+    // of its own: identity arrives with the work (protocol.md, "Server-side
+    // runs never derive identity from their own session"). Its own session
+    // is never a viewer's, so a default seeded there is read by nobody, and
+    // a new serving runtime has a new session, so every start would seed
+    // the piece's defaults again.
+    const setup = await standUp({
+      names: { arg: "fo-n2-arg", result: "fo-n2-result" },
+      pattern: OWNED_DRAFT_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine } = setup;
+    const bob = await setup.watchRoot(bobSigner);
+    const bobSession = resolveScopeKey("session", bob.scopeKeyIdentity);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobSession, '"members":""'),
+    );
+    const serviceSessionRows = engine.database.prepare(
+      `SELECT COUNT(*) AS n FROM head WHERE scope_key LIKE :prefix`,
+    ).get({
+      prefix: `session:${encodeURIComponent(serviceSigner.did())}:%`,
+    }) as { n: number };
+    expect(serviceSessionRows.n).toBe(0);
+    setup.cancel();
+  });
+
   it("(n4) a session that opens a piece and types at once keeps its keystroke, and finds the other defaults filled in beside it, whichever of its write and the arrival seed lands first", async () => {
     // Bob's first keystroke is a blind write of `title`, issued as soon as
     // his view watches the draft. The arrival seed races it: it can probe
