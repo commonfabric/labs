@@ -48,8 +48,8 @@ The work after it is on two branches:
    with a `wish` has scoped state, so under the serving loop with resume 71
    corpus pieces are found current where the trunk finds 80.
 2. `claude/compiled-pattern-serving-m6` is the one branch not merged. The
-   attempt is the branch `merge-attempt/serving-m6` (head `1d609076c0`, note
-   982), cut from the merged branch. One test of the serving branch fails
+   attempt is the branch `merge-attempt/serving-m6` (head `364a53722e`, notes
+   982 to 985), cut from the merged branch. One test of the serving branch fails
    there, for a defect of the trunk that the merge exposed and did not
    create (below).
 
