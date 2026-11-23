@@ -14,7 +14,7 @@ import {
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /** The pattern of `compare/fixtures/chained-maps.tsx`. */
 const artifact = async (): Promise<Artifact> => {
@@ -41,14 +41,14 @@ type Kept = { count: number; tags: string[]; texts: string[] };
 // computes from a text on the note that holds the text.
 describe("a `map` over the result of a `map` over an array of references, whose body reads the value a reference in the upstream row names", () => {
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
 
   beforeEach(async () => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,

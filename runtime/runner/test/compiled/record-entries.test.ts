@@ -13,7 +13,7 @@ import {
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /** The pattern of `compare/fixtures/record-entries.tsx`. */
 const artifact = async (): Promise<Artifact> => {
@@ -38,14 +38,14 @@ type Table = { kind: string; rows: { name: string; title: string }[] };
 // consumes that member's clause and no other member's.
 describe("a `map` over the entries of a record of references as a compiled piece", () => {
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
 
   beforeEach(async () => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,

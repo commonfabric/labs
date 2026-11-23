@@ -13,7 +13,7 @@ import {
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /** The pattern of `compare/fixtures/keyed-join.tsx`. */
 const artifact = async (): Promise<Artifact> => {
@@ -38,14 +38,14 @@ type Rows = { name: string; titles: string[] }[];
 // the key of every item, of those that are not in it as well (PL §3.17).
 describe("a keyed join as a compiled piece, each member under a clause of its own", () => {
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
 
   beforeEach(async () => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,

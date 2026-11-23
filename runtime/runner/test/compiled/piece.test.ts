@@ -10,7 +10,7 @@ import {
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /**
  * The artifact of a pattern of a fixture of `base/pattern-compiler`, as
@@ -34,7 +34,7 @@ const artifactOf = async (
 
 describe("startCompiledPiece()", () => {
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
 
@@ -51,7 +51,7 @@ describe("startCompiledPiece()", () => {
   beforeEach(async () => {
     const signer = await Identity.fromPassphrase("compiled piece");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = runtimeWith(true);
     pieces = [];
   });
