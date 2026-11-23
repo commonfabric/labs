@@ -323,6 +323,15 @@ const assembledElements = new WeakMap<
  */
 const bucketElements = new WeakMap<object, readonly Element[]>();
 
+/**
+ * Where the result of the instance stores the bucket that a `lookup` gave,
+ * by the array of the bucket's members: the position below the record
+ * `buckets` of a kept index whose buckets are documents of their own
+ * (`Instance.bucketRecordOf`). An output that holds the array is stored as
+ * a reference to that position (`Instance.#formOf`).
+ */
+const bucketPlaces = new WeakMap<object, Ref>();
+
 /** The value code of a plan, as the crate's `emit` command prints it. */
 export type Code = {
   modules: { module: number; path: string; source: string }[];
@@ -465,6 +474,11 @@ export class Index {
   >();
   /** Moves with each change of a bucket. */
   serial = 0;
+  /**
+   * The encoded keys of the buckets that changed since the index was last
+   * stored bucket by bucket (`Instance.#storeIndex`), which empties it.
+   */
+  readonly changed = new Set<string>();
   constructor(
     readonly mode: "group" | "key",
     /** The name of the memo entry of the assembly. */
@@ -617,6 +631,19 @@ type Unit = {
    * document last passed over the rows.
    */
   swept: boolean;
+};
+
+/**
+ * A place of the stored result that holds a kept index whose buckets are
+ * stored by themselves: the collection of the index, the element keys it
+ * was named under, the path of the result it stands at, and the index as
+ * it was last stored.
+ */
+type IndexUnit = {
+  collection: number;
+  context: Context;
+  path: string[];
+  index: Index;
 };
 
 /** A document of the layout: the result document, or a part. */
@@ -1875,9 +1902,14 @@ export class Host {
     ) {
       // An index is held by reference, so that a cone that looks up a key
       // depends on one bucket. The result of the instance holds the index
-      // whole.
+      // whole, unless its buckets are documents of their own: the result
+      // then holds the reference, and the buckets that changed are stored
+      // by themselves (`Instance.#storeIndex`).
       const handle = new IndexHandle(output.collection, this.context);
-      return this.cone === undefined ? this.settled(handle) : handle;
+      return this.cone === undefined &&
+          instance.bucketRecordOf(output.collection) === undefined
+        ? this.settled(handle)
+        : handle;
     }
     if (output.collection !== undefined) {
       // The result of a construct that assembles rows is held by
@@ -2060,6 +2092,12 @@ export class Host {
     // keys they have there: a per-element construct over the bucket takes
     // them as its elements and forms no key from what a member holds.
     bucketElements.set(members, instance.indexElements(held, keys));
+    const record = keys.length === 0
+      ? undefined
+      : instance.bucketRecordOf(index.collection);
+    if (record !== undefined) {
+      bucketPlaces.set(members, new Ref(instance.id, [...record, encoded]));
+    }
     return members;
   }
 
@@ -4911,13 +4949,21 @@ export class Instance {
      * place holds a record of the name of the assembly, which is the
      * same for every state of the collection.
      */
-    assembled?: (reference: Assembled, path: string[]) => unknown,
+    assembled?: (reference: Assembled | IndexHandle, path: string[]) => unknown,
     path: string[] = [],
+    /**
+     * The position that the result stores an array at already, where it
+     * does: the place then holds a reference to that position, and no copy
+     * of the array.
+     */
+    placed?: (array: readonly unknown[]) => Ref | undefined,
   ): unknown {
     // An index is compared by which bucket each element is in.
     if (value instanceof Index) return { $index: [...value.of] };
     if (value instanceof IndexHandle) {
-      return { $index: this.plan.collections[value.collection].name };
+      return assembled === undefined
+        ? { $index: this.plan.collections[value.collection].name }
+        : assembled(value, path);
     }
     if (value instanceof Assembled) {
       return assembled === undefined
@@ -4952,14 +4998,18 @@ export class Instance {
     if (value instanceof Thunk) return undefined;
     if (typeof value === "function") return undefined;
     if (Array.isArray(value)) {
+      const place = placed?.(value);
+      if (place !== undefined) {
+        return { $link: { doc: place.doc, path: [...place.path] } };
+      }
       return value.map((member, index) =>
-        this.stored(member, assembled, [...path, `${index}`])
+        this.stored(member, assembled, [...path, `${index}`], placed)
       );
     }
     if (isRecord(value)) {
       const members: Record<string, unknown> = {};
       for (const [name, member] of Object.entries(value)) {
-        const kept = this.stored(member, assembled, [...path, name]);
+        const kept = this.stored(member, assembled, [...path, name], placed);
         if (kept !== undefined) members[name] = kept;
       }
       if (this.store.copies.has(value)) this.#copied.add(members);
@@ -5429,42 +5479,50 @@ export class Instance {
       ? this.#rootUnits
       : owner.unit.inside.get(owner.key) ?? new Map<string, Unit>();
     if (owner !== undefined) owner.unit.inside.set(owner.key, inside);
-    return this.stored(value, (reference, path) => {
-      const at = [...below, ...path];
-      const id = JSON.stringify(at);
-      seen.add(id);
-      const known = inside.get(id);
-      if (known !== undefined && known.name === reference.name) {
-        this.#dueUnits.add(known);
-        return KEPT;
-      }
-      if (known !== undefined) this.#dispose(known);
-      const unit: Unit = {
-        name: reference.name,
-        collection: reference.collection,
-        context: reference.context,
-        place: owner === undefined
-          ? { path: at }
-          : { unit: owner.unit, key: owner.key, below: at },
-        keys: [],
-        values: [],
-        inside: new Map(),
-        serial: this.#unitSerial++,
-        sizes: [],
-        parted: [],
-        splits: [],
-        forced: new Set(),
-        sum: 0,
-        part: false,
-        partForced: false,
-        swept: false,
-      };
-      inside.set(id, unit);
-      const units = this.#units.get(unit.name) ?? new Set();
-      units.add(unit);
-      this.#units.set(unit.name, units);
-      return this.#rowsOf(unit);
-    });
+    return this.stored(
+      value,
+      (reference, path) => {
+        const at = [...below, ...path];
+        if (reference instanceof IndexHandle) {
+          return this.#indexForm(reference, at, owner === undefined);
+        }
+        const id = JSON.stringify(at);
+        seen.add(id);
+        const known = inside.get(id);
+        if (known !== undefined && known.name === reference.name) {
+          this.#dueUnits.add(known);
+          return KEPT;
+        }
+        if (known !== undefined) this.#dispose(known);
+        const unit: Unit = {
+          name: reference.name,
+          collection: reference.collection,
+          context: reference.context,
+          place: owner === undefined
+            ? { path: at }
+            : { unit: owner.unit, key: owner.key, below: at },
+          keys: [],
+          values: [],
+          inside: new Map(),
+          serial: this.#unitSerial++,
+          sizes: [],
+          parted: [],
+          splits: [],
+          forced: new Set(),
+          sum: 0,
+          part: false,
+          partForced: false,
+          swept: false,
+        };
+        inside.set(id, unit);
+        const units = this.#units.get(unit.name) ?? new Set();
+        units.add(unit);
+        this.#units.set(unit.name, units);
+        return this.#rowsOf(unit);
+      },
+      [],
+      (array) => bucketPlaces.get(array),
+    );
   }
 
   /** The rows of a unit in stored form, from its assembly as it is now. */
@@ -6176,7 +6234,82 @@ export class Instance {
       this.#dueUnits.delete(unit);
       if (this.#stands(unit)) this.#storeUnit(unit);
     }
+    for (const unit of this.#indexUnits.values()) this.#storeIndex(unit);
     this.#arrange();
+  }
+
+  /**
+   * The kept indexes whose buckets are stored by themselves, by the path
+   * of the result each stands at, as text.
+   */
+  readonly #indexUnits = new Map<string, IndexUnit>();
+
+  /**
+   * The stored form of a reference to an index that stands at the path
+   * `at` of the result. Where the buckets of the index are documents of
+   * their own and the index stands at the path of its kept output, the
+   * index is stored whole the first time, and afterwards the form is
+   * `KEPT`: the buckets that changed are stored by themselves
+   * (`#storeIndex`). Otherwise the form is the index whole.
+   */
+  #indexForm(handle: IndexHandle, at: string[], atRoot: boolean): unknown {
+    const { collection, context } = handle;
+    const record = atRoot ? this.bucketRecordOf(collection) : undefined;
+    const entry = this.assembled(collection)(this.freshContext(context));
+    const index = entry.value as Index;
+    const whole = () =>
+      this.stored(
+        this.indexRecord(index, new Host(this, context, undefined), collection),
+      );
+    if (
+      record === undefined ||
+      JSON.stringify(at) !== JSON.stringify(record.slice(0, -1))
+    ) return whole();
+    const id = JSON.stringify(at);
+    const known = this.#indexUnits.get(id);
+    if (known !== undefined && known.collection === collection) return KEPT;
+    this.#indexUnits.set(id, { collection, context, path: at, index });
+    index.changed.clear();
+    return whole();
+  }
+
+  /**
+   * Brings the stored buckets of a kept index up to date with the index:
+   * each bucket that changed since the index was last stored is compared
+   * and written by itself, and one that emptied is removed. An index that
+   * was formed again whole is stored whole, each bucket compared by itself.
+   * Where a bucket changed, the record of the index is given again at the
+   * path of the index: its label is that of the membership of the index,
+   * which a read of any bucket consumes there.
+   */
+  #storeIndex(unit: IndexUnit): void {
+    const { collection, context, path } = unit;
+    const entry = this.assembled(collection)(this.freshContext(context));
+    const index = entry.value as Index;
+    const host = new Host(this, context, undefined);
+    if (index !== unit.index) {
+      unit.index = index;
+      index.changed.clear();
+      this.#place(path, this.indexRecord(index, host, collection), undefined, [
+        ...path,
+      ]);
+      this.#unchangedOutput(path);
+      return;
+    }
+    if (index.changed.size === 0) return;
+    for (const encoded of index.changed) {
+      const at = [...path, "buckets", encoded];
+      const bucket = this.#bucketOf(index, encoded, host, collection);
+      if (bucket === undefined) {
+        if (this.store.peek(this.id, at) !== undefined) {
+          this.store.put(this.id, at, undefined);
+        }
+      } else {
+        this.#place(at, bucket, undefined, at);
+      }
+    }
+    index.changed.clear();
+    this.#unchangedOutput(path);
   }
 
   /** The entry of a computation that has not been evaluated. */
@@ -7085,26 +7218,45 @@ export class Instance {
     const occupied = [...index.buckets].filter(([, { keys }]) =>
       keys.length > 0
     );
-    // Where the index is over the rows of another per-element construct
-    // that the result keeps and that are stored as documents of their own,
-    // a bucket holds a reference by key to each row at its place in the
-    // result, and no copy of the row (note 611 of `SPEC-NOTES.md`): the
-    // index is then written when a member enters or leaves a bucket and
-    // not when a row changes, and what reads a member reads the row where
-    // it is stored, under the row's label.
-    const rows = this.#keptRowsOf(collection);
-    const member = (key: string) =>
-      rows === undefined
-        ? this.indexMember(index, key, host)
-        : new Ref(this.id, [...rows, keySegment(key)]);
     return {
       kind: "collection-index",
       mode: index.mode,
-      buckets: Object.fromEntries(occupied.map(([encoded, { keys }]) => {
-        const members = keys.map(member);
-        return [encoded, index.mode === "group" ? members : members[0]];
-      })),
+      buckets: Object.fromEntries(
+        occupied.map((
+          [encoded],
+        ) => [encoded, this.#bucketOf(index, encoded, host, collection)]),
+      ),
     };
+  }
+
+  /**
+   * What the stored index holds for the bucket of an encoded key: its
+   * members in `group` mode, the first of them in `key` mode, and nothing
+   * for a bucket with no member.
+   *
+   * Where the index is over the rows of another per-element construct that
+   * the result keeps and that are stored as documents of their own, a
+   * bucket holds a reference by key to each row at its place in the
+   * result, and no copy of the row (note 611 of `SPEC-NOTES.md`): the index
+   * is then written when a member enters or leaves a bucket and not when a
+   * row changes, and what reads a member reads the row where it is stored,
+   * under the row's label.
+   */
+  #bucketOf(
+    index: Index,
+    encoded: string,
+    host: Host,
+    collection: number,
+  ): unknown {
+    const keys = index.buckets.get(encoded)?.keys ?? [];
+    if (keys.length === 0) return undefined;
+    const rows = this.#keptRowsOf(collection);
+    const members = keys.map((key) =>
+      rows === undefined
+        ? this.indexMember(index, key, host)
+        : new Ref(this.id, [...rows, keySegment(key)])
+    );
+    return index.mode === "group" ? members : members[0];
   }
 
   /**
@@ -7130,6 +7282,56 @@ export class Instance {
 
   /** The result of `#bucketRecordPaths()`. */
   #bucketPaths: ReadonlySet<string> | undefined;
+
+  /**
+   * The path of the result document at which the instance keeps the record
+   * of the buckets of the index of `collection`, where the buckets are
+   * stored as documents of their own (`bucketDocuments`).
+   */
+  bucketRecordOf(collection: number): readonly string[] | undefined {
+    if (this !== this.root || !this.options.bucketDocuments?.has(collection)) {
+      return undefined;
+    }
+    return this.#bucketOutputs().find((kept) => kept.collection === collection)
+      ?.record;
+  }
+
+  /**
+   * The kept indexes whose buckets are stored as documents of their own:
+   * the output of each, its collection, and the path of the record of its
+   * buckets. Made once.
+   */
+  #bucketOutputs(): readonly {
+    output: number;
+    collection: number;
+    record: readonly string[];
+  }[] {
+    if (this.#bucketKept !== undefined) return this.#bucketKept;
+    const collections = this === this.root
+      ? this.options.bucketDocuments
+      : undefined;
+    const found: { output: number; collection: number; record: string[] }[] =
+      [];
+    this.plan.outputs.forEach((output, index) => {
+      if (
+        output.kept === true && output.collection !== undefined &&
+        collections?.has(output.collection) && !output.path.includes("*")
+      ) {
+        found.push({
+          output: index,
+          collection: output.collection,
+          record: [...output.path, "buckets"],
+        });
+      }
+    });
+    this.#bucketKept = found;
+    return found;
+  }
+
+  /** The result of `#bucketOutputs()`. */
+  #bucketKept:
+    | readonly { output: number; collection: number; record: string[] }[]
+    | undefined;
 
   /**
    * The path of the result at which the instance keeps the rows of the
@@ -7517,6 +7719,7 @@ export class Instance {
       for (const encoded of touched) {
         const bucket = index.buckets.get(encoded);
         if (bucket !== undefined) bucket.version = ++index.serial;
+        index.changed.add(encoded);
         this.#markUsers(bucketName(name, encoded));
       }
       this.counts.bucketsChanged += touched.size;
@@ -8682,6 +8885,9 @@ export class Instance {
       for (
         const [collection, elements] of Object.entries(place.elements ?? {})
       ) {
+        // A `fold` that is given no element reads no group of the
+        // collection (`#heldByReference`).
+        if ("groups" in elements && elements.groups.length === 0) continue;
         const folds = `${instance}\n${collection}`;
         const held = this.#recordFolds.get(folds) ?? new Set();
         held.add(key);
@@ -12414,10 +12620,13 @@ export class Instance {
       this.#readBy(output, keyed, (address) => own.push(address), false);
       this.root.#ownReads.set(this.#recordKey(output, at), own);
     } else {
-      given = this.#storedInPlace(
-        record.template,
-        this.#inputsFor(record.template, keyed, [inputs, result]),
-        { doc, path: at },
+      given = this.#heldByReference(
+        this.#storedInPlace(
+          record.template,
+          this.#inputsFor(record.template, keyed, [inputs, result]),
+          { doc, path: at },
+        ),
+        held,
       );
       if (sharing !== undefined && first === undefined) {
         this.root.#sharedInputs.set(
@@ -12476,6 +12685,61 @@ export class Instance {
       record: { output },
       ...given,
       ...(stored?.bound || unbound ? { bound: true as const } : {}),
+    };
+  }
+
+  /**
+   * The inputs of a write that stored, at its target, a reference to the
+   * position of a bucket of a kept index whose buckets are documents of
+   * their own (`bucketPlaces`): the inputs given, with those of the output
+   * of the index replaced by inputs under which that output has no label,
+   * every slot a constant and every `fold` without an element. The label
+   * of the index is stored once, at the output of the index, which stands
+   * above the position the reference names, and a read through the
+   * reference consumes it there. The label of the target is then that of
+   * the key the bucket was looked up by, and a change of the membership of
+   * the index gives no record of the target again.
+   */
+  #heldByReference<T extends { inputs: number }>(inputs: T, held: unknown): T {
+    if (!isLink(held) || held.$link.doc !== this.id) return inputs;
+    const record = JSON.stringify(held.$link.path.slice(0, -1));
+    const index = this.#bucketOutputs().find((kept) =>
+      JSON.stringify(kept.record) === record
+    );
+    const table = this.root.#inputsTable;
+    const place = table.inputs[inputs.inputs];
+    const named = index === undefined
+      ? undefined
+      : place.outputs?.[index.output];
+    if (index === undefined || named === undefined) return inputs;
+    // A chain of outputs is as long as the plan is deep.
+    const without = (at: number, depth: number): number => {
+      const { slots, selections, picks, elements, dynamic, outputs } =
+        table.inputs[at];
+      const each = <T, U>(of: Record<number, T>, to: (value: T) => U) =>
+        Object.fromEntries(
+          Object.entries(of).map(([name, value]) => [name, to(value)]),
+        );
+      const constant = table.binding({ constant: true });
+      return table.place({
+        slots: each(slots, () => constant),
+        ...(selections === undefined ? {} : { selections }),
+        ...(picks === undefined ? {} : { picks: each(picks, () => null) }),
+        ...(dynamic === undefined ? {} : { dynamic: each(dynamic, () => []) }),
+        ...(outputs === undefined || depth > 64 ? {} : {
+          outputs: each(outputs, (below) => without(below, depth + 1)),
+        }),
+        ...(elements === undefined ? {} : {
+          elements: each(elements, (): FoldElements => ({ groups: [] })),
+        }),
+      });
+    };
+    return {
+      ...inputs,
+      inputs: table.place({
+        ...place,
+        outputs: { ...place.outputs, [index.output]: without(named, 0) },
+      }),
     };
   }
 

@@ -1,0 +1,804 @@
+[
+  {
+    "module": "bucket-reference.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [
+            1,
+            0,
+            2,
+            3
+          ],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "bucket-reference.tsx",
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = (pattern(\"sha256:4f154486dde8983b140d532bfc5b385d73dc80af68ad5437bb858b73e0b497c4\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => (({ from: $h.slot(2), to: $h.slot(3) })));\n}\n$rt.element(0, ($h) => ($h.output(0)));\n}\n{\n$rt.element(2, ($h) => ($h.slot(4)));\n}\n{\n$rt.element(3, ($h) => (({ topic: $h.slot(6), mentionedBy: $h.lookup($h.output(6), $h.slot(6)) })));\n}\n$rt.value(5, ($h) => ($h.at($h.slot(0), [\"length\"])));\nreturn $rt.thunk(($h) => (({ count: $h.output(12), rows: $h.output(8), byMentioned: $h.output(6) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "collection": 1,
+              "cone": 0,
+              "output": 0
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "output": 4
+            },
+            {
+              "collection": 2,
+              "cone": 2,
+              "output": 6
+            },
+            {
+              "cone": 3
+            },
+            {
+              "collection": 3,
+              "cone": 3,
+              "output": 8
+            },
+            {
+              "cone": 4,
+              "function": true,
+              "output": 12
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 26,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "flatMap",
+              "membership": {
+                "op": "shared",
+                "template": 0
+              },
+              "name": "pairs",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 1
+              },
+              "name": "pairs",
+              "source": {
+                "slot": 1
+              },
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "construct": "groupBy",
+              "membership": {
+                "op": "shared",
+                "template": 1
+              },
+              "name": "byMentioned",
+              "source": {
+                "collection": 0,
+                "via": "groupBy"
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": "rows",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "bucket-reference.tsx",
+                "start": 976
+              },
+              "bodies": [],
+              "entry": "pairs",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2,
+                3
+              ],
+              "within": [
+                {
+                  "element": 0
+                },
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "bucket-reference.tsx",
+                "start": 944
+              },
+              "bodies": [],
+              "entry": "pairs",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "bucket-reference.tsx",
+                "start": 1041
+              },
+              "bodies": [],
+              "entry": "byMentioned",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4,
+                5
+              ],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "bucket-reference.tsx",
+                "start": 1093
+              },
+              "bodies": [],
+              "entry": "rows",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "bucket-reference.tsx",
+                "start": 1187
+              },
+              "bodies": [],
+              "entry": "length",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 1,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            },
+            {
+              "from": 2,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 6
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "collection": 1,
+              "cone": 0,
+              "constraints": [],
+              "interim": "pairs",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 1
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "pairs",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "pairs",
+              "kept": false,
+              "path": [
+                "*",
+                "from"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "pairs",
+              "kept": false,
+              "path": [
+                "*",
+                "to"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "constraints": [],
+              "interim": "pairs",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "pairs",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "output",
+                "output": 0
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "byMentioned"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 1
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "byMentioned",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "collection": 3,
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "mentionedBy"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 6
+                  },
+                  {
+                    "op": "output",
+                    "output": 6
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "topic"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:4f154486dde8983b140d532bfc5b385d73dc80af68ad5437bb858b73e0b497c4"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "topics"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "mentions"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "to"
+              ],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/6"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/7"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "op": "output",
+                "output": 0
+              },
+              "collection": 0,
+              "op": "fold"
+            },
+            {
+              "body": {
+                "op": "slot",
+                "slot": 4
+              },
+              "collection": 2,
+              "op": "fold"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "topics": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "mentions": {
+                        "items": {
+                          "asCell": [
+                            "cell"
+                          ]
+                        },
+                        "type": "array"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "mentions"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "topics"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "items": {
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "type": "array"
+                },
+                "t1": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "properties": {
+                    "mentions": {
+                      "$ref": "#/$defs/t0"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "mentions"
+                  ],
+                  "type": "object"
+                }
+              },
+              "properties": {
+                "byMentioned": {},
+                "count": {
+                  "type": "number"
+                },
+                "rows": {
+                  "items": {
+                    "properties": {
+                      "mentionedBy": {
+                        "items": {
+                          "properties": {
+                            "from": {
+                              "properties": {
+                                "mentions": {
+                                  "$ref": "#/$defs/t0"
+                                },
+                                "title": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "title",
+                                "mentions"
+                              ],
+                              "type": "object"
+                            },
+                            "to": {
+                              "$ref": "#/$defs/t1"
+                            }
+                          },
+                          "required": [
+                            "from",
+                            "to"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "topic": {
+                        "$ref": "#/$defs/t1"
+                      }
+                    },
+                    "required": [
+                      "topic",
+                      "mentionedBy"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "count",
+                "rows",
+                "byMentioned"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "properties": {
+                  "mentions": {
+                    "items": {
+                      "asCell": [
+                        "cell"
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "mentions"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "items": {
+                "asCell": [
+                  "cell"
+                ]
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "properties": {
+                "mentions": {
+                  "items": {
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "mentions"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "asCell": [
+                "cell"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "mentions": {
+                  "items": {
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "mentions"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "items": {
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "properties": {
+                "from": {
+                  "properties": {
+                    "mentions": {
+                      "$ref": "#/$defs/t0"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "mentions"
+                  ],
+                  "type": "object"
+                },
+                "to": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "properties": {
+                    "mentions": {
+                      "$ref": "#/$defs/t0"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "mentions"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]
