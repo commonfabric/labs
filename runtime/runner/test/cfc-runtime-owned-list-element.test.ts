@@ -1,0 +1,152 @@
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+
+import { Identity } from "@commonfabric/identity";
+import type { JSONSchema } from "../src/builder/types.ts";
+import { Runtime } from "../src/runtime.ts";
+import { StorageManager } from "../src/storage/cache.deno.ts";
+import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
+
+const signer = await Identity.fromPassphrase("runtime owned list element");
+const space = signer.did();
+const stranger =
+  (await Identity.fromPassphrase("runtime owned list element stranger")).did();
+
+/** A clause no residency clause of `space` covers. */
+const strangerOnly = {
+  type: "https://commonfabric.org/cfc/atom/User",
+  subject: stranger,
+};
+
+/**
+ * A running piece's own list, written once by a transaction that read a
+ * labeled value, then extended by keyed element the way a handler extends
+ * one: `elementById()` names the element's document, the handler writes it,
+ * and `addUnique()` adds its membership.
+ */
+describe("runtime-owned list elements", () => {
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "persist",
+    });
+  });
+
+  afterEach(async () => {
+    await runtime.dispose();
+    await storageManager.close();
+  });
+
+  /** A source whose `secret` field carries {@link strangerOnly}. */
+  const seedSecret = async (name: string) => {
+    const seed = runtime.edit();
+    const cell = runtime.getCell(space, name, {
+      type: "object",
+      properties: { secret: { type: "string" } },
+    } as JSONSchema);
+    const id = cell.getAsNormalizedFullLink().id;
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredEnvelope(seed, { space, scope: "space", id, path: [] }, {
+      value: { secret: "s3cr3t" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["secret"],
+            label: { confidentiality: [strangerOnly] },
+          }],
+        },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any);
+    expect((await seed.commit().settled).error).toBeUndefined();
+  };
+
+  /** Start a piece holding a list of its own, and hand back its result. */
+  const startPiece = async (name: string) => {
+    const { commonfabric } = createTrustedBuilder(runtime);
+    const { pattern, Cell: BuilderCell } = commonfabric;
+    const testPattern = pattern<Record<string, never>>(() => ({
+      items: BuilderCell.of<{ name: string }[]>([]),
+    }));
+    const tx = runtime.edit();
+    const resultCell = runtime.getCell(
+      space,
+      name,
+      testPattern.resultSchema,
+      tx,
+    );
+    const result = runtime.run(tx, testPattern, {}, resultCell);
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    return result;
+  };
+
+  type Piece = Awaited<ReturnType<typeof startPiece>>;
+
+  /** Replace the list with one element derived from the labeled source. */
+  const overRead = async (piece: Piece, sourceName: string) => {
+    const tx = runtime.edit();
+    const source = runtime.getCell(space, sourceName, undefined, tx);
+    const raw = source.getRaw() as { secret?: string };
+    // deno-lint-ignore no-explicit-any
+    (piece.withTx(tx) as any).key("items").set([{ name: `${raw.secret}` }]);
+    tx.prepareCfc();
+    return await tx.commit().settled;
+  };
+
+  /**
+   * Add an element by key, reading nothing but the list: write the keyed
+   * element's document, then add its membership.
+   */
+  const addByKey = async (piece: Piece, key: string) => {
+    const tx = runtime.edit();
+    // deno-lint-ignore no-explicit-any
+    const list = (piece.withTx(tx) as any).key("items");
+    const entry = list.elementById(key);
+    entry.set({ name: key });
+    list.addUnique(entry);
+    tx.prepareCfc();
+    return await tx.commit().settled;
+  };
+
+  it("commits a keyed add to a list no labeled write has reached", async () => {
+    const piece = await startPiece("clean-list");
+
+    expect((await addByKey(piece, "first")).error).toBeUndefined();
+  });
+
+  it("commits a labeled write to the list itself", async () => {
+    await seedSecret("tainting-source");
+    const piece = await startPiece("tainted-list");
+
+    expect((await overRead(piece, "tainting-source")).error).toBeUndefined();
+  });
+
+  it("commits a keyed add after a labeled write reached the list", async () => {
+    // The add reads the list, so its join carries the clause the earlier
+    // write left there, and the keyed element's document is where that
+    // join lands.
+    await seedSecret("wedging-source");
+    const piece = await startPiece("wedged-list");
+    expect((await overRead(piece, "wedging-source")).error).toBeUndefined();
+
+    const added = await addByKey(piece, "after");
+
+    expect(added.error).toBeUndefined();
+  });
+});
