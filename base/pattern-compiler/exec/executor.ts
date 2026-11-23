@@ -195,6 +195,11 @@ export type Plan = {
     }[];
     envelopes: { kind: string; slot?: number; path?: string[] }[];
     /**
+     * The paths of the body's result at which it gives a reference
+     * (PL §1.1, `Body.outputs`): `*` stands for each member of an array.
+     */
+    outputs?: { path: string[]; reference?: unknown }[];
+    /**
      * The handles the body is given: an entry of a slot names the
      * `identity` slot of the handle (PL §1.1, `Body.handles`).
      */

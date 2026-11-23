@@ -20,12 +20,18 @@ import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 
-/** The artifact of a pattern of `compare/fixtures/runner-lists.tsx`. */
-const artifactOf = async (pattern: string): Promise<Artifact> => {
+/**
+ * The artifact of a pattern of a fixture of `base/pattern-compiler`, by
+ * default of `compare/fixtures/runner-lists.tsx`.
+ */
+const artifactOf = async (
+  pattern: string,
+  fixture = "runner-lists",
+): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
     await Deno.readTextFile(
       new URL(
-        "../../../../base/pattern-compiler/compare/fixtures/runner-lists.emit.json",
+        `../../../../base/pattern-compiler/compare/fixtures/${fixture}.emit.json`,
         import.meta.url,
       ),
     ),
@@ -312,6 +318,152 @@ describe("the rows of a `map` over an array declared as references", () => {
     } finally {
       tx.abort();
     }
+  });
+
+  describe("over the fixture `ordered-rows.tsx`", () => {
+    /**
+     * Starts the fixture over three items, each a cell of its own, and two
+     * notes in place. `sorted` and `nested` are a `map` over the result of
+     * a `lift` that gives the references by rank, `filed` is a `map` over
+     * the array of references, and `plain` a `map` over plain values in
+     * place.
+     */
+    const ordered = async () => {
+      const cells = [
+        { title: "a", rank: 2, tags: ["x", "y"] },
+        { title: "b", rank: 1, tags: ["z"] },
+        { title: "c", rank: 3, tags: [] },
+      ].map((value, index) => ({
+        cell: runtime.getCell<Record<string, unknown>>(space, `row ${index}`),
+        value,
+      }));
+      const items = runtime.getCell<unknown[]>(space, "ordered items");
+      const result = runtime.getCell<Record<string, unknown>>(
+        space,
+        "ordered result",
+      );
+      const artifact = await artifactOf("default", "ordered-rows");
+      await commit((tx) => {
+        for (const { cell, value } of cells) cell.withTx(tx).set(value);
+        items.withTx(tx).set(cells.map(({ cell }) => cell));
+      });
+      let piece: CompiledPiece | undefined;
+      await commit((tx) => {
+        piece = startCompiledPiece(
+          runtime,
+          tx,
+          artifact,
+          { items, notes: [{ text: "n" }, { text: "m" }] },
+          result.withTx(tx),
+        );
+        pieces.push(piece);
+      });
+      return { piece: piece!, result, cells: cells.map(({ cell }) => cell) };
+    };
+
+    /** A member of the result as the runtime's own read gives it. */
+    const member = (result: Cell<Record<string, unknown>>, name: string) => {
+      const tx = runtime.edit();
+      try {
+        return JSON.parse(JSON.stringify(result.withTx(tx).key(name).get()));
+      } finally {
+        tx.abort();
+      }
+    };
+
+    it("names the three collections over references and not the one over plain values", async () => {
+      const artifact = await artifactOf("default", "ordered-rows");
+      const named = [...rowDocumentCollections(artifact)].map((index) =>
+        artifact.plan.outputs.find((output) => output.collection === index)
+          ?.path.join("/")
+      );
+
+      expect(named.sort()).toEqual(["filed", "nested", "sorted"]);
+    });
+
+    it("gives the runtime's read the rows the executor holds, a row with a collection in it included", async () => {
+      const { piece, result } = await ordered();
+
+      expect(piece.refusals).toEqual([]);
+      expect(member(result, "sorted")).toEqual([
+        { text: "B" },
+        { text: "A" },
+        { text: "C" },
+      ]);
+      expect(member(result, "filed")).toEqual([
+        { text: "A" },
+        { text: "B" },
+        { text: "C" },
+      ]);
+      expect(member(result, "nested")).toEqual([
+        { tags: [{ text: "Z" }] },
+        { tags: [{ text: "X" }, { text: "Y" }] },
+        { tags: [] },
+      ]);
+    });
+
+    it("moves the links and keeps the documents of the rows when a rank changes the order", async () => {
+      const { piece, result, cells } = await ordered();
+      const linksOf = () => {
+        const tx = runtime.edit();
+        try {
+          return (tx.readValueOrThrow({
+            ...result.getAsNormalizedFullLink(),
+            path: ["sorted"],
+          }) as unknown[]).map((row) => parseLink(row as never).id);
+        } finally {
+          tx.abort();
+        }
+      };
+      const links = linksOf();
+
+      await commit((tx) => cells[2].withTx(tx).key("rank").set(0));
+
+      expect(piece.refusals).toEqual([]);
+      expect(member(result, "sorted")).toEqual([
+        { text: "C" },
+        { text: "B" },
+        { text: "A" },
+      ]);
+      expect(linksOf()).toEqual([links[2], links[0], links[1]]);
+    });
+
+    it("stores what a handler that changes the order of the array leaves", async () => {
+      const { piece, result } = await ordered();
+
+      result.key("rotate").send({} as never);
+      await settled();
+
+      expect(piece.refusals).toEqual([]);
+      expect(member(result, "filed")).toEqual([
+        { text: "B" },
+        { text: "C" },
+        { text: "A" },
+      ]);
+      expect(member(result, "sorted")).toEqual([
+        { text: "B" },
+        { text: "A" },
+        { text: "C" },
+      ]);
+    });
+
+    it("writes a tag of a row into the document of the row", async () => {
+      const { piece, result, cells } = await ordered();
+      const resultId = result.getAsNormalizedFullLink().id;
+      changed.clear();
+
+      await commit((tx) =>
+        cells[0].withTx(tx).key("tags").set(["x", "y", "w"])
+      );
+
+      expect(piece.refusals).toEqual([]);
+      expect(member(result, "nested")).toEqual([
+        { tags: [{ text: "Z" }] },
+        { tags: [{ text: "X" }, { text: "Y" }, { text: "W" }] },
+        { tags: [] },
+      ]);
+      expect(changed.has(resultId)).toBe(false);
+    });
   });
 
   it("stores in the document of a row the clause of its member and of no other member", async () => {
