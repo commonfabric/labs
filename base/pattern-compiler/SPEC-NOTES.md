@@ -18964,3 +18964,666 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    was not looked into.
 5. Questions 1 and 4 of round 13 stand: the label of the lists of the readers,
    and a fold over a collection whose rows are left as stored (P273).
+
+## Round 16: a resume by units for derived collections, and what is no row
+
+Round sixteen (2026-11-23), on the branch `claude/compiled-pattern-runner-m3`
+from the commit `a467194a96`. The notes are numbered from 960. The provisional
+decisions are numbered from P420. Whenever a note says `map`, it names the case.
+
+960. **What the round did, by step, and what leads.**
+     - _Not built, said first: the index, the sort and the `flatMap` as stored
+       units (step 2), the entries of the pattern's own body (step 3), and with
+       them the upstream of a collection left as stored (the second half of step
+       1)._ Each is larger than the other steps together, and each needs
+       something stored that nothing stores yet: the result of a body for each
+       element key, and the lists for an entry that is no row. Notes 966 and 967
+       hold the plan of each as this round's code leaves it. Topics is therefore
+       expected to resume whole still (note 972).
+     - _Not built: the three costs of the wake itself (step 6)._ Each needs a
+       change outside the executor and the lists, which note 968 names. They are
+       what stands between the first event after a takeover and today's on a
+       collection that is left as stored.
+     - _A defect of the case rounds 13 and 14 built, found and closed (note
+       962)._ After a wake by units, an item that entered an array anywhere but
+       at its end made the next evaluation of the assembly form it whole, which
+       evaluated the body of every row.
+     - _Step 1, first half, built (note 961)._ The rows of a `map` over the
+       output of a `lift` or a `computed` that gives references, over a `filter`
+       and over a `sortBy` are left as stored, with what the `map` is over
+       evaluated once at the wake.
+     - _Step 4, built in part (notes 963 and 964)._ A row is left as stored
+       though its body holds another collection, an entry with an instance of
+       its own, or a read of the position of its element, and so are the rows of
+       a `map` in a pattern compiled in at a call site. An instance for each
+       row, and a collection in the body whose own body binds a handler, are not
+       built.
+     - _Step 5, found (note 965)._ Why four modules left no row as stored.
+     - _Step 7, measured (notes 969 to 972), and the memory of the load and of
+       the wake (note 973)._ The first event after a takeover is still slower
+       than today's on the list fixture at 10,000 rows, 172 ms against 55, which
+       the owner's word of 2026-11-23 asks to close (note 970) and this round
+       did not.
+     - _By what the plan says,_ 81 of the 84 collections of the corpus whose
+       rows are documents are taken, in 42 of the 43 modules, where round 14
+       took 47 in 28. The three that are not: two whose body holds a collection
+       whose own body binds a handler (`food-recipe.tsx`,
+       `group-chat-room.tsx`), and one with an operation in the body
+       (`shopping-list.tsx`).
+     - _With the experimental option off._ Every change is in
+       `base/pattern-compiler/` and `runtime/runner/src/compiled/`, which
+       nothing loads without a compiled piece, and in tests. One line of
+       `runtime/runner/test/clock-preload.ts` keeps a new test file on the real
+       clock.
+961. **Step 1, first half, built: the rows of a `map` whose source is no slot
+     (provisional decisions P420 and P421).**
+     - _The cases, named._ Over the output of a `lift` that gives the members of
+       an array of references, each as the reference it is: left as stored. Over
+       a `filter` and over a `sortBy` over an array of references: left as
+       stored. Over an array of plain values in place, as the source of the
+       `lift`, the `filter` or the `sortBy`: every body is evaluated, as for a
+       `map` over a slot (note 864), because the body of such an element reads
+       through a reference by key. Over the result of another `map`: the rows of
+       the second `map` are plain values in place in the result and no
+       documents, so nothing of it is left; the first `map` of the chain is
+       taken by the plan and evaluated whole, because the second reads each of
+       its rows as a value.
+     - _Which collections_ (`storedRowCollections`). The rule no longer asks for
+       a slot as the source. `rowDocumentCollections` already gives a `map` over
+       an output whose body gives a reference at each member, and over a
+       `filter` or a `sortBy` over a source of references.
+     - _The first evaluation of the assembly_ (`Instance.#storedIn`, called from
+       `Instance.assembled`). `#seed` leaves a collection whose source is no
+       slot alone. The assembly then forms its element table as a running
+       executor does (`Instance.#table`), which evaluates the source: the `lift`
+       once, or the body of the `filter` or of the `sortBy` for each element.
+       The rows are taken where each element of that table is a reference and
+       the row document of each key is the one the stored result links to at the
+       same position (P272, P420). A membership or an order that differs from
+       the stored one fails the comparison, and every body is evaluated. The
+       elements that the lists name as readers of a document that changed while
+       no runtime ran the piece are evaluated, as for a slot.
+     - _A later evaluation._ Over a `filter` or a `sortBy`, `#reassemble`
+       applies a change of the source to the assembly as it does for a
+       collection over a slot: the rows that entered or moved are evaluated and
+       no other. Over the output of a `lift`, a change of the output marks the
+       assembly through the entry of the `lift`, which `#reassemble` does not
+       take, so the assembly is formed whole by that evaluation, as in a running
+       executor, with no body evaluated for a row that is left: a row is left
+       where no evaluation of this executor formed it, nothing marked its body,
+       and the unit that stores the rows holds it before the first or behind the
+       last position at which its keys differ from those of the table (P421).
+       The store step compares a row by identity, so it writes nothing for a row
+       that holds `STORED_ROW` at a position that held it. That pass is one step
+       for each element with no body evaluated. Two changes of the output in one
+       evaluation that leave a row between them evaluate the rows between them.
+     - _Tests._ `runtime/runner/test/compiled/unit-resume-derived.test.ts` on
+       `compare/fixtures/unit-resume-derived.tsx`, a piece woken by units in the
+       runtime that wrote it. Over a `lift`: no body at the wake, one for an
+       event that renames an item, one for a change by another writer, none when
+       an item leaves the output and one when it enters again. Over a `filter`:
+       the body of the `filter` for each item at the wake and no body of the
+       `map`; a row taken out with one body of the `filter` evaluated. Over a
+       `sortBy`: the key of each item at the wake; the key and the row of an
+       item whose title moves it. Seven of them failed before the change, each
+       with every body evaluated. `compiled-serving-takeover-derived.test.ts` on
+       `fixtures/serving-list-derived.tsx` has the same under the serving loop
+       after a takeover, for a `map` over a `filter` whose body reads the
+       position of its element and binds a handler.
+       `exec/test/stored-units-derived.test.ts` has what the plan gives.
+     - _What the wake costs._ A `filter` or a `sortBy` as the source evaluates
+       one body for each element at the wake, and each reads the document of its
+       item: the first event after a takeover reads every item, where it reads
+       none for a `map` over a slot. Not timed. A `lift` evaluates once and
+       reads what it reads, every item where it selects by a member.
+962. **A defect found and closed: an element that entered a collection anywhere
+     but at its end evaluated every row after a wake by units.**
+     `Instance.#adoptStored` has the assembly depend on the entry of the body of
+     an element whose row it holds as stored. `#perElement` calls it before
+     every evaluation of a body, also from inside `#reassemble`, which has
+     removed that dependency for the evaluation it is about to make. The old
+     entry of the assembly held, at the position the new element has now, the
+     dependency of another row left as stored, so the call registered the
+     assembly as a user of the body again, the evaluation marked the assembly
+     while it was being brought up to date, and the next evaluation formed it
+     whole: `#seed` gives nothing a second time, so every body was evaluated. An
+     item appended at the end did not show it, because the old entry holds no
+     dependency of a row there, and the tests of rounds 13 and 14 append.
+     `#adoptStored` now does nothing while the assembly is being evaluated.
+     Test: `unit-resume-derived.test.ts`, "a `map` over a slot that holds an
+     array of references": another writer puts an item before the others and an
+     event then renames one item, with two bodies evaluated. It evaluated five
+     for the first of the two steps before the change.
+963. **Step 4, built in part: what the body of an element may hold (provisional
+     decisions P423, P424 and P425).**
+     - _The lists hold what every entry under the key read (P423)._ The lists
+       held what the entry of the body read, and a row counted as plain only
+       where that entry used no other entry. A body with a `computed` that has a
+       function body, or with a collection inside, is computed by several
+       entries, each kept under the key of the element (`Instance.#underKey`),
+       and the stored row holds what each of them gave: a body returns a
+       reference to an inner collection and does not depend on it. The store
+       step now tells the lists, for each element under whose key an entry was
+       evaluated, what every entry under that key read (`Instance.#noteRows`).
+       The row is plain where none of those entries used an entry that is kept
+       elsewhere, has side-writes, is compared on every pull, or read through a
+       reference by key. An entry under the key of a row left as stored that is
+       evaluated apart from the body marks the body (`Instance.#underListed`),
+       so the lists never hold less than the row depends on.
+     - _The position of the element (P424)._ A body that reads the position of
+       its element was not plain. The document of the units now says of which
+       collections a row depends on the position of its element
+       (`StoredUnits.positioned`), and the resumed executor registers the body
+       of each row it leaves of such a collection as a reader of the position
+       (`Instance.#watchPositions`), which is what `#reassemble` asks when an
+       element moves. A row is valid at the wake because the comparison of the
+       row documents is by position. The mark is of the collection and stays
+       once set.
+     - _A collection in the body (P425)._ `storedRowCollections` gives a `map`
+       whose element body holds another collection. The inner rows are in the
+       document of the outer row, and the lists of the outer row hold what the
+       inner bodies read. Left out: a collection whose inner element body binds
+       a handler, whose stream is named by the keys of both elements. A state
+       cell, an instance, an operation and a cone with side-writes in the body
+       leave the collection out as before.
+     - _Tests._ `unit-resume-body.test.ts` on
+       `compare/fixtures/unit-resume-body.tsx`: a `map` among the children of a
+       view node whose body holds a `computed` with a function body (no entry at
+       the wake, two for a rename, where the wake evaluated eight before); a
+       body that reads its position (none at the wake, and three when another
+       writer puts an item in before two others); a body that holds a `map` over
+       a second array of references (none at the wake, three for a rename, and a
+       change of one mark reaches every row).
+     - _Not built._ An instance for each row. A collection in the body whose own
+       body binds a handler: way (a) of note 867 stands, and note 968 says what
+       it needs. A read through a reference by key, which is what an inner
+       collection over plain values in place of the item makes: the lists would
+       hold the array and the key.
+964. **Step 4, built: a pattern compiled in at a call site (provisional decision
+     P422).** Such a pattern adds a `site` step to the `within` of what it
+     declares. `storedRowCollections` left out every collection whose `within`
+     holds a step, and now leaves out one whose `within` names an element. The
+     names of the entries, of the row documents and of the streams are formed
+     from the element steps alone, so nothing else changed. Seven collections of
+     the corpus. Test: `AtSite` of `unit-resume-derived.test.ts`.
+965. **Step 5: why four modules whose collection the plan took left no row.**
+     Found with the run of note 971 and prints at each place where the executor
+     declines, which are in no commit.
+     - `apps/base/contacts.tsx`: the body of each element holds two `computed`
+       with a function body, which are entries of their own, and reads the
+       position of its element (`contacts.map((piece, index) => ...)`). Both
+       made the row not plain. Closed by note 963: the wake now leaves the rows
+       of its 4 elements.
+     - `dev/gideon-tests/test-cell-equals.tsx`: the body reads the position of
+       its element, and it holds a dependency that names no entry, which is
+       compared on every pull (`Writable.equals` of two cells). The second still
+       makes the row not plain.
+     - `product/primitives/option-picker.tsx`: the `map` is inside a `computed`
+       that spreads its rows into another array beside one more member. No unit
+       of the collection stands in the result, so there is no stored array to
+       take, and its elements are texts, plain values in place.
+     - `apps/redactor/vault.tsx`: with the items written as references, three of
+       its commits are refused (CFC question 4 of round 14). The stored result
+       then holds five links at the place of the rows where the argument holds
+       three items, the comparison of the row documents with the keys fails, and
+       every body is evaluated, which is what the comparison is for.
+966. **Step 2, not built: the index, the sort and the `flatMap` as stored units,
+     and with them a `filter` or a `sortBy` as a source that is left as stored.
+     The plan as this round leaves it.**
+     - _What is missing is one thing: the result of a body for each element key,
+       stored._ The assembly of a `filter` keeps whether each element is kept
+       (`Rows.flags`), that of a `sortBy` the key each element was placed by
+       (`Rows.sortKeys`), that of an index the bucket of each element
+       (`Index.of`), and that of a `flatMap` the length of each segment
+       (`Rows.segments`). Each is the result of one body for one element key,
+       and `#reassemble` moves one element from it. A resumed executor has none
+       of them, so it evaluates the body for every element: that is the
+       evaluation of the source of note 961, and the whole of an index or a sort
+       at a wake.
+     - _The store._ A document set beside the lists, in parts by the element
+       key: for each collection and key, the result of the body in stored form.
+       The derivation that evaluated a body writes the result where it differs,
+       as it writes the entry of the lists. The lists are by collection and key
+       already, and `Instance.#noteRows` tells them what an entry under a key
+       read, so the body of a `filter`, a `sortBy` or an index is listed as the
+       body of a `map` is: the rule that only a collection of
+       `storedRowCollections` is told (`Instance.#listed`) is the one place to
+       change.
+     - _The wake._ The assembly forms its table from the links of the source
+       array, as `#seed` does, takes the result of each key from the store where
+       the lists name no document that changed, and evaluates the body of the
+       others. That is one read of each part and no read of an item. The table
+       is valid where every key has a stored result: there is no row document to
+       compare (P272), so a key with none evaluates its body. `Rows.flags`,
+       `Rows.sortKeys` and `Index.of` are then what a running executor holds,
+       and `#reassemble` applies a change as it does now.
+     - _The index._ The buckets are documents (note 575), so a bucket is written
+       when a key that maps to it changed and at no other time, which
+       `#storeIndex` does from `Index.changed`. What reads a bucket depends on
+       the name of the bucket (`bucketName`). A row left as stored that looked a
+       bucket up is not plain today. To leave it, the lists hold the names of
+       buckets beside the documents: `StoredUnits.readers` takes a name, and a
+       bucket whose members change marks the rows the list of its name holds.
+       That is the stored "used by" of note 869.
+     - _The `flatMap`._ The segment of an element is the assembled result of a
+       collection in its body, which note 963 lists under the key. The length of
+       each segment is the stored result.
+     - _A collection that a fold of a label template names (P273)._ It still
+       resumes whole. On the Topics program of this branch the folds name four
+       `filter` collections of `topic.tsx` and no collection whose rows are
+       documents, so P273 leaves no row of it out. With the stored results
+       above, a folded `filter` would be the first collection for which a group
+       is formed from a label read back from the storage: that is CFC question 4
+       of round 13, and the step above stops there for a folded collection. What
+       it costs on the boards of the measurement worktree could not be read here
+       (note 972).
+     - _The order to build it in._ The store of the results and its write at the
+       derivation; the `filter` and the `sortBy` at a wake; the index; the names
+       of buckets in the lists; the `flatMap`.
+     - _The functions to change._ `StoredUnits` of `exec/stored-units.ts`: a
+       member that gives the stored result of a key of a collection and one that
+       is told a result, beside `readers` and `read`. `PieceUnits` of
+       `runtime/runner/src/compiled/units.ts`: the parts of the results, written
+       in `record` as the parts of the lists are, and named in the document of
+       the units so that a replica that reads over a session brings them
+       (`syncBasis` of `compiled/resume.ts`). `Instance.#underListed` and
+       `#noteRows`: told for a `filter`, a `sortBy` and an index, which means a
+       second set beside `#listed`. `Instance.assembled`: where the table is
+       formed for such a collection at a wake, a function beside `#storedIn`
+       that gives the stored result of each key in the place of
+       `host.dependEntry(this.#perElement(...))`, with a dependency that
+       `#adoptStored` can replace; the `switch` on the construct then forms
+       `flags`, `sortKeys` and the index from results it did not evaluate, so
+       `Rows.results` holds the stored results and no `STORED_ROW`.
+       `Instance.#hydrate` and `#evaluateStoredReaders` name the assembly by
+       `reader.collection` and need no change.
+     - _The tests to write first._ In the form of
+       `runtime/runner/test/compiled/unit-resume-derived.test.ts`, on
+       `OverFilter` and `OverSort` of
+       `compare/fixtures/unit-resume-derived.tsx`: no body of the `filter` at
+       the wake (the test there now asserts one for each item, and is the one to
+       change); one body of the `filter` and none of the `map` for an event that
+       changes the member the `filter` reads of one item; the same for the key
+       of a `sortBy`; then, on `compare/fixtures/index-in-body.tsx` or a fixture
+       like it, no key body of a `groupBy` at the wake and the documents of two
+       buckets written for an item that changes its key. Under the serving loop,
+       `compiled-serving-takeover-derived.test.ts` with
+       `ServingLoopStats.storeReads` bounded as
+       `compiled-serving-takeover-handlers.test.ts` bounds it: today the wake
+       reads every item there.
+967. **Step 3, not built: the entries of the pattern's own body. The plan as
+     this round leaves it.** At a wake the resumed executor evaluates the result
+     and every entry the result demands (note 869).
+     - _What exists after this round._ The lists hold a reader by a collection
+       and a key, and the store step tells them what a set of entries read
+       (`Instance.#noteRows`). An entry of the pattern's own body can be listed
+       the same way under a number that names it in the place of the collection,
+       with one empty key. The result document is given to a resumed executor as
+       the storage holds it (`Instance.#heldResult`), so the stored value of a
+       kept output is in the store when the result is evaluated.
+     - _What to build._ (a) `Host.output` gives, for a kept output whose entry
+       the lists did not mark and that is evaluated for the result alone, a
+       marker in the place of the value, as `STORED_ROW` stands for a row, and
+       the store step writes nothing at the path of such a marker. Any other
+       reader of the entry evaluates it, as a reader that takes the rows of a
+       collection as values does (`#unseed`). (b) The entry is plain where it
+       read documents alone, or used entries that are themselves left as stored;
+       a mark then passes along the edges of the plan (`Plan.edges`), which are
+       static. (c) An interim output has no stored value. It is evaluated when
+       something demands it, and nothing demands it while each entry that uses
+       it is left.
+     - _The upstream of a collection as a stored unit (the second half of step
+       1)._ For a `filter` or a `sortBy` it is note 966. For the output of a
+       `lift` it is this note: the array the `lift` returned has a document of
+       its own where the executor made one (`Instance.#generated`), so the table
+       can be formed from the links of that document as `#seed` forms it from
+       the links of a slot, with the `lift` not evaluated while the lists mark
+       none of what it read. Whether the adapter stores that document under a
+       name a resumed executor forms again was not read in this round.
+     - _The functions to change._ `Host.output` and `Instance.evaluated` for
+       (a); `Instance.#place` and `#formOf` for a marker that stands for a
+       stored value, as `KEPT` stands for rows; `Instance.#noteRows`, or a
+       function beside it, told for the entries of the pattern's own body, with
+       `ElementReads.collection` naming the entry; `Instance.#hydrate` and
+       `#evaluateStoredReaders`, which name the assembly of `reader.collection`
+       and would name the entry.
+     - _The tests to write first._ A fixture with a kept output that a `lift`
+       computes from one input beside a `map`, in the form of
+       `unit-resume.test.ts`: `counts.evaluations` of the wake holds the result
+       and no evaluation of the `lift`; a change of the input by another writer
+       evaluates the `lift` and stores its value; a second entry that reads the
+       first evaluates both. Then `OverLift` of `unit-resume-derived.tsx` with
+       no evaluation of the `lift` at the wake.
+     - _What it would free._ The count of entries a wake evaluates beside the
+       load, in the table of note 971, is the measure. On Topics the board reads
+       every topic in one `lift`, so an edit of one topic evaluates that `lift`
+       whatever is stored: the first edit after a takeover needs the per-element
+       constructs of note 966 before this note changes it.
+968. **Step 6, not built: the costs of the wake itself. What each needs.**
+     - _The registration of a handler for each row and binding._ The scheduler
+       does route an event to a stream that no handler is registered for:
+       `queueSchedulerEvent` of `runtime/runner/src/scheduler/events.ts` keeps
+       the place of the event in the queue and calls `startEventPiece`, which
+       follows the stream's entity to the result document
+       (`ensurePieceRunningVerdict`) and asks `Runtime.compiledPieceLoader`, and
+       then looks for the handler again. Three things are missing for a
+       registration at the first event. (1) The loader is told the result
+       document and not the stream: one more member of its `why`, passed from
+       `ensureVerdict`. (2) The entity of a stream is a hash of the result, the
+       binding and the keys (`RuntimeTransactions.#entityOfStream`), which does
+       not give them back: the marker of the stream would hold the binding and
+       the keys, written by the run that stores the row, or the piece forms the
+       entity of each row and binding until one matches, which is the work of
+       the registration moved to the first event to a row. (3)
+       `RuntimeTransactions.#decode` tells a link to the marker of a stream from
+       a link to a document by the table of the streams it registered. With
+       streams not registered, the first link it decodes to a document that is
+       no stream, as each link of the source array, would have to search every
+       stream: it needs the marker read where a row is decoded, or a link form
+       that says that its target is a stream. (2) and (3) are a change of what
+       the storage holds for a stream, so nothing was built. The test to write
+       first: `compiled-serving-takeover-handlers.test.ts` with a count of the
+       handlers the adapter registered (`RuntimeTransactions.#streamsHandled`,
+       which has no reader yet), small after an event to a stream of the
+       pattern's own body and one more after an event to the stream of a row.
+       The same change is way (a) of note 867 for a handler bound in the body of
+       a collection in a body.
+     - _The parse of a link for each row._ `RuntimeTransactions.heldResult`
+       parses each link of each array of links to whole documents of the stored
+       result, to give the executor the entity at each position for the
+       comparison with the keys (P272). It ends with the table that is formed
+       whole (note 870): with the links in documents of a bounded number, each
+       with the key and the row document stored beside the link, the comparison
+       is of one such document. Built by another branch in this round; nothing
+       was done here.
+     - _A refused commit after a wake by units evaluates every row._
+       `RuntimeTransactions.#restored` gives the executor the result document
+       with every link decoded, which reads the document of each row, and
+       `Instance.restore` takes every row out of each unit, so the next store
+       step stores every row, which needs its value. What it needs: (1)
+       `#restored` gives the result document as `heldResult` gives it, without
+       the arrays of links to row documents; (2) `Instance.restore` keeps, in a
+       unit whose rows are left as stored, each row that no evaluation of this
+       executor formed, with the link to its row document put back as `#seed`
+       puts it, and takes out the rows it evaluated, which are stored again; (3)
+       the assembly, which is formed whole after the restore because the source
+       array was written, leaves those rows by the rule of P421, which
+       `#storedIn` applies to a collection over no slot today and `#seed` would
+       have to arrange for one over a slot (`stored` and `first` of the record
+       of `#seeds`). The transaction that was refused wrote no row that it did
+       not evaluate, so a row of (2) holds in the storage what it held. Not
+       built: the adapter's record of which row documents an array holds
+       (`RowArray`) has to be brought back for the rows that are kept, which was
+       not read far enough to change. The test to change first is that of
+       `unit-resume-refused.test.ts`, which asserts four bodies and would assert
+       one.
+969. **Step 7: the corpus, the pass counts.** `compare/runner-corpus.ts`, one
+     run of each mode over the 375 modules the crate emits, load averages 11 to
+     16 (1 minute). On the runner path 194 of the 272 modules run pass, and 183
+     of the 239 that the other modes run. Under the serving loop (`--serving`)
+     183. After a resume (`--resume`) 183, with 131 modules resumed and the
+     basis of all 131 matched. Under the serving loop with a takeover
+     (`--serving --resume`) 183, with 80 modules taken over and the basis of all
+     80 matched. With `--references` as well, 180, as in round 14 and for the
+     reason of note 872. One module's line differs from round 14 in one mode:
+     `apps/redactor/vault.tsx` on the runner path has two commits refused where
+     the file of round 14 has three. It passes in neither. Run alone three times
+     it has one refused each time, every one the same writer-fit refusal of the
+     same entity, so the count follows how the commits fall and not this round's
+     change, which was not shown beyond that.
+970. **Step 7: the list of `compare/serving-path.ts`, one table of times.** The
+     runs are those of note 973, which collect between the steps, with the load
+     averages 10 to 15: the compiled arm twice, with the mean of the two runs in
+     each cell, and today's once, 7 events for each figure, milliseconds, the
+     pattern `fixtures/serving-list.tsx`, which this round changed nothing of
+     but the defect of note 962.
+
+     |   Rows | Arm      | Runs |   Load | `rename`, reader | `add`, reader | A client reads the last row after the takeover | First event after it, reader | Second, reader |
+     | -----: | -------- | ---: | -----: | ---------------: | ------------: | ---------------------------------------------: | ---------------------------: | -------------: |
+     |  1,000 | compiled |    2 |    659 |             25.6 |          57.8 |                                            158 |                         52.7 |           23.0 |
+     |  1,000 | today    |    1 |  4,508 |             31.2 |           241 |                                          1,547 |                         81.9 |           24.7 |
+     | 10,000 | compiled |    2 |  5,525 |             49.4 |           324 |                                          1,153 |                          172 |           26.2 |
+     | 10,000 | today    |    1 | 84,582 |             47.5 |         3,415 |                                          4,386 |                         55.0 |           47.3 |
+
+     The first event after the takeover is 172 ms at 10,000 rows against today's
+     55, on a machine with other load, where round 14 had 120 against 24.5: it
+     follows the rows, and is what the owner's word of 2026-11-23 asks to bring
+     to today's, as the coordinating session relayed it: the first event after a
+     serving runtime starts over a space that holds the piece is to be no slower
+     than today's. Nothing of this round changes it. What it is made of is in
+     notes 698 and 871: the table formed whole and, where rows bind handlers,
+     the registrations. A `map` over a `filter` was not timed: its wake adds one
+     body and one read of a document for each item (note 961).
+971. **Step 7: the corpus, what a wake left as stored.** With
+     `--serving --resume --references`, for the 19 modules that have rows in
+     documents and an event behind the takeover. The plan takes a collection of
+     all 19, where round 14 took one of 14, and 14 leave rows, where 10 did.
+     Without `--references` the arrays are plain values in place and no row is
+     left in any module.
+
+     | Module                                            | Collections with rows in documents | Taken by the plan | Rows left as stored | Entries, wake / load | Bodies, wake / load |
+     | ------------------------------------------------- | ---------------------------------: | ----------------: | ------------------: | -------------------: | ------------------: |
+     | `apps/base/contacts.tsx`                          |                                  1 |                 1 |                   4 |              13 / 11 |               6 / 6 |
+     | `apps/bookmarks/bookmarks.tsx`                    |                                  1 |                 1 |                   2 |               10 / 7 |               1 / 2 |
+     | `apps/budget-tracker/confidential.tsx`            |                                  2 |                 2 |                   4 |              21 / 25 |              6 / 10 |
+     | `apps/budget-tracker/expense-form.tsx`            |                                  2 |                 2 |                   5 |               6 / 10 |               0 / 4 |
+     | `apps/budget-tracker/main.tsx`                    |                                  2 |                 2 |                   4 |              21 / 25 |              6 / 10 |
+     | `apps/contacts/contact-book.tsx`                  |                                  3 |                 3 |                   6 |              23 / 32 |             12 / 18 |
+     | `apps/project-list/main.tsx`                      |                                  1 |                 1 |                   3 |                5 / 5 |               1 / 2 |
+     | `apps/redactor/vault.tsx`                         |                                  1 |                 1 |                   0 |                7 / 6 |               3 / 2 |
+     | `apps/topic-workbench/main.tsx`                   |                                  5 |                 5 |                   0 |              52 / 51 |               6 / 6 |
+     | `dev/gideon-tests/test-cell-equals.tsx`           |                                  1 |                 1 |                   0 |              13 / 11 |               6 / 4 |
+     | `dev/self-reference-test/self-reference-test.tsx` |                                  1 |                 1 |                   2 |                7 / 6 |               2 / 2 |
+     | `examples/map-demo/map-demo.tsx`                  |                                  6 |                 6 |                   8 |              34 / 30 |             10 / 12 |
+     | `examples/simple-list/simple-list.tsx`            |                                  1 |                 1 |                   2 |              26 / 16 |               7 / 6 |
+     | `product/primitives/amount-ledger.tsx`            |                                  1 |                 1 |                   3 |              13 / 15 |               0 / 2 |
+     | `product/primitives/check-list.tsx`               |                                  2 |                 2 |                   3 |              31 / 20 |               9 / 8 |
+     | `product/primitives/option-picker.tsx`            |                                  1 |                 1 |                   0 |               11 / 8 |               2 / 2 |
+     | `product/primitives/sortable-table.tsx`           |                                  2 |                 2 |                   4 |              16 / 17 |               3 / 8 |
+     | `showcase/card-piles/main.tsx`                    |                                  2 |                 2 |                   4 |              11 / 10 |               1 / 4 |
+     | `showcase/wordsearch/play.tsx`                    |                                  2 |                 2 |                   0 |              79 / 64 |             45 / 42 |
+
+     The count of the wake includes what the event itself made evaluate. The
+     five that leave none: `vault.tsx`, `test-cell-equals.tsx` and
+     `option-picker.tsx` for the reasons of note 965; `topic-workbench/main.tsx`
+     and `wordsearch/play.tsx` because their collections are over the output of
+     a `lift` or a `computed` that is an array of plain values generated from
+     scratch, read from the source and not shown by a print. The column of the
+     entries shows what notes 966 and 967 leave open: the wake evaluates about
+     as many entries as the load in every module, because everything that is no
+     row is evaluated.
+972. **Step 7: Topics, not run. What the plan of this branch's program says, and
+     what to run.**
+     - _Why it was not run._ The arm `serving` of `compare/topics/scale.ts`
+       reads the files of a board from `patterns/apps/topics/`, among them
+       `card-text.ts`, which this branch does not have: it stopped there at 100
+       topics. The boards are on the measurement worktree.
+     - _What the plan says,_ for the program of this branch written through
+       `compare/topics/tree.ts`. `main.tsx` has one collection, a `map` over the
+       output of a `lift`, whose rows are in place: nothing of it is taken, and
+       a wake evaluates the `lift` over every topic and the body of each row.
+       `topic.tsx` has nine collections, two with rows in documents, both taken
+       now, where round 14 took one: the second is a `map` over an output. Its
+       four `filter` collections are the ones a fold names.
+     - _What to expect on the boards,_ from notes 577, 632 and 873 and not from
+       their source: no collection of a board is left as stored, and the first
+       edit after a takeover stays the whole derivation, 8.5 s at 2,000 topics
+       against today's 2.3 s. What it needs, in the order the owner's word of
+       2026-11-23 gives: the stored results of note 966 for the two `groupBy`,
+       the sort and the `flatMap`; the names of buckets in the lists, for the
+       `map` of `crossrefTable` whose body looks a bucket up; reads by key in
+       the lists, for `mentionable`, whose rows are plain values in place; and
+       note 967 for the entries around them.
+     - _What to run there after the merge:_ as note 873 says, and for each board
+       `storedRowCollections` over its artifact with
+       `Instance.counts.rowsLeftStored`, `counts.evaluations` and
+       `counts.elementEvaluations` of the piece that woke.
+973. **The memory of the load and of the first event after a takeover.**
+     `compare/serving-path.ts` now reads `Deno.memoryUsage()` at the end of each
+     step, and the heap in use after a collection where the process is started
+     with `--v8-flags=--expose-gc`. The peak of the resident set is that of the
+     whole run as `/usr/bin/time -l` gives it, since the process has no reading
+     of its own peak. One process holds the memory server, the serving loop and
+     both clients, so every figure is of all of them, and the items the client
+     wrote are in it before the load. Megabytes; the compiled arm twice, where
+     the two runs differ by less than 1 in the heap after a collection, and
+     today's once.
+
+     |   Rows | Arm      | Peak resident set, whole run | Heap after a collection: before the load | After the load | After the events | After the takeover, before an event | After the first event | Heap in use as the first event left it |
+     | -----: | -------- | ---------------------------: | ---------------------------------------: | -------------: | ---------------: | ----------------------------------: | --------------------: | -------------------------------------: |
+     |  1,000 | compiled |                   455 to 705 |                                     83.2 |          109.6 |            118.1 |                               113.4 |                 114.8 |                                  118.3 |
+     |  1,000 | today    |                        1,368 |                                     83.2 |          201.9 |            255.4 |                               269.7 |                 268.2 |                                  283.3 |
+     | 10,000 | compiled |               1,462 to 1,687 |                                    198.5 |          430.9 |            472.3 |                               419.6 |                 432.7 |                                  443.0 |
+     | 10,000 | today    |                        4,718 |                                    198.5 |        1,128.2 |          1,559.1 |                             1,693.3 |               1,691.7 |                                1,694.4 |
+
+     - _The load is the peak._ The resident set is largest when the load ends,
+       1,456 to 1,684 MB at 10,000 rows, and falls behind it. The heap in use
+       reaches 696 to 723 MB there, of which 431 stay after a collection: about
+       23 KB for a row over what the process held before, for the row documents,
+       the lists, the basis and the replicas of three runtimes. Today's arm
+       holds 1,128 MB after its load and peaks at 4.7 GB.
+     - _The first event after a takeover adds 13 MB at 10,000 rows and 1.4 MB at
+       1,000,_ about 1.3 KB for a row, to what the process holds after a
+       collection, and the heap in use as the event left it is 10 MB above that.
+       So the wake is far below the load, and nothing in it comes near the
+       memory of the process.
+     - _What holds memory in proportion to the collection in the wake,_ by the
+       code, with the 1.3 KB for a row as their sum and no figure for each: the
+       element table, one element with its key and its reference for each row
+       and the same again by key (`Instance.#tables`), where a key is the text
+       of the address of the item; the keys the store holds for the source array
+       (`Store.adoptKeys`); the entry of the assembly with one result, one
+       member and one dependency for each row (`Rows`); the link to each row
+       document in the result document; the adapter's record of the array
+       (`RuntimeTransactions.rowsHeld`, the keys with a table from the key to
+       the row document); the positions the source array links to, for
+       `#hydrate` (`#seeds`, `targets`); and, where rows bind handlers, one
+       stream and one handler for each row and binding, which this fixture has
+       none of. The lists of the readers are not among them: a part is read when
+       a document it names changes, and one part holds one in 256 of the
+       documents.
+     - _The documents the takeover brings_ are held before any event: the
+       comparison of the basis read 1,263 and 10,268 documents (note 699), and a
+       piece that holds rows as stored counts as a reader of every entity its
+       basis names (P333), so the replica keeps them. The heap after the
+       takeover is below the heap before it because the serving runtime that was
+       replaced is collected in the same process, so the table gives no figure
+       for them alone. That needs a process that starts over a store on disk,
+       which this harness does not have.
+     - _What would exceed this._ A piece woken whole, as every piece on a
+       replica that reads over a session and every collection of note 974 that
+       is not left, holds what the load holds. The table and the registrations
+       grow with the rows and with nothing else; the documents kept grow with
+       the sources.
+974. **Findings on structure, scale and soundness.**
+     - _Scale, closed: after a wake by units, an item that entered a collection
+       anywhere but at its end evaluated every row_ (note 962). The case rounds
+       13 and 14 built had it.
+     - _Soundness, closed by construction: the lists held less than a row
+       depends on where the body returns a reference to something else under its
+       key_ (note 963). A body that holds a collection does not depend on the
+       assembly of it, so the reads of the inner bodies were in no list. Before
+       this round such a collection was never taken, so nothing was wrong in a
+       run; the lists of a row now hold the reads of every entry under its key.
+     - _Soundness, held by a mark: an entry under the key of a row left as
+       stored that is evaluated apart from the body_ (note 963). The body is
+       marked and the row evaluated. Without the mark the lists would keep what
+       the entry read at the run before.
+     - _Soundness, held by a comparison: a source that is no slot_ (note 961).
+       The rows are taken only where the table that the evaluation of the source
+       gives names the stored row documents position by position. A source whose
+       membership or order changed while no runtime ran the piece evaluates
+       every body: nothing takes the rows that stayed.
+     - _Soundness, an assumption that more now rests on: the basis names every
+       document a row was derived from_ (note 861), now also the documents that
+       the entries under the key of a row read.
+     - _Structure, not closed: a `filter` or a `sortBy` as a source is evaluated
+       for every element at a wake_ (notes 961 and 966), which reads the
+       document of every item. The rows are left; the wake still follows the
+       collection in documents read.
+     - _Structure, not closed: an array of plain values, in place or generated
+       from scratch by a `lift` or a `computed`, is evaluated whole at a wake_
+       (notes 864 and 971). The body of such an element reads through a
+       reference by key, which the lists do not hold. In the corpus that is what
+       `topic-workbench/main.tsx` and `wordsearch/play.tsx` have: the plan takes
+       their collections and a wake leaves no row.
+     - _Structure, not closed: everything that is no row is evaluated at a wake_
+       (notes 966 and 967).
+     - _Structure, a mark that does not come back: a collection of which one
+       element was once not plain stays whole._ `PieceUnits.record` keeps
+       `plain` of a collection false once it was false, for as long as the
+       document of the units is of the same compiled pattern, and `position`
+       true once it was true. A row that becomes plain again is not taken.
+     - _Scale, not closed: the table of a collection is formed whole at a wake,
+       one registration with the scheduler is made for each row and binding, and
+       a refused commit after a wake by units evaluates every row_ (note 968).
+       Note 973 says what the first two hold in memory.
+     - _Scale, new and small: the store step tells the lists what each row read
+       whose key had an entry evaluated,_ with one pass over the entries under
+       the key. The lists compare it with what they hold and write nothing where
+       it is the same.
+     - _A harness trap, not a defect: `emit --unchecked` emits a name that no
+       import binds as it stands._ A fixture that used `UI` without importing it
+       gave a result whose view stood under the key `undefined`.
+975. **Provisional decisions of the round, and what was not done.** P420: the
+     rows of a `map` whose source is no slot are left as stored where the
+     element table that an evaluation of the source gives at the wake names,
+     position by position, the row documents the stored result links to, and
+     every body is evaluated otherwise (note 961). P421: an assembly that is
+     formed whole leaves a row as stored where no evaluation of this executor
+     formed it, nothing marked its body, and the unit that stores the rows holds
+     it at an unchanged position, before the first or behind the last position
+     at which the keys differ (note 961). P422: a collection of a pattern that
+     is compiled in at a call site, in no element body, is taken as one of the
+     pattern's own (note 964). P423: the lists hold for a row what every entry
+     that is kept under the key of its element read, the row is plain where none
+     of them used an entry kept elsewhere, and an entry under the key of a row
+     left as stored that is evaluated apart from the body evaluates the row
+     (note 963). P424: the document of the units says of which collections a row
+     depends on the position of its element, and a row left as stored of such a
+     collection is evaluated when the position of its element changes (note
+     963). P425: a `map` whose element body holds another collection is taken,
+     unless the element body of the inner collection binds a handler (note 963).
+     Not done: steps 2 and 3 and the second half of step 1, each with its plan
+     (notes 966 and 967); an instance for each row and a handler bound in the
+     body of a collection in a body (note 963); step 6 (note 968); reads by key
+     in the lists (note 974); a source whose membership changed while no runtime
+     ran the piece, with the rows that stayed left; Topics on the measured
+     boards (note 972); the timing table of `compare/serving-path.ts`, which the
+     owner's word of 2026-11-23 replaced with the memory of note 973; a test of
+     a `map` over an output that passes another collection on, of a `map` over a
+     `lift` that stands in a view node, and of a row over a `lift` that binds a
+     handler.
+
+### CFC questions deferred, round 16
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Question 2 of round 14, restated with the new set. A row left as stored keeps
+   the label it was stored with across a takeover, with no derivation that
+   confirms it. That now holds for the rows of a `map` over the output of a
+   `lift`, over a `filter` and over a `sortBy`, for a row whose body holds a
+   `computed` with a function body, another collection or a read of its
+   position, and for the rows of a pattern compiled in at a call site: by what
+   the plan says 81 of the 84 collections of the corpus whose rows are
+   documents. For a row that holds a collection, the label kept is that of the
+   outer row with every inner row.
+2. The array of the links to the rows of a `map` over a `filter` says which
+   items the `filter` kept. A wake takes that array from the stored result and
+   gives no record for it, as for a `map` over a slot. The `filter` itself is
+   evaluated at the wake, so a fold over it is formed from members this executor
+   evaluated. Once the `filter` is left as stored (note 966), the label of what
+   it kept would be formed from stored results: question 4 of round 13.
+3. The lists now hold, for a row, the reads of the bodies of a collection inside
+   its body, and the document of the units says which collections read the
+   position of their elements. Question 1 of round 13 stands for both.
+4. A change of the label alone of a document that a row left as stored read
+   evaluates the row (P335), for the wider set of question 1 as well: the lists
+   name the reads of every entry under the key. What it costs is one evaluation
+   of the row and of what is under its key for each such change, and for a
+   document that every row read, as a second array that each body maps, every
+   row.
+5. Question 4 of round 14 stands, and has a consequence that was found: with the
+   items of `apps/redactor/vault.tsx` written as references, the commits that
+   are refused leave a stored result that is not the derivation of the stored
+   argument, and a wake by units evaluates every body (note 965).
