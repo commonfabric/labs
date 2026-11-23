@@ -285,7 +285,7 @@ type Sites = {
 // in the body of a `map` over an array of plain values in place, and once
 // outside it. The call is compiled into the instance, and the state cell
 // the callee declares is of the scope `user`.
-describe("a pattern compiled in through `asScope(\"user\")`", () => {
+describe('a pattern compiled in through `asScope("user")`', () => {
   let acting: string;
   let instance: Instance;
 

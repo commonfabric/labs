@@ -7024,6 +7024,21 @@ export class Instance {
   }
 
   /**
+   * The scope the entry of the value of the output `output` was found to
+   * have, under the element keys `keys`: the scope of the document that
+   * holds what the output returned whole.
+   */
+  #scopeOfOutput(output: number, keys: readonly string[]): Scope | undefined {
+    const value = this.valueOfOutput.get(output);
+    if (value === undefined || this.store.scopes === undefined) {
+      return undefined;
+    }
+    return this.store.scopes.narrowed(
+      `${this.id}\n${this.#name("value", value, keys)}`,
+    );
+  }
+
+  /**
    * Brings the entries that were found to be of a scope key up to date
    * for the key that is evaluated for: nothing else demands the entry of
    * a key where what holds it by reference is current.
@@ -9083,7 +9098,10 @@ export class Instance {
     const keys = within.map((collection) =>
       context.get(collection)?.key ?? "?"
     );
-    const id = this.outputDocument(output, keys);
+    const id = this.#inScope(
+      this.outputDocument(output, keys),
+      this.#scopeOfOutput(output, keys),
+    );
     this.#documents.add(id);
     const store = (array: readonly unknown[]) => {
       const stored = this.stored(array);
