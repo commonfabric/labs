@@ -287,11 +287,13 @@ nothing in the runtime derives. A piece whose output the opened piece's
 argument links to, as `cf piece link` wires one, is not started by the open;
 an event's auto-load of a piece that is not running starts it. An open
 that follows the opened piece's origin follows each enclosing piece's
-origin first. The opened piece
-is started in its own right after them, so it keeps running when one of them
-stops; each enclosing piece is started in its own right too, and runs until
-it is stopped itself or the runtime ends, as a piece an event's auto-load
-starts does. That start is best effort: an enclosing
+origin first. The opened piece is instantiated after them, in its own right,
+so it keeps running when one of them stops. Its start loads its root, its
+pattern, and the documents the pattern reads while the walk runs, and
+instantiates its graph once the walk is done
+(`RunnerStartOptions.instantiateAfter`). Each enclosing piece is started in its
+own right too, and runs until it is stopped itself or the runtime ends, as a
+piece an event's auto-load starts does. That start is best effort: an enclosing
 piece that cannot start, one whose origin's follow cannot be settled, and an
 argument whose links cannot be read leave the opened piece to start alone,
 with a warning naming it, so an open fails only where the piece's own start

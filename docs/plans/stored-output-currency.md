@@ -141,10 +141,31 @@ and the slice is stored against what that index reports. That space tells
 the reading one of its next change, so the slice is a current input of
 another slice while it is clean.
 
-No slice of a piece is vouched for when its root is not space-scoped, when a
-computation of it declares a write in another space, or when it records a
-source origin, since a start is where the serving runtime follows that
-origin.
+No slice of a piece is vouched for when a computation of it declares a
+write in another space.
+
+A piece whose result document is declared narrower than the space, as a
+pattern instantiated at a user's or a session's scope is, is recorded like
+any other. Each viewer holds an instance of that document, with the pattern
+pointer the piece runs for them, and the serving runtime runs one program
+for each pointer those instances hold, each viewer's computations at their
+own key. Those runs are the piece's slices, and the read of the viewer's
+own instance is among each slice's reads. What the record needs of the
+piece itself, the cells it owns that are owed a default, is taken over the
+programs it runs.
+
+A piece that records a source origin is vouched for like any other, and its
+record says that it records one. A start is where the serving runtime
+follows a piece's origin, so before the loop first leaves a root unstarted
+in a tenure it follows the origin of each piece the root rests on that
+records one: the root's own piece and those beneath it. The follow needs
+the piece's result document and not the piece, and a piece that holds an
+instance of that document for each viewer has no one document to follow
+through: where one of its instances records an origin, the piece is not
+vouched for. Where the origin has not
+moved the root stays unstarted, and where the piece adopted new source the
+root is loaded, so the piece starts on that source. What the store holds
+of the root is what a client reads while the follow runs.
 
 ### How a slice becomes marked
 
@@ -395,8 +416,24 @@ slice changed. So:
   recorded. A later write of the slot by another slice's run leaves the
   earlier rows behind, and a row behind the slot's head answers for
   nothing. It marks no slice: what else the slice answers for is as current
-  as it was. Slices recorded together can each hold a row at the head, since
-  a snapshot names every instance a run's declared surface reaches.
+  as it was.
+- **A snapshot names a slot for a slice only while the slot holds what the
+  slice's run left there.** A run's declared writes reach the slot whichever
+  run wrote it last, so the scheduler keeps, for each node that runs once
+  for each viewer, the latest change to each instance of a document the node
+  writes, and the run that made it, as its replica reports changes. The
+  slot holds a run's write where that run made the latest change, or where
+  nothing has changed the slot since that run handed its writes over: a run
+  that writes what the slot already held changes nothing, and the slot is
+  then as much its own as the earlier run's. Two viewers whose runs write
+  the slot alike both answer for it, and two whose runs write it differently
+  answer for it one at a time: the earlier slice's record names the slot as
+  one that holds a later write, and its row is stored behind the slot's
+  head until the slice's computation runs again. The row stays so that the
+  slot is not taken for one the slice's runs never wrote, which the slice at
+  the slot's own key could answer for. A change that is no run's, one the
+  store pushed or a write taken back, leaves the slot answered for by none
+  of them.
 - **A demander's view of a slot is decided by the slices of the demander's
   own chain that hold a row for it**: the session's, the user's, the
   space's. A root passes for a session that demands the slot when each such
@@ -417,9 +454,7 @@ Two things this leaves as they are. A slot that is rewritten each time the
 set of viewers changes costs the returning viewer a start, because a start
 is what writes the slot for them: the index is then right about such a
 piece and no faster for it. And the false-clean check reads the instances at
-a slice's own key alone. A snapshot names every instance a run's declared
-surface reaches, so two slices can both hold a row for a slot at its head,
-and the index cannot tell which of their runs wrote it.
+a slice's own key alone.
 
 ## Checking it before relying on it
 
@@ -430,7 +465,10 @@ an instance it vouched for again, to a value other than the one it held,
 with no input of it changed, the judgment was wrong: the count of those is
 `currency.falseClean`, logged with the piece. A start derives every output
 of a piece afresh, those of a current slice among them, so an instance
-written again as it stood is not counted. Whether a piece had been clean is
+written again as it stood is not counted. A piece does not run for a viewer
+who holds no instance of its result document, so the write that makes one,
+by whoever instantiates the piece for them, counts as a changed input.
+Whether a piece had been clean is
 kept with its record, so a mark that lands before the next record is stored
 does not hide it. `skip` acts on the
 judgment, and only under an epoch: a record is trusted across builds only by
@@ -454,8 +492,9 @@ wrong.
   server on a serving host's request, outside the wave's transaction.
 - §1: a demand for a recorded, clean piece loads nothing, which is a rule for
   which pieces start.
-- §3e: a piece that records a source origin is always started, so the origin
-  is followed as it is today.
+- §3e: the serving runtime follows a piece's origin before its first start
+  of the piece in a tenure, and before it first leaves a root that rests on
+  the piece unstarted.
 - §6 step 3: an effect whose result never landed is re-fired by a start, so a
   piece is not recorded while any effect is outstanding.
 - §8: the exception that names the basis tables names these too.
@@ -477,8 +516,13 @@ wrong.
   session's documents.
 - **A space with effects always in flight records nothing.** Attributing an
   outbox entry to its piece lifts this.
-- **A piece with a source origin, or a root narrower than the space, always
-  starts.**
+- **A piece whose result document each viewer holds an instance of, one of
+  which records a source origin, always starts.** An origin is followed
+  through one result document.
+- **A piece with no computation of its own has no record.** A pattern that
+  only instantiates others registers no computation under its own result
+  document, so no snapshot is taken of it, and a root that leads to it is
+  loaded.
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
   computes.
@@ -502,7 +546,8 @@ wrong.
 
 1. **The index.** `runtime/memory/v2/currency-index.ts` and its tables
    (`currency_slice`, `currency_read`, `currency_write`, `currency_vouch`,
-   `currency_decide`, `currency_under`, `currency_cursor`, and
+   `currency_decide`, `currency_origin`, `currency_under`,
+   `currency_cursor`, and
    `currency_expiry` for the time a
    slice that read a clock expires at): store a batch of records, advance
    the cursor, judge roots against demand rows. The tables join the SQL

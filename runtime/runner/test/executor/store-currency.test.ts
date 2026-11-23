@@ -175,6 +175,18 @@ describe("StoreCurrency", () => {
       /** The pieces the scheduler reports as changed, once. */
       let changed: string[];
 
+      /** The scope the scheduler reports each piece's root at. */
+      let rootScope: "space" | "session";
+
+      /**
+       * The instances at another key the scheduler reports each piece's
+       * slice as deciding and as holding a later write of, by piece.
+       */
+      let slots: Map<string, {
+        decides: Array<{ id: string; scopeKey: "space" }>;
+        superseded: Array<{ id: string; scopeKey: "space" }>;
+      }>;
+
       /**
        * A runtime whose scheduler reports `changed` as the pieces that
        * changed, each with one user's slice that read what `reads` holds
@@ -186,6 +198,7 @@ describe("StoreCurrency", () => {
           pieceCurrencySnapshot: (_space: string, piece: string) => {
             const read = reads.get(piece);
             return read === undefined ? undefined : {
+              rootScope,
               under: [],
               unvouched: [],
               writes: [],
@@ -199,7 +212,8 @@ describe("StoreCurrency", () => {
                   derived: false,
                 })),
                 vouches: [],
-                decides: [],
+                decides: slots.get(piece)?.decides ?? [],
+                superseded: slots.get(piece)?.superseded ?? [],
               }],
             };
           },
@@ -211,6 +225,48 @@ describe("StoreCurrency", () => {
       beforeEach(() => {
         reads = new Map();
         changed = [];
+        slots = new Map();
+        rootScope = "space";
+      });
+
+      it("records the instances a slice decides and those it holds a later write of, and names neither list for a slice with none", () => {
+        reads.set("of:piece", []);
+        reads.set("of:plain", []);
+        slots.set("of:piece", {
+          decides: [{ id: "computed:held", scopeKey: "space" }],
+          superseded: [{ id: "computed:lost", scopeKey: "space" }],
+        });
+        changed = ["of:piece", "of:plain"];
+
+        const snapshot = currency.snapshot(runtime, 0, []);
+
+        expect(
+          snapshot?.records.map(({ piece, slices }) => ({
+            piece,
+            slices: slices.map(({ key, decides, superseded }) => ({
+              key,
+              decides,
+              superseded,
+            })),
+          })),
+        ).toEqual([
+          {
+            piece: "of:piece",
+            slices: [{
+              key: "user:alice",
+              decides: [{ id: "computed:held", scopeKey: "space" }],
+              superseded: [{ id: "computed:lost", scopeKey: "space" }],
+            }],
+          },
+          {
+            piece: "of:plain",
+            slices: [{
+              key: "user:alice",
+              decides: undefined,
+              superseded: undefined,
+            }],
+          },
+        ]);
       });
 
       it("keeps what a piece's runs read in another space, with the slice each run belongs to", () => {
@@ -230,6 +286,96 @@ describe("StoreCurrency", () => {
         }]]]);
         expect(currency.takeForeignReadsChanged()).toBe(true);
         expect(currency.takeForeignReadsChanged()).toBe(false);
+      });
+
+      it("vouches for a piece that records a source origin, and says so in its record", () => {
+        reads.set("of:piece", [{ space: SPACE, id: "of:near" }]);
+        changed = ["of:piece"];
+        const following = {
+          ...runtime,
+          runner: {
+            pieceCurrencyFacts: () => ({ owned: [], followsOrigin: true }),
+          },
+        } as unknown as Runtime;
+
+        const snapshot = currency.snapshot(following, 0, []);
+
+        expect(
+          snapshot?.records.map(({ piece, vouched, followsOrigin }) => ({
+            piece,
+            vouched,
+            followsOrigin,
+          })),
+        ).toEqual([{ piece: "of:piece", vouched: true, followsOrigin: true }]);
+      });
+
+      describe("for a piece whose root each viewer holds an instance of", () => {
+        /** The scope of the cell the runner was asked the facts of. */
+        let asked: unknown;
+
+        /** A runtime whose runner reports `facts` for every piece. */
+        const scopedRuntime = (facts: {
+          owned: string[];
+          followsOrigin?: boolean;
+        }) =>
+          ({
+            ...runtime,
+            getCellFromLink: (link: { scope: unknown }) => {
+              asked = link.scope;
+              return {};
+            },
+            runner: { pieceCurrencyFacts: () => facts },
+          }) as unknown as Runtime;
+
+        beforeEach(() => {
+          rootScope = "session";
+          reads.set("of:piece", [{ space: SPACE, id: "of:near" }]);
+          changed = ["of:piece"];
+        });
+
+        it("asks the runner about the root at its own scope, and vouches for the piece", () => {
+          const snapshot = currency.snapshot(
+            scopedRuntime({ owned: ["of:owned"] }),
+            0,
+            [],
+          );
+
+          expect(asked).toBe("session");
+          expect(
+            snapshot?.records.map(({ piece, vouched, owned }) => ({
+              piece,
+              vouched,
+              owned,
+            })),
+          ).toEqual([{
+            piece: "of:piece",
+            vouched: true,
+            owned: ["of:owned"],
+          }]);
+        });
+
+        it("does not vouch for the piece where an instance of its root records a source origin, and records no origin for it", () => {
+          // An origin is followed through one result document, and such a
+          // piece holds one for each viewer.
+
+          const snapshot = currency.snapshot(
+            scopedRuntime({ owned: [], followsOrigin: true }),
+            0,
+            [],
+          );
+
+          expect(
+            snapshot?.records.map(({ piece, vouched, followsOrigin }) => ({
+              piece,
+              vouched,
+              followsOrigin,
+            })),
+          ).toEqual([{
+            piece: "of:piece",
+            vouched: false,
+            followsOrigin: undefined,
+          }]);
+        });
       });
 
       it("reports no change for a piece that reads no other space", () => {
@@ -266,7 +412,11 @@ describe("StoreCurrency", () => {
             judgeCurrencyRoots: (_space, roots) => {
               asked.push([...roots]);
               return Promise.resolve({
-                servable: roots.map((root) => ({ root, piece: "of:piece" })),
+                servable: roots.map((root) => ({
+                  root,
+                  piece: "of:piece",
+                  origins: [],
+                })),
                 held: [],
                 upstream: [],
                 refused: {},
@@ -304,6 +454,76 @@ describe("StoreCurrency", () => {
         ]]);
         expect(judged.servable).toEqual(["shared", "derived", "own-derived"]);
       });
+
+      describe("for a root that rests on a piece recording a source origin", () => {
+        let judgments: number;
+        let currency: StoreCurrency;
+        const idleRuntime = {
+          scheduler: { hasNodesUnderDemandRoot: () => false },
+        } as unknown as Runtime;
+
+        /** Judges the one root, saying whether the demand changed. */
+        const judgeRoot = (demandChanged: boolean) =>
+          currency.judge(
+            idleRuntime,
+            new Map([["key", { id: "of:result", scope: "space" }]]),
+            () => true,
+            demandChanged,
+          );
+
+        beforeEach(() => {
+          judgments = 0;
+          currency = new StoreCurrency({
+            space: SPACE,
+            server: {
+              judgeCurrencyRoots: (_space, roots) => {
+                judgments += 1;
+                return Promise.resolve({
+                  servable: roots.map((root) => ({
+                    root,
+                    piece: "of:piece",
+                    origins: ["of:piece", "of:nested"],
+                  })),
+                  held: [],
+                  upstream: [],
+                  refused: {},
+                  marked: [],
+                });
+              },
+            } as Pick<
+              HostMemoryServer,
+              "judgeCurrencyRoots"
+            > as HostMemoryServer,
+            mode: "skip",
+            epoch: "epoch-one",
+            serviceIdentity: "did:key:service",
+            stats: emptyServingLoopStats(),
+            onOwed: () => {},
+            onMarked: () => {},
+          });
+        });
+
+        it("returns those pieces with the root's key, and again while it asks the memory server nothing new", async () => {
+          const first = await judgeRoot(true);
+
+          const second = await judgeRoot(false);
+
+          expect(judgments).toBe(1);
+          expect([[...first.origins], [...second.origins]]).toEqual([
+            [["key", ["of:piece", "of:nested"]]],
+            [["key", ["of:piece", "of:nested"]]],
+          ]);
+        });
+
+        it("counts the root no longer among those left unloaded once the caller loads it", async () => {
+          await judgeRoot(true);
+          expect(currency.servesFromStore).toBe(true);
+
+          currency.load("key");
+
+          expect(currency.servesFromStore).toBe(false);
+        });
+      });
     });
 
     describe("judge(), for a root the memory server returns as stale only upstream", () => {
@@ -340,7 +560,7 @@ describe("StoreCurrency", () => {
               Promise.resolve({
                 servable: stale
                   ? []
-                  : roots.map((root) => ({ root, piece: root })),
+                  : roots.map((root) => ({ root, piece: root, origins: [] })),
                 held: stale
                   ? roots.map((root) => ({
                     root,
@@ -389,6 +609,7 @@ describe("StoreCurrency", () => {
 
         expect(await judge(currency)).toEqual({
           servable: [],
+          origins: new Map(),
           held: ["key"],
           rearm: [],
         });
@@ -421,6 +642,7 @@ describe("StoreCurrency", () => {
 
         expect(await judge(currency)).toEqual({
           servable: ["key"],
+          origins: new Map(),
           held: [],
           rearm: [],
         });
@@ -460,6 +682,7 @@ describe("StoreCurrency", () => {
 
         expect(await judge(currency)).toEqual({
           servable: [],
+          origins: new Map(),
           held: ["key"],
           rearm: [],
         });
@@ -615,7 +838,11 @@ describe("StoreCurrency", () => {
               judgments += 1;
               await held?.promise;
               return {
-                servable: roots.map((root) => ({ root, piece: root })),
+                servable: roots.map((root) => ({
+                  root,
+                  piece: root,
+                  origins: [],
+                })),
                 held: [],
                 upstream: [],
                 refused: {},

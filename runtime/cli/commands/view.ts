@@ -10,12 +10,13 @@ A less-like viewer for the dense output of '--show-transformed' and saved source
 files. Transformed TypeScript is parsed with the same parser the transformer
 uses, so blocks, closures, schemas, type positions and Common Fabric builders
 (pattern/lift/handler/…) are colored exactly as the compiler sees them.
-Markdown, JSON, JSONC, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, Lean,
-shell, makefile, Java properties, INI, ProGuard, Git attributes and XML files
-use syntax highlighting selected from language metadata, as do Lean's
+Markdown, JSON, JSONC, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, Lean, C,
+C++, CUDA, shell, makefile, Java properties, INI, ProGuard, Git attributes and
+XML files use syntax highlighting selected from language metadata, as do Lean's
 'lean-toolchain' files and Git, Docker and Bazel ignore files. Kotlin covers
 Gradle's '.gradle.kts' build scripts, HCL covers OpenTofu and Terraform
-configuration, shell covers Bash and POSIX shell, makefiles color their recipes
+configuration, a '.h' header is colored with the C++ grammar unless piped with
+'--language c', shell covers Bash and POSIX shell, makefiles color their recipes
 as shell, INI covers Ansible configuration and inventories, and XML covers
 Android manifests and resources, SVG and Apple property lists. Python
 interpreter shebangs select Python, 'swift' and 'xcrun swift' shebangs select

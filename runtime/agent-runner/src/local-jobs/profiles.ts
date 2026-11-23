@@ -1,21 +1,31 @@
 /**
  * Host-approved profiles for local jobs: the authority a job runs with,
  * chosen by name. A profile says which tools a job may use, which host
- * configurations back them, how many model turns it gets, and the
- * prompt-slot role its task binds as, whether a job may bring a browser
- * host, and the fabric session, pattern index and subagent profiles its
- * tools run against. The host writes the file; a caller names a profile and
- * may only narrow it — fewer tools, fewer turns, fewer or readonly mounts,
- * no browser — never widen it, and never set its role or its fabric.
+ * configurations back them, how many model turns it gets, the model and
+ * model provider it runs on, and the prompt-slot role its task binds as,
+ * whether a job may bring a browser host, and the fabric session, pattern
+ * index and subagent profiles its tools run against. The host writes the
+ * file; a caller names a profile and may only narrow it — fewer tools, fewer
+ * turns, fewer or readonly mounts, no browser — never widen it, and never
+ * set its role, its model provider or its fabric.
  *
  * A profile is refused when it is read if it grants a tool nothing in it
- * backs, the same contradiction `cf-harness` refuses a run for, so a bad
- * grant stops the runner's start rather than failing every job.
+ * backs, or bounds model calls on a provider that cannot verify the bounds:
+ * the same contradictions `cf-harness` refuses a run for, so a bad profile
+ * stops the runner's start rather than failing every job. A request is
+ * refused for the same bound contradiction when it is enqueued.
  */
 
 import { dirname, isAbsolute } from "@std/path";
 
-import { parseCfHarnessCliToolId } from "@commonfabric/cf-harness/cli";
+import {
+  createCfHarnessCliCapabilities,
+  parseCfHarnessCliToolId,
+} from "@commonfabric/cf-harness/cli";
+import {
+  type HarnessModelProviderId,
+  isHarnessModelProviderId,
+} from "@commonfabric/cf-harness/config";
 import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import {
@@ -47,6 +57,16 @@ import type { MemorySpace } from "@commonfabric/runner";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
+/**
+ * The provider that cannot verify `maxInputBytes` or `maxOutputTokens`: the
+ * harness refuses a run under it with either, as its model client is built.
+ */
+const GATEWAY_PROVIDER: HarnessModelProviderId = "openai-compatible-gateway";
+
+/** Why a gateway-pinned profile may set no bound. */
+const GATEWAY_BOUNDS_REFUSAL =
+  "`maxInputBytes` and `maxOutputTokens` need a provider that verifies them, which `openai-compatible-gateway` does not";
+
 /** One profile, as the host file states it. */
 export interface LocalJobProfile extends HarnessModelLimits {
   /** The tools a job may use; a result schema adds `submit_result`. */
@@ -75,6 +95,18 @@ export interface LocalJobProfile extends HarnessModelLimits {
 
   /** Model name passed to `cf-harness`. */
   model?: string;
+
+  /**
+   * The `cf-harness` model provider every job under this profile runs on.
+   * Absent, the harness resolves one as it does for any run, from its
+   * environment and then its persisted preference, when the job starts; a
+   * profile that sets `maxInputBytes` or `maxOutputTokens` with no provider
+   * then fails each job that resolves to `openai-compatible-gateway`. A
+   * request cannot set or change it. A follow-up continues its
+   * predecessor's recorded run, which the harness refuses to continue on a
+   * provider other than the one it recorded.
+   */
+  modelProvider?: HarnessModelProviderId;
 
   /**
    * The reasoning effort a job runs at, and the most a request may ask for;
@@ -284,6 +316,7 @@ const profileOf = async (
     loomRetrievalConfig,
     commands,
     model,
+    modelProvider,
     reasoningEffort,
     cacheAffinityKey,
     browserHost,
@@ -351,6 +384,22 @@ const profileOf = async (
   }
   if (model !== undefined && typeof model !== "string") {
     fail("`model` must be a string");
+  }
+  const provider = isHarnessModelProviderId(modelProvider)
+    ? modelProvider
+    : undefined;
+  if (modelProvider !== undefined && provider === undefined) {
+    fail(
+      `\`modelProvider\` must be one of ${
+        createCfHarnessCliCapabilities().modelProviders.join(", ")
+      }`,
+    );
+  }
+  if (
+    provider === GATEWAY_PROVIDER &&
+    (maxInputBytes !== undefined || maxOutputTokens !== undefined)
+  ) {
+    fail(GATEWAY_BOUNDS_REFUSAL);
   }
   const effort = reasoningEffortOf(reasoningEffort);
   if (reasoningEffort !== undefined && effort === undefined) {
@@ -484,6 +533,7 @@ const profileOf = async (
       }
       : {}),
     ...(model !== undefined ? { model: model as string } : {}),
+    ...(provider !== undefined ? { modelProvider: provider } : {}),
     ...(effort !== undefined ? { reasoningEffort: effort } : {}),
     ...(cacheAffinityKey !== undefined
       ? { cacheAffinityKey: cacheAffinityKey as string }
@@ -720,6 +770,16 @@ export const narrowLocalJobProfile = (
       };
     }
     mounts.push({ ...granted, mode: selected.mode ?? granted.mode });
+  }
+  if (
+    profile.modelProvider === GATEWAY_PROVIDER &&
+    (narrowing.maxInputBytes !== undefined ||
+      narrowing.maxOutputTokens !== undefined)
+  ) {
+    return {
+      refusal:
+        "The profile runs on `openai-compatible-gateway`, which cannot verify `maxInputBytes` or `maxOutputTokens`, so a request may name neither.",
+    };
   }
   for (const name of ["maxInputBytes", "maxOutputTokens"] as const) {
     const value = narrowing[name];

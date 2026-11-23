@@ -31,6 +31,7 @@ import {
 } from "@commonfabric/data-model-schema/schema-refs";
 import type { MemorySpace, Result, Unit } from "@commonfabric/memory/interface";
 import {
+  canResolveScopeKey,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
@@ -1787,6 +1788,23 @@ type AttributingPosition = {
 };
 
 /**
+ * Whether `context`'s traversal leaves a link of `scope` unfollowed: it
+ * counts such links (`TraversalContext.onUnresolvedLinkScope`) and acts as a
+ * principal with no session, which has no instance of a session-scoped
+ * document. A memory server's walk of a root naming a `user` instance is
+ * one. Every other traversal whose identity resolves no instance of a scope
+ * fails where it builds the target's key.
+ */
+function leavesLinkUnfollowed(
+  context: TraversalContext,
+  scope: CellScope | undefined,
+): boolean {
+  const identity = context.scopeKeyIdentity;
+  return context.onUnresolvedLinkScope !== undefined &&
+    !!identity.principal && !canResolveScopeKey(scope, identity);
+}
+
+/**
  * Begins the position of `doc` memoized in `memo`, in a walk that attributes
  * by record; nothing otherwise.
  */
@@ -1797,6 +1815,9 @@ function attributingPosition(
 ): AttributingPosition | undefined {
   const records = context.records;
   if (records === undefined) return undefined;
+  // A document the walk left its link unfollowed for is absent, belongs to
+  // no record, and attributes nothing.
+  if (leavesLinkUnfollowed(context, doc.address.scope)) return undefined;
   let table = memoAttributionTables.get(memo);
   if (table === undefined) {
     table = new Map();
@@ -1890,9 +1911,17 @@ export type TraversalContext = {
    * keys carry the shared scope_key, built from this identity. The
    * identity arrives with the work — a client traversal supplies its
    * runtime's own session (`Runtime.scopeKeyIdentity`); the memory
-   * server's query path supplies the querying session's.
+   * server's query path supplies the one it walks a graph's roots under.
    */
   scopeKeyIdentity: ScopeKeyIdentity;
+
+  /**
+   * Set by a traversal that leaves a session-scoped link unfollowed where it
+   * acts as a principal with no session (`leavesLinkUnfollowed()`), and
+   * called for each link it leaves. A traversal that sets none fails at such
+   * a link, where it builds the target's key.
+   */
+  onUnresolvedLinkScope?: () => void;
 
   /**
    * Whether this is a query-shaped traversal. Such a traversal walks
@@ -2981,6 +3010,9 @@ export abstract class BaseObjectTraverser {
     if (link.scope === undefined) {
       return false;
     }
+    // A walk that leaves this link unfollowed has walked no instance of its
+    // target, and `followPointer()` does not follow the link for it.
+    if (leavesLinkUnfollowed(this.context, link.scope)) return false;
 
     const targetSelector = narrowAndCombineSelectorForLink(
       address.path,
@@ -3535,6 +3567,18 @@ function followPointerOnce(
     ]);
     return [notFound(target), selector, []];
   }
+  if (leavesLinkUnfollowed(context, link.scope)) {
+    // The walk names each document it reaches by scope instance, and acts as
+    // a principal with no session, so it has no instance of a session-scoped
+    // target to name. Nothing is read or recorded for the target.
+    context.onUnresolvedLinkScope?.();
+    logger.info("traverse", () => [
+      "session-scoped link not followed: the walk acts as a principal " +
+      "with no session",
+      { source: doc.address, target },
+    ]);
+    return [notFound(target), selector, []];
+  }
   noteDeclaredReadScope(tx, schemaScope, link.scope);
   if (selector !== undefined) {
     // We'll need to re-root the selector for the target doc
@@ -3579,7 +3623,10 @@ function followPointerOnce(
     context.referenceOnly
       ? {
         ...READ_NON_RECURSIVE,
-        meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
+        meta: Object.freeze({
+          ...READ_NON_RECURSIVE.meta,
+          ...linkResolutionProbe,
+        }),
       }
       : READ_NON_RECURSIVE,
   );

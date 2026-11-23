@@ -250,7 +250,7 @@ describe("piece schema compatibility", () => {
     // `moduleIdentity` changes while `file`, `path`, and the `uiContract` stay
     // identical. That is a recompile of the same authorization, not a narrowed
     // contract, so the backward-compatibility check accepts it: the
-    // content-addressed identity is normalized out of the `ifc` comparison. The
+    // content-addressed identity is removed before the proof begins. The
     // ten baselined patterns that carry a CFC write (system/home,
     // system/profile-*, lobby, and the cfc-* demos) depend on this to stay
     // editable.
@@ -434,6 +434,257 @@ describe("piece schema compatibility", () => {
           ),
         )
       ).toThrow("result.flag: ifc changed");
+    });
+  });
+
+  describe("contracts that differ only in writer identity", () => {
+    // The pattern update gate records a contract by a hash of its schemas
+    // without the volatile identity of their writer claims, so it relies on
+    // the proof giving two such contracts the same issues against every other
+    // contract, as previous or as candidate. Each schema here serves as both
+    // argument and result, so every comparison runs both roles.
+
+    const issues = (previous: JSONSchema, candidate: JSONSchema) =>
+      patternSchemaIncompatibilities(
+        pattern(previous, previous),
+        pattern(candidate, candidate),
+      );
+
+    const writer = (moduleIdentity: string, path = "setFlag") => ({
+      writeAuthorizedBy: {
+        __ctWriterIdentityOf: {
+          file: "/patterns/demo/main.tsx",
+          path: [path],
+          moduleIdentity,
+        },
+      },
+    });
+
+    // Two definitions of the same shape, each holding an object whose fields
+    // name either definition, beneath enough nested unions that proving one
+    // through the other reaches the bound on splitting them. With equal
+    // writers, the two definitions are one schema to the proof, and its
+    // recursion stops one level sooner than with different ones.
+    const recursiveDefinitions = (
+      identities: readonly [string, string],
+      path?: string,
+    ): JSONSchema => {
+      const definition = (moduleIdentity: string): JSONSchema => {
+        let schema: JSONSchema = {
+          anyOf: [{ type: "string" }, {
+            type: "object",
+            ifc: writer(moduleIdentity, path),
+            properties: {
+              d0: { $ref: "#/$defs/d0" },
+              d1: { $ref: "#/$defs/d1" },
+            },
+          }],
+        };
+        for (let wrappers = 0; wrappers < 8; wrappers++) {
+          schema = { anyOf: [schema] };
+        }
+        return schema;
+      };
+      return {
+        type: "object",
+        properties: { x: { $ref: "#/$defs/d0" } },
+        $defs: {
+          d0: definition(identities[0]),
+          d1: definition(identities[1]),
+        },
+      };
+    };
+    const recursiveTarget: JSONSchema = {
+      type: "object",
+      properties: { x: { $ref: "#/$defs/t" } },
+      $defs: {
+        t: {
+          anyOf: [{ type: "string" }, {
+            type: "object",
+            ifc: writer("target"),
+            properties: {
+              d0: { $ref: "#/$defs/t" },
+              d1: { $ref: "#/$defs/t" },
+            },
+          }],
+        },
+      },
+    };
+
+    const nested = (moduleIdentity: string, path?: string): JSONSchema => ({
+      type: "object",
+      allOf: [{
+        properties: { flag: { type: "boolean", ifc: writer(moduleIdentity) } },
+      }],
+      if: { properties: { mode: { const: "edit" } } },
+      then: {
+        properties: {
+          list: {
+            type: "array",
+            items: {
+              ifc: {
+                writePolicyAnyOf: [{
+                  ...writer(moduleIdentity, path),
+                  uiContract: baselineUiContract,
+                }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // A list of results held in a document of the schema registry, which a
+    // schema reaches only through a content-addressed `$ref`.
+    const registered = (
+      moduleIdentity: string,
+      path = baselineIdentity.path,
+    ): JSONSchema => {
+      const document = trustedWriteResult(
+        { ...baselineIdentity, moduleIdentity, path },
+        baselineUiContract,
+      );
+      const { taggedHashString } = internSchema(document, true);
+      registerSchemaDocument(taggedHashString, document);
+      return {
+        type: "array",
+        items: { $ref: formatExternalSchemaRef(taggedHashString) },
+      };
+    };
+
+    const twins: readonly [string, JSONSchema, JSONSchema][] = [
+      [
+        "a field's writer",
+        trustedWriteResult(baselineIdentity, baselineUiContract),
+        trustedWriteResult(
+          {
+            ...baselineIdentity,
+            moduleIdentity: "DCTZZ89BogydamlP301Qx",
+            file: "/api/patterns/demo/main.tsx",
+          },
+          baselineUiContract,
+        ),
+      ],
+      ["writers under `allOf` and `then`", nested("a"), nested("b")],
+      [
+        "definitions recursing through nested unions",
+        recursiveDefinitions(["a", "b"]),
+        recursiveDefinitions(["a", "a"]),
+      ],
+    ];
+    const thirds: readonly JSONSchema[] = [
+      { type: "object" },
+      { type: "object", properties: { x: { type: "string" } } },
+      trustedWriteResult(
+        { ...baselineIdentity, path: ["other"] },
+        baselineUiContract,
+      ),
+      nested("c", "other"),
+      recursiveTarget,
+      recursiveDefinitions(["c", "c"]),
+      recursiveDefinitions(["c", "d"], "other"),
+      ...twins.map(([, left]) => left),
+    ];
+
+    for (const [name, left, right] of twins) {
+      it(`returns the same issues for twins with ${name}, as previous or as candidate`, () => {
+        for (const third of thirds) {
+          expect(issues(left, third)).toEqual(issues(right, third));
+          expect(issues(third, left)).toEqual(issues(third, right));
+        }
+      });
+    }
+
+    it("accepts a candidate over definitions whose writers differ, where nested unions reach the split bound", () => {
+      for (
+        const previous of [
+          recursiveDefinitions(["a", "b"]),
+          recursiveDefinitions(["a", "a"]),
+        ]
+      ) {
+        expect(
+          patternSchemaIncompatibilities(
+            pattern(previous, true),
+            pattern(recursiveTarget, true),
+          ),
+        ).toEqual([]);
+      }
+    });
+
+    it("proves a link through a registered document whose writer differs only in identity", () => {
+      expect(() => assertSchemaSubset(registered("a"), registered("b")))
+        .not.toThrow();
+      expect(() =>
+        assertSchemaSubset(registered("a"), registered("a", ["other"]))
+      ).toThrow("value[].flag: ifc changed");
+    });
+
+    it("returns issues for twins whose writers differ in their binding path", () => {
+      expect(issues(nested("a"), nested("a", "other"))).toEqual([
+        {
+          path: "argument",
+          reason:
+            "then changed in a way compatibility checking cannot prove safe",
+        },
+        {
+          path: "result",
+          reason:
+            "then changed in a way compatibility checking cannot prove safe",
+        },
+      ]);
+      expect(
+        issues(
+          recursiveDefinitions(["a", "b"]),
+          recursiveDefinitions(["a", "b"], "other"),
+        ),
+      ).not.toEqual([]);
+    });
+
+    it("refuses a writer identity that changes from a list to a record", () => {
+      // A stored schema can hold an identity of any shape, which the schema
+      // type does not admit, so this one is read the way a stored one is.
+
+      const listed = (identity: unknown): JSONSchema =>
+        JSON.parse(JSON.stringify({
+          type: "object",
+          properties: {
+            flag: {
+              type: "boolean",
+              ifc: { writeAuthorizedBy: { __ctWriterIdentityOf: identity } },
+            },
+          },
+        }));
+      expect(
+        issues(listed(["setFlag"]), listed({ 0: "setFlag" })),
+      ).toEqual([
+        { path: "argument.flag", reason: "ifc changed" },
+        { path: "result.flag", reason: "ifc changed" },
+      ]);
+    });
+
+    it("compares a writer identity's own `__proto__` key as written", () => {
+      // `JSON.parse` makes `__proto__` an own key, as it would for a schema
+      // read off the wire, and the runtime reads the identity's own keys.
+
+      const identity = (moduleIdentity: string, proto: string): JSONSchema =>
+        JSON.parse(
+          JSON.stringify(
+            trustedWriteResult(
+              { ...baselineIdentity, moduleIdentity },
+              baselineUiContract,
+            ),
+          ).replace(
+            '"moduleIdentity"',
+            `"__proto__":${proto},"moduleIdentity"`,
+          ),
+        );
+      expect(issues(identity("a", '{"v":1}'), identity("b", '{"v":1}')))
+        .toEqual([]);
+      expect(issues(identity("a", '{"v":1}'), identity("b", '{"v":2}')))
+        .toEqual([
+          { path: "argument.flag", reason: "ifc changed" },
+          { path: "result.flag", reason: "ifc changed" },
+        ]);
     });
   });
 

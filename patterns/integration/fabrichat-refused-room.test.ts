@@ -7,6 +7,7 @@
  * draws, on a page whose runtime has been refused the room.
  */
 
+import { debugStr } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { env, type Page, waitForCondition } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
@@ -17,7 +18,10 @@ import { describe, it } from "@std/testing/bdd";
 import {
   clickCfButton,
   clickTrustedAction,
+  collectBrowserLoadSummary,
   fillCfInput,
+  readCfInputProbe,
+  readTrustedActionProbe,
   waitForRuntimeIdle,
   waitForSettledText,
   waitForText,
@@ -171,7 +175,17 @@ describe("fabrichat-refused-room", () => {
             status !== "pending"
           ).length === 2,
         { stuckLabel: "both starts' outcomes" },
-      );
+      ).catch(async (cause) => {
+        const diagnostics = await Promise.allSettled([
+          readCfInputProbe(secondPage, "#fabrichat-start-direct"),
+          readTrustedActionProbe(secondPage, START_ACTION),
+          collectBrowserLoadSummary(secondPage, "second chat start"),
+        ]);
+        throw new Error(
+          debugStr`Second chat start diagnostics: $quote,indent,xlong${diagnostics}`,
+          { cause },
+        );
+      });
       expect(Object.values(outcomes).map(({ status }) => status)).toEqual([
         "done",
         "done",
