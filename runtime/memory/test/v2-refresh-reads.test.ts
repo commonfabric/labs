@@ -12,7 +12,12 @@ import type { FabricValue } from "@commonfabric/api";
 
 import { resolveScopeKey } from "../v2.ts";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
-import { refreshTrackedGraph, toDirtyKey, trackGraph } from "../v2/query.ts";
+import {
+  partitionGraphQuery,
+  refreshTrackedGraph,
+  toDirtyKey,
+  trackGraph,
+} from "../v2/query.ts";
 
 const space = "did:key:z6Mk-memory-v2-refresh-reads";
 const identity = { principal: "did:key:alice", sessionId: "session:alice" };
@@ -230,9 +235,10 @@ describe("v2-refresh-reads", () => {
     });
 
     it("delivers the stored version of another principal's instance that a root names by its key", async () => {
-      // The graph's identity is alice's, and the root names bob's instance
-      // of a document in the user scope, which a change is reported under
-      // by bob's key.
+      // The querying session is alice's, and the root names bob's instance
+      // of a document in the user scope, so the root is walked in a graph
+      // of bob's (`partitionGraphQuery()`), and a change to it is reported
+      // under bob's key.
       const bobKey = resolveScopeKey("user", bob);
       const profile = (name: string): Operation => ({
         op: "set",
@@ -242,19 +248,21 @@ describe("v2-refresh-reads", () => {
       });
       await withEngine((engine) => {
         commit(engine, [profile("before")], bob);
+        const parts = partitionGraphQuery({
+          roots: [{
+            id: "of:profile",
+            scope: "user",
+            entityScopeKey: bobKey,
+            selector: { path: [], schema: true },
+          }],
+        }, identity);
+        expect(parts.map((part) => part.instance)).toEqual([bobKey]);
         const tracked = trackGraph(
           space,
           engine,
-          {
-            roots: [{
-              id: "of:profile",
-              scope: "user",
-              entityScopeKey: bobKey,
-              selector: { path: [], schema: true },
-            }],
-          },
+          parts[0].query,
           undefined,
-          identity,
+          parts[0].identity,
         );
         const bobDocument = (entities: Map<string, { document: unknown }>) =>
           [...entities].filter(([key]) => key.includes(`/${bobKey}/`)).map((
