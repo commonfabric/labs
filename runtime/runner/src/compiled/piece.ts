@@ -291,7 +291,7 @@ export class CompiledPiece {
         held: (doc) => transactions.heldOwn(doc),
         write: (handed, doc, path, value) =>
           transactions.writeOwn(handed, doc, path, value as FabricValue),
-        result: (rows) => transactions.heldResult(rows),
+        result: (rows, arrays) => transactions.heldResult(rows, arrays),
         rowsHeld: (path, keys) => transactions.rowsHeld(path, keys),
         streamsHeld: (bindings, keys) => {
           for (const key of keys) {

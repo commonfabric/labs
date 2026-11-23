@@ -208,6 +208,7 @@ installFakeClock({
     // The same serving memory server, taken over by a second serving loop.
     "compiled-serving-takeover",
     "compiled-serving-takeover-handlers",
+    "compiled-serving-takeover-view",
   ],
 });
 

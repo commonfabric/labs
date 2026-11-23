@@ -5920,6 +5920,7 @@ export class Instance {
         const units = this.#units.get(unit.name) ?? new Set();
         units.add(unit);
         this.#units.set(unit.name, units);
+        if (owner === undefined) this.#claimStored(unit);
         const rows = this.#rowsOf(unit);
         if (owner === undefined) this.#unitPlaced(unit);
         return rows;
@@ -6747,7 +6748,18 @@ export class Instance {
    * leave as stored, each with the path of the result that keeps it
    * (`storedRowCollections`).
    */
-  #listed: ReadonlyMap<number, readonly string[]> | undefined;
+  #listed: ReadonlyMap<number, readonly string[] | undefined> | undefined;
+
+  /**
+   * For a resumed instance, the arrays of links to whole documents that
+   * the stored result holds at a path the plan does not name, by the text
+   * of the path, until a unit of a collection of `#listed` is placed there
+   * (`#claimStored`).
+   */
+  readonly #storedArrays = new Map<
+    string,
+    { path: readonly string[]; entities: readonly string[] }
+  >();
 
   /**
    * For a resumed instance, the collections whose rows the storage holds
@@ -6790,10 +6802,41 @@ export class Instance {
    * for each element.
    */
   #leftStored(unit: Unit): boolean {
-    const seed = this.#seeds.get(unit.name);
-    return seed !== undefined && "path" in unit.place &&
-      unit.place.path.length === seed.path.length &&
-      unit.place.path.every((segment, index) => segment === seed.path[index]);
+    if (!("path" in unit.place)) return false;
+    // Before the assembly is first evaluated, the path is the one the
+    // stored rows were found at.
+    const path = this.#seeds.get(unit.name)?.path ??
+      (unit.name === this.#name("assembly", unit.collection, [])
+        ? this.#storedRows.get(unit.collection)?.path
+        : undefined);
+    return path !== undefined && unit.place.path.length === path.length &&
+      unit.place.path.every((segment, index) => segment === path[index]);
+  }
+
+  /**
+   * A unit is being made at a place of the result document itself. Where
+   * the stored result holds an array of links to whole documents there,
+   * and the collection of the unit is one of `#listed` that the plan keeps
+   * at no path, whose assembly has not been evaluated, the array is taken
+   * as the stored rows of the collection: its assembly is then formed with
+   * no body evaluated (`#seed`), where the links are those of the row
+   * documents of its keys.
+   */
+  #claimStored(unit: Unit): void {
+    if (this.#storedArrays.size === 0 || !("path" in unit.place)) return;
+    const id = JSON.stringify(unit.place.path);
+    const found = this.#storedArrays.get(id);
+    if (found === undefined) return;
+    this.#storedArrays.delete(id);
+    const { collection, name } = unit;
+    if (
+      this.#listed?.has(collection) !== true ||
+      this.#listed.get(collection) !== undefined ||
+      name !== this.#name("assembly", collection, []) ||
+      this.#memo.has(name) || this.#storedRows.has(collection) ||
+      this.options.units?.listed(collection) !== true
+    ) return;
+    this.#storedRows.set(collection, found);
   }
 
   /**
@@ -6849,16 +6892,26 @@ export class Instance {
       paths.push(record);
       of.push(undefined);
     }
-    const held = units.result(paths);
+    // A collection that the plan keeps at no path stands where the value
+    // of the result holds it: every array of links to whole documents of
+    // the stored result is then a place such a collection can stand at.
+    const unplaced = [...this.#listed].some(([one, path]) =>
+      path === undefined && units.listed(one)
+    );
+    const held = units.result(paths, unplaced);
     if (held === undefined) return undefined;
     of.forEach((collection, index) => {
       const entities = held.rows[index];
       if (
         collection === undefined || entities === undefined ||
-        !this.#listed?.has(collection) || !units.listed(collection)
+        this.#listed?.get(collection) === undefined ||
+        !units.listed(collection)
       ) return;
       this.#storedRows.set(collection, { path: paths[index], entities });
     });
+    for (const found of held.found ?? []) {
+      this.#storedArrays.set(JSON.stringify(found.path), found);
+    }
     this.#resultHeld = true;
     return held.value;
   }

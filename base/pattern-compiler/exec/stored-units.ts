@@ -39,6 +39,14 @@ export type StoredReader = {
   own: (readonly string[])[];
 };
 
+/** An array of links to whole documents that a stored result holds. */
+export type StoredArray = {
+  /** The path of the array in the result document. */
+  path: readonly string[];
+  /** The entity that each position links to. */
+  entities: readonly string[];
+};
+
 /** What an evaluation of the body of one element read. */
 export type ElementReads = {
   collection: number;
@@ -69,11 +77,19 @@ export type StoredUnits = {
    * What the storage holds as the result document, with nothing at each
    * path of `rows`, and for each of those paths the entity that each
    * position of the stored array links to, or nothing where the storage
-   * holds no array of links to whole documents there.
+   * holds no array of links to whole documents there. With `arrays`, the
+   * value also has nothing at each other position of the document itself
+   * that holds an array of links to whole documents, and `found` names
+   * each such position with the entities its array links to.
    */
   result(
     rows: readonly (readonly string[])[],
-  ): { value: unknown; rows: (readonly string[] | undefined)[] } | undefined;
+    arrays?: boolean,
+  ): {
+    value: unknown;
+    rows: (readonly string[] | undefined)[];
+    found?: StoredArray[];
+  } | undefined;
   /**
    * The document and the entity that hold the row of `key` of the array at
    * `path` of the result document.
@@ -103,7 +119,10 @@ export type StoredUnits = {
 
 /**
  * The collections of the plan of `artifact` whose rows a resumed executor
- * can leave as stored, each with the path of the result that keeps it:
+ * can leave as stored, each with the path of the result that keeps it, or
+ * with nothing where the result keeps it at no path the plan names: such
+ * a collection stands where the value of the result holds it, as among
+ * the children of a view node, which the evaluation of the result says.
  *
  * - its rows are documents of their own (`rows`, as
  *   `rowDocumentCollections` gives them), and its source is a slot that
@@ -121,9 +140,9 @@ export type StoredUnits = {
 export const storedRowCollections = (
   artifact: Artifact,
   rows: ReadonlySet<number>,
-): Map<number, readonly string[]> => {
+): Map<number, readonly string[] | undefined> => {
   const { plan } = artifact;
-  const found = new Map<number, readonly string[]>();
+  const found = new Map<number, readonly string[] | undefined>();
   const inside = (within: readonly { element?: number }[] | undefined) =>
     (within ?? []).flatMap((step) =>
       step.element === undefined ? [] : [step.element]
@@ -162,10 +181,8 @@ export const storedRowCollections = (
     if (collection.source.slot === undefined) return;
     if (collection.source.entries === true) return;
     const place = plan.outputs.find((output) => output.collection === index);
-    if (
-      place === undefined || place.kept !== true || place.path.includes("*")
-    ) return;
-    found.set(index, place.path);
+    if (place === undefined || place.path.includes("*")) return;
+    found.set(index, place.kept === true ? place.path : undefined);
   });
   return found;
 };

@@ -19,7 +19,9 @@ const artifactOf = async (
 };
 
 /** The collections of a pattern whose rows can be left as stored. */
-const storedOf = (artifact: Artifact): [number, readonly string[]][] => [
+const storedOf = (
+  artifact: Artifact,
+): [number, readonly string[] | undefined][] => [
   ...storedRowCollections(artifact, rowDocumentCollections(artifact)),
 ];
 
@@ -30,6 +32,14 @@ describe("storedRowCollections()", () => {
     const artifact = await artifactOf("serving-list");
 
     expect(storedOf(artifact)).toEqual([[0, ["rows"]]]);
+  });
+
+  it("gives a `map` that the result keeps at no path the plan names, with no path", async () => {
+    // `serving-list-view.tsx`: the `map` stands among the children of a
+    // view node.
+    const artifact = await artifactOf("serving-list-view");
+
+    expect(storedOf(artifact)).toEqual([[0, undefined]]);
   });
 
   it("gives nothing where the rows are stored in place", async () => {

@@ -38,6 +38,7 @@ import {
   isWalkableObjectNotArray,
 } from "@commonfabric/data-model";
 
+import type { StoredArray } from "../../../../base/pattern-compiler/exec/stored-units.ts";
 import {
   createSigilLinkFromParsedLink,
   getMetaLink,
@@ -3710,13 +3711,21 @@ export class RuntimeTransactions implements TransactionHooks {
    * one, with no member at each path of `rows`, and for each of those
    * paths the entity that each position of the stored array links to, or
    * nothing where the storage holds no array of links to whole documents
-   * there. Nothing where the replica holds no result document. The
-   * document counts as one the storage holds, and the executor's creation
-   * of it with this value is no write.
+   * there. With `arrays`, the value also has nothing at each other
+   * position of the document that holds an array of links to whole
+   * documents, and `found` names each such position
+   * (`StoredUnits.result`). Nothing where the replica holds no result
+   * document. The document counts as one the storage holds, and the
+   * executor's creation of it with this value is no write.
    */
   heldResult(
     rows: readonly (readonly string[])[],
-  ): { value: unknown; rows: (readonly string[] | undefined)[] } | undefined {
+    arrays = false,
+  ): {
+    value: unknown;
+    rows: (readonly string[] | undefined)[];
+    found?: StoredArray[];
+  } | undefined {
     if (this.#owner === undefined) return undefined;
     const read = this.#runtime.edit();
     let stored: FabricValue | undefined;
@@ -3726,8 +3735,9 @@ export class RuntimeTransactions implements TransactionHooks {
       read.abort();
     }
     if (!isWalkableObjectNotArray(stored)) return undefined;
-    const entities = rows.map((path) => {
-      const held = valueAt(stored, path);
+    // The entity each position of an array links to, where every position
+    // links to a whole document of the space of the instance.
+    const entitiesOf = (held: unknown): string[] | undefined => {
       if (!Array.isArray(held)) return undefined;
       const ids: string[] = [];
       for (const member of held) {
@@ -3740,28 +3750,49 @@ export class RuntimeTransactions implements TransactionHooks {
         ids.push(link.id);
       }
       return ids;
-    });
-    // The value without the members at the paths of `rows`: none of the
-    // links there is decoded, which for each reads the entity it names.
+    };
+    const entities = rows.map((path) => entitiesOf(valueAt(stored, path)));
+    const found: StoredArray[] = [];
+    // The value without the members at the paths of `rows` and, with
+    // `arrays`, without the arrays of links to whole documents: none of
+    // the links there is decoded, which for each reads the entity it names.
     const without = (value: unknown, at: readonly string[]): unknown => {
-      const inside = rows.filter((path) =>
-        path.length > at.length && isPrefix(at, path)
-      );
-      if (inside.length === 0 || !isWalkableObjectNotArray(value)) {
+      if (!arrays) {
+        const inside = rows.filter((path) =>
+          path.length > at.length && isPrefix(at, path)
+        );
+        if (inside.length === 0 || !isWalkableObjectNotArray(value)) {
+          return this.#decode(value);
+        }
+      }
+      if (Array.isArray(value)) {
+        const ids = value.length === 0 ? undefined : entitiesOf(value);
+        if (ids !== undefined) {
+          found.push({ path: at, entities: ids });
+          return undefined;
+        }
+        return value.map((member, index) =>
+          without(member, [...at, `${index}`])
+        );
+      }
+      if (!isWalkableObjectNotArray(value) || isPrimitiveCellLink(value)) {
         return this.#decode(value);
       }
       const members: Record<string, unknown> = {};
       for (const [name, member] of Object.entries(value)) {
         const below = [...at, name];
         if (rows.some((path) => samePath(path, below))) continue;
-        members[name] = without(member, below);
+        const kept = without(member, below);
+        // A member that held an array which was taken out is absent.
+        if (kept !== undefined || member === undefined) members[name] = kept;
       }
       return members;
     };
     this.#documents.add(this.#owner);
     this.#heldBefore.add(this.#owner);
     this.#heldWhole.add(this.#owner);
-    return { value: without(stored, []), rows: entities };
+    const value = without(stored, []);
+    return { value, rows: entities, ...(arrays ? { found } : {}) };
   }
 
   /**

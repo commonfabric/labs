@@ -178,8 +178,9 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
   /** @inheritDoc */
   result(
     rows: readonly (readonly string[])[],
+    arrays?: boolean,
   ): ReturnType<StoredUnits["result"]> {
-    return this.#storage.result(rows);
+    return this.#storage.result(rows, arrays);
   }
 
   /** @inheritDoc */
