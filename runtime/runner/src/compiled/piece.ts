@@ -17,7 +17,8 @@
  *   invalidates it when an event was handled, when another writer changed a
  *   document the executor holds, and when a stored label changed alone. The
  *   action brings the piece up to date in the transaction the scheduler
- *   gives it.
+ *   gives it. Where a handler made instances, the action first derives
+ *   those alone and runs again for the rest.
  *
  * So `Runtime.idle()` resolves for a compiled piece when no event of it is
  * queued and its derivation is current, as for any piece.
@@ -148,14 +149,23 @@ export class CompiledPiece {
     this.#derive = (given) => {
       this.#counts.derivations += 1;
       const began = performance.now();
+      // The first derivation of the instances a handler made is a
+      // transaction of its own, which the scheduler commits before the
+      // derivation of what reads them runs: that one then finds the labels
+      // of their results stored, and gives no record again for a row whose
+      // value and whose labels stayed.
+      let first = false;
       try {
         transactions.within(given, () => {
+          first = this.instance.settleMade();
+          if (first) return;
           this.instance.settle();
           this.instance.relabel();
         });
       } finally {
         this.#counts.ownMs += performance.now() - began;
       }
+      if (first) this.#invalidate();
     };
     this.instance = transactions.within(tx, () =>
       new Instance(

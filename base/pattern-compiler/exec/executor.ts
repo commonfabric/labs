@@ -2510,6 +2510,11 @@ export class Instance {
   readonly #instances = new Map<string, Instance>();
   /** The instances that this instance made. */
   readonly #children: Instance[] = [];
+  /**
+   * On the root: the instances that a handler made and that have had no
+   * derivation yet, in the order they were made.
+   */
+  readonly #awaitingFirst = new Set<Instance>();
   /** The documents and declared places of this instance, by identifier. */
   readonly #documents = new Set<string>();
   /** The bindings that function bodies of this instance made, by key. */
@@ -3258,7 +3263,10 @@ export class Instance {
     // transaction behind the batch, and not in the event's transaction
     // (ES §1.1, "From the creation of an instance to its settled
     // result").
-    if (this.root.#tx?.record.cause === "event") return;
+    if (this.root.#tx?.record.cause === "event") {
+      this.root.#awaitingFirst.add(this);
+      return;
+    }
     // A state cell of the pattern's own body exists from the start, and
     // one of an element body from when its key enters the element table.
     const first = () => {
@@ -7187,6 +7195,24 @@ export class Instance {
   }
 
   /**
+   * Brings up to date, in one derivation transaction, each instance that a
+   * handler made and that has had no derivation yet, and nothing else:
+   * what read a document of such an instance stays marked, for `settle()`.
+   * Returns whether there was such an instance. Whoever runs the executor
+   * calls it before `settle()` where the first derivation of an instance
+   * is to be committed before the derivations that read its result, so
+   * that those find the labels of the result stored.
+   */
+  settleMade(): boolean {
+    const { root } = this;
+    if (root.#awaitingFirst.size === 0) return false;
+    root.#within("derivation", () => {
+      for (const made of [...root.#awaitingFirst]) made.#settle();
+    });
+    return true;
+  }
+
+  /**
    * On the root: one derivation transaction, and behind it the request
    * transactions of the effects whose request is stale. What a request
    * transaction writes is a change like any other, so a further
@@ -7207,6 +7233,7 @@ export class Instance {
    * the bound on the evaluations of a cone instance ends (ES §2.7).
    */
   #settle(): void {
+    this.root.#awaitingFirst.delete(this);
     const none: Context = new Map();
     const result = this.#result;
     if (result === undefined) return;
@@ -11750,6 +11777,8 @@ export class Instance {
       }
       if (root.#instances.size > instances) {
         for (const id of [...root.#instances.keys()].slice(instances)) {
+          const made = root.#instances.get(id);
+          if (made !== undefined) root.#awaitingFirst.delete(made);
           root.#instances.delete(id);
         }
         for (const [name, { instance }] of [...root.#made]) {
