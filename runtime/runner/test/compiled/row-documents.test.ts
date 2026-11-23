@@ -321,6 +321,79 @@ describe("the rows of a `map` over an array declared as references", () => {
       );
     });
 
+    it("stores the documents of the creation under what the caller read before the start", async () => {
+      // The caller can have computed the argument from what it read in the
+      // transaction it hands, so the creation, which is committed apart,
+      // holds those reads.
+
+      const secret = runtime.getCell<Record<string, unknown>>(
+        space,
+        "caller secret",
+        await labeled("clause-of-the-caller"),
+      );
+      const items = runtime.getCell<unknown[]>(space, "caller items");
+      const result = runtime.getCell<Record<string, unknown>>(
+        space,
+        "caller result",
+      );
+      await commit((tx) => {
+        secret.withTx(tx).set({ id: "s", title: "secret", done: false });
+        items.withTx(tx).set([]);
+      });
+      const artifact = await artifactOf("Cells");
+      let piece: CompiledPiece | undefined;
+      await commit((tx) => {
+        secret.withTx(tx).get();
+        piece = startCompiledPiece(
+          runtime,
+          tx,
+          artifact,
+          { items },
+          result.withTx(tx),
+          { loadRows: 2 },
+        );
+        pieces.push(piece);
+      });
+      expect(piece!.refusals).toEqual([]);
+      const argument = piece!.transactions.entityOf(piece!.instance.argument);
+      expect(labelsOf(argument)).toContain("clause-of-the-caller");
+    });
+
+    it("loads in the handed transaction where the caller wrote into it before the start", async () => {
+      // A position the caller staged holds its label in the handed
+      // transaction alone, so no row is stored by another one.
+
+      const commits = commitsOf();
+      const item = runtime.getCell<Record<string, unknown>>(
+        space,
+        "staged item",
+        await labeled("clause-staged"),
+      );
+      const items = runtime.getCell<unknown[]>(space, "staged items");
+      const result = runtime.getCell<Record<string, unknown>>(
+        space,
+        "staged result",
+      );
+      const artifact = await artifactOf("Cells");
+      let piece: CompiledPiece | undefined;
+      await commit((tx) => {
+        item.withTx(tx).set({ id: "i", title: "staged", done: false });
+        items.withTx(tx).set([item]);
+        piece = startCompiledPiece(
+          runtime,
+          tx,
+          artifact,
+          { items },
+          result.withTx(tx),
+          { loadRows: 2 },
+        );
+        pieces.push(piece);
+      });
+      expect(piece!.refusals).toEqual([]);
+      expect(commits.length).toBe(1);
+      expect(rowsOf(result)).toEqual([{ label: "staged!", done: false }]);
+    });
+
     it("takes a change of a member after such a load", async () => {
       const { piece, result, cells } = await started(
         "Cells",

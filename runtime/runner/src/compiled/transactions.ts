@@ -77,6 +77,7 @@ import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
+  IReadActivity,
   IStorageNotification,
   TransactionCommitReceipt,
 } from "../storage/interface.ts";
@@ -383,6 +384,8 @@ export class RuntimeTransactions implements TransactionHooks {
       rows: number;
       tx: IExtendedStorageTransaction | undefined;
       documents: string[];
+      /** The reads the handed transaction had made when the load began. */
+      before: IReadActivity[];
     }
     | undefined;
   /**
@@ -864,9 +867,28 @@ export class RuntimeTransactions implements TransactionHooks {
       // handed transaction is written into that one, but the creation of a
       // load in bounded transactions, which is committed here.
       this.#cause = cause;
-      this.#tx = this.#load !== undefined && cause === "creation"
-        ? this.#runtime.edit()
-        : this.#given.tx;
+      if (this.#load === undefined || cause !== "creation") {
+        this.#tx = this.#given.tx;
+        return;
+      }
+      // The caller can have computed the argument from what it read in the
+      // transaction it hands. The creation makes those reads too, so that
+      // what it stores has the label it would have in that transaction
+      // where no record gives it one.
+      const creation = this.#runtime.edit();
+      for (const read of this.#load.before) {
+        creation.read({
+          space: read.space,
+          id: read.id,
+          scope: read.scope,
+          type: "application/json",
+          path: [...read.path],
+        }, {
+          meta: read.meta,
+          ...(read.nonRecursive ? { nonRecursive: true } : {}),
+        });
+      }
+      this.#tx = creation;
       return;
     }
     this.#reportLabels();
@@ -907,7 +929,8 @@ export class RuntimeTransactions implements TransactionHooks {
      *
      * 1. The creation: the documents the instance makes for itself, so that
      *    a record of a later transaction whose input passes through one of
-     *    them finds its label stored.
+     *    them finds its label stored. Its transaction makes the reads that
+     *    `tx` had made when the load began.
      * 2. The row documents, in transactions of at most `loadRows`: each row
      *    whose records name no position the load itself wrote and include
      *    one for the row whole. Such a transaction stores a row under the
@@ -915,7 +938,8 @@ export class RuntimeTransactions implements TransactionHooks {
      *    row has the label it has when the load is done.
      *
      * Everything else, the links to the rows among it, is written into
-     * `tx`. Until the caller commits `tx`, the storage holds row documents
+     * `tx`. A load whose `tx` the caller wrote into before is written into
+     * `tx` whole. Until the caller commits `tx`, the storage holds row documents
      * that no document links to. Where one of the adapter's commits is
      * refused, `tx` is aborted.
      */
@@ -928,10 +952,22 @@ export class RuntimeTransactions implements TransactionHooks {
     const given: Given = { tx, failed: undefined };
     this.#given = given;
     this.#resetTransaction();
+    // A position that the caller wrote into `tx` holds its value and its
+    // label there alone, which no other transaction reads, so such a load
+    // is written into `tx` whole.
     this.#load = options.loadRows === undefined ||
-        !Number.isFinite(options.loadRows) || options.loadRows < 1
+        !Number.isFinite(options.loadRows) || options.loadRows < 1 ||
+        tx.getWriteAttemptLog?.().length !== 0
       ? undefined
-      : { rows: options.loadRows, tx: undefined, documents: [] };
+      : {
+        rows: options.loadRows,
+        tx: undefined,
+        documents: [],
+        before: [
+          ...tx.getPotentiallyExternalReadActivities?.() ??
+            tx.getReadActivities?.() ?? [],
+        ],
+      };
     let result: T;
     try {
       result = run();
