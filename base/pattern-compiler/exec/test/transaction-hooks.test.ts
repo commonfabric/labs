@@ -1884,3 +1884,74 @@ describe("the records of the row documents a `lift` writes", () => {
     expect(rows(mark)).toEqual([]);
   });
 });
+
+// `fixtures/named-position.tsx`: the row of a `map` over an array of
+// references holds the cell of its item, which its body names as
+// `items.key(index)` and does not read. The plan has a slot for the
+// reference at `items/*`, and no read binds it.
+describe("a slot of the reference at a position that a body named through a handle and did not read", () => {
+  /** An instance over `count` items, each a document of its own. */
+  const over = async (count: number) => {
+    const recorder = new Recorder((doc, path, observes) =>
+      `${doc}/${path.join("/")} ${observes}`
+    );
+    const documents = Array.from({ length: count }, (_, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { title: `t${index}`, n: index },
+    }));
+    const instance = new Instance(
+      await artifactOf("named-position"),
+      { items: documents.map(({ id }) => ({ $link: { doc: id, path: [] } })) },
+      { transactions: recorder, documents },
+    );
+    /** The paths each record of `rows/<row>/item` binds a chain to. */
+    const named = (row: number) =>
+      [
+        ...recorder.changed.flatMap(({ writes }) => writes ?? []),
+        ...recorder.left.flatMap(({ writes }) => writes),
+      ].filter(({ target }) => target.path.join("/") === `rows/${row}/item`)
+        .flatMap(({ slots }) => Object.values(slots)).flatMap((bound) =>
+          "chain" in bound
+            ? [bound.chain[bound.chain.length - 1].path.join("/")]
+            : []
+        );
+    return { instance, recorder, named };
+  };
+
+  it("binds the slot to the position the body named, and to no position that names every member", async () => {
+    const { named } = await over(3);
+
+    for (const row of [0, 1, 2]) {
+      expect(named(row)).toContain(`items/${row}`);
+      expect(named(row)).not.toContain("items/*");
+    }
+  });
+
+  it("gives no record of a row again when the label at the position of another member changed, among 10 members and among 1,000", async () => {
+    for (const count of [10, 1_000]) {
+      const { instance, recorder } = await over(count);
+      const given = recorder.left.length;
+
+      // The store says that a read of the second position consumes
+      // another label, and that a read of no other position does.
+      recorder.labelsChanged?.(
+        [{
+          doc: instance.argument,
+          paths: [["items", "1"]],
+          unchanged: (path) => path.join("/") !== "items/1",
+        }],
+        true,
+      );
+      instance.dispatch();
+
+      expect(
+        recorder.left.slice(given).flatMap(({ writes }) => writes).filter((
+          { target },
+        ) => target.path[0] === "rows").map(({ target }) =>
+          target.path.join("/")
+        ),
+      ).toEqual(["rows/1/item"]);
+    }
+  });
+});

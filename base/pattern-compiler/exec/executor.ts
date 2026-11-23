@@ -1480,12 +1480,17 @@ export class Handle {
 
   key(segment: string | number): Handle {
     if (this.#target instanceof StreamRef) return this;
+    const target = this.#target.key(`${segment}`);
+    const below = [...this.#below, `${segment}`];
+    if (this.#host !== undefined && this.#slot !== undefined) {
+      this.#instance.noteNamed(this.#host, this.#slot, below, target);
+    }
     return new Handle(
       this.#instance,
-      this.#target.key(`${segment}`),
+      target,
       this.#host,
       this.#slot,
-      [...this.#below, `${segment}`],
+      below,
       schemaBelow(this.#declared, `${segment}`),
       this.#fixed,
     );
@@ -1819,6 +1824,13 @@ export class Host {
   demandedAt: { clock: number; reads: number } | undefined;
   /** What the evaluation bound each slot it read to, by the slot. */
   readonly bound = new Map<number, Bound>();
+  /**
+   * The slots of `bound` that no read bound, each to the positions a body
+   * named through a handle (`Instance.noteNamed`).
+   */
+  readonly namedOnly = new Set<number>();
+  /** The slots a body named too many positions of for `noteNamed` to bind. */
+  readonly namedMany = new Set<number>();
   /** The branch each selector took, as the value code reported it. */
   readonly selections = new Map<number, number>();
   /** The key each pick chose, as the value code reported it. */
@@ -9654,6 +9666,84 @@ export class Instance {
       return;
     }
     host.bound.set(index, { observes: slot.observes, at });
+  }
+
+  /**
+   * For `noteNamed()`: the `identity` slot of the plan for the member that
+   * a handle names below the cell of its own slot, by that slot and the
+   * path below with each position of a member written as `*`; -1 where
+   * the plan has none.
+   */
+  readonly #namedSlots = new Map<string, number>();
+
+  /**
+   * The most positions that `noteNamed()` binds one slot to in one
+   * evaluation. A body that names more, as one that walks a whole array
+   * does, leaves the slot to the position that names every member
+   * (`#elementsBound`), which one address covers.
+   */
+  static readonly #NAMED_MOST = 8;
+
+  /**
+   * Records that a body named, through the handle of `slot`, the member at
+   * the path `below` of the handle's cell, which is at `named`: the plan's
+   * slot for the reference at a member of that cell (its path ends in `*`
+   * where the handle's ends) is bound to the position named. A body that
+   * takes the cell of a member and does not read it, as
+   * `list.key(index).resolveAsCell()` does, makes no read that binds the
+   * slot. Without this the slot is bound to the position that names every
+   * member, and the label of what the body returned follows the labels of
+   * all of them.
+   */
+  noteNamed(
+    host: Host,
+    slot: number,
+    below: readonly string[],
+    named: Ref,
+  ): void {
+    if (this.root.options.transactions === undefined) return;
+    const isMember = (segment: string) =>
+      /^(0|[1-9][0-9]*)$/.test(segment) || isKeySegment(segment);
+    const text = `${slot}\n${
+      below.map((segment) => isMember(segment) ? "*" : JSON.stringify(segment))
+        .join("\n")
+    }`;
+    let found = this.#namedSlots.get(text);
+    if (found === undefined) {
+      const of = this.plan.slots[slot];
+      const path = [...of.path, ...below];
+      found = this.plan.slots.findIndex((candidate, index) =>
+        index !== slot && candidate.observes === "identity" &&
+        candidate.path.includes("*") && sameRoot(candidate.root, of.root) &&
+        candidate.path.length === path.length &&
+        candidate.path.every((segment, at) =>
+          segment === "*" ? isMember(path[at]) : segment === path[at]
+        )
+      );
+      this.#namedSlots.set(text, found);
+    }
+    if (found < 0 || host.namedMany.has(found)) return;
+    const held = host.bound.get(found);
+    if (held === undefined) {
+      host.bound.set(found, { observes: "identity", at: [named] });
+      host.namedOnly.add(found);
+      return;
+    }
+    if (!("at" in held) || !host.namedOnly.has(found)) return;
+    if (
+      held.at.some((one) =>
+        one instanceof Ref && one.doc === named.doc &&
+        one.path.length === named.path.length &&
+        one.path.every((segment, at) => segment === named.path[at])
+      )
+    ) return;
+    if (held.at.length >= Instance.#NAMED_MOST) {
+      host.bound.delete(found);
+      host.namedOnly.delete(found);
+      host.namedMany.add(found);
+      return;
+    }
+    held.at.push(named);
   }
 
   /**
