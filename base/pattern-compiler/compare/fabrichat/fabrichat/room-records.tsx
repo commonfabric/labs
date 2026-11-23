@@ -1455,7 +1455,10 @@ const threadTitleRecord = (
   root: Cell<unknown> | undefined,
   threadInfo: ThreadInfoCell | undefined,
   title: unknown,
-): { record: Writable<StoredThreadInfo>; value: StoredThreadInfo } => {
+): {
+  record: Writable<StoredThreadInfo | undefined>;
+  value: StoredThreadInfo;
+} => {
   const key = root === undefined ? undefined : threadInfoKeyOf(root);
   if (root === undefined || key === undefined) {
     throw new Error("Only a send in a thread can give the thread a title.");

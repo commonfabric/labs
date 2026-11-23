@@ -32,7 +32,7 @@ export type Favorite = {
 export const onRemoveFavorite = handler<
   Record<string, never>,
   {
-    favorites: Writable<Array<Favorite> | Default<[]>>;
+    favorites?: Writable<Array<Favorite> | Default<[]>>;
     id?: string;
     item?: Writable<unknown>;
   }
@@ -40,6 +40,7 @@ export const onRemoveFavorite = handler<
   // A favorite added through the keyed path carries an id. Drop its membership
   // by that id — the same key home's addFavorite used, so both reach the same
   // entity — and clear the entity, since it outlives its link.
+  if (favorites === undefined) return;
   if (id) {
     favorites.removeByValue(favorites.elementById(id));
     const entry: Writable<Favorite | undefined> = favorites.elementById(id);

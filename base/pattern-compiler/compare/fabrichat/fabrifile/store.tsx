@@ -543,4 +543,18 @@ export const ensureFileStore = handler<
   fileStore.set({ store: FileStore({}) });
 });
 
+/**
+ * `ensureFileStore`, bound to a record that a container may not hold: the
+ * handle `key` gives for an optional property has a value type with
+ * `undefined`, which a handle of the record's type does not take
+ * (`language-subset.md` §7.5.4).
+ */
+export const ensureRootFileStore = handler<
+  void,
+  { fileStore?: Writable<FileStoreRecord | undefined> }
+>((_, { fileStore }) => {
+  if (fileStore === undefined || fileStore.get()?.store !== undefined) return;
+  fileStore.set({ store: FileStore({}) });
+});
+
 export default FileStore;

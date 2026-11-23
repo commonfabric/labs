@@ -54,6 +54,7 @@ import type {
 } from "../fabrifile/schemas.tsx";
 import {
   ensureFileStore,
+  ensureRootFileStore,
   type FileStoreRecord,
   type FileStoreRecordCell,
 } from "../fabrifile/store.tsx";
@@ -1523,7 +1524,9 @@ const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
 /** One thread composer's session-owned draft and view. */
 interface ThreadComposerOutput {
   [UI]: VNode;
-  draft: PerSession<Writable<{ value: string; revision: string }>>;
+  draft: PerSession<
+    Writable<{ value: string; revision: string } | undefined>
+  >;
 }
 
 /** Owns one thread's session draft under its root's mapped occurrence identity. */
@@ -1549,7 +1552,9 @@ const FabriChatThreadComposer = pattern<{
       joined,
     },
   ) => {
-    const draft = new Writable.perSession<{ value: string; revision: string }>({
+    const draft = new Writable.perSession<
+      { value: string; revision: string } | undefined
+    >({
       value: "",
       revision: "",
     });
@@ -1909,7 +1914,7 @@ export const FabriChatRoomCore = pattern<
     ownSpace,
     rootKeeps: rootKeepsFileStore,
     own: ensureFileStore({ fileStore }),
-    root: ensureFileStore({ fileStore: rootFileStore }),
+    root: ensureRootFileStore({ fileStore: rootFileStore }),
   });
 
   // Each handler is bound to the cells it uses and no others.
@@ -1998,7 +2003,7 @@ export const FabriChatRoomCore = pattern<
     })
   );
   const selectedThreadDraft = computed(
-    (): Writable<{ value: string; revision: string }> | undefined =>
+    (): Writable<{ value: string; revision: string } | undefined> | undefined =>
       threadComposers[0]?.draft,
   );
   // The aggregate view belongs to the session, as the child composers do.
