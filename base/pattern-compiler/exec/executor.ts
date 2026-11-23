@@ -6581,7 +6581,12 @@ export class Instance {
     }
   }
 
-  /** The elements a stream's keys name, from the element tables. */
+  /**
+   * The elements a stream's keys name, outermost first: each from the
+   * element table that its collection has for the elements found
+   * around it, so a key that two tables of an inner collection hold
+   * names the element of the enclosing element of the stream.
+   */
   #contextOf(stream: StreamRef): Context {
     const context = new Map<number, Element>();
     let step = 0;
@@ -6591,11 +6596,14 @@ export class Instance {
       if (element === undefined) continue;
       const key = stream.keys[step];
       step += 1;
-      for (const table of this.#tables.values()) {
-        if (table.collection !== element) continue;
-        const found = table.byKey.get(key);
-        if (found !== undefined) context.set(element, found);
-      }
+      const found = this.#tables.get(
+        this.#name(
+          "assembly",
+          element,
+          this.#keysIn(this.#outerOf(element), context),
+        ),
+      )?.byKey.get(key);
+      if (found !== undefined) context.set(element, found);
     }
     return context;
   }
