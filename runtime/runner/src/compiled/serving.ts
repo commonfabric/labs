@@ -1,9 +1,17 @@
 /**
  * Runs pieces from compiled patterns in a serving runtime: the piece that
- * a result document names a compiled pattern for (`compiled/setup.ts`) is
- * started from what the storage holds when the serving loop reaches one of
- * its documents, by demand or by an event to one of its streams
- * (milestone 6 of `docs/plans/compiled-pattern-language-integration.md`).
+ * a result document names the source of a pattern for (`compiled/setup.ts`)
+ * is compiled and started from what the storage holds when the serving loop
+ * reaches one of its documents, by demand or by an event to one of its
+ * streams (milestone 6 of
+ * `docs/plans/compiled-pattern-language-integration.md`).
+ *
+ * The serving runtime compiles. A client writes the source, and the
+ * artifact the executor is given is the one the compiler of this process
+ * returned for it, whose check accepted every module. The value code is
+ * evaluated in a compartment. An artifact that the storage holds is not
+ * read, and a source the compiler refuses is not evaluated: the reason is
+ * written where the client reads it (`compiledFailureOf`).
  *
  * The serving loop finds the result document of a piece from any document
  * of it by the `result` links, as it does for a piece of today's runtime,
@@ -26,7 +34,25 @@ import {
   startCompiledPiece,
 } from "./piece.ts";
 import { resumeCompiledPiece, syncCompiledPiece } from "./resume.ts";
-import { compiledPointerOf } from "./setup.ts";
+import {
+  compiledFailureOf,
+  compiledPointerOf,
+  type PatternProgram,
+  patternProgramOf,
+} from "./setup.ts";
+
+export type { PatternProgram } from "./setup.ts";
+
+/**
+ * What compiles the source of a pattern for a serving runtime: it resolves
+ * to the artifact of the pattern the program names and to the artifacts of
+ * the program by identity, and rejects where the compiler refuses the
+ * program. `PatternCompiler.compile` of `compiled/compile.deno.ts` is one.
+ */
+export type CompilePatternProgram = (program: PatternProgram) => Promise<{
+  main: Artifact;
+  artifacts: (id: string) => Artifact | undefined;
+}>;
 
 const logger = getLogger("compiled-serving");
 
@@ -39,19 +65,32 @@ const loading = new WeakMap<
 const running = new WeakMap<Runtime, CompiledPiece[]>();
 
 /**
- * The compiled patterns this process parsed, by the entity that holds the
- * text: one parsed artifact serves every piece of it in every space.
+ * What each compiler of this process gave, by the entity that holds the
+ * source: one compile serves every piece of a source in every space, and a
+ * source the compiler refused is not compiled again. The entity is named
+ * by the text it holds.
  */
-const parsed = new Map<string, Artifact>();
+const compiles = new WeakMap<
+  CompilePatternProgram,
+  Map<string, ReturnType<CompilePatternProgram>>
+>();
+
+/** Why the serving runtime does not start a piece that names a source. */
+export class CompiledPieceRefused extends Error {
+  override name = "CompiledPieceRefused";
+}
 
 /** What `serveCompiledPieces()` takes. */
 export type ServeCompiledPiecesOptions = {
+  /** What compiles the source a client wrote. */
+  compile: CompilePatternProgram;
   /**
    * What each piece is started with beside the compiled pattern: the
-   * artifacts of the patterns its function bodies instantiate, and what its
-   * clock holds.
+   * artifacts of the patterns its function bodies instantiate beside those
+   * of its program, what its clock holds, and what evaluates its value
+   * code where that is not a compartment of the piece's own.
    */
-  piece?: Pick<CompiledPieceOptions, "artifacts" | "now">;
+  piece?: Pick<CompiledPieceOptions, "artifacts" | "now" | "evaluate">;
   /** Called with each piece the runtime started. */
   started?: (piece: CompiledPiece) => void;
   /**
@@ -91,29 +130,121 @@ const brought = async (
   return held(runtime, space, id);
 };
 
+/** The context a transaction of the serving runtime's own is stamped with. */
+const stamp = (id: string, what: string) => (tx: IExtendedStorageTransaction) =>
+  // The wave of a serving runtime takes a transaction that names the run
+  // it is of. The load of a piece is a derivation with no acting principal.
+  stampWaveRunContext(tx, {
+    actionId: `compiled-piece:${what}:${id}`,
+    kind: "derivation",
+  });
+
+/**
+ * Writes why the piece whose result document is at `root` was not started
+ * where the client that set it up reads it. The wave the transaction joins
+ * settles it.
+ */
+const refuse = (
+  runtime: Runtime,
+  { space, id }: Pick<NormalizedFullLink, "space" | "id">,
+  reason: string,
+): void => {
+  const at = compiledFailureOf(id);
+  const stored = held(runtime, space, at);
+  if ((stored as { reason?: unknown } | undefined)?.reason === reason) return;
+  const tx = runtime.edit();
+  stamp(id, "refused")(tx);
+  tx.writeValueOrThrow({ space, id: at, path: [], scope: "space" }, {
+    reason,
+  });
+  runtime.prepareTxForCommit(tx);
+  tx.commit().settled.then(({ error }) => {
+    if (error === undefined) return;
+    logger.warn("compiled-piece-refusal-not-stored", () => [
+      `The reason the compiled piece ${id} was not started did not commit:`,
+      error,
+    ]);
+  });
+};
+
+/**
+ * The artifact of the piece whose result document is at `root`, compiled
+ * from the source the storage names for it, or nothing where the storage
+ * names nothing for it. Throws `CompiledPieceRefused` where what is named
+ * is no source, and what the compiler rejects with where it refuses the
+ * source.
+ */
+const compiledFor = async (
+  runtime: Runtime,
+  { space, id }: Pick<NormalizedFullLink, "space" | "id">,
+  compile: CompilePatternProgram,
+): Promise<Awaited<ReturnType<CompilePatternProgram>> | undefined> => {
+  const pointer = await brought(runtime, space, compiledPointerOf(id));
+  if (pointer === undefined) return undefined;
+  const named = (pointer as { source?: unknown }).source;
+  if (typeof named !== "string") {
+    throw new CompiledPieceRefused(
+      "The document that names the pattern of the piece names no source. " +
+        "The serving runtime compiles the source of a pattern and " +
+        "evaluates no artifact that it finds stored.",
+    );
+  }
+  let known = compiles.get(compile);
+  if (known === undefined) {
+    known = new Map();
+    compiles.set(compile, known);
+  }
+  let compiled = known.get(named);
+  if (compiled === undefined) {
+    const text = await brought(runtime, space, named as URI);
+    const program = typeof text === "string"
+      ? patternProgramOf(text)
+      : undefined;
+    if (program === undefined) {
+      throw new CompiledPieceRefused(
+        "The document the piece names as its source holds no program.",
+      );
+    }
+    compiled = compile(program);
+    known.set(named, compiled);
+  }
+  return await compiled;
+};
+
 /**
  * Starts the piece whose result document is at `root`, where the storage
- * names a compiled pattern for it: from the stored argument alone where
- * the result document is empty, in the bounded transactions of a load, and
- * otherwise as a resume (`resumeCompiledPiece`).
+ * names the source of a pattern for it: from the stored argument alone
+ * where the result document is empty, in the bounded transactions of a
+ * load, and otherwise as a resume (`resumeCompiledPiece`). Where the source
+ * is refused, the reason is stored for the client and nothing is started.
  */
 const start = async (
   runtime: Runtime,
   root: Pick<NormalizedFullLink, "space" | "id">,
   failed: (piece: CompiledPiece, error: Error) => void,
-  options: ServeCompiledPiecesOptions["piece"] = {},
+  refused: (error: unknown) => void,
+  { compile, piece: options = {} }: ServeCompiledPiecesOptions,
 ): Promise<CompiledPiece | undefined> => {
   const { space, id } = root;
-  const pointer = await brought(runtime, space, compiledPointerOf(id));
-  const named = (pointer as { artifact?: unknown } | undefined)?.artifact;
-  if (typeof named !== "string") return undefined;
-  let artifact = parsed.get(named);
-  if (artifact === undefined) {
-    const text = await brought(runtime, space, named as URI);
-    if (typeof text !== "string") return undefined;
-    artifact = JSON.parse(text) as Artifact;
-    parsed.set(named, artifact);
+  let compiled: Awaited<ReturnType<CompilePatternProgram>> | undefined;
+  try {
+    compiled = await compiledFor(runtime, root, compile);
+  } catch (error) {
+    // A demand that reaches the piece again finds the compile kept and the
+    // reason stored, and writes nothing.
+    await brought(runtime, space, compiledFailureOf(id));
+    refuse(runtime, root, error instanceof Error ? error.message : `${error}`);
+    refused(error);
+    return undefined;
   }
+  if (compiled === undefined) return undefined;
+  const artifact = compiled.main;
+  const ofProgram = compiled.artifacts;
+  const pieceOptions = {
+    ...options,
+    artifacts: (identity: string) =>
+      ofProgram(identity) ?? options.artifacts?.(identity),
+  };
   const resultCell = runtime.getCellFromLink({
     space,
     id,
@@ -121,16 +252,10 @@ const start = async (
     scope: "space",
   });
   await syncCompiledPiece(runtime, artifact, resultCell);
-  // The wave of a serving runtime takes a transaction that names the run
-  // it is of. The load of a piece is a derivation with no acting principal.
-  const opened = (tx: IExtendedStorageTransaction) =>
-    stampWaveRunContext(tx, {
-      actionId: `compiled-piece:load:${id}`,
-      kind: "derivation",
-    });
+  const opened = stamp(id, "load");
   if (held(runtime, space, id) !== undefined) {
     return await resumeCompiledPiece(runtime, artifact, resultCell, {
-      ...options,
+      ...pieceOptions,
       opened,
       sealed: { failed },
     });
@@ -148,7 +273,7 @@ const start = async (
       // One transaction: the wave commits what the cycle sealed as one
       // commit, and a transaction the load would commit by itself is one
       // the wave has no run for.
-      { ...options, loadRows: Infinity, storedArgument: true },
+      { ...pieceOptions, loadRows: Infinity, storedArgument: true },
     );
   } catch (error) {
     tx.abort(error);
@@ -172,7 +297,7 @@ const start = async (
  */
 export const serveCompiledPieces = (
   runtime: Runtime,
-  options: ServeCompiledPiecesOptions = {},
+  options: ServeCompiledPiecesOptions,
 ): void => {
   const pieces = new Map<string, Promise<CompiledPiece | undefined>>();
   loading.set(runtime, pieces);
@@ -191,7 +316,8 @@ export const serveCompiledPieces = (
         ]);
         options.failed?.(root.id, error);
       };
-      piece = start(runtime, root, failed, options.piece).then((started) => {
+      const refused = (error: unknown) => options.failed?.(root.id, error);
+      piece = start(runtime, root, failed, refused, options).then((started) => {
         if (started === undefined) pieces.delete(root.id);
         else {
           running.get(runtime)?.push(started);

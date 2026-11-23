@@ -1182,8 +1182,9 @@ documents and in place, `refused-commit.test.ts`, and `created-members.test.ts`
 for an instance that a handler makes, `value-code.test.ts` for the compartment,
 and `compile.test.ts` for `PatternCompiler`, with a shell script in the place of
 the binary. They load the artifacts of `compare/fixtures/`, so they need no
-build of the crate. `compare/test/compile-on-load.test.ts` runs the release
-binary. Notes 579 on of `SPEC-NOTES.md` have what is stubbed and the figures.
+build of the crate. `compare/test/compile-on-load.test.ts` and
+`compare/test/serving-compile.test.ts` run the release binary. Notes 579 on of
+`SPEC-NOTES.md` have what is stubbed and the figures.
 
 ## A compiled piece under server execution
 
@@ -1205,26 +1206,32 @@ space, and starts one from what the storage holds.
   runs and of the documents handlers make are formed from are kept in a document
   of the piece, and a resume goes on from them.
 - **Setup by a client.**
-  `setUpCompiledPiece(runtime, tx, artifact, argument,
-  resultCell)` of
-  `compiled/setup.ts` writes the compiled pattern, the document that names it
-  for the result document, and the argument document. A client with server
-  execution on then appends events with `Cell.send` and runs nothing of the
-  piece.
+  `setUpCompiledPiece(runtime, tx, program, argument, resultCell)` of
+  `compiled/setup.ts` writes the source of the pattern (the files of the program
+  and the name of the main file), the document that names it for the result
+  document, and the argument document. A client with server execution on then
+  appends events with `Cell.send` and runs nothing of the piece.
 - **The serving runtime.** `serveCompiledPieces(runtime)` of
   `compiled/serving.ts` installs `Runtime.compiledPieceLoader`, which
   `ensurePieceRunningVerdict` asks for a result document that names no pattern.
-  The loader starts the piece from the storage: a load where the result document
-  is empty, a resume otherwise. The handlers and the derivation are the
-  scheduler's, so the loop's event drain reaches the handlers and its waves hold
-  what they write. A wave that is rejected takes its writes back from the
-  replica, and the piece then restores the documents the withdrawn transactions
-  wrote from the storage. `listenCompiledServingMemoryServer()` of
+  The loader compiles the source the storage names for the piece with the
+  compiler it was given (`ServeCompiledPiecesOptions.compile`, for which
+  `listenCompiledServingMemoryServer()` takes one `PatternCompiler`), keeps what
+  the compiler gave by the document of the source, and starts the piece from the
+  storage: a load where the result document is empty, a resume otherwise. The
+  value code is evaluated in a compartment. Where the document names no source,
+  or the compiler refuses it, nothing is evaluated and the reason is written
+  into the document `compiledFailureOf(result)`, which the client reads. The
+  handlers and the derivation are the scheduler's, so the loop's event drain
+  reaches the handlers and its waves hold what they write. A wave that is
+  rejected takes its writes back from the replica, and the piece then restores
+  the documents the withdrawn transactions wrote from the storage.
+  `listenCompiledServingMemoryServer()` of
   `compiled/serving-memory-server.deno.ts` gives a test a memory server on a
   websocket with such a serving loop.
 
-The serving runtime evaluates the value code of the artifact a client wrote,
-outside a sandbox, and nothing but the helper for tests installs the loader.
+Nothing but the helper for tests installs the loader. Note 812 of
+`SPEC-NOTES.md` lists what a toolshed needs before it may.
 
 ```sh
 COMPILED_PIECE_STORAGE=socket deno test --no-check -A runtime/runner/test/compiled/

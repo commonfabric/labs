@@ -1235,9 +1235,11 @@ holds the measurements and the conditions for revisiting.
   starts such a piece: `ensurePieceRunningVerdict()` asks
   `Runtime.compiledPieceLoader` for a result document that names no pattern,
   only with the option on and only where `serveCompiledPieces()` of
-  `runtime/runner/src/compiled/serving.ts` installed one. The loader runs
-  the value code of an artifact that a client wrote, and nothing installs it
-  but `listenCompiledServingMemoryServer()`, a helper for tests.
+  `runtime/runner/src/compiled/serving.ts` installed one. The loader
+  compiles the source of a pattern that a client wrote, evaluates the value
+  code its own compile gave in a compartment, and reads no artifact from
+  storage. Nothing installs it but `listenCompiledServingMemoryServer()`, a
+  helper for tests.
 - **Current default and planned end state.** Off by default. A measurement
   only: the specification the template labels rest on is specs pull request
   #91, unmerged, and the deciding sites carry its `SPEC-PENDING` marker. The

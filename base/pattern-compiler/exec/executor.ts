@@ -1687,19 +1687,26 @@ export class Host {
    * `Plan.dynamicReads` names, by the entry.
    */
   readonly dynamic = new Map<number, Address[]>();
+  /**
+   * The instance whose code is evaluated. Value code is handed the host
+   * of each call, and reads no member of it that holds the executor.
+   */
+  readonly #instance: Instance;
 
   constructor(
-    readonly instance: Instance,
+    instance: Instance,
     readonly context: Context,
     /** The cone of the code being evaluated, where it belongs to one. */
     readonly cone: number | undefined,
     /** The name of the memo entry being evaluated, where it is one. */
     readonly key?: string,
-  ) {}
+  ) {
+    this.#instance = instance;
+  }
 
   /** The value of a slot, or its reference for an `identity` slot. */
   slot(index: number, rest: string[] = []): unknown {
-    const { instance } = this;
+    const instance = this.#instance;
     if (
       this.cone !== undefined &&
       !instance.plan.cones[this.cone].slots.includes(index)
@@ -1749,7 +1756,7 @@ export class Host {
    * with the container, and the read follows them.
    */
   #handsHandles(index: number): boolean {
-    const { plan } = this.instance;
+    const { plan } = this.#instance;
     if (
       this.cone === undefined || plan.slots[index].observes !== "enumeration"
     ) {
@@ -1825,9 +1832,9 @@ export class Host {
 
   /** A read of a place that the value code names no slot for. */
   read(root: Root, path: string[]): unknown {
-    this.instance.counts.readsWithoutSlot += 1;
+    this.#instance.counts.readsWithoutSlot += 1;
     this.demand(root, path);
-    return this.at(this.instance.rootOf(root, this), path);
+    return this.at(this.#instance.rootOf(root, this), path);
   }
 
   /**
@@ -1837,21 +1844,21 @@ export class Host {
    * (ES §2.3, "A cone with side-writes").
    */
   demand(root: Root, path: readonly string[]): void {
-    const writers = this.instance.writersOf(root, path, this.cone);
+    const writers = this.#instance.writersOf(root, path, this.cone);
     if (writers.length === 0) return;
     for (const writer of writers) {
       if (!this.writers.includes(writer)) this.writers.push(writer);
       writer(this.context);
     }
     this.demandedAt = {
-      clock: this.instance.store.clock,
+      clock: this.#instance.store.clock,
       reads: this.reads.length,
     };
   }
 
   /** The value of an entry of `Plan.outputs`. */
   output(index: number): unknown {
-    const { instance } = this;
+    const instance = this.#instance;
     const output = instance.plan.outputs[index];
     if (
       this.cone !== undefined && output.cone !== this.cone &&
@@ -1903,7 +1910,7 @@ export class Host {
 
   /** The value a value function computes, by the value's number. */
   value(value: number): unknown {
-    return this.depend(this.instance.evaluated(value));
+    return this.depend(this.#instance.evaluated(value));
   }
 
   /** The evaluation that the host was made for has ended. */
@@ -1932,14 +1939,14 @@ export class Host {
    */
   settled(value: unknown): unknown {
     if (value instanceof IndexHandle) {
-      const { instance } = this;
+      const instance = this.#instance;
       const assembled = instance.assembled(value.collection);
       const entry: Lazy = () => assembled(instance.freshContext(value.context));
       const index = this.done ? entry(this.context).value : this.depend(entry);
       return instance.indexRecord(index as Index, this, value.collection);
     }
     if (!(value instanceof Assembled)) return value;
-    const { instance } = this;
+    const instance = this.#instance;
     const assembled = instance.assembled(value.collection);
     const entry: Lazy = () => assembled(instance.freshContext(value.context));
     // A stamp of a dependency that looks below a reference after the
@@ -1975,9 +1982,9 @@ export class Host {
 
   dependEntry(entry: Lazy, path?: readonly string[]): Entry {
     const used = entry(this.context);
-    const on = used.owner === this.instance ? used.key : undefined;
+    const on = used.owner === this.#instance ? used.key : undefined;
     if (on !== undefined && this.key !== undefined) {
-      this.instance.uses(this.key, on);
+      this.#instance.uses(this.key, on);
     }
     if (path === undefined) {
       this.dependencies.push({
@@ -1987,7 +1994,7 @@ export class Host {
       });
     } else {
       const held = (from: Entry) =>
-        canonical(this.instance.stored(this.at(from.value, path)));
+        canonical(this.#instance.stored(this.at(from.value, path)));
       this.dependencies.push({
         stamp: (context) => held(entry(context)),
         seen: held(used),
@@ -2006,7 +2013,7 @@ export class Host {
    * has gives the empty bucket, and the evaluation depends on it as well.
    */
   lookup(index: unknown, key: unknown, pick?: number): unknown {
-    const { instance } = this;
+    const instance = this.#instance;
     const stored = index instanceof Handle ? index.target : index;
     if (stored instanceof Ref) {
       // An index that another instance keeps: the bucket is the member of
@@ -2064,7 +2071,7 @@ export class Host {
    * `v` and `at` read nothing through it.
    */
   stream(binding: number): StreamMarker {
-    return markerOf(this.instance.streamFor(binding, this.context));
+    return markerOf(this.#instance.streamFor(binding, this.context));
   }
 
   /**
@@ -2080,12 +2087,12 @@ export class Host {
     const [a, b] = [this.settled(left), this.settled(right)];
     for (const operand of [a, b]) {
       if (operand instanceof Ref) {
-        this.instance.store.locate(operand, true, this.reads, true);
+        this.#instance.store.locate(operand, true, this.reads, true);
       }
     }
-    const seen = this.instance.same(a, b);
+    const seen = this.#instance.same(a, b);
     this.dependencies.push({
-      stamp: () => this.instance.same(a, b),
+      stamp: () => this.#instance.same(a, b),
       seen,
     });
     return seen;
@@ -2102,7 +2109,7 @@ export class Host {
     }
     if (value instanceof Ref) {
       return this.#reading(
-        this.instance.store.read(value, this.reads, false, bound),
+        this.#instance.store.read(value, this.reads, false, bound),
       );
     }
     this.#reading(value);
@@ -2161,7 +2168,7 @@ export class Host {
    * the slot resolves through declares a default of its own (ruling Z16).
    */
   invoke(body: number, computed: unknown): unknown {
-    const { instance } = this;
+    const instance = this.#instance;
     const run = instance.bodies.get(body);
     if (run === undefined) {
       throw new Unsupported("a body that has no function");
@@ -2324,7 +2331,7 @@ export class Host {
   spread(given: unknown): unknown[] {
     const value = this.settled(given);
     if (value instanceof Ref) {
-      const { store } = this.instance;
+      const { store } = this.#instance;
       const located = store.locate(value, true, this.reads);
       const held = located.value;
       if (Array.isArray(held)) {
@@ -2349,7 +2356,7 @@ export class Host {
   constant(value: unknown): unknown {
     return value === undefined
       ? undefined
-      : this.instance.handleOfConstant(this.v(value), this);
+      : this.#instance.handleOfConstant(this.v(value), this);
   }
 
   /**
@@ -2387,7 +2394,7 @@ export class Host {
     // A body that would be handed a value in an error state is not run.
     this.#reading(value);
     if (value instanceof StreamMarker) {
-      return this.instance.handleOf(value, this);
+      return this.#instance.handleOf(value, this);
     }
     // A handle that value code made for a constant stays the handle.
     if (value instanceof Handle) return value;
@@ -2432,6 +2439,24 @@ class NoHost extends Host {
     return undefined;
   }
 }
+
+/**
+ * The classes of this module whose instances value code is handed, makes
+ * through `$rt`, or catches. An evaluator that confines value code freezes
+ * each with its prototype, so that a body replaces no method that the
+ * executor or another instance calls.
+ */
+export const HANDED_CLASSES: readonly object[] = [
+  Unsupported,
+  Assembled,
+  Index,
+  IndexHandle,
+  Thunk,
+  ReadsFailure,
+  Handle,
+  Host,
+  NoHost,
+];
 
 /**
  * A position at which a reader of the stored result finds the link to a

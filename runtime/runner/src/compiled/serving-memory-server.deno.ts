@@ -3,7 +3,8 @@
  * loop whose runtimes run pieces from compiled patterns
  * (`serveCompiledPieces`): `listenServingMemoryServer()` of
  * `executor/serving-memory-server.deno.ts` with the experimental option
- * `compiledPatterns` on and the loader installed on each serving runtime.
+ * `compiledPatterns` on and the loader installed on each serving runtime,
+ * which compiles the source a client wrote with one compiler of the server.
  * The loop runs on this thread, over a non-persistent store.
  *
  * Deno-only, as the server it listens with is.
@@ -17,9 +18,14 @@ import { ExecutorHost } from "../executor/host.ts";
 import { servingRuntimeFactory } from "../executor/serving-runtime.ts";
 import type { SpaceServerPolicy } from "../executor/space-server.ts";
 import type { ExperimentalOptions, Runtime } from "../runtime.ts";
+import {
+  PatternCompiler,
+  type PatternCompilerOptions,
+} from "./compile.deno.ts";
 import type { CompiledPiece } from "./piece.ts";
 import {
   compiledPiecesOf,
+  type CompilePatternProgram,
   serveCompiledPieces,
   type ServeCompiledPiecesOptions,
 } from "./serving.ts";
@@ -54,12 +60,26 @@ export const listenCompiledServingMemoryServer = async (
     /** Experimental options of the serving runtimes, beside the forced ones. */
     experimental?: ExperimentalOptions;
     policy?: SpaceServerPolicy;
+    /**
+     * What compiles the source a client wrote. The default is one
+     * `PatternCompiler` for the server, made with `compiler`, which runs
+     * the binary of `base/pattern-compiler`.
+     */
+    compile?: CompilePatternProgram;
+    /** Where the default compiler finds its binary and keeps what it gave. */
+    compiler?: PatternCompilerOptions;
     /** What each serving runtime serves compiled pieces with. */
-    pieces?: ServeCompiledPiecesOptions;
+    pieces?: Omit<ServeCompiledPiecesOptions, "compile">;
   } = {},
 ): Promise<CompiledServingMemoryServer> => {
   const experimental = { ...options.experimental, compiledPatterns: true };
   const serviceIdentity = await Identity.generate();
+  let compile = options.compile;
+  if (compile === undefined) {
+    const compiler = new PatternCompiler(options.compiler);
+    compile = (program) => compiler.compile(program);
+  }
+  const serve: ServeCompiledPiecesOptions = { ...options.pieces, compile };
   const standalone = StandaloneMemoryServer.start({
     acl: { mode: "off", delegatingDids: [serviceIdentity.did()] },
     namesInstances: () => namesInstancesByDefault(experimental),
@@ -99,7 +119,7 @@ export const listenCompiledServingMemoryServer = async (
       serviceIdentity: serviceIdentity.did(),
       createRuntime: async (space, context) => {
         const made = await create(space, context);
-        serveCompiledPieces(made.runtime, options.pieces);
+        serveCompiledPieces(made.runtime, serve);
         runtimes.push(made.runtime);
         return made;
       },

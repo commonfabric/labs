@@ -8,12 +8,22 @@ import {
   Instance,
 } from "../../../../base/pattern-compiler/exec/executor.ts";
 import type { Cell, MemorySpace } from "../../src/cell.ts";
+import { PatternCompileError } from "../../src/compiled/compile.deno.ts";
 import {
   type CompiledServingMemoryServer,
   listenCompiledServingMemoryServer,
 } from "../../src/compiled/serving-memory-server.deno.ts";
-import { compiledPiecesOf } from "../../src/compiled/serving.ts";
-import { setUpCompiledPiece } from "../../src/compiled/setup.ts";
+import {
+  compiledPiecesOf,
+  type PatternProgram,
+} from "../../src/compiled/serving.ts";
+import {
+  argumentDocumentOf,
+  compiledFailureOf,
+  compiledPointerOf,
+  setUpCompiledPiece,
+} from "../../src/compiled/setup.ts";
+import { compartmentEvaluator } from "../../src/compiled/value-code.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 
@@ -28,6 +38,23 @@ const artifactOf = async (name: string): Promise<Artifact> => {
   ) as { patterns: Artifact[] }[];
   return patterns.find(({ name }) => name === "default")!;
 };
+
+/** The program of one file of `compare/fixtures/`. */
+const programOf = async (name: string): Promise<PatternProgram> => ({
+  main: `/${name}.tsx`,
+  files: [{
+    name: `/${name}.tsx`,
+    contents: await Deno.readTextFile(
+      new URL(
+        `../../../../base/pattern-compiler/compare/fixtures/${name}.tsx`,
+        import.meta.url,
+      ),
+    ),
+  }],
+});
+
+/** The statement of the handler body of `fixtures/handler.tsx` that sets `last`. */
+const SETS_LAST = "last.set(event.text + secret);";
 
 type Item = { id: string; title: string; done: boolean };
 type Row = { label: string; done: boolean };
@@ -88,6 +115,10 @@ describe("a compiled piece under the serving loop", () => {
   let serving: CompiledServingMemoryServer;
   let clients: Runtime[];
   let cancels: (() => void)[];
+  /** The programs the serving runtime had compiled. */
+  let compiled: PatternProgram[];
+  /** How many module texts of value code the serving runtime evaluated. */
+  let evaluated: number;
 
   /**
    * A client of the serving memory server, over its websocket, with server
@@ -109,7 +140,39 @@ describe("a compiled piece under the serving loop", () => {
   beforeEach(async () => {
     signer = await Identity.fromPassphrase("compiled piece serving");
     space = signer.did();
-    serving = await listenCompiledServingMemoryServer();
+    compiled = [];
+    evaluated = 0;
+    const evaluate = compartmentEvaluator();
+    serving = await listenCompiledServingMemoryServer({
+      // The crate's binary is not run here. What stands in its place gives
+      // the artifact the crate emitted for a fixture, and refuses a source
+      // that names the host object of the value code, as the crate does.
+      compile: async (program) => {
+        compiled.push(program);
+        const [{ contents }] = program.files;
+        if (contents.includes("$h")) {
+          throw new PatternCompileError("`$h` is not a listed name");
+        }
+        const main = await artifactOf(program.main.slice(1, -".tsx".length));
+        // The handler of `fixtures/handler.tsx` stores what the name `Deno`
+        // is to it, which nothing the crate emits reads.
+        for (const module of main.code.modules) {
+          module.source = module.source.replaceAll(
+            SETS_LAST,
+            "last.set(typeof Deno);",
+          );
+        }
+        return { main, artifacts: () => undefined };
+      },
+      pieces: {
+        piece: {
+          evaluate: (module, parameters) => {
+            evaluated += 1;
+            return evaluate(module, parameters);
+          },
+        },
+      },
+    });
     clients = [];
     cancels = [];
   });
@@ -137,6 +200,7 @@ describe("a compiled piece under the serving loop", () => {
    */
   const setUp = async (runtime: Runtime, count: number) => {
     const artifact = await artifactOf("serving-list");
+    const program = await programOf("serving-list");
     const items = runtime.getCell<Item[]>(space, "items");
     await commit(runtime, (tx) => {
       const members = Array.from({ length: count }, (_, index) => {
@@ -153,7 +217,7 @@ describe("a compiled piece under the serving loop", () => {
     });
     const result = runtime.getCell<List>(space, "list");
     await commit(runtime, (tx) => {
-      setUpCompiledPiece(runtime, tx, artifact, { items }, result.withTx(tx));
+      setUpCompiledPiece(runtime, tx, program, { items }, result.withTx(tx));
     });
     return { artifact, result };
   };
@@ -318,5 +382,129 @@ describe("a compiled piece under the serving loop", () => {
       "t2!",
     ]);
     expect(compiledPiecesOf(reader)).toEqual([]);
+  });
+
+  /** The reason the serving runtime gave for not starting a piece. */
+  const refusal = async (runtime: Runtime, result: Cell<unknown>) => {
+    const cell = runtime.getCellFromLink<{ reason: string }>({
+      space,
+      id: compiledFailureOf(result.getAsNormalizedFullLink().id),
+      path: [],
+      scope: "space",
+    });
+    cancels.push(cell.sink(() => {}));
+    const { reason } = await waitForCellValue<{ reason: string }>(
+      runtime,
+      cell,
+      (value) => typeof value?.reason === "string",
+      { stuckLabel: "a client reads why its piece did not start" },
+    );
+    return reason;
+  };
+
+  describe("the compiled pattern of a piece", () => {
+    it("is compiled by the serving runtime from the source a client wrote, and its value code is evaluated in a compartment", async () => {
+      const sender = client();
+      const program = await programOf("handler");
+      type Result = { last?: string; note: string; record?: unknown };
+      const result = sender.getCell<Result>(space, "handler");
+      await commit(sender, (tx) => {
+        setUpCompiledPiece(
+          sender,
+          tx,
+          program,
+          { secret: "s", note: "n" },
+          result.withTx(tx),
+        );
+      });
+      const cell = sender.getCellFromLink<Result>(
+        result.getAsNormalizedFullLink(),
+      );
+      cancels.push(cell.sink(() => {}));
+      // The state cell `last` has no document until the handler writes it.
+      await waitForCellValue<Result>(
+        sender,
+        cell,
+        (value) => value?.note === "n" && value.record !== undefined,
+        { stuckLabel: "a client reads the result of the load" },
+      );
+
+      (cell.key("record") as unknown as Cell<unknown>).send({
+        text: "t",
+        extra: "e",
+      });
+
+      const value = await waitForCellValue<Result>(
+        sender,
+        cell,
+        (value) => typeof value?.last === "string",
+        { stuckLabel: "a client reads what the handler stored" },
+      );
+      expect(value.last).toBe("undefined");
+      expect(compiled).toEqual([program]);
+      expect(evaluated).toBe(1);
+    });
+
+    it("is not evaluated where a client wrote an artifact in the place of the source, and the client reads why", async () => {
+      const sender = client();
+      const artifact = await artifactOf("handler");
+      const result = sender.getCell<{ last: string }>(space, "handler");
+      const { id } = result.getAsNormalizedFullLink();
+      const at = (entity: string) => ({
+        space,
+        id: entity as `${string}:${string}`,
+        path: [],
+        scope: "space" as const,
+      });
+      await commit(sender, (tx) => {
+        tx.writeValueOrThrow(at("of:an artifact"), JSON.stringify(artifact));
+        tx.writeValueOrThrow(at(compiledPointerOf(id)), {
+          artifact: "of:an artifact",
+        });
+        tx.writeValueOrThrow(at(argumentDocumentOf(id)), {
+          secret: "s",
+          note: "n",
+        });
+      });
+      cancels.push(
+        sender.getCellFromLink(result.getAsNormalizedFullLink()).sink(() => {}),
+      );
+
+      const reason = await refusal(sender, result);
+
+      expect(reason).toContain("names no source");
+      expect(compiled).toEqual([]);
+      expect(evaluated).toBe(0);
+      expect(serving.pieces()).toEqual([]);
+    });
+
+    it("is not evaluated where the compiler refuses the source, and the client reads the diagnostics", async () => {
+      const sender = client();
+      const program = await programOf("handler");
+      program.files[0].contents = program.files[0].contents.replace(
+        SETS_LAST,
+        "last.set(String($h));",
+      );
+      const result = sender.getCell<{ last: string }>(space, "handler");
+      await commit(sender, (tx) => {
+        setUpCompiledPiece(
+          sender,
+          tx,
+          program,
+          { secret: "s", note: "n" },
+          result.withTx(tx),
+        );
+      });
+      cancels.push(
+        sender.getCellFromLink(result.getAsNormalizedFullLink()).sink(() => {}),
+      );
+
+      const reason = await refusal(sender, result);
+
+      expect(reason).toContain("`$h` is not a listed name");
+      expect(compiled).toEqual([program]);
+      expect(evaluated).toBe(0);
+      expect(serving.pieces()).toEqual([]);
+    });
   });
 });

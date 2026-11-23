@@ -1,8 +1,8 @@
 /**
  * Sets a piece from a compiled pattern up in storage, for a runtime that
- * does not run it: a client under server execution writes the compiled
- * pattern and the argument, and the serving runtime of the space starts the
- * piece from them (`compiled/serving.ts`, milestone 6 of
+ * does not run it: a client under server execution writes the source of the
+ * pattern and the argument, and the serving runtime of the space compiles
+ * the source and starts the piece (`compiled/serving.ts`, milestone 6 of
  * `docs/plans/compiled-pattern-language-integration.md`).
  *
  * This module imports the identifiers of the executor's store and none of
@@ -19,37 +19,104 @@ import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 
+/**
+ * The source of a pattern as a client writes it: the files of the program
+ * by name, the name of the main file, and the export of that file that is
+ * the pattern, `default` where none is named.
+ */
+export type PatternProgram = {
+  main: string;
+  mainExport?: string;
+  files: { name: string; contents: string }[];
+};
+
 /** The entity that holds a document the executor names by `id`. */
 export const entityOfDocument = (id: string): URI =>
   (id.startsWith("of:") ? id : `of:${id}`) as URI;
 
 /**
- * The entity that names the compiled pattern of the piece whose result
- * document is `result`: it holds `{ artifact }`, the entity of the document
- * of the compiled pattern.
+ * The entity that names the source of the pattern of the piece whose
+ * result document is `result`: it holds `{ source }`, the entity of the
+ * document of the source.
  */
 export const compiledPointerOf = (result: string): URI =>
   entityOfDocument(identifierOf({ type: "compiled", parent: result }));
 
 /**
- * The entity that holds a compiled pattern, by the text of its artifact:
- * two pieces of one compiled pattern in a space share the document.
+ * The entity that holds the source of a pattern, by the text it is stored
+ * as: two pieces of one source in a space share the document.
  */
-export const compiledPatternDocumentOf = (text: string): URI =>
-  entityOfDocument(identifierOf({ type: "compiled pattern", text }));
+export const patternSourceDocumentOf = (text: string): URI =>
+  entityOfDocument(identifierOf({ type: "pattern source", text }));
+
+/** The entity of the argument document of the piece whose result is `result`. */
+export const argumentDocumentOf = (result: string): URI =>
+  entityOfDocument(argumentOf(result));
+
+/**
+ * The entity in which the serving runtime writes why it did not start the
+ * piece whose result document is `result`: `{ reason }`, where the reason
+ * holds the diagnostics of the compiler for a source it refused.
+ */
+export const compiledFailureOf = (result: string): URI =>
+  entityOfDocument(identifierOf({ type: "compiled failure", parent: result }));
+
+/** The text a program is stored as, and parsed from (`patternProgramOf`). */
+const textOfProgram = ({ main, mainExport, files }: PatternProgram): string =>
+  JSON.stringify({
+    main,
+    ...(mainExport === undefined ? {} : { mainExport }),
+    files: files.map(({ name, contents }) => ({ name, contents })),
+  });
+
+/**
+ * The program a stored text holds, or nothing where the text is not that
+ * of a program: some other JSON, an artifact among it, or no JSON.
+ */
+export const patternProgramOf = (text: string): PatternProgram | undefined => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const { main, mainExport, files } = parsed as Record<string, unknown>;
+  if (
+    typeof main !== "string" ||
+    (mainExport !== undefined && typeof mainExport !== "string") ||
+    !Array.isArray(files)
+  ) return undefined;
+  const read: PatternProgram["files"] = [];
+  for (const file of files) {
+    if (typeof file !== "object" || file === null) return undefined;
+    const { name, contents } = file as Record<string, unknown>;
+    if (typeof name !== "string" || typeof contents !== "string") {
+      return undefined;
+    }
+    read.push({ name, contents });
+  }
+  return {
+    main,
+    ...(mainExport === undefined ? {} : { mainExport }),
+    files: read,
+  };
+};
 
 /**
  * Writes into `tx` what the serving runtime starts a compiled piece from:
- * the document of the compiled pattern, which holds the artifact as JSON
- * text, the document that names it for the result document of
- * `resultCell`, and the argument document, where `argument` holds values
- * and cells. The caller commits `tx`, and the result document stays empty
- * until a serving runtime derives it.
+ * the document of the source, which holds `program` as JSON text, the
+ * document that names it for the result document of `resultCell`, and the
+ * argument document, where `argument` holds values and cells. The caller
+ * commits `tx`, and the result document stays empty until a serving runtime
+ * compiled the source and derived the result. The client writes no
+ * artifact: the serving runtime evaluates value code its own compile gave
+ * and none it finds stored.
  */
 export const setUpCompiledPiece = (
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
-  artifact: unknown,
+  program: PatternProgram,
   argument: unknown,
   resultCell: Cell<unknown>,
 ): void => {
@@ -63,14 +130,12 @@ export const setUpCompiledPiece = (
     path: [],
     scope: "space",
   });
-  const text = JSON.stringify(artifact);
-  const pattern = compiledPatternDocumentOf(text);
-  tx.writeValueOrThrow(at(pattern), text);
-  tx.writeValueOrThrow(at(compiledPointerOf(result.id)), {
-    artifact: pattern,
-  });
+  const text = textOfProgram(program);
+  const source = patternSourceDocumentOf(text);
+  tx.writeValueOrThrow(at(source), text);
+  tx.writeValueOrThrow(at(compiledPointerOf(result.id)), { source });
   tx.writeValueOrThrow(
-    at(entityOfDocument(argumentOf(result.id))),
+    at(argumentDocumentOf(result.id)),
     convertCellsToLinks(argument as never) as FabricValue,
   );
   // The runtime is named so that the call reads as `startCompiledPiece`

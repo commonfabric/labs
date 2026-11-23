@@ -37,7 +37,6 @@ import { setUpCompiledPiece } from "../../../runtime/runner/src/compiled/setup.t
 import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
-import type { Artifact } from "../exec/executor.ts";
 
 type Arm = "compiled" | "today";
 type Item = { id: string; title: string; done: boolean };
@@ -126,12 +125,19 @@ const measure = async (
     const began = performance.now();
     const tx = sender.edit();
     if (arm === "compiled") {
-      const [{ patterns }] = JSON.parse(
-        await Deno.readTextFile(
-          new URL("./fixtures/serving-list.emit.json", import.meta.url),
-        ),
-      ) as { patterns: Artifact[] }[];
-      setUpCompiledPiece(sender, tx, patterns[0], { items }, result.withTx(tx));
+      // The serving runtime compiles the source with the crate's release
+      // binary, which is part of the load.
+      const name = "/serving-list.tsx";
+      const contents = await Deno.readTextFile(
+        new URL("./fixtures/serving-list.tsx", import.meta.url),
+      );
+      setUpCompiledPiece(
+        sender,
+        tx,
+        { main: name, files: [{ name, contents }] },
+        { items },
+        result.withTx(tx),
+      );
     } else {
       const program = await resolveLocalProgram(
         (resolver) => sender.harness.resolve(resolver),

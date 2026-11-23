@@ -67,6 +67,7 @@ import {
   corpusModules,
   eventOrder,
   mainPattern,
+  sourceOf,
 } from "./corpus.ts";
 import { generateEvent, generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
@@ -357,9 +358,24 @@ const runServed = async (
   // The piece the serving runtime starts, or why it did not start.
   const loaded = Promise.withResolvers<CompiledPiece>();
   loaded.promise.catch(() => {});
+  const main = `/${base.module.replace(/^\/+/, "")}`;
+  const program = {
+    main,
+    files: [{
+      name: main,
+      contents: await Deno.readTextFile(sourceOf(base.module)),
+    }],
+  };
   const serving = await listenCompiledServingMemoryServer({
+    // The crate compiled the corpus in one run (`emit --corpus`). What
+    // compiles here gives the artifact of that run for the module the
+    // client wrote the main file of, and no other.
+    compile: (given) =>
+      given.main === main
+        ? Promise.resolve({ main: artifact, artifacts })
+        : Promise.reject(new Error(`Not the module of the run: ${given.main}`)),
     pieces: {
-      piece: { artifacts, now },
+      piece: { now },
       started: (piece) => loaded.resolve(piece),
       failed: (_result, error) => loaded.reject(error),
     },
@@ -375,7 +391,7 @@ const runServed = async (
   try {
     const result = client.getCell<unknown>(space, "corpus on the runner");
     const tx = client.edit();
-    setUpCompiledPiece(client, tx, artifact, argument, result.withTx(tx));
+    setUpCompiledPiece(client, tx, program, argument, result.withTx(tx));
     const { error } = await tx.commit().settled;
     if (error !== undefined) {
       return {

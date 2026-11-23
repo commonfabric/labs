@@ -10,17 +10,21 @@
  *
  * The compartment confines names. What the executor hands the code is an
  * object of the executor: `$rt`, the host of a call (`$h`), and the handles
- * and references a function body is given. A handle keeps the instance in
- * private fields, and the classes of what a body is given are frozen here.
- * `$rt` and `$h` are confined by the crate's check alone, which refuses a
- * source that names them.
+ * and references a function body is given. A handle and a host keep the
+ * instance in private fields, and the classes of what a body is given are
+ * frozen here. A body that names `$rt` or `$h` still calls every method of
+ * them, each of which reads and writes the instance the code belongs to
+ * and no other; the crate's check refuses a source that names either.
  */
 import {
-  Handle,
+  HANDED_CLASSES,
   type ModuleEvaluator,
 } from "../../../../base/pattern-compiler/exec/executor.ts";
 import {
+  ComputedOutput,
+  MissingKey,
   Ref,
+  StreamMarker,
   StreamRef,
 } from "../../../../base/pattern-compiler/exec/store.ts";
 import { createModuleCompartmentGlobals } from "../sandbox/compartment-globals.ts";
@@ -42,13 +46,23 @@ const valueCodeGlobals = (): Record<string, unknown> => {
 };
 
 /**
- * Freezes the classes whose instances a function body is given: a handle,
- * and through the member `target` of a handle a reference. A body then
+ * Freezes the classes whose instances value code is handed, makes through
+ * `$rt` or catches: a handle, the host of a call, a deferred value, a
+ * reference, and the errors the executor throws into a body. A body then
  * replaces no method that the executor or another piece calls.
  */
 const freezeHandedClasses = (): void => {
-  for (const handed of [Handle, Ref, StreamRef]) {
-    Object.freeze(handed.prototype);
+  for (
+    const handed of [
+      ...HANDED_CLASSES,
+      Ref,
+      StreamRef,
+      StreamMarker,
+      MissingKey,
+      ComputedOutput,
+    ] as { prototype?: object }[]
+  ) {
+    if (handed.prototype !== undefined) Object.freeze(handed.prototype);
     Object.freeze(handed);
   }
 };

@@ -184,6 +184,14 @@ describe("the value code of a compiled piece", () => {
     expect(await lastAfterAnEvent(artifact)).toBe("undefined,undefined");
   });
 
+  it("gives a handler body no member of the host of a call that holds the executor", async () => {
+    const artifact = await artifactWith((source) =>
+      source.replaceAll(SETS_LAST, "last.set(typeof $rt.nohost.instance);")
+    );
+
+    expect(await lastAfterAnEvent(artifact)).toBe("undefined");
+  });
+
   it("commits nothing of a handler body that replaces a method of every handle", async () => {
     const artifact = await artifactWith((source) =>
       source.replaceAll(
@@ -196,6 +204,28 @@ describe("the value code of a compiled piece", () => {
     // that threw was not committed.
     expect(await lastAfterAnEvent(artifact)).toBeUndefined();
     expect(Object.isFrozen(Handle.prototype)).toBe(true);
+  });
+
+  it("commits nothing of a handler body that replaces a method of the host of every call", async () => {
+    const artifact = await artifactWith((source) =>
+      source.replaceAll(
+        SETS_LAST,
+        'last.set("before"); Object.getPrototypeOf(Object.getPrototypeOf($rt.nohost)).slot = () => "replaced";',
+      )
+    );
+
+    expect(await lastAfterAnEvent(artifact)).toBeUndefined();
+  });
+
+  it("commits nothing of a handler body that replaces a method of every deferred value", async () => {
+    const artifact = await artifactWith((source) =>
+      source.replaceAll(
+        SETS_LAST,
+        'last.set("before"); Object.getPrototypeOf($rt.thunk(() => 1)).evaluate = () => "replaced";',
+      )
+    );
+
+    expect(await lastAfterAnEvent(artifact)).toBeUndefined();
   });
 
   it("gives a handler body the time of its event, to the second", async () => {
