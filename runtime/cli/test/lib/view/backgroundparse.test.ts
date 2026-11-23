@@ -16,7 +16,7 @@ import { parseDiff } from "../../../lib/view/diff.ts";
 import {
   buildDiffDocument,
   type DiffWorkspace,
-  type WorkspaceCache,
+  WorkspaceCache,
 } from "../../../lib/view/diffdoc.ts";
 import { diffSource } from "../../../lib/view/diffedit.ts";
 import {
@@ -451,7 +451,7 @@ index ${gitBlobName(OLD)}..${gitBlobName(NEW)} 100644
         DIFF,
         model,
         ws,
-        new Map(),
+        new WorkspaceCache(),
         "source",
         undefined,
         pending,
@@ -466,7 +466,7 @@ index ${gitBlobName(OLD)}..${gitBlobName(NEW)} 100644
 
     it("builds what a build without pending parses does once the parses finish", () => {
       const ws = workspace(new Map([["/workspace/answer.ts", NEW]]));
-      const cache: WorkspaceCache = new Map();
+      const cache = new WorkspaceCache();
       const pending = new PendingParses(0);
       const first = buildDiffDocument(
         DIFF,
@@ -477,7 +477,7 @@ index ${gitBlobName(OLD)}..${gitBlobName(NEW)} 100644
         undefined,
         pending,
       );
-      const pendingOld = first.edit.oldFileLines;
+      const pendingOld = first.edit.oldFileLines(0);
       finishAll(pending.take());
 
       const { doc } = buildDiffDocument(
@@ -491,32 +491,32 @@ index ${gitBlobName(OLD)}..${gitBlobName(NEW)} 100644
       );
       const whole = buildDiffDocument(DIFF, model, ws);
 
-      expect(pendingOld).toEqual([null]);
+      expect(pendingOld).toBe(null);
       expect(coloredSpans(doc.lines.slice(5))).toBeGreaterThan(0);
       expect(doc).toEqual(whole.doc);
-      expect(first.edit.oldFileLines).toEqual(whole.edit.oldFileLines);
+      expect(first.edit.oldFileLines(0)).toEqual(whole.edit.oldFileLines(0));
     });
 
     it("builds from a file saved while its parse was pending", () => {
       const files = new Map([["/workspace/answer.ts", NEW]]);
       const ws = workspace(files);
-      const cache: WorkspaceCache = new Map();
+      const cache = new WorkspaceCache();
       const pending = new PendingParses(0);
       buildDiffDocument(DIFF, model, ws, cache, "source", undefined, pending);
       const jobs = pending.take();
       const saved = NEW.replace("42", "4_2");
       files.set("/workspace/answer.ts", saved);
-      cache.delete("/workspace/answer.ts");
+      cache.forget("/workspace/answer.ts");
 
       finishAll(jobs);
       buildDiffDocument(DIFF, model, ws, cache, "source", undefined, pending);
 
-      expect(cache.get("/workspace/answer.ts")?.fileText).toBe(saved);
+      expect(cache.file("/workspace/answer.ts")?.fileText).toBe(saved);
     });
 
     it("re-parses through its editable source with the finished parses", () => {
       const ws = workspace(new Map([["/workspace/answer.ts", NEW]]));
-      const cache: WorkspaceCache = new Map();
+      const cache = new WorkspaceCache();
       const pending = new PendingParses(0);
       const { doc, edit } = buildDiffDocument(
         DIFF,
