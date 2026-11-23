@@ -209,6 +209,7 @@ installFakeClock({
     "compiled-serving-takeover",
     "compiled-serving-takeover-handlers",
     "compiled-serving-takeover-view",
+    "compiled-serving-takeover-derived",
   ],
 });
 
