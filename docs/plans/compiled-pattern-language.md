@@ -9695,6 +9695,57 @@ today.
   bootstrap of a toolshed does. *Tests:* `compiled-serving.test.ts`, the case
   that counts the reads from the store. *If decided otherwise:* the policy in
   `serving-memory-server.deno.ts` (questions 452 and 469).
+- **P410. A memo entry that read a write that did not reach storage is marked
+  and compared with what is stored.** The coordinator's decision of 2026-11-23;
+  it is no owner ruling. *The case:* with 0 stored at `x` and an output `y` that
+  is twice `x`, a handler stages 1 at `x`, reads `y` through a handle, which
+  evaluates `y` to 2 inside the event's transaction
+  (`scheduler-and-serving-loop.md` §5.3), and throws. An entry of `y` that
+  stays current and unstored has 2 stored by the next demand, beside a stored
+  `x` of 0. The same holds for a cone instance evaluated before the body
+  of a later event of the batch, or in the derivation transaction behind it,
+  against a write of an event that the wave's commit requeues or withdraws.
+  *Decision:* a write is discarded when it did not reach storage and no memo
+  entry holds it as unstored: a write of a handler body whose transaction did
+  not commit, whether it was rejected, aborted, withdrawn or requeued, and a
+  side-write whose entry is dropped. The scheduler matches the address of a
+  discarded write again, with what is stored, which marks the entries evaluated
+  after the write; a marked entry is compared with what is stored when it is
+  next needed, and is evaluated again where a read differs. One rule covers a
+  body that throws, a refused transaction and a conflict. A derived write that
+  the memo holds as unstored is not discarded, and P10 keeps its rule for the
+  own side-writes of a cone instance that failed at the bound
+  (`scheduler-and-serving-loop.md` §1.5, I3, §3.5, §5.5, §10.4 and its question
+  62; `execution-and-storage.md` §3.3; `plan-and-label-templates.md` §5.4).
+  *Alternative:* drop every entry evaluated in a transaction that did not
+  commit, and every entry of a later transaction of the batch that read one of
+  its writes; it evaluates again the cone instances that read no discarded
+  write. *Tests:* none. Read in source and not run: the prototype's executor at
+  `aabee19586` undoes the store's changes of a transaction that does not commit
+  (`Instance.#abort` in `base/pattern-compiler/exec/executor.ts`, with
+  `Store.undo`), each undone change marks the entries that read the position,
+  and a marked entry is evaluated again where a position it read changed after
+  its evaluation (`Instance.#current`). *If decided otherwise:* the items of
+  §3.5 and §3.3 named above (question 510).
+- **P411. `Object.fromEntries` records the enumeration of its argument and the
+  value of each key, and `concat` the enumeration of an array operand.** The
+  coordinator's decision of 2026-11-23; it is no owner ruling. *The case:*
+  with no observation for `Object.fromEntries(e)`,
+  `(pairs) => Object.keys(Object.fromEntries(pairs)).length` has an empty
+  footprint: the body is handed an argument without `pairs`, and its result is
+  wrong (`footprint-analysis.md` §9.2; the label covers what the body is
+  given). The length of `v.concat(w)` depends on `w` in the same way.
+  *Decision:* in §3.4 there, the rule the
+  document applies to `new Map(v)`: `enumeration` at a projection `e` and
+  `value` at `e/*/0`, and `value` at a key that is a projection where the body
+  built the pairs; `concat` records `enumeration` at an operand that is a
+  projection of array type. *Alternative:* a record whose key set is tracked,
+  with the observation made by the later `Object.keys`; the abstract domain has
+  no such value. *Tests:* none. The crate at `aabee19586` records nothing for
+  `Object.fromEntries` (`footprint.rs`, the arm `("Object", "fromEntries")`),
+  and records the enumeration of an array operand of `concat`. *If decided
+  otherwise:* the two rows and the paragraph below the table of objects
+  (question 511).
 
 **The scope of the storage decisions** (the coordinator's recommendation to
 the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
@@ -15741,7 +15792,8 @@ checked for labels beyond the tests named. Questions 391 to 401 are of the
 constructs of milestone 3, 402 to 404 of milestone 5, 405 to 411 of the buckets
 of a kept index as documents and of the other changes of milestone 3 that
 followed the constructs, 412 to 423 of milestone 6, and 438 to 467, which
-stand behind question 437, of the rounds of 2026-11-23.
+stand behind question 437, of the rounds of 2026-11-23. Question 512 is of
+the review of pull request #9788.
 
 391. **Whether a read of which reference a position holds consumes the label of
      what the link names** (deferred by Z88). In the runtime's resolution it
@@ -16380,6 +16432,20 @@ question 419; and the ruling on rows committed ahead of a wave, into question
      reads it through its own transaction, which commits to the piece's space.
      What the preparation takes of the labels of that document, and what the
      basis of the piece records for it, were not read.
+512. **What a library call observes of a value the body built from inputs**
+     (deferred by Z88; beside P411). The rules of `footprint-analysis.md` §3.4
+     are stated for a receiver or an argument that is a projection. Two cases
+     have no rule, and each can leave an observation out. *A record built by a
+     spread of a closed type,* by a rest element of one, or by `Object.assign`,
+     holds a projection for each declared property, and whether an optional
+     property is present is observed by a later `Object.keys`, `Object.entries`
+     or `in` test of the record, which records nothing. *A list or a bag the
+     body built whose members are projections,* as the receiver of `flat`,
+     `join`, `includes` or `toSorted()`: the members are opened, converted or
+     compared, and the rows name `v/*` of a projection receiver alone. A
+     missing entry gives the body an argument that lacks the path, so the
+     result is wrong and the label covers what was given (§9.2 there). *Open:*
+     the rule for each. Neither was counted on the corpus.
 
 **From the rounds of 2026-11-23, beside the deferred questions.** A create on
 Topics reads and records the same at every size, a pattern is started from its
@@ -16494,6 +16560,32 @@ P200 and P210 are of this work.
      `SELF`. The crate's check refuses the two measured Topics boards, which are
      compiled with `emit --unchecked`. Every cell is of one to three runs on a
      machine under load. *Assumed:* each as stated.
+
+**From the review of pull request #9788.** Two points that the automated review
+of the design documents raised, each with a rule in the documents.
+
+510. **A memo entry that read a write that did not reach storage** (for the
+     owner; P410; SS question 62). A cone instance can be evaluated against a
+     value a handler body staged: at a journaled read of that body, before the
+     body of a later event of the batch, and in the derivation transaction
+     behind the batch. Where the handler's transaction does not commit, an
+     entry that stayed current would have its value stored from the memo.
+     *Assumed:* the address of such a write is matched again with what is
+     stored, and the marked entry is compared and evaluated again. *To decide:*
+     that rule, or dropping every entry a transaction that did not commit
+     evaluated. *Not built or tested:* the prototype's executor, read at
+     `aabee19586` and not run, marks the readers of every change it undoes, so
+     it is not expected to have the defect; it reads a kept output through a
+     handle from the stored position and does not evaluate a stale cone
+     instance at the read, so the case of §5.3 does not arise there, and no test
+     has a handler that writes, reads a derived value and throws.
+511. **The footprint of `Object.fromEntries` and of `concat`** (not for the
+     owner as to the rule, which is that of `new Map(v)`; P411). *Assumed:* as
+     written in `footprint-analysis.md` §3.4. *Not built:* the crate at
+     `aabee19586` records no observation for `Object.fromEntries`
+     (`footprint.rs`), so a body that reads an input through it alone is handed
+     an argument without that input (FA request 26). What the rules leave open
+     for a value the body built is question 512.
 
 ## Open, and not needing the owner
 

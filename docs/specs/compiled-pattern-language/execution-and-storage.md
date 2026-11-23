@@ -3286,13 +3286,28 @@ changes the fingerprint as well.
   the event is requeued whole at the wave's commit
   (`scheduler-and-serving-loop.md` §5.5). In each, nothing it staged is
   stored. An entry of a cone instance that staged no side-write keeps its
-  values, because they are pure derivations of state the transaction did
+  values, where they are pure derivations of state the transaction did
   not change (`plan-and-label-templates.md` §5.4). Its kept outputs are
   recorded as unstored. An entry whose cone instance staged side-writes or
   made instances is dropped: the writes did not happen, and a later
   evaluation has to perform them. A handler of the batch that then reads
   such an unstored output by address reads the entry's value, which is
   staged from the memo before the read (section 1.3).
+- **An entry that read a write that is discarded.** Provisional (P410;
+  `scheduler-and-serving-loop.md` §3.5 and its question 62). The values
+  of an entry are not derivations of what is stored where its last
+  evaluation read a write of a handler body whose transaction did not
+  commit, or a side-write whose entry is dropped. The evaluation was made
+  at a journaled read of the body that staged the write (section 1.4),
+  before the body of a later event of the batch, or in the derivation
+  transaction behind the batch. The scheduler reports the address of the
+  write again, with what is stored, and the entry is marked. The check
+  above then finds a fingerprint that differs, the cone instance is
+  evaluated again, and what the entry recorded as unstored is not stored
+  from it. An entry that read the address before the write finds the
+  fingerprint it recorded and is current. An entry that read a derived
+  write the memo holds as unstored is not marked on that account: the
+  write is staged from the memo before the next read of its address.
 - **A derived write withdrawn before the preparation.** When a handler
   body wrote something a cone instance evaluated before the body had read,
   the derived writes of that cone instance that were not instantiated

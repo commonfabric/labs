@@ -12560,7 +12560,9 @@ it asked for comes to exist. The other events of the batch are not
 affected. The values computed before the body are pure derivations of
 state that did not change. The aborted transaction does not store them.
 The runtime holds them, and the next transaction that demands them stores
-them (section 4.1, step 1).
+them (section 4.1, step 1). A value that was computed from a write that
+does not reach storage is not held in this way: it is computed again
+(`scheduler-and-serving-loop.md` §3.5, provisional, P410).
 
 A failure before a body or behind the batch is a cone failure and follows
 section 5.2. If the failed cone is one the handler reads, the handler

@@ -233,7 +233,7 @@ recorded here because the tables depend on them.
 | --- | --- | --- |
 | I1, live consistency | Kept | At quiescence every demanded kept output holds the value its cone computes from the current committed inputs. The exception is an output whose write a failed constraint dropped: it holds what was stored before, until the instantiation key of the write changes (section 5.6) |
 | I2, dormancy | Kept | An instance nothing demands is not evaluated, and loading, dirtying, and releasing it read no cell data. The entries of element slots are not built by loading: they come from the first evaluation of the collection. The entries of a slot whose path holds `*` come from the first read of its container (section 3.2) |
-| I3, value-gated execution | Kept | A cone instance that has been evaluated is evaluated again only when something its last evaluation read has changed, or when the process holds no memo entry for it and either its basis rows are behind the heads of its inputs or a stale consumer pulls an interim output of it, which is stored nowhere. A transaction that does not commit, a dropped write, and a withdrawn write leave a cone instance current and its output unstored, and cause no evaluation. The one exception is a cone instance that staged a side-write or made an instance in a transaction that did not commit, or whose side-write was withdrawn: its memo entry is dropped, so that a later evaluation performs the write (section 3.5) |
+| I3, value-gated execution | Kept | A cone instance that has been evaluated is evaluated again only when something its last evaluation read has changed, or when the process holds no memo entry for it and either its basis rows are behind the heads of its inputs or a stale consumer pulls an interim output of it, which is stored nowhere. A transaction that does not commit, a dropped write, and a withdrawn write leave a cone instance current and its output unstored, and cause no evaluation. The one exception is a cone instance that staged a side-write or made an instance in a transaction that did not commit, or whose side-write was withdrawn: its memo entry is dropped, so that a later evaluation performs the write (section 3.5). Provisional (P410): a cone instance that read a write that is discarded, which is a write of a handler body or a side-write that did not reach storage, has its memo entry marked and compared with what is stored, and is evaluated again where the two differ (section 3.5) |
 | I4, event order and consistency | Kept, per space | Handlers run in the order of section 5.4. Every value a handler reads from its own space is current when it reads it (section 5.3). There are five exceptions, and in each the handler reads what is stored: a cell a materializer creates under a cause computed from data (section 7.2); an address inside the envelope of a materializer of an instance that is not loaded (section 7.4); a cell that an instance that is not loaded writes through a handle, and a path of a child's argument whose writing instance is not loaded (sections 4.4 and 5.3); and a derived value of another space (section 9.2). A value of an instance marked as torn down has no current value beside the one last stored (section 2.7) |
 | I5, self-stability | Kept | The commit of a cause's transaction dirties nothing in the instances that transaction evaluated |
 | I6, bounded non-convergence | Kept, changed form | Section 8 |
@@ -1290,13 +1290,41 @@ Stale and unstored are two states, and the scheduler keeps them apart.
 
 - **The dirty marks of writes that did not happen are undone.** A slot that
   only the unstaged or uncommitted write had dirtied returns to its state
-  before it. A slot the cause itself dirtied stays dirty.
+  before it. A slot the cause itself dirtied stays dirty. A slot that a
+  cone instance read after the write is the exception of the third item.
 - **A cone instance that staged no side-write and made no instance stays
-  current.** Its memo entry keeps the value it computed, which is a pure
-  derivation of state the transaction did not change. Its kept output is
-  unstored. The scheduler adds the write to `InstanceRecord.unstored`, with
-  the refusal where a constraint dropped it, and does not evaluate the cone
-  instance again on that account.
+  current,** where it read no write that is discarded (the next item). Its
+  memo entry keeps the value it computed, which is a pure derivation of
+  what is stored and of derived writes that the memo holds as unstored.
+  Its kept output is unstored. The scheduler adds the write to
+  `InstanceRecord.unstored`, with the refusal where a constraint dropped
+  it, and does not evaluate the cone instance again on that account.
+- **A cone instance that read a write that is discarded is compared with
+  what is stored.** Provisional (P410; open question 62). A write is
+  discarded when it did not reach storage and no memo entry holds its
+  value as unstored: a write of a handler body whose transaction did not
+  commit, for whichever of the reasons above, and a side-write whose memo
+  entry is dropped. A cone instance can have read such a write in three
+  places: at a journaled read of the body that staged it (section 5.3);
+  before the body of a later event of the batch; and in the derivation
+  transaction behind the batch. In the last two the transaction that
+  staged the write sealed, and the wave's commit requeued or withdrew it
+  (section 5.5). The scheduler matches the address of each discarded
+  write again, with what is stored, as it does for a staged write that is
+  unstaged, for the cone instances that were evaluated after the write.
+  That marks their memo entries, and a marked entry is compared with what
+  is stored when it is next needed (`execution-and-storage.md` §3.3). An
+  entry whose reads return what it recorded is current. An entry that
+  recorded the discarded value is stale: the cone instance is evaluated
+  again, and what the entry held as unstored is not stored from it. With
+  0 stored at `x` and an output `y` that is twice `x`, a handler that
+  stages 1 at `x`, reads `y` through a handle, and throws leaves 0 at `x`
+  and an entry for `y` that holds 2 and recorded 1 at `x`. The entry is
+  marked, the next demand of `y` reads 0 at `x`, and `y` is evaluated to
+  0. A derived write that the memo holds as unstored is not discarded:
+  its readers stay current, because it is staged from the memo before the
+  next read of its address. The entry of a cone instance that failed at
+  the bound keeps the rule of section 8.2 for its own side-writes (P10).
 - **A cone instance that staged a side-write or made an instance** in a
   transaction that did not commit, or whose side-write was withdrawn, by a
   conflict or because a handler body wrote something the cone instance
@@ -1308,7 +1336,8 @@ Stale and unstored are two states, and the scheduler keeps them apart.
   exists, the rows are behind the heads, the cone instance is stale, and it
   is evaluated again.
 - **Storing what is unstored.** The next transaction that demands an
-  unstored output stores it from the memo, without an evaluation, by the
+  unstored output of a current cone instance stores it from the memo,
+  without an evaluation, by the
   third condition of `plan-and-label-templates.md` §4.1. The cycle runs a
   derivation transaction for a demanded unstored output even when nothing
   is stale (section 10.2). A write that carries a refusal is the exception
@@ -2372,10 +2401,10 @@ Five points go beyond today's rules.
   into the wave requeue behind it. The handlings of the events it sent in
   the same cycle are undone with it, through the lineage of today.
 - **What a withdrawn or dropped write leaves** is section 3.5: the output is
-  unstored, its cone instance is current unless something it read changed,
-  and the basis rows are not advanced. A dropped write among the units a
-  withdrawal takes loses its verdict with them, so no refusal is recorded
-  for it.
+  unstored, its cone instance is current unless something it read changed
+  or was a write that is discarded, and the basis rows are not advanced.
+  A dropped write among the units a withdrawal takes loses its verdict
+  with them, so no refusal is recorded for it.
 
 **The handling and its receipt.** A handling is one event on one stream,
 and it is identified by its receipt, by ruling: the event's identifier and
@@ -3644,7 +3673,8 @@ identity and the scope instance that ran. Here it is:
   was withdrawn, or its event was requeued, when a constraint drops a derived
   write, or when one is withdrawn, the rows of the cone instance that computed
   the write stay where they were (section 3.5). In the process that evaluated
-  it, the memo entry is current and the output is unstored (section 3.5). After
+  it, the memo entry is current, unless it read a write that is discarded, and
+  the output is unstored (section 3.5). After
   a restart there is no entry, the rows are behind the heads, and the cone
   instance is found stale and evaluated again. The rows advance when a later
   transaction stores the write.
@@ -4650,6 +4680,25 @@ space, and no space runs the builder path beside the compiled path
     of the list. Not determined: what the index registers for each of
     the three. Nothing is assumed. It is question 294 of the
     continuation plan.
+62. **A memo entry that read a write that did not reach storage**
+    (sections 3.5, 5.3 and 5.5). A cone instance can be evaluated against
+    a value that a handler body staged: at a journaled read of that body,
+    before the body of a later event of the batch, and in the derivation
+    transaction behind the batch. Where the handler's transaction does
+    not commit, because it was rejected, aborted, withdrawn or requeued,
+    the entry holds a value computed from a write that storage does not
+    hold, and storing it from the memo would store a value that is no
+    function of what is stored. The same holds for an entry that read a
+    side-write whose own entry is dropped. *Assumed* (P410 of the
+    continuation plan, the coordinator's decision and not ruled): the
+    scheduler matches the address of such a write again, with what is
+    stored, which marks the entries evaluated after the write, and a
+    marked entry is compared with what is stored when it is next needed.
+    The alternative drops every entry that was evaluated in a transaction
+    that did not commit, or in a later transaction of the batch that read
+    one of its writes, which evaluates again the cone instances that read
+    none of the discarded writes. It is question 510 of the continuation
+    plan.
 
 
 ### For another document or the prototype

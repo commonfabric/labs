@@ -565,7 +565,7 @@ parameters.
 | `reduce`, `reduceRight` | `enumeration`. The element parameter is `v/*`. The accumulator parameter is the join of the initial value and what the callback returns | That join |
 | `toSorted(compare)`, and `sort(compare)` on a local copy | `enumeration`. Both parameters of `compare` are `v/*` | A bag of `v/*` |
 | `toSorted()` and `sort()` with no argument | `enumeration`, and `value` at `v/*`, since elements are compared as strings. Widening W2 when the element type is a container | A bag of `v/*` |
-| `slice`, `concat`, `toReversed`, `toSpliced`, `with`, `values`, `entries`, `keys` | `enumeration` | A bag of `v/*`, joined with the other operands |
+| `slice`, `concat`, `toReversed`, `toSpliced`, `with`, `values`, `entries`, `keys` | `enumeration`, at `v` and at each operand of `concat` that is a projection of array type | A bag of `v/*`, joined with the members of each array operand of `concat` and with the other operands |
 | `flat()`, `flat(depth)` | `enumeration` at `v` and at each nested array the call opens: at `v/*` for a depth of one, and one level further for each further level of a literal depth. A depth that is not a literal opens every array level of the element type | A bag of the members at the levels opened, joined with the members at each level that are not arrays |
 | `Array.of(…)`, `new Array(n)` | None | A list of the arguments; an empty list |
 | `includes(w)`, `indexOf(w)`, `lastIndexOf(w)` | `enumeration`. At `v/*` and at `w`: `value` for a scalar element type, `identity` otherwise | `Computed` |
@@ -582,10 +582,22 @@ its arguments to the bag.
 | `Object.keys(v)` | `enumeration` | `Computed` |
 | `Object.values(v)` | `enumeration` | A bag of `v/*` |
 | `Object.entries(v)` | `enumeration` | A bag of pairs of a `Computed` key and `v/*` |
-| `Object.fromEntries(e)` | None | A record or a bag, from the members of `e` |
+| `Object.fromEntries(e)` | For a projection `e`, `enumeration` at `e` and `value` at `e/*/0`. For a list or a bag the body built, `value` at the key of each pair that is a projection | A bag of `e/*/1` for a projection `e`. For a list of pairs with static keys, a record. Otherwise a bag of the second members of the pairs |
 | `Object.assign(target, v)` | As `{ ...v }` | The members are added to `target` |
 | `Object.freeze(v)`, `Object.getPrototypeOf(v)` | `shape` | `v`; `Computed` |
 | `Object.create(null)` | None | An empty record |
+
+`Object.fromEntries` makes an object whose keys are the first members of
+the pairs, so which keys the result has depends on which pairs `e` holds
+and on the key of each. The call records both where it is made, as
+`new Map(v)` does, because the result is a bag the body built, and the
+rules for `Object.keys` and for an `in` test record at a projection. The
+type of the argument makes each key a scalar. For
+`(pairs: [string, number][]) => Object.keys(Object.fromEntries(pairs)).length`
+the footprint is `enumeration` at `pairs` and `value` at `pairs/*/0`.
+`concat` appends the members of an operand that is an array, so the
+length of the result depends on the length of that operand as it does on
+the receiver's.
 
 **`JSON`.** `JSON.stringify(v)` records `value` at `v` and is widening W2,
 with or without an indent or a replacer. The parameters of a replacer
@@ -3874,3 +3886,13 @@ asked.
     follows, which can differ from the links a read follows, so the
     record may have to be that of `resultOwnerOf` in place of a resolved
     entry. This document did not decide between the two.
+26. **`Object.fromEntries` and a library call on a value the body built**
+    (to the prototype and the continuation plan). §3.4 gives
+    `Object.fromEntries` the observations of `new Map(v)`, and `concat`
+    the enumeration of an array operand (provisional, P411 of the
+    continuation plan). The prototype has to record the first. *Assumed,*
+    and not decided here: no rule for an enumeration or a key test of a
+    record built by a spread of a closed type with optional properties,
+    and none for `flat`, `join`, `includes` or `toSorted()` on a list or a
+    bag the body built whose members are projections. It is question 512
+    of the continuation plan.
