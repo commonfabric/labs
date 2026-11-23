@@ -287,6 +287,24 @@ type CaptionPath = {
   chunks?: number[];
 };
 
+/**
+ * The path of the row at `index` below an array of rows of a board that
+ * was loaded with `size` topics: the index, or with `SCALE_LISTS=documents`
+ * and more than 64 topics, the chunk and the place in it. A load lays the
+ * rows out in chunks of 48 (`LIST_FILL` of
+ * `runtime/runner/src/compiled/transactions.ts`), and a topic that is
+ * appended afterwards moves none of them.
+ */
+const rowAt = (
+  arm: string,
+  size: number,
+  index: number,
+): (string | number)[] =>
+  arm === "serving" && Deno.env.get("SCALE_LISTS") === "documents" &&
+    size > 64
+    ? [Math.floor(index / 48), index % 48]
+    : [index];
+
 /** The path of the card at `index`, below the array of cards. */
 const cardAt = (
   { chunks }: CaptionPath,
@@ -686,7 +704,7 @@ export const runServing = async (
     const last = size - 1;
     await measure(
       "load",
-      ["mentionable", last, "title"],
+      ["mentionable", ...rowAt(arm, size, last), "title"],
       (value) => value === board.topics[last].title,
       async () => {
         const tx = sender.edit();
@@ -765,7 +783,7 @@ export const runServing = async (
     for (const at of board.edited) {
       await measure(
         `edit topic ${at}`,
-        ["mentionable", at, "title"],
+        ["mentionable", ...rowAt(arm, size, at), "title"],
         (value) => value === `Edited topic ${at}`,
         () =>
           commit((tx) => {
@@ -776,7 +794,7 @@ export const runServing = async (
     const middle = Math.floor(size / 2);
     await measure(
       `edit mentions ${middle}`,
-      ["crossrefs", 0, "mentionedBy", 2],
+      ["crossrefs", ...rowAt(arm, size, 0), "mentionedBy", 2],
       (value) => value !== undefined && value !== null,
       () =>
         commit((tx) => {
@@ -785,7 +803,7 @@ export const runServing = async (
     );
     await measure(
       `edit shortName ${middle}`,
-      ["mentionable", middle, "shortName"],
+      ["mentionable", ...rowAt(arm, size, middle), "shortName"],
       (value) => value === `renamed-${middle}`,
       () =>
         commit((tx) => {
@@ -848,7 +866,7 @@ export const runServing = async (
         if (profiled === "title") {
           await measure(
             `repeated title ${turn}`,
-            ["mentionable", middle, "title"],
+            ["mentionable", ...rowAt(arm, size, middle), "title"],
             (value) => value === `Repeated ${turn}`,
             () =>
               commit((tx) => {
@@ -858,7 +876,7 @@ export const runServing = async (
         } else if (profiled === "shortName") {
           await measure(
             `repeated shortName ${turn}`,
-            ["mentionable", middle, "shortName"],
+            ["mentionable", ...rowAt(arm, size, middle), "shortName"],
             (value) => value === `again-${turn}`,
             () =>
               commit((tx) => {
@@ -870,7 +888,7 @@ export const runServing = async (
           const gone = turn % 2 === 0;
           await measure(
             `repeated mentions ${turn}`,
-            ["crossrefs", 0, "mentionedBy", 2],
+            ["crossrefs", ...rowAt(arm, size, 0), "mentionedBy", 2],
             (value) => (value === undefined || value === null) === gone,
             () =>
               commit((tx) => {
@@ -913,7 +931,7 @@ export const runServing = async (
         for (let turn = 0; turn < 2; turn++) {
           await measure(
             `after takeover ${turn}`,
-            ["mentionable", 0, "title"],
+            ["mentionable", ...rowAt(arm, size, 0), "title"],
             (value) => value === `After the takeover ${turn}`,
             () =>
               commit((tx) => {
