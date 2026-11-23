@@ -123,6 +123,18 @@ export type CompiledPieceOptions = {
    * confines nothing is for a measurement of what the compartment costs.
    */
   evaluate?: ModuleEvaluator;
+  /**
+   * What each `wish` of the piece resolves to, by its operands: a harness's
+   * stand-in for the runtime's own resolution, which a compiled piece does
+   * not call yet. Without it a `wish` holds an error.
+   */
+  wishes?: NonNullable<Instance["options"]["wishes"]>;
+  /**
+   * What the value code imports from `commonfabric` under each name here,
+   * for a built-in the executor does not have: a harness's stand-in for
+   * what the runtime answers, such as the acting principal.
+   */
+  builtins?: Record<string, unknown>;
 };
 
 /** What a compiled piece did, counted. */
@@ -303,6 +315,10 @@ export class CompiledPiece {
           events: "queue",
           transactions,
           evaluate: options.evaluate ?? compartmentEvaluator(),
+          ...(options.wishes === undefined ? {} : { wishes: options.wishes }),
+          ...(options.builtins === undefined
+            ? {}
+            : { builtins: options.builtins }),
           ...(rowDocuments === undefined ? {} : { rowDocuments }),
           ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
           load: (id) => transactions.load(id),

@@ -32,6 +32,7 @@
  */
 import {
   debugStr,
+  FabricPrimitive,
   type FabricValue,
   isWalkableObjectNotArray,
 } from "@commonfabric/data-model";
@@ -3332,6 +3333,11 @@ export class RuntimeTransactions implements TransactionHooks {
       value === null || value === undefined || typeof value === "string" ||
       typeof value === "number" || typeof value === "boolean"
     ) {
+      return value;
+    }
+    // A primitive of the data model, such as a time, and a `bigint` are
+    // values of the storage as they are.
+    if (value instanceof FabricPrimitive || typeof value === "bigint") {
       return value;
     }
     throw new Error(debugStr`The executor holds no JSON value: ${value}`);
