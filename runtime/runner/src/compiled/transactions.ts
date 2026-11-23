@@ -148,6 +148,11 @@ export type RuntimeCounts = {
    */
   rowLinks: number;
   /**
+   * Arrays of row documents written whole, as the links they hold: one for
+   * each array a transaction spliced so that positions shifted.
+   */
+  rowArraysWritten: number;
+  /**
    * The labels the runtime's table of labels was asked to name: one for
    * each distinct label that a position asked for consumes.
    */
@@ -234,6 +239,10 @@ type RowArray = {
   keys: string[];
   /** The position of each key, formed when it is asked for. */
   positions?: Map<string, number>;
+  /** The identifier of the document of each row, by its key. */
+  ids: Map<string, string>;
+  /** The link to the document of each row, by its key. */
+  links: Map<string, FabricValue>;
 };
 
 /**
@@ -349,6 +358,7 @@ export class RuntimeTransactions implements TransactionHooks {
     recordBytes: 0,
     labelEntriesChanged: 0,
     rowLinks: 0,
+    rowArraysWritten: 0,
     labelsResolved: 0,
   };
   /** Whether `RuntimeCounts.recordBytes` is counted. */
@@ -970,6 +980,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#stagedState = 0;
     this.#created = [];
     this.#createdStreams = [];
+    this.#splicedArrays.clear();
   }
 
   /**
@@ -1865,7 +1876,14 @@ export class RuntimeTransactions implements TransactionHooks {
         if (!this.#rowCollections.has(collection)) continue;
         const [of, path] = JSON.parse(text) as [string, string[]];
         if (of !== doc || arrays.some((one) => one.text === text)) continue;
-        arrays.push({ doc, path, text, keys: [] });
+        arrays.push({
+          doc,
+          path,
+          text,
+          keys: [],
+          ids: new Map(),
+          links: new Map(),
+        });
       }
     }
     return arrays;
@@ -1873,9 +1891,65 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** The identifier of the document of the row of `key` of an array. */
   #rowDocument(array: RowArray, key: string): string {
-    const id = identifierOf({ rows: [array.doc, ...array.path], key });
-    if (!this.#rowDocuments.has(id)) this.#rowDocuments.set(id, { array, key });
+    let id = array.ids.get(key);
+    if (id === undefined) {
+      id = identifierOf({ rows: [array.doc, ...array.path], key });
+      array.ids.set(key, id);
+      if (!this.#rowDocuments.has(id)) {
+        this.#rowDocuments.set(id, { array, key });
+      }
+    }
     return id;
+  }
+
+  /**
+   * The link to the document of the row of `key` of an array: one value
+   * for each key, so that an array written again holds, at a position
+   * whose row stayed, the link it held.
+   */
+  #linkOfRow(array: RowArray, key: string): FabricValue {
+    let link = array.links.get(key);
+    if (link === undefined) {
+      const id = this.#rowDocument(array, key);
+      link = createSigilLinkFromParsedLink({
+        id: this.entityOf(id),
+        space: this.#spaceOf(id),
+        path: [],
+      });
+      array.links.set(key, link);
+    }
+    return link;
+  }
+
+  /**
+   * The arrays of row documents that the transaction in progress spliced
+   * so that positions behind the splice shifted, each with the transaction
+   * the array is written into. The links of such an array are written
+   * once, when the transaction ends (`#writeSplicedArrays`), however many
+   * splices it made.
+   */
+  readonly #splicedArrays = new Map<RowArray, IExtendedStorageTransaction>();
+
+  /**
+   * Writes each array of `#splicedArrays` as the links it holds now, under
+   * a read of the array.
+   */
+  #writeSplicedArrays(): void {
+    for (const [array, tx] of this.#splicedArrays) {
+      const at: NormalizedFullLink = {
+        space: this.#spaceOf(array.doc),
+        id: this.entityOf(array.doc),
+        path: [...array.path],
+        scope: "space",
+      };
+      tx.readValueOrThrow(at);
+      tx.writeValueOrThrow(
+        at,
+        array.keys.map((key) => this.#linkOfRow(array, key)),
+      );
+      this.#counts.rowArraysWritten += 1;
+    }
+    this.#splicedArrays.clear();
   }
 
   /** The records of bucket documents of a document of the executor. */
@@ -2155,6 +2229,8 @@ export class RuntimeTransactions implements TransactionHooks {
     for (const key of keys) {
       const id = this.#rowDocument(array, key);
       tx.writeValueOrThrow(this.#address(id, []), undefined, { delete: true });
+      array.ids.delete(key);
+      array.links.delete(key);
     }
   }
 
@@ -2187,13 +2263,10 @@ export class RuntimeTransactions implements TransactionHooks {
       const key = array.keys[index];
       if (
         index >= splice.start && index < splice.start + splice.inserted
-      ) return this.#writeRow(tx, array, key, held[index]);
-      const id = this.#rowDocument(array, key);
-      return createSigilLinkFromParsedLink({
-        id: this.entityOf(id),
-        space: this.#spaceOf(id),
-        path: [],
-      });
+      ) {
+        this.#writeRow(tx, array, key, held[index]);
+      }
+      return this.#linkOfRow(array, key);
     };
     // A position of the array is written at the array itself, which
     // `#address` would take for a path of the row's document.
@@ -2203,20 +2276,28 @@ export class RuntimeTransactions implements TransactionHooks {
       path: [...path, ...below],
       scope: "space",
     });
+    // A change of the members that is not given as one of positions writes
+    // the array, as the links it holds when the transaction ends
+    // (`#writeSplicedArrays`), and the rows that entered now. A row that
+    // moves is taken out by one such change and put in by another, and the
+    // array is written once for the two.
     if (!positions) {
       this.#counts.rowLinks += held.length;
-      tx.writeValueOrThrow(here([]), held.map((_, index) => linkAt(index)));
+      for (let offset = 0; offset < splice.inserted; offset++) {
+        linkAt(splice.start + offset);
+      }
+      this.#splicedArrays.set(array, tx);
       return;
     }
     const moved = splice.removed !== splice.inserted;
     const end = moved ? held.length : splice.start + splice.inserted;
     // A splice in the middle of a long array shifts every position behind
-    // it. The array is then written once, as the links it holds now, under
-    // a read of the array: the commit sends the difference from what the
-    // storage holds, which is the splice itself where the server takes
-    // splices of an array the transaction read, and the positions that
-    // differ otherwise. The paths written are the same either way.
-    const whole = moved && end - splice.start > SPLICE_AS_POSITIONS;
+    // it, and the array is then written in the same way, under a read of
+    // the array. A later splice of an array that waits for that write waits
+    // with it, since the transaction does not hold the array it would
+    // write positions of. The paths written are the same either way.
+    const whole = this.#splicedArrays.has(array) ||
+      (moved && end - splice.start > SPLICE_AS_POSITIONS);
     if (moved) {
       written.push([...path, "length"]);
       if (!whole) tx.writeValueOrThrow(here(["length"]), held.length);
@@ -2224,12 +2305,12 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#counts.rowLinks += Math.max(0, end - splice.start);
     for (let index = splice.start; index < end; index++) {
       written.push([...path, `${index}`]);
-      if (!whole) tx.writeValueOrThrow(here([`${index}`]), linkAt(index));
+      const link = index < splice.start + splice.inserted || !whole
+        ? linkAt(index)
+        : undefined;
+      if (!whole) tx.writeValueOrThrow(here([`${index}`]), link);
     }
-    if (whole) {
-      tx.readValueOrThrow(here([]));
-      tx.writeValueOrThrow(here([]), held.map((_, index) => linkAt(index)));
-    }
+    if (whole) this.#splicedArrays.set(array, tx);
   }
 
   /**
@@ -2790,6 +2871,8 @@ export class RuntimeTransactions implements TransactionHooks {
   /** @inheritDoc */
   end({ committed }: { committed: boolean }): void {
     const tx = this.#open();
+    if (committed) this.#writeSplicedArrays();
+    else this.#splicedArrays.clear();
     this.#tx = undefined;
     if (this.#given !== undefined) {
       if (tx !== this.#given.tx) {
