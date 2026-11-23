@@ -4083,11 +4083,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     );
     // The runner's explicit-instance read, transaction layer (stage A): a
     // per-instance run's read of a scoped instance the replica has NEVER
-    // seen kicks an instance-named load — the serving replica only ever
-    // receives the SERVICE's instances through its own watches (the
-    // memory server resolves a root's scoped links against the loopback
-    // session), so a demander's instance arrives only when a read names
-    // it. The read itself stays absent; the read is logged under that
+    // seen kicks an instance-named load — the serving replica receives a
+    // demander's instances only through a watch root that names one, and
+    // through the links the memory server follows from such a root, so an
+    // instance none of those reaches arrives only when a read names it.
+    // The read itself stays absent; the read is logged under that
     // instance, so the reader re-runs when the doc lands. Reserved once
     // per (space, instance, id) per manager (`shouldPullDoc`), like the
     // link-target kick in `Runtime.ensureLinkedDocLoaded`. Never on the
