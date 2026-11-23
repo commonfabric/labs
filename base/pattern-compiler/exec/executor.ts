@@ -7057,7 +7057,8 @@ export class Instance {
 
   /**
    * The narrowest scope that each path of the result was stored in a
-   * scope instance of the result document in, by the text of the path.
+   * scope instance of the document of the scoped outputs in
+   * (`#scopedOutputs`), by the text of the path.
    */
   readonly #placeScopes = new Map<string, Scope>();
 
@@ -7065,9 +7066,10 @@ export class Instance {
    * The reference the result holds in the place of the output `index`,
    * where the output was evaluated for one scope key, and nothing where
    * it is one for every key: the value is stored at the path of the
-   * output in the scope instance of the result document, and the result
-   * document of the space holds a link of that scope to it
-   * (`execution-and-storage.md` §4.1).
+   * output in the scope instance of the document of the scoped outputs
+   * (`#scopedOutputs`), and the result document holds a link of that
+   * scope to it. `execution-and-storage.md` §4.1 assumes the scope
+   * instance of the result document in that place.
    */
   scopedOutput(index: number, host: Host): unknown {
     const output = this.plan.outputs[index];
@@ -7102,7 +7104,8 @@ export class Instance {
    * collection `reference` that stands at the path `at` of the result,
    * where the assembly is of a scope key, and nothing where it is one for
    * every key. The rows are stored whole in the scope instance of the
-   * result document. Below a row of another collection they have no path
+   * document of the scoped outputs. Below a row of another collection
+   * they have no path
    * of the result, and the form is an error state.
    */
   #scopedRows(
@@ -7133,8 +7136,9 @@ export class Instance {
 
   /**
    * The entry that stores what `valueOf` gives at the path `path` of the
-   * scope instance of the result document, for the scope key evaluated
-   * for: its value is the reference to that place, which is the same for
+   * scope instance of the document of the scoped outputs, for the scope
+   * key evaluated for: its value is the reference to that place, which is
+   * the same for
    * every key. The value is stored with each reference to an assembled
    * collection in it settled, member by member where it differs from
    * what the place holds.

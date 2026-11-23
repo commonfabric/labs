@@ -1255,8 +1255,11 @@ holds the measurements and the conditions for revisiting.
   of a compiled piece with its own `wish`, the built-ins a compiled piece
   imports with its own functions, and the fetch effects of the reactive
   tier with its own fetch built-ins (`compiled/wish.ts`,
-  `compiled/builtins.ts`). The option
-  also gates the
+  `compiled/builtins.ts`). A compiled piece holds a document of the scope
+  `user` or `session` once for each principal or session, addressed by its
+  entity and that scope, and under a serving loop its derivation runs once
+  for each principal that demands the piece (`compiled/scopes.ts`). The
+  option also gates the
   start of a pattern from its source: where
   `runCompiledPatterns()` of `runtime/runner/src/compiled/run.ts` gave the
   runtime a pattern compiler (`Runtime.compiledPatternRunner`),

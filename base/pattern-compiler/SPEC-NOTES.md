@@ -18544,3 +18544,481 @@ the commit `1aa060a02b`. Its tables are in the folder of the round,
        per-element body (note 724). The executor and the adapter read neither
        member, and a link of the executor holds a document and a path and no
        scope.
+881. **What the round did, by step.**
+     - _How scopes work today (step 1), done._ Note 880.
+     - _User-scoped and session-scoped state in the executor and the adapter
+       (step 2), done, with what notes 883 and 890 leave open._ Notes 882 to
+       884.
+     - _`asScope` on a call in a per-element body, and the manager copy put back
+       (step 3), done._ Note 885.
+     - _The answers of built-ins for each asking principal and each question
+       (step 4), done._ Note 886.
+     - _A resume hears of what a built-in read (step 5), done for a built-in,
+       and not needed for a `wish`._ Note 887.
+     - _A host for a handle a built-in returns, and a handler that waits for a
+       document (step 6), not done, with a plan._ Note 888.
+     - _The serving loop in Workers and a compile outside the loop's wait (step
+       7), not done, with a plan._ Note 888.
+     - _Tables (step 8), done in part:_ what a further principal costs, on the
+       executor in memory; FabriChat and Home with one user on the runner path;
+       the corpus on the runner path, under serving and after a resume. Not
+       measured: FabriChat with two users on the serving path. Note 889.
+882. **Step 2: the scope instances of a document, and an entry for each scope
+     key.** The least machinery that was found sound, in three places.
+     - _The names (`exec/scope-instances.ts`)._ The executor names a document of
+       the scope `user` or `session` by one text for every principal: the name
+       it has for the document, and `~user` or `~session`. A link to it in a
+       document of the space is so the same for every reader, as today's link
+       is. Whoever runs the executor says which scope key an evaluation is for
+       (`Instance.options.scopes.keyOf`), and the store holds one copy of the
+       document for each key, under the name with the key (`Documents` of
+       `exec/store.ts` resolves a name in `get`, `set`, `has` and `delete`), and
+       keeps the time of the last change of each copy by itself (`#noteChange`,
+       `changedSince`).
+     - _Which documents are of a scope._ A state cell by `StateCell.scope` of
+       the plan (`stateCellDocument`), the state document of an operation by
+       `Operation.scope` (`#operationState`, `#resolveWish`), the document of an
+       array that an output of a scope returned whole (`#generated`), and the
+       document of the scoped outputs of an instance (below). A state cell of a
+       scope is given its first value once for each key (`stateCell`,
+       `#stateCellFor`).
+     - _An entry for each scope key (`#ensure` of `exec/executor.ts`)._ The
+       scope of an entry is found by running, as today's is: an evaluation that
+       reads or writes a scope instance, or uses an entry of a scope key, is of
+       that scope, and the scope of an entry only narrows
+       (`ScopeInstances.narrow`). Each evaluation has a frame that holds the
+       narrowest scope it touched. The memo holds the entry of the key that is
+       evaluated for: the entry of another key is set aside by its key
+       (`#forActing`) and brought back when its key is evaluated for again, and
+       is then compared with everything it read and used, since no change marked
+       it meanwhile. An entry that touched nothing scoped is one for every key,
+       so what is of the space is derived once. An entry that was one for every
+       key and is found to be of one counts as changed, so that what used it is
+       evaluated again and is of a key too.
+     - _What is not set aside._ The assembly of a collection: its element table
+       stands beside the entry and is one for the instance, so the assembly of a
+       collection of a scope is formed again each time another key is evaluated
+       for. The entries of its elements are set aside, so no body of an element
+       runs again. The cost is in note 884.
+     - _Entries held by reference._ The entry of an operation and of a child
+       holds a reference to documents its evaluation made, which is the same for
+       every key, so what uses it is of no key on its account
+       (`#ensureReference`). Nothing then demands the entry of a key where its
+       users are current, so each derivation brings the entries of a scope key
+       that stand outside every element body, and those held by reference, up to
+       date for the key it is for (`#pullScoped`, called in `#settle`).
+     - _An output of a scope (`scopedOutput`, `#scopedPlace`, `#putScoped`)._
+       Where the entry of a kept output is of a scope key, the result record
+       holds a reference in its place, and the value is stored at the path of
+       the output in the scope instance of one document of the instance, the
+       document of its scoped outputs (`#scopedOutputs`), with each reference to
+       an assembled collection in it settled, written member by member where it
+       differs. The result document of the space holds a link of that scope, the
+       same for every reader. A collection of a scope that stands in an output
+       of the space is stored the same way at its path (`#scopedRows`, called in
+       `#formOf`), and one that stands in a row of another collection takes an
+       error state there. The write records of such a path are those of the
+       output (`#writesOf`).
+     - _What is refused._ An evaluation that is found to be of a scope and wrote
+       what it derived into a document of the space takes an error state and its
+       writes are withdrawn (`#refuseStoredForEveryKey`): the request of an
+       effect that depends on a value of a scope, the argument of a child, a
+       constant held for a body. A write through a write edge to a cell lands in
+       the scope of the cell, as today.
+     - _The adapter (`compiled/scopes.ts`, `compiled/transactions.ts`)._ It
+       addresses a document of a scope by its entity and the name of the scope
+       (`#address`, `#cfcAddress`, `#storedLabels`, the target in `#record`),
+       and the transaction of the run resolves the instance from the identity it
+       carries, as it does for a cell of any pattern: the serving loop's stamp
+       of a derivation or a handler, or the runtime's own identity. Nothing in
+       the adapter says which principal a run is for. What it keeps of a
+       document from one transaction to the next it keeps for each instance
+       (`DocumentInstances`, `ByDocumentInstance`). A link holds the scope of
+       its target: `#decode` gives a link of a scope the name of that scope,
+       with the scope of the document it is in where it names none, and
+       `#encodeOnce` writes the scope back, and in a piece that has documents of
+       a scope also `space`, since a link with no scope inherits the scope of
+       the document it is stored in. A change another writer committed to one
+       instance is applied to that instance (`ChangeByOther.scoped`,
+       `actingAs`), and what a refused transaction wrote is restored for the
+       identity that transaction carried (`#restored`, `actingFor`,
+       `Restored.acting`).
+     - _The piece (`compiled/piece.ts`)._ From the run on in which the piece
+       named a document of a scope, the derivation names its piece
+       (`observationIdentity`, `#subscribe`), so a serving loop runs it once for
+       each principal that demands the piece. A piece with no such document is
+       derived by an action that names no piece, as before. A run in which every
+       entry is current reads no document of a scope through its transaction, so
+       the piece sets the scope the transaction read to the narrowest scope it
+       has named a document of. The state document of a `wish` the plan gives
+       the scope `user` is of that scope, so the request and the outcome of each
+       principal are in that principal's instance (`RuntimeWishes.answer`), and
+       the outcome is a link with the scope of the cell the runtime's `wish`
+       sent, where round thirteen copied the value (P291 is withdrawn).
+     - _Tests._ `exec/test/scope-instances.test.ts`, thirteen cases on the
+       executor in memory over `fixtures/scoped.tsx`, `scoped-rows.tsx` and
+       `scoped-site.tsx`. `runtime/runner/test/compiled/scoped-serving.test.ts`,
+       five cases with two clients of two identities under the serving loop: the
+       nickname of each, a value of the space both read after one changed it,
+       the instances the store holds for each principal, a takeover by a second
+       serving loop, and `spaceAccess` for each (step 4). The first seven cases
+       of the executor suite were seen to fail with one principal's value given
+       to the other. The cases of the rows and of the site were written after
+       the code.
+883. **What the serving loop showed, in the order found.**
+     - _The runs of one pass do not see each other's writes._ The scheduler runs
+       the derivation for one principal after another inside one run of the
+       action, and the write of the first is not in the replica when the second
+       reads. The second run of a pass was refused as inconsistent where its
+       transaction read a document of the space the first had written. Three
+       causes were removed: the basis document, which every run wrote (a piece
+       that has documents of a scope now records its basis in a run that made a
+       document, and in no other, P354); the label of the result document, which
+       a run read where it stored a path of the result again (the result now
+       depends on the reference to a scoped output and not on the entry of one
+       key); and the result document itself, whose instance of the space the
+       runtime reads with each of its instances of a scope
+       (`cfc-scoped-instance-labels`), so the outputs of a scope are in a
+       document of their own (P351). What is left is in note 890.
+     - _A refused commit left the executor ahead for the wrong principal._
+       `#restored` read the storage with the runtime's identity and the piece
+       applied the value to that identity's copy. Both now use the identity the
+       refused transaction carried, and the entries that stored a scoped output
+       are marked, so they store it again (`Instance.restore`).
+     - _A resume read the documents of a scope as absent._ `resume.ts` named an
+       entity for a name with a scope and brought it at the scope `space`.
+       `linkOfDocument` gives the entity and the scope, and `bringReached`
+       follows a link in the scope it names.
+     - _A derivation that was invalidated during its own run ran again in the
+       same pass._ The scheduler runs an action that names its piece again at
+       once where its run left it not current, and the replica does not hold
+       what the run wrote yet. The derivation that follows the first derivation
+       of the instances a handler made, and the run that first names the piece,
+       are now asked for when the transaction of the run has ended. The corpus
+       under the serving loop showed it, with three modules refused once each.
+     - _A resume did not bring what a link of a scope led to._ The outcome of a
+       `wish` is a link to the cell the runtime's `wish` keeps, where it was a
+       copy. `resumeCompiledPiece` now also brings a document of the space of
+       the piece that the executor asked for and the replica held none of
+       (`RuntimeTransactions.wanted`), and derives again. The corpus after a
+       resume showed it, with three modules that did not resume.
+     - _A harness's stamp had no session._ `actsFor` stamped a derivation with a
+       principal alone, and a read of a document of the scope `session` threw.
+       The stamp holds the session of the runtime.
+884. **What a further principal costs.** `compare/scope-cost.ts`, on the
+     executor in memory over `fixtures/scoped-rows.tsx`: a `map` over an array
+     of plain values in place, a list of the space, whose body reads what the
+     acting user picked. One run of each cell, on an Apple M5 Max with 18 cores
+     at a load average of 15 from other work. Times in milliseconds, summed over
+     the principals; "element" is evaluations of an element body, summed over
+     the principals.
+
+     | Rows  | Principals | Derived again, nothing changed | A note posted: ms, element | One principal picks: ms, element | Entries set aside |
+     | ----- | ---------- | ------------------------------ | -------------------------- | -------------------------------- | ----------------- |
+     | 100   | 1          | 0.02                           | 3.2, 2                     | 7.0, 101                         | 0                 |
+     | 100   | 2          | 3.6                            | 6.1, 3                     | 6.5, 101                         | 102               |
+     | 100   | 8          | 15.2                           | 19.7, 9                    | 17.9, 101                        | 714               |
+     | 1,000 | 1          | 0.03                           | 19.6, 2                    | 42.4, 1,001                      | 0                 |
+     | 1,000 | 2          | 28.9                           | 41.0, 3                    | 58.6, 1,001                      | 1,002             |
+     | 1,000 | 8          | 107.5                          | 141.7, 9                   | 136.8, 1,001                     | 7,014             |
+
+     So, for each further principal that demands the piece: one memo entry for
+     each cone instance that reads state of a scope (one for each row here), one
+     copy of each document of a scope, and one run of the derivation at each
+     change. A run evaluates the bodies whose reads changed for that principal
+     and no other: a note that is posted costs one body for each principal, and
+     a pick by one principal costs the bodies of that principal alone. What
+     follows the size of the list is the assembly: each run for another
+     principal than the one before forms the assembly of a collection of a scope
+     again and compares the stored rows member by member, about 14 microseconds
+     for each row and principal, also where nothing changed. With one principal
+     nothing is formed again.
+885. **Step 3: `asScope` on a call that is compiled in.** `src/plan.rs`:
+     `as_scope` recognizes a pattern called through `asScope(scope)` alone,
+     `call` compiles it in as a call with no modifier, and `state_cell` gives a
+     state cell the narrowest of its own scope and the scopes of the sites it is
+     compiled in through, as question 161 of `plan-and-label-templates.md`
+     assumes. The same over an array of references, over an array of plain
+     values in place and over the result of another per-element construct, which
+     the plan does not tell apart, and outside an element body. `src/emit.rs`
+     (`call`) renders the call as the site it is. Test: `tests/plan.rs`,
+     `as_scope_on_a_call_compiled_in_sets_the_scope_of_the_state_of_the_callee`,
+     seen to fail with "a call form in the reactive tier", and two cases of the
+     executor suite over `fixtures/scoped-site.tsx`. The copy of the FabriChat
+     manager instantiates `RoomRoster` and `NoticeTold` with `asScope("user")`
+     again (the stand-in of note 724 is reverted in a commit of its own), and
+     the manager starts with no cone in an error state. `asScope` composed with
+     `asInstance()` is as before: the plan has no `Child.scope`, and the
+     executor reads none.
+886. **Step 4: the answers of built-ins.** `RuntimeAnswers` of
+     `compiled/builtins.ts` keeps, for each question, the answer each principal
+     was given and the entries that used it, and has an action of the scheduler
+     for each question, which asks it again through the transaction the
+     scheduler gives it: the scheduler runs the action of a question when
+     something its answer read changes, and no other. The action names the piece
+     and reads the principal of its run with the runtime's
+     `homeSpacePrincipalFor`, which makes the run one of the scope `user`, so a
+     serving loop runs it once for each principal that demands the piece, and
+     each run compares with what that principal was answered and marks that
+     principal's entries (`Instance.markStale` with the scope keys of the
+     principal). `spaceAccess` answers for the acting principal: the entry that
+     used its answer is of the scope `user` (`reading(..., true)`). The other
+     built-ins answer the same for every principal and their users are entries
+     for every key. Tests: `runtime-answers.test.ts`, two cases, and the fifth
+     case of `scoped-serving.test.ts`, seen to fail with `unknown` for the
+     owner. Not built: an action of a question no entry uses any more stays
+     registered until the piece stops.
+887. **Step 5: what a resume hears of.** A piece that has a `wish` is never
+     resumed without its executor: the runtime's `wish` keeps its state in a
+     cell of the scope `user`, the outcome links to it, and a piece that has
+     named a document of a scope has a basis that names that document, which has
+     no number, so the basis never matches (P354). Its wake registers every
+     action again. What was left is a piece with no document of a scope whose
+     derivations asked a built-in: `compiled/outside-reads.ts` keeps, for each
+     question and principal, the documents of the space scope the run of its
+     action read, by the position that read them, the derivation stores them in
+     a document of the piece (`OutsideReads.flush`), and `wakeOnOutsideReads`
+     brings those documents into the replica of a piece that was resumed from a
+     matching basis and wakes it at a commit that changes one. `serving.ts`
+     (`start`) calls it. The same record is kept for a `wish`
+     (`RuntimeWishesOptions.read`), by the identifier of its state document, and
+     is written for no piece today, since every piece with a `wish` has a
+     document of a scope. Test: `outside-reads.test.ts` over
+     `fixtures/space-members.tsx`, seen to fail with the piece never woken. Not
+     built: a change between the comparison of the basis and the start of the
+     watch is not seen.
+888. **Steps 6 and 7, not done, and the plans.**
+     - _A host for a handle a built-in returns._ `returned` of `runtimeBuiltins`
+       makes the handle with no host. The plan: the host is that of the handle
+       the built-in was given, read through an accessor beside `targetOf`, and
+       in the reactive tier that of the evaluation in progress, which
+       `Instance.#evaluating` has to hold. No test could be written: in every
+       fixture tried, the body of a handler, of a `lift` and of an authored
+       function was handed the list as an array of handles and not as a handle,
+       so the runtime's `linksOf` refused it ("takes a cell as its target"),
+       which is the open finding of note 744. In a handler the read through the
+       returned handle does reach the transaction (seen in the journal of the
+       handler's transaction); what is missing is its place in the write record.
+     - _A handler that waits for a document._ The plan: the piece does what
+       `linksOf` does for a handler of today's path. Where the handler's run
+       asked for a document the replica holds none of
+       (`RuntimeTransactions.wanted`), the piece starts the load (`#bring`) and
+       calls `withdrawHandlerWhileLoading`, which marks the transaction
+       (`dispatchedHandlerNotRun`) where the load is under way, and the
+       scheduler runs the handler again when the document arrived. The executor
+       has gone on by then: the documents the handler wrote are restored from
+       the storage (`#restored`), as after a refused commit. It is sound because
+       the scheduler commits nothing of a withdrawn run, and the event stays the
+       next of its stream.
+     - _The serving loop in Workers, and the compile outside the loop's wait._
+       As note 749 has it; nothing was added. The meaning of an event to a piece
+       whose program is still compiling, for the build: the event is an entry of
+       its stream, which the serving loop passes when a handler ran for it, so
+       the loader answers "not served yet", the event stays the next entry of
+       its stream, and the loader has the serving loop take the piece up when
+       the artifact is there. A client observes the commit of its event and,
+       later than today, the commit of what the handler wrote, and no refusal.
+889. **Step 8: measured.** One run of each cell, on an Apple M5 Max with 18
+     cores at a load average of 13 to 14 from other work, at the commit
+     `234e56fca4`; round thirteen measured at a load of 6 to 8 (note 750). Three
+     sends each. Milliseconds.
+     - _FabriChat and Home with one user, on the runner path_ (the arm `runner`
+       of `compare/fabrichat/scale.ts`, with the runtime's `wish` and built-ins
+       and `actsFor`). The state of the scope `session` and `user` of the room
+       is now held in scope instances, and the manager instantiates `RoomRoster`
+       and `NoticeTold` with `asScope("user")`.
+
+       | Step            | Messages held | This round | In the piece | Round thirteen |
+       | --------------- | ------------- | ---------- | ------------ | -------------- |
+       | Room, start     | 0             | 329, 157   |              | 246, 101       |
+       | Room, send      | 10            | 71 to 79   | 32 to 36     | 65 to 67       |
+       | Room, send      | 100           | 266 to 300 | 123 to 129   | 276 to 297     |
+       | Room, fill      | 100           | 18,119     |              | 15,119         |
+       | Manager, start  |               | 243        |              | 210            |
+       | Home, start     |               | 368        |              | 343            |
+       | Home, one event |               | 64         | 17           | 53             |
+
+       A send evaluates 27 cones where it evaluated 26, reads the same positions
+       (116 to 128 at 10, 656 to 668 at 100), stages 9 or 10 writes, and gives
+       146 to 156 records at 10 where it gave 139, and 597 to 607 at 100 where
+       it gave 501: the outputs of the scope `session` are stored whole in their
+       scope instance, with the records of their paths. The room starts with no
+       cone in an error state. The manager evaluates 53 cones at its start, as
+       in round thirteen, and Home 124 where it evaluated 119, with the two
+       cones in an error state it had. At this load the difference of the times
+       to round thirteen is within what the load explains, and was not separated
+       from it.
+     - _Two users on the serving path: not measured for FabriChat._ `scale.ts`
+       has no arm under the serving loop, and none was added: a send of the room
+       needs the profile of the sender, and a `wish` for a seeded profile did
+       not resolve under the serving loop in the test of the round (note 890).
+       What two users cost was measured on the executor in memory (note 884),
+       and the behavior with two clients under the serving loop is in the tests
+       of note 882, with no times.
+     - _The corpus_ (`compare/runner-corpus.ts`), against round thirteen
+       (note 750) on the runner path and after a resume, and against the run of
+       the round on the basis for the serving loop (`r13-basis/`):
+
+       | Count                                   | Runner path | Round thirteen | Under serving | Before | After a resume | Round thirteen |
+       | --------------------------------------- | ----------: | -------------: | ------------: | -----: | -------------: | -------------: |
+       | Modules run                             |         273 |            273 |           239 |    239 |            273 |            273 |
+       | Started                                 |         264 |            264 |           232 |    230 |            264 |            264 |
+       | Every event handled                     |         222 |            221 |           200 |    200 |            221 |            221 |
+       | No commit refused                       |         251 |            251 |           222 |    220 |            253 |            254 |
+       | Equal to the executor in memory         |         232 |            231 |           209 |    212 |            230 |            230 |
+       | With a `wish`: equal, of those compared |    21 of 31 |       20 of 31 |       not run |        |       21 of 31 |       20 of 31 |
+       | Resumed by a second runtime             |             |                |               |        |            154 |            154 |
+       | The basis matched, nothing evaluated    |             |                |               |        |            137 |            145 |
+       | The resume wrote no document            |             |                |               |        |             89 |             99 |
+
+       On the runner path three modules changed, none for the worse. Under the
+       serving loop two modules start that did not
+       (`system/fabrichat/message-row.tsx`,
+       `system/profile-picker/profile-picker.tsx`), and three that held the
+       values of the executor in memory no longer do: `apps/redactor/vault.tsx`,
+       `apps/topic-workbench/main.tsx` and `showcase/wordsearch/play.tsx`, each
+       with state of the scope `session` or `user`. After a resume
+       `topic-workbench` differs as well, at a value of a state cell of the
+       scope `session`: the second runtime is another session, which reads its
+       own instance, where the executor in memory has one for all. The other two
+       were not looked into. Fourteen modules with state of a scope are no
+       longer found current by a resume (P354). A module with a `wish` is still
+       left out under the serving loop, where no client of the harness seeds the
+       home. The first run of the corpus in this round showed three modules
+       refused once under the serving loop and three that did not resume, which
+       the last commit of the code removed (note 883); the files of that run are
+       in `r14-scope/first-run/`.
+890. **Findings on structure, scale and soundness.**
+     - _Soundness, closed: a compiled piece had one instance for every
+       principal_ (note 751). A document of a scope is held and stored once for
+       each principal, an entry that read one is kept for its principal, and a
+       value of a scope is stored in no document of the space (note 882).
+     - _Structure, open: the runs of one pass for several principals do not see
+       each other's writes_ (note 883). The run for the first principal of a
+       pass evaluates what is of the space and writes it. A run for another
+       principal of the same pass that reads, through its transaction, a
+       document of the space the first wrote in that pass is refused as
+       inconsistent, restored, and run again in the next pass, where it commits.
+       The result document, the basis and the labels of the result no longer
+       cause it. What can still cause it: an entry of a scope that reads a row
+       document, a bucket document or the document of an array an output
+       returned whole, in the pass in which an entry of the space wrote that
+       document. No test shows the case, and the rule P290 does not stop the
+       second run, since the reason of the refusal holds the hashes of the
+       documents. The plan: the derivation as two actions of the scheduler, one
+       that names no piece and evaluates what is of the space, and one that
+       names the piece and evaluates what is of a scope, which the scheduler
+       runs for each principal after the commit of the first.
+     - _Structure, open: a piece with a `wish`, or with any state of a scope, is
+       never resumed without its executor_ (note 887, P354). A basis cannot say
+       that the piece is up to date for a principal that has not demanded it
+       yet. So the resume that evaluates nothing (milestone 6) no longer applies
+       to FabriChat, to Home, or to any piece with a `wish`: each takeover
+       starts their executors. The plan is with the resume by units: a basis for
+       each scope key, compared for the principals that demand the piece.
+     - _Scale, open: the assembly of a collection of a scope is formed again for
+       each principal at each run, and an output of a scope is stored whole_
+       (note 884): work that follows the rows for each principal at each change,
+       also where nothing of that principal changed. The plan: the element table
+       by scope key, so that the assembly is set aside like any entry, and the
+       rows of a collection of a scope in row documents of that scope, each
+       behind a link of the scope at the row's position, as the rule of `map` in
+       `scoped-cell-instances.md` has it.
+     - _Scale, open: memory follows the principals ever seen._ The executor
+       keeps the copy of each document of a scope and the entries set aside for
+       each scope key until the piece stops, also for a principal that no longer
+       demands the piece.
+     - _Scale, open: one action of the scheduler for each question of a
+       built-in_ (note 886), which is one for each message of a room for
+       `principalOf`, registered when the piece starts, and none is removed when
+       its question is no longer asked.
+     - _Structure, open: the first derivation of a piece runs for the serving
+       runtime's own identity._ The piece is started in the transaction of the
+       load, which carries no principal, so the first derivation writes the
+       instances of the serving identity (three documents for
+       `fixtures/scoped.tsx`), which no client reads. Today's runtime does the
+       same for a node nobody demands with an identity.
+     - _Not diagnosed: a `wish` for a seeded profile under the serving loop._
+       With a home written from each client (a profile in the space of the
+       identity, the claim, and the root that lists it), the greeting of
+       `fixtures/scoped.tsx` stayed `hello nobody` for both principals under the
+       serving loop. Each principal did get a state document and an outcome of
+       its own. On the runner path the same wish resolves (`wish.test.ts`).
+       Whether the seed or the cross-space read of the serving runtime is at
+       fault was not looked into.
+     - _Open as before:_ a handle a built-in returns has no host, a handler does
+       not wait for a document that is being brought, a body is handed a value
+       where it declares a handle (note 744), and the serving loop in Workers
+       gets no compiler (note 888).
+891. **Provisional decisions of the round, and what was not verified.** P350:
+     the executor names a document of a scope by one name for every principal,
+     and the transaction of the run resolves the instance (note 882). P351: an
+     output of a scope is stored in the scope instance of a document of its own
+     and not of the result document, behind a link in the result;
+     `execution-and-storage.md` §4.1 assumes the result document (notes 882 and
+     883). P352: the scope of an entry is found by running and only narrows, and
+     the assembly of a collection of a scope is formed again and not set aside
+     (note 882). P353: an evaluation of a scope that stored what it derived in a
+     document of the space takes an error state (note 882). P354: the basis of a
+     piece that has named a document of a scope names that document with no
+     number, so a resume starts its executor, and such a piece records its basis
+     in a run that made a document alone (note 883). P355: the derivation names
+     its piece from the run on in which the piece named a document of a scope,
+     and a run then counts as one of the narrowest scope the piece has named a
+     document of (note 882). P356: `asScope` on a call that is compiled in sets
+     the scope of the state cells of the callee (note 885). P357: an answer of a
+     built-in is kept for each principal, and `spaceAccess` alone makes its user
+     an entry of the scope `user` (note 886). P358: a piece stores what its
+     built-ins read outside the executor by position, for a resume from a
+     matching basis (note 887). P359: in a piece that has documents of a scope,
+     a stored link says the scope of its target, `space` included (note 882).
+     P360: the stamp a harness gives a derivation holds the session of the
+     runtime (note 883). _Not verified:_ a principal that comes to demand a
+     piece after it narrowed, or after the others left; two sessions of one
+     principal; a write of a client to a document of a scope, as through a
+     member bound both ways; a per-element construct of a scope under the
+     serving loop (the executor suite alone covers it); FabriChat or Home with
+     two users, on any path; a `wish` that resolves a profile under the serving
+     loop; a resume of a piece with state of a scope on a memory server over a
+     socket; the refusal of note 890 with its second run; today's runtime beside
+     any figure; each table is one run, at a load average of 15 to 20.
+
+### CFC questions deferred, round fourteen
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. An output of a scope is stored in a document of its own (P351). The runtime
+   reads the label of an instance of a scope joined with the confidentiality of
+   the instance of the space of the same document. For the result document that
+   would join what every output of the space declares; for the document of the
+   scoped outputs the instance of the space is absent, so nothing is joined.
+   Which the label of an output of a scope should carry.
+2. A value of the space is derived once, in the run of the principal the
+   scheduler ran first, through a transaction that carries that principal: its
+   reads are made under the read ceiling of that principal's session, and the
+   serving loop attributes the write to that principal where the run read
+   something of a scope. Every principal then reads the value. Today a node of
+   the space runs once for the smallest demanding pair, with the same question.
+3. The piece sets the scope its derivation's transaction read to the narrowest
+   scope it has named a document of (P355), where the run read no such document
+   through the transaction. The serving loop derives the attribution of the run
+   from that scope. Whether a run that wrote documents of the space alone should
+   carry the principal.
+4. `spaceAccess` alone makes its user an entry of one principal (P357).
+   `principalOf`, `profileOwnerOf`, `resultOwnerOf`, `spaceMembers` and the
+   others are answered through the transaction of whichever principal ran first
+   and their users are given to every principal. Whether an answer that one
+   principal's session may read is one another's may read.
+5. An evaluation of a scope that writes a cell of the space through a write edge
+   is not refused (P353): scope is no label, and the label of that write is the
+   template's. Whether a derived write from a narrower scope into a cell of the
+   space needs a declaration.
+6. The outcome of a `wish` of the scope `user` is now a link to the cell the
+   runtime's `wish` keeps for the principal, in a state document of the same
+   scope (question 2 of round thirteen is answered in form). The label of the
+   outcome is still that of the transaction of the runtime's `wish` (question 1
+   of round thirteen).
+7. The first derivation of a served piece writes the instances of the serving
+   identity (note 890), under the label the records give.
+8. A handle a built-in returns still reads with no host (question 7 of round
+   thirteen).
