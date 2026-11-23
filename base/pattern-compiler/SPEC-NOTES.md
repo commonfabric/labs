@@ -13457,8 +13457,8 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        written again. The basis index of `scheduler-and-serving-loop.md` §10.4
        is what would let a resume skip the evaluation, and it is not built (note
        803).
-     - _What is written (P130)._ The derivation of a resume is one transaction. A
-       change of it that writes what the storage holds is no write: the
+     - _What is written (P130)._ The derivation of a resume is one transaction.
+       A change of it that writes what the storage holds is no write: the
        runtime's transaction logs no attempt for it, and the adapter then gives
        no record and does not count the path as written
        (`RuntimeTransactions.change`, `#resuming`). A resume over inputs that
@@ -13555,8 +13555,8 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
      The third item is the large one: the executor's assembly holds every row in
      memory today.
 804. **Step 3: the piece under the serving loop, as built (provisional decisions
-     P133 to P136).** One piece of space scope, started by a client and run by the
-     serving runtime of its space.
+     P133 to P136).** One piece of space scope, started by a client and run by
+     the serving runtime of its space.
      - _The client sets the piece up and runs nothing (P133, P136)._
        `setUpCompiledPiece(runtime, tx, artifact, argument, resultCell)` writes
        three documents and no result: the compiled pattern, as the JSON text of
@@ -13673,9 +13673,9 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        installs the loader; a toolshed must not, until the server compiles
        (§10.5) or the artifact carries the integrity of compiled output, and
        until the value code runs in the sandbox.
-     - _A rejected wave left the executor ahead of the storage_ (note 804, P135),
-       closed with a test. Not closed: the restore follows the size of the
-       result, and a wave that holds the transactions of two pieces restores
+     - _A rejected wave left the executor ahead of the storage_ (note 804,
+       P135), closed with a test. Not closed: the restore follows the size of
+       the result, and a wave that holds the transactions of two pieces restores
        each.
      - _The names of handler runs and of the documents handlers make restarted
        from zero in a second process_ (note 802, P132), closed with a test.
@@ -13835,12 +13835,12 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
      piece on a serving runtime is one transaction of a wave, stamped as a
      derivation with no acting principal (note 804). P135: the replica's revert
      of a transaction that had settled is a refused commit of the piece (note
-     804). P136: a client under server execution runs nothing of a compiled piece
-     (note 804). Not done: the basis index (note 803), a bounded load under the
-     serving loop, the resume of an instance a handler made, events a handler
-     sends as durable entries, the profile of an append under server execution,
-     the cause of the 11 modules that differ after a resume, Topics under the
-     serving loop, and every construct FabriChat and Home lack.
+     804). P136: a client under server execution runs nothing of a compiled
+     piece (note 804). Not done: the basis index (note 803), a bounded load
+     under the serving loop, the resume of an instance a handler made, events a
+     handler sends as durable entries, the profile of an append under server
+     execution, the cause of the 11 modules that differ after a resume, Topics
+     under the serving loop, and every construct FabriChat and Home lack.
 
 ### CFC questions deferred, milestone 6
 
@@ -13865,12 +13865,12 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    principal (P134), though a client's setup caused it and the client chose the
    argument. Whether the load is a derivation or the consequence of the client's
    act, and under which principal its labels are formed.
-6. A client writes the argument document and the compiled pattern (P133), and the
-   serving runtime takes both as it finds them: the artifact has no integrity of
-   compiled output, and the argument has the label of the client's commit.
-   Beside the soundness finding of note 806, which integrity the derived values
-   of such a piece may claim: the atom `TransformedBy` names a compiled pattern
-   that nobody attested.
+6. A client writes the argument document and the compiled pattern (P133), and
+   the serving runtime takes both as it finds them: the artifact has no
+   integrity of compiled output, and the argument has the label of the client's
+   commit. Beside the soundness finding of note 806, which integrity the derived
+   values of such a piece may claim: the atom `TransformedBy` names a compiled
+   pattern that nobody attested.
 7. The restore after a rejected wave (P135) reads the documents the withdrawn
    transactions wrote outside any transaction of the piece, and the derivation
    that follows gives every row its record again. Whether those rows may be
