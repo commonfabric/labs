@@ -761,7 +761,17 @@ type Writer = (context: Context) => void;
  */
 type Bound =
   | { observes: string; at: (Position | Ref)[] }
-  | { upstream: { collection: number; keys: [number, string][] } }
+  | {
+    upstream: { collection: number; keys: [number, string][] };
+    /**
+     * The stored positions that the read of the slot went through, where
+     * the upstream element holds a reference there and the slot reads what
+     * the reference names: the label of the slot is then that of the
+     * upstream output, which says which reference the element holds,
+     * joined with the label of the read at these positions.
+     */
+    through?: { observes: string; at: (Position | Ref)[] };
+  }
   /** A constant of the plan, such as a literal a binding gives its state. */
   | { constant: true }
   /**
@@ -8510,6 +8520,17 @@ export class Instance {
         element !== undefined && upstream !== undefined &&
         !(element.source instanceof Ref) && "entry" in element.source
       ) {
+        // A read of a value through a reference that the upstream element
+        // holds went through stored positions, which the label of the
+        // upstream output, the label of the reference, does not cover.
+        const read = slot.observes === "identity" ? [] : host.reads.slice(from);
+        const held = host.bound.get(index);
+        const through = held !== undefined && "upstream" in held
+          ? held.through
+          : undefined;
+        if (through !== undefined) {
+          for (const position of read) through.at.push(position);
+        }
         host.bound.set(index, {
           upstream: {
             collection: upstream,
@@ -8518,6 +8539,11 @@ export class Instance {
               [upstream, element.key],
             ],
           },
+          ...(through !== undefined
+            ? { through }
+            : read.length === 0
+            ? {}
+            : { through: { observes: slot.observes, at: read } }),
         });
         return;
       }
@@ -9118,7 +9144,19 @@ export class Instance {
           for (const at of upstream.positions ?? []) positions.push(at);
           return id;
         });
-        parts.push(`${slot}<${ids.join("|")}>`);
+        const through = bound.through === undefined
+          ? []
+          : this.#addressesOf(bound.through.at);
+        for (const at of through) positions.push(at);
+        const read = through.map((address) =>
+          this.#labelKey(address, bound.through?.observes ?? "value") ??
+            JSON.stringify([address.doc, address.path])
+        );
+        parts.push(
+          `${slot}<${ids.join("|")}>${
+            read.length === 0 ? "" : `@${[...new Set(read)].join(",")}`
+          }`,
+        );
         continue;
       }
       const addresses = this.#addressesOf(bound.at);
@@ -10435,11 +10473,18 @@ export class Instance {
         collection,
         this.plan.slots[slot].path,
       );
+      const through = bound.through === undefined
+        ? undefined
+        : this.#bindingOf(slot, bound.through, outputs, depth);
+      const read = through !== undefined && "chain" in through &&
+          through.chain.length > 0
+        ? through
+        : undefined;
       if (output !== undefined) {
         outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
-        return { output };
+        return read === undefined ? { output } : { output, through: read };
       }
-      return { chain: [], observes: this.plan.slots[slot].observes };
+      return read ?? { chain: [], observes: this.plan.slots[slot].observes };
     }
     const { root } = this.plan.slots[slot];
     const wish = root.kind === "operation" &&
@@ -10688,6 +10733,7 @@ export class Instance {
         for (const each of this.#elementCones(collection)) {
           readInputs(this.#inputsOf(each, this.#keysFor(each, keys)), keys);
         }
+        for (const at of this.#addressesOf(bound.through?.at ?? [])) once(at);
       } else {
         for (const at of this.#addressesOf(bound.at)) once(at);
       }
@@ -11623,7 +11669,19 @@ export class Instance {
           if (id === undefined) return undefined;
           ids.push(id);
         }
-        parts.push(`${slot}<${ids.join("|")}>`);
+        const read = new Set<string>();
+        if (bound.through !== undefined) {
+          for (const address of this.#addressesOf(bound.through.at)) {
+            const label = this.#labelKey(address, bound.through.observes);
+            if (label === undefined) return undefined;
+            read.add(label);
+          }
+        }
+        parts.push(
+          `${slot}<${ids.join("|")}>${
+            read.size === 0 ? "" : `@${[...read].sort().join(",")}`
+          }`,
+        );
         continue;
       }
       const labels = new Set<string>();

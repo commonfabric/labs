@@ -2329,6 +2329,10 @@ export class RuntimeTransactions implements TransactionHooks {
    * and a slot whose label then depends on itself is refused as a cycle.
    */
   #takesStaged(binding: SlotBinding): boolean {
+    if ("output" in binding) {
+      return binding.through !== undefined &&
+        this.#takesStaged(binding.through);
+    }
     if (!("chain" in binding)) return false;
     const last = binding.chain.at(-1);
     if (last === undefined || !this.#wrote(last)) return false;
@@ -2341,8 +2345,20 @@ export class RuntimeTransactions implements TransactionHooks {
    * Helper for `#slots()`, for one binding, with whether its position
    * takes the staged label (`#takesStaged`).
    */
-  #binding(binding: SlotBinding, staged: boolean): RuntimeSlotBinding {
-    if ("output" in binding) return { output: binding.output };
+  #binding(
+    binding: SlotBinding,
+    staged: boolean,
+    alone = true,
+  ): RuntimeSlotBinding {
+    if ("output" in binding) {
+      if (binding.through === undefined) return { output: binding.output };
+      // The read keeps its chain where the one position it went through
+      // is one this transaction wrote, marked as read after the write.
+      const through = this.#binding(binding.through, staged, false);
+      return "chain" in through
+        ? { output: binding.output, through }
+        : { output: binding.output };
+    }
     if ("constant" in binding) return { constant: true };
     if ("staged" in binding) {
       return { staged: this.#cfcAddress(binding.staged) };
@@ -2350,7 +2366,10 @@ export class RuntimeTransactions implements TransactionHooks {
     // A staged position that the read crossed links to, or that holds
     // links the read followed, keeps those positions: the binding names
     // them all, marked as read after the write.
-    if (staged && binding.chain.length === 1 && binding.below === undefined) {
+    if (
+      alone && staged && binding.chain.length === 1 &&
+      binding.below === undefined
+    ) {
       return { staged: this.#cfcAddress(binding.chain[0]) };
     }
     // A position the transaction did not read, such as the one an element

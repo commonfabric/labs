@@ -137,6 +137,33 @@ describe("a keyed join: a `map` over an array of references whose body looks up 
     });
   });
 
+  it("lists the members of a bucket in the order of the source after a member moves in the source, and after a member returns to a bucket it had left", async () => {
+    const { instance, titles } = await started(6);
+
+    // The first member moves behind the last.
+    instance.spliceArgument(["items"], 0, 1, []);
+    instance.spliceArgument(["items"], 5, 0, [link("item-0")]);
+    instance.settle();
+
+    expect(titles()).toEqual({
+      even: ["t2", "t4", "t0"],
+      odd: ["t1", "t3", "t5"],
+      none: [],
+    });
+
+    // A member between two others of its bucket leaves it and returns.
+    instance.store.write(new Ref("item-4", ["tag"]), "odd");
+    instance.settle();
+    instance.store.write(new Ref("item-4", ["tag"]), "even");
+    instance.settle();
+
+    expect(titles()).toEqual({
+      even: ["t2", "t4", "t0"],
+      odd: ["t1", "t3", "t5"],
+      none: [],
+    });
+  });
+
   it("evaluates no key function and changes no bucket for a change of a member that the key function does not read", async () => {
     const { instance, work } = await started(4);
 
