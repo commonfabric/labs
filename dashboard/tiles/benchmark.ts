@@ -2,11 +2,11 @@
  * Trends one scale-invariant index of benchmark performance per processor on
  * main. Each index changes by the geometric mean of the selected benchmark
  * changes between consecutive runs on that processor. The all benchmarks tile
- * selects every product benchmark. The key benchmarks tile selects
- * `topic board/journey` and `topic board scale/100`. Each selected benchmark
- * carries the same weight regardless of size. `deno bench` samples each benchmark
- * to a fixed time budget, so a performance change moves the per-operation times
- * without materially changing the run's wall-clock time.
+ * selects every product benchmark. The key benchmarks tile selects the ones
+ * `KEY_BENCHMARKS` names. Each selected benchmark carries the same weight
+ * regardless of size. `deno bench` samples each benchmark to a fixed time
+ * budget, so a performance change moves the per-operation times without
+ * materially changing the run's wall-clock time.
  *
  * Each processor has its own colored line, and the headline shows the largest
  * established trend among processors measured in the last twelve hours.
@@ -1699,7 +1699,7 @@ export const benchmark: Tile = {
   ] satisfies Route[],
 };
 
-/** Topic board journey and 100-topic load measurements. */
+/** The measurements `KEY_BENCHMARKS` names. */
 export const keyBenchmarks: Tile = makeBenchmarkTile(KEY_SELECTION);
 
 export async function benchmarkHistoryResponse(

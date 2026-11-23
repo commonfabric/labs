@@ -198,7 +198,10 @@ faced them:
   instance holds. A seed whose create a
   wave dropped for that write runs once more to do so (serving-loop.md
   §3d), and one lost for good leaves the demander unseeded, asked again
-  when its demand next changes.
+  when its demand next changes. The
+  serving runtime's own start of a piece names no actor and seeds no
+  instance: not the service identity's session, which no viewer reads
+  and which every new serving runtime replaces.
   Demand-paced still: instances come only from demanders (never "all
   known principals"), and an eager/idle-scheduled node NOBODY demands
   with an identity keeps the wave-level fallback and, if it narrows,

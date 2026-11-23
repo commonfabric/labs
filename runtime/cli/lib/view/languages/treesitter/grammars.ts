@@ -1,4 +1,5 @@
 import type { TreeSitterGrammar } from "./adapter.ts";
+import { cGrammar, cppGrammar } from "../c-family/c-family.ts";
 import { hclGrammar } from "../hcl/hcl.ts";
 import { kotlinGrammar } from "../kotlin/kotlin.ts";
 import { pythonGrammar } from "../python/python.ts";
@@ -14,6 +15,8 @@ import { tomlGrammar } from "../toml/toml.ts";
  * ships generated C source and native builds that the pager never reads.
  */
 export const treeSitterGrammars: readonly TreeSitterGrammar[] = [
+  cGrammar,
+  cppGrammar,
   hclGrammar,
   kotlinGrammar,
   pythonGrammar,

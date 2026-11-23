@@ -196,7 +196,7 @@ validation step (`tasks/check-bench-report.ts`) fails the run when stdout
 carried no report, a report that will not parse, or anything besides the
 report, and when the report is missing what every tile needs of it: the
 processor identity, a product measurement, the machine calibration, and each
-of the two key benchmarks. That last is a set rather than the whole report — a
+of the key benchmarks. That last is a set rather than the whole report — a
 product benchmark that stopped reporting passes it, and shows up as its own
 series ending on the chart — and each of these shows up as a red run in the
 Actions tab. What keeps a corrupt artifact off the charts is the dashboard
@@ -242,14 +242,17 @@ and misses others.
 **Names identify chart series.** The dashboard tracks each benchmark by its
 origin file, group, and verbatim name. Renaming a bench or its group breaks
 the series: history stays under the old name and the renamed bench starts
-over. Two of those keys are written out in `KEY_BENCHMARKS` in
-`dashboard/bench-report.ts`, and the key benchmarks tile trends those
-and nothing else, so moving or renaming one of them costs that tile half of
-what it reads and both of them leave it nothing at all. Two things hold that
-in place: `deno task check-bench-workflow` fails a change that leaves one of
-those files out of the workflow's `deno bench` list, and the validation step
-fails a run whose report is missing either, which together keep such a change
-to a red check or one red run instead of a hole in the history. So:
+over. Five of those keys are written out in `KEY_BENCHMARKS` in
+`dashboard/bench-report.ts`: the topic board's `journey`, the 100-topic board
+load, and the `home cold`, `home warm`, and `room` steps of
+[the FabriChat setup benchmark](#setup-steps). The key benchmarks tile trends
+those and nothing else, so moving or renaming one of them costs that tile a
+fifth of what it reads, and moving the FabriChat setup file or renaming its
+group costs three fifths at once. Two things hold that in place:
+`deno task check-bench-workflow` fails a change that leaves one of those files
+out of the workflow's `deno bench` list, and the validation step fails a run
+whose report is missing any of them, which together keep such a change to a red
+check or one red run instead of a hole in the history. So:
 
 - Keep names stable. Never interpolate values that change as unrelated commits
   land: content hashes, byte counts, module counts, dates. If a name must
@@ -1040,12 +1043,13 @@ API_URL=http://localhost:8000/ FRONTEND_URL=http://localhost:5173/ \
 deno bench -A patterns/integration/piece-grid-stopped.bench.ts
 ```
 
-## The FabriChat room benchmarks
+## The FabriChat benchmarks
 
-Three bench files measure a FabriChat group room, on the pattern in
+Four bench files measure FabriChat, on the pattern in
 `patterns/system/fabrichat/`. Two drive a browser against a running toolshed
-as the Topics benchmarks do, and one runs many runtimes against one storage
-server as the lunch-poll contention benchmark does.
+as the Topics benchmarks do, one runs many runtimes against one storage server
+as the lunch-poll contention benchmark does, and one measures the setup a
+headless FabriChat test performs before it asserts anything.
 
 ### The seeded room
 
@@ -1198,7 +1202,60 @@ four participants. `CF_FABRICHAT_BURST_MEMBERS` and
 `CF_FABRICHAT_BURST_MESSAGES` resize it for a local run, and the size names the
 series.
 
-### Running them locally
+### Setup steps
+
+`patterns/integration/fabrichat-setup.bench.ts` measures the steps a headless
+FabriChat integration test spends almost all of its time in: the ones the
+`fabrichat-room-list-*` tests repeat many times before they assert anything,
+and the Home and profile the seeded room above brings up for every member. Its
+`fabrichat setup` group has one series per step:
+
+- `home cold` brings up a new person's Home with `ensureDefaultPattern()`, with
+  the client, and the serving loop when it runs in this process rather than in
+  a worker of its own, compiling into one compile cache that starts empty, so
+  the Home pattern compiles from source once. What the process keeps beyond
+  that cache, the compiler's own modules and its parse memos among them, is
+  already warm by then, so the one-time cost the first Home in a process also
+  pays is not part of this series.
+- `home warm` is the same with the compile caches holding what earlier
+  bring-ups compiled, as for every later person.
+- `profile` creates the person's profile through Home's `createProfile`, sent
+  as a click on its reviewed action, until Home lists it.
+- `room` creates a group room the way the room-list tests do, through
+  `RoomListServer.createGroup()`: the manager's `createGroup`, sent the same
+  way, until the request reports done, then a read of the new room's link.
+- `reopen` starts a fresh client of a Home that holds a profile and a room the
+  way the room-list tests do, through `RoomListServer.bootClient()`: from
+  starting its controller through `ensureDefaultPattern()` and
+  `adoptCatalogRooms()`, keeping the record of every document it loads that
+  those tests keep.
+
+Because `room` and `reopen` time those helpers whole, a change to what a helper
+does beyond the runtime's own work moves these series as well.
+
+Each step ends once the client has settled, which is what the room-list tests
+wait for between steps (`RoomListServer.settle()`): the client's runtime idle,
+its writes on the server, and, with server execution on, the serving loop
+quiescent and the client caught up with what it wrote.
+
+Every invocation starts a `RoomListServer` of its own, the in-process storage
+server the room-list tests use, and generates new people. Whatever the step
+needs before it, a Home or a profile or a room, is done with the timer stopped.
+The posture resolves from `EXPERIMENTAL_SERVER_EXECUTION` as the tests' does,
+so the Benchmarks workflow measures these steps with server execution off; a
+local run without that variable measures them with it on, serving from a
+serving memory server. Nothing in the file needs a toolshed or a browser:
+
+```sh
+CF_LOG_LEVEL=silent deno bench -A patterns/integration/fabrichat-setup.bench.ts
+```
+
+`home cold`, `home warm`, and `room` are key benchmarks. Bringing up Homes and
+creating rooms is what a FabriChat integration test spends most of its setup
+on, so these three say whether a runtime change makes those tests faster or
+slower, and which of the steps moved.
+
+### Running the browser benchmarks locally
 
 Start client-execution dev servers as described in
 [Local dev servers](LOCAL_DEV_SERVERS.md), then run, for example:

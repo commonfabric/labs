@@ -46,6 +46,12 @@ import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
 import { rustLanguage } from "../lib/view/languages/rust/language.ts";
 import { tomlLanguage } from "../lib/view/languages/toml/language.ts";
 import { hclLanguage } from "../lib/view/languages/hcl/language.ts";
+import {
+  cFamilyHeaderLanguage,
+  cLanguage,
+  cppLanguage,
+  cudaLanguage,
+} from "../lib/view/languages/c-family/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
@@ -169,6 +175,11 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("lean"), leanLanguage);
   assertEquals(languageForName("lean4"), leanLanguage);
   assertEquals(languageForName("lean-toolchain"), leanToolchainLanguage);
+  assertEquals(languageForName("c"), cLanguage);
+  assertEquals(languageForName("cpp"), cppLanguage);
+  assertEquals(languageForName("c++"), cppLanguage);
+  assertEquals(languageForName("cuda"), cudaLanguage);
+  assertEquals(languageForName("h"), cFamilyHeaderLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
@@ -212,6 +223,10 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "hcl",
     "lean",
     "lean-toolchain",
+    "c",
+    "cpp",
+    "cuda",
+    "c-family-header",
     "shell",
     "make",
     "properties",
@@ -257,6 +272,13 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "lean",
     "lean4",
     "lean-toolchain",
+    "c",
+    "cpp",
+    "c++",
+    "cxx",
+    "cuda",
+    "c-family-header",
+    "h",
     "shell",
     "sh",
     "bash",

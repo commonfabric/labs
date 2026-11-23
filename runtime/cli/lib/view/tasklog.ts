@@ -148,7 +148,7 @@ export interface TaskRow {
 }
 
 /** The frames of a running step's spinner, one after the other. */
-const SPINNER = [..."◐◓◑◒"];
+export const SPINNER: readonly string[] = [..."◐◓◑◒"];
 
 /** What a step that has ended shows in place of its spinner. */
 const ENDED: Readonly<Record<Exclude<StepState, "busy">, string>> = {

@@ -3,7 +3,8 @@
  * server, fresh clients of a person's Home that record what they load, and the
  * ways those tests come to have the rooms they count. Each test file starts a
  * server of its own, so that running one of its tests runs no other file's
- * setup.
+ * setup, and sets each scenario up the first time one of its tests reads it,
+ * so that running one test runs no other scenario's setup either.
  *
  * Each client is a runtime of its own, beside the server, in the posture the
  * run resolves, as `multi-runtime-harness.ts` resolves it: with server
@@ -30,6 +31,7 @@ import {
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import type { ModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import {
   CHAT_START,
   closeMember,
@@ -124,7 +126,10 @@ interface Chats {
   rooms?: Row[];
 }
 
-/** A fresh client of the person's Home, and what it has loaded since it began. */
+/**
+ * A fresh client of the person's Home, and what it has loaded since it began.
+ * `RoomListServer.dispose` disposes of one.
+ */
 export interface Client {
   controller: PiecesController;
   home: Cell<unknown>;
@@ -172,6 +177,9 @@ export class RoomListServer {
   /** Releases the pattern environment a served handler reads. */
   readonly #releasePatternEnvironment: () => void;
 
+  /** The runtimes `startRecording` has started and nothing has disposed of. */
+  readonly #live = new Set<PiecesController>();
+
   private constructor(
     server: StandaloneMemoryServer | ListeningServingMemoryServer,
     served: ListeningServingMemoryServer | undefined,
@@ -187,10 +195,43 @@ export class RoomListServer {
     return this.#server.url;
   }
 
-  /** Stops the server, and releases the pattern environment. */
+  /**
+   * Disposes of every client still running, stops the server, and releases
+   * the pattern environment.
+   */
   async close(): Promise<void> {
-    await this.#server.close();
-    this.#releasePatternEnvironment();
+    try {
+      await this.disposeClients();
+    } finally {
+      await this.#server.close();
+      this.#releasePatternEnvironment();
+    }
+  }
+
+  /** Disposes of `controller`, unless it has been disposed of already. */
+  async dispose(controller: PiecesController): Promise<void> {
+    if (this.#live.delete(controller)) await controller.dispose();
+  }
+
+  /**
+   * Disposes of every runtime `startRecording` started that is still running.
+   * The outermost block holding a scenario's tests does this after them, so
+   * that no client of one scenario is still running while the next one is set
+   * up. It tries every runtime, and then throws the errors any disposals
+   * threw, together.
+   */
+  async disposeClients(): Promise<void> {
+    const failures: unknown[] = [];
+    for (const controller of [...this.#live]) {
+      try {
+        await this.dispose(controller);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Disposing of the clients failed");
+    }
   }
 
   /**
@@ -315,6 +356,7 @@ export class RoomListServer {
       apiUrl: this.url,
       identity: person,
     });
+    this.#live.add(controller);
     const arrived = new Map<string, Set<string>>();
     const refused = new Map<string, Error>();
     controller.runtime.storageManager.subscribe({
@@ -353,17 +395,22 @@ export class RoomListServer {
     },
   ): Promise<Client> {
     const { controller, arrived, refused } = await this.startRecording(person);
-    const waits = new MemberWaits(controller.runtime.scheduler);
-    if (early) {
-      const root = await controller.getDefaultPattern(false);
-      if (root === undefined) throw new Error("The person has no Home");
-      root.key("chatManager").key("$VIEWS").key("chats").asSchema<Chats>(CHATS)
-        .sink(() => {});
+    try {
+      const waits = new MemberWaits(controller.runtime.scheduler);
+      if (early) {
+        const root = await controller.getDefaultPattern(false);
+        if (root === undefined) throw new Error("The person has no Home");
+        root.key("chatManager").key("$VIEWS").key("chats")
+          .asSchema<Chats>(CHATS).sink(() => {});
+      }
+      const home = (await controller.ensureDefaultPattern()).getCell();
+      if (adopt) await controller.adoptCatalogRooms();
+      await this.settle(controller);
+      return { controller, home, waits, arrived, refused };
+    } catch (error) {
+      await this.dispose(controller);
+      throw error;
     }
-    const home = (await controller.ensureDefaultPattern()).getCell();
-    if (adopt) await controller.adoptCatalogRooms();
-    await this.settle(controller);
-    return { controller, home, waits, arrived, refused };
   }
 
   /**
@@ -552,14 +599,22 @@ export class RoomListServer {
     }
   }
 
-  /** Starts a server in the posture the run resolves. */
-  static async start(): Promise<RoomListServer> {
+  /**
+   * Starts a server in the posture the run resolves. A serving loop in this
+   * process compiles into `cache`, the clients' shared cache unless another is
+   * named.
+   */
+  static async start(
+    cache: ModuleByteCache = moduleByteCache,
+  ): Promise<RoomListServer> {
     const serve = (request: Request) => systemPatternsRoute().serve(request);
     if (serving) {
       const served = await listenServingMemoryServer({
         serve,
         aclMode: "enforce",
-        ...(runsInWorker() ? {} : { moduleByteCache }),
+        // A loop the environment puts in a worker takes no closure; the
+        // worker builds a cache of its own.
+        ...(runsInWorker() ? {} : { moduleByteCache: cache }),
       });
       return new RoomListServer(
         served,
