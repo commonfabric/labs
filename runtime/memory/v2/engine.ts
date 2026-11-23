@@ -605,6 +605,14 @@ CREATE TABLE IF NOT EXISTS currency_decide (
 );
 CREATE INDEX IF NOT EXISTS idx_currency_decide_instance
   ON currency_decide (branch, instance_key, id);
+-- The recorded pieces that record a source origin (serving-loop.md §3e). A
+-- serving loop follows the origin of each before it leaves a demanded root
+-- that rests on the piece unstarted.
+CREATE TABLE IF NOT EXISTS currency_origin (
+  branch TEXT NOT NULL,
+  piece  TEXT NOT NULL,
+  PRIMARY KEY (branch, piece)
+);
 -- The seq the marks are complete through.
 CREATE TABLE IF NOT EXISTS currency_cursor (
   branch TEXT    NOT NULL PRIMARY KEY,

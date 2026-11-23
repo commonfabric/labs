@@ -173,6 +173,13 @@ export type CurrencyRecord = {
   owned: readonly string[];
 
   /**
+   * Whether the piece records a source origin (serving-loop.md §3e), which
+   * a serving loop follows before it leaves a demanded root that rests on
+   * the piece unstarted.
+   */
+  followsOrigin?: boolean;
+
+  /**
    * The slices the loop ran. A piece with no `space` slice yet is given one
    * that read nothing where the record names none. A slice the piece holds
    * and the record does not name is left as it is.
@@ -359,6 +366,22 @@ WHERE branch = :branch AND id = :id AND scope_key = :scope_key
 `),
   deleteUnder: engine.prepare(`
 DELETE FROM currency_under WHERE branch = :branch AND piece = :piece
+`),
+  // The pieces a root encloses. `currency_under` is keyed by the piece
+  // enclosed, and holds few rows for a root.
+  selectBeneath: engine.prepare(`
+SELECT piece FROM currency_under WHERE branch = :branch AND root = :root
+`),
+  insertOrigin: engine.prepare(`
+INSERT OR IGNORE INTO currency_origin (branch, piece)
+VALUES (:branch, :piece)
+`),
+  deleteOrigin: engine.prepare(`
+DELETE FROM currency_origin WHERE branch = :branch AND piece = :piece
+`),
+  selectOrigin: engine.prepare(`
+SELECT 1 AS found FROM currency_origin
+WHERE branch = :branch AND piece = :piece
 `),
   insertUnder: engine.prepare(`
 INSERT OR IGNORE INTO currency_under (branch, piece, root)
@@ -1558,6 +1581,11 @@ export const storeCurrencyRecords = (
       for (const root of record.under) {
         if (root !== piece) statements.insertUnder.run({ branch, piece, root });
       }
+      if (record.followsOrigin === true) {
+        statements.insertOrigin.run({ branch, piece });
+      } else {
+        statements.deleteOrigin.run({ branch, piece });
+      }
       for (const id of record.writes) {
         statements.insertWrite.run({ branch, piece, id, owned: 0 });
       }
@@ -2471,6 +2499,12 @@ export type CurrencyJudgment = {
    * asked about, stale only through what is upstream of it.
    */
   upstream: CurrencyUpstreamRead[];
+
+  /**
+   * The pieces each servable root rests on that record a source origin: its
+   * own piece and those beneath it. A root that rests on none has no entry.
+   */
+  origins: Array<{ root: string; pieces: string[] }>;
 };
 
 /**
@@ -2525,6 +2559,7 @@ export const judgeCurrencyRoots = (
     refused: [],
     held: [],
     upstream: [],
+    origins: [],
   };
 
   /** Whether each slice asked about is stale only upstream, by slice. */
@@ -2730,6 +2765,15 @@ export const judgeCurrencyRoots = (
     if (reason !== undefined) judgment.refused.push({ root, reason });
     else if (readers !== undefined) judgment.held.push({ root, readers });
     else judgment.servable.push(root);
+  }
+  for (const root of judgment.servable) {
+    const beneath = statements.selectBeneath.all({ branch, root }) as Array<
+      { piece: string }
+    >;
+    const pieces = [root, ...beneath.map(({ piece }) => piece)].filter((
+      piece,
+    ) => statements.selectOrigin.get({ branch, piece }) !== undefined);
+    if (pieces.length > 0) judgment.origins.push({ root, pieces });
   }
   return judgment;
 };

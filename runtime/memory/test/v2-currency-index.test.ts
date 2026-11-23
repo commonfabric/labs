@@ -109,6 +109,8 @@ describe("currency-index", () => {
     slices?: CurrencySliceRecord[];
     /** The time the `space` slice expires at. */
     expiresAt?: number;
+    /** Whether the piece records a source origin. */
+    followsOrigin?: boolean;
   };
 
   /** A record of `piece`, vouched for, with `parts` over the empty ones. */
@@ -157,6 +159,7 @@ describe("currency-index", () => {
       vouched: parts.vouched ?? true,
       writes: [...(parts.writes ?? []), ...(parts.produces ?? [])],
       owned: parts.owned ?? [],
+      ...(parts.followsOrigin === true && { followsOrigin: true }),
       slices: [...slices.values()],
     };
   };
@@ -1431,6 +1434,51 @@ describe("currency-index", () => {
       storeVouching();
 
       expect(judge(["of:unrecorded"], [ROOT_ROW])).toEqual([]);
+    });
+
+    describe("with a piece that records a source origin", () => {
+      /** The pieces a judgment of `of:piece` names as recording an origin. */
+      const origins = () =>
+        judgeCurrencyRoots(engine, {
+          space: SPACE,
+          roots: ["of:piece"],
+          rows: [ROOT_ROW],
+          epoch: EPOCH,
+        }).origins;
+
+      it("names the root's own piece with a root the store can serve", () => {
+        storeVouching({ followsOrigin: true });
+
+        expect(origins()).toEqual([{ root: "of:piece", pieces: ["of:piece"] }]);
+      });
+
+      it("names a piece beneath the root, and no piece that records none", () => {
+        const asOf = storeVouching();
+        store(asOf, [
+          record("of:nested", { under: ["of:piece"], followsOrigin: true }),
+          record("of:plain", { under: ["of:piece"] }),
+        ]);
+
+        expect(origins()).toEqual([{
+          root: "of:piece",
+          pieces: ["of:nested"],
+        }]);
+      });
+
+      it("names no piece once a record of it says it records no origin", () => {
+        const asOf = storeVouching({ followsOrigin: true });
+        store(asOf, [record("of:piece", { produces: ["computed:out"] })]);
+
+        expect(origins()).toEqual([]);
+      });
+
+      it("names none for a root the store cannot serve", () => {
+        storeVouching({ followsOrigin: true, reads: [input("of:state")] });
+        write("of:state");
+        advance();
+
+        expect(origins()).toEqual([]);
+      });
     });
 
     it("returns nothing for a marked root", () => {

@@ -141,10 +141,18 @@ and the slice is stored against what that index reports. That space tells
 the reading one of its next change, so the slice is a current input of
 another slice while it is clean.
 
-No slice of a piece is vouched for when its root is not space-scoped, when a
-computation of it declares a write in another space, or when it records a
-source origin, since a start is where the serving runtime follows that
-origin.
+No slice of a piece is vouched for when its root is not space-scoped, or
+when a computation of it declares a write in another space.
+
+A piece that records a source origin is vouched for like any other, and its
+record says that it records one. A start is where the serving runtime
+follows a piece's origin, so before the loop first leaves a root unstarted
+in a tenure it follows the origin of each piece the root rests on that
+records one: the root's own piece and those beneath it. The follow needs
+the piece's result document and not the piece. Where the origin has not
+moved the root stays unstarted, and where the piece adopted new source the
+root is loaded, so the piece starts on that source. What the store holds
+of the root is what a client reads while the follow runs.
 
 ### How a slice becomes marked
 
@@ -454,8 +462,9 @@ wrong.
   server on a serving host's request, outside the wave's transaction.
 - §1: a demand for a recorded, clean piece loads nothing, which is a rule for
   which pieces start.
-- §3e: a piece that records a source origin is always started, so the origin
-  is followed as it is today.
+- §3e: the serving runtime follows a piece's origin before its first start
+  of the piece in a tenure, and before it first leaves a root that rests on
+  the piece unstarted.
 - §6 step 3: an effect whose result never landed is re-fired by a start, so a
   piece is not recorded while any effect is outstanding.
 - §8: the exception that names the basis tables names these too.
@@ -477,8 +486,7 @@ wrong.
   session's documents.
 - **A space with effects always in flight records nothing.** Attributing an
   outbox entry to its piece lifts this.
-- **A piece with a source origin, or a root narrower than the space, always
-  starts.**
+- **A piece with a root narrower than the space always starts.**
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
   computes.
@@ -502,7 +510,8 @@ wrong.
 
 1. **The index.** `runtime/memory/v2/currency-index.ts` and its tables
    (`currency_slice`, `currency_read`, `currency_write`, `currency_vouch`,
-   `currency_decide`, `currency_under`, `currency_cursor`, and
+   `currency_decide`, `currency_origin`, `currency_under`,
+   `currency_cursor`, and
    `currency_expiry` for the time a
    slice that read a clock expires at): store a batch of records, advance
    the cursor, judge roots against demand rows. The tables join the SQL

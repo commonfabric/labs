@@ -102,9 +102,9 @@ describe("Server", () => {
           ),
         ).toEqual({
           servable: [
-            { root: PIECE, piece: PIECE },
-            { root: OUTPUT, piece: PIECE },
-            { root: "of:outer", piece: PIECE },
+            { root: PIECE, piece: PIECE, origins: [] },
+            { root: OUTPUT, piece: PIECE, origins: [] },
+            { root: "of:outer", piece: PIECE, origins: [] },
           ],
           held: [],
           upstream: [],
@@ -314,6 +314,31 @@ describe("Server", () => {
         });
       });
 
+      it("returns, with each root that leads to a piece recording a source origin, that piece", async () => {
+        const asOf = write({
+          [PIECE]: { value: {} },
+          [INPUT]: { value: 1 },
+          [OUTPUT]: { value: "computed", result: link(PIECE) },
+        });
+        await server.storeCurrencyRecords(SPACE, {
+          asOf,
+          seen: [],
+          epoch: EPOCH,
+          records: [{ ...record(), followsOrigin: true }],
+        });
+
+        const { servable } = await server.judgeCurrencyRoots(
+          SPACE,
+          [PIECE, OUTPUT],
+          { epoch: EPOCH },
+        );
+
+        expect(servable).toEqual([
+          { root: PIECE, piece: PIECE, origins: [PIECE] },
+          { root: OUTPUT, piece: PIECE, origins: [PIECE] },
+        ]);
+      });
+
       it("returns the piece for an output one record writes that the space holds no instance of", async () => {
         // A derived document that exists only at instances narrower than the
         // space has no back-link to read at the `space` instance.
@@ -331,7 +356,11 @@ describe("Server", () => {
             epoch: EPOCH,
           }),
         ).toEqual({
-          servable: [{ root: "computed:per-user", piece: PIECE }],
+          servable: [{
+            root: "computed:per-user",
+            piece: PIECE,
+            origins: [],
+          }],
           held: [],
           upstream: [],
           refused: {},
@@ -382,7 +411,7 @@ describe("Server", () => {
         expect(
           await server.judgeCurrencyRoots(SPACE, [PIECE], { epoch: EPOCH }),
         ).toEqual({
-          servable: [{ root: PIECE, piece: PIECE }],
+          servable: [{ root: PIECE, piece: PIECE, origins: [] }],
           held: [],
           upstream: [],
           refused: {},
