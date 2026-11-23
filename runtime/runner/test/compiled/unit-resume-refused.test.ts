@@ -174,6 +174,8 @@ describe("a commit that is refused after a compiled piece was woken by units", (
             { text: "+mine" },
           ),
       );
+      // The piece has the derivation run after an event it handles.
+      piece.derive();
     });
     await writer.idle();
     await server.idle();
