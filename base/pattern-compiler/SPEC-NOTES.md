@@ -13432,7 +13432,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        idle loop, so a suite on the socket can jump logical time. The suites of
        milestone 3 pass under it. The suite of the serving loop is on the real
        clock (`compiled-serving` in `realClockFiles`).
-802. **Step 2: resume, as built (provisional decisions P90 to P92).**
+802. **Step 2: resume, as built (provisional decisions P130 to P132).**
      `resumeCompiledPiece(runtime, artifact, resultCell)` starts the piece in a
      runtime that holds nothing of it.
      - _What is read._ `syncCompiledPiece` brings into the replica the result
@@ -13457,7 +13457,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        written again. The basis index of `scheduler-and-serving-loop.md` §10.4
        is what would let a resume skip the evaluation, and it is not built (note
        803).
-     - _What is written (P90)._ The derivation of a resume is one transaction. A
+     - _What is written (P130)._ The derivation of a resume is one transaction. A
        change of it that writes what the storage holds is no write: the
        runtime's transaction logs no attempt for it, and the adapter then gives
        no record and does not count the path as written
@@ -13479,7 +13479,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        the one transaction commits, and then all differences at once. The
        transaction is as large as the difference, which after a long time
        without a runtime can be the board.
-     - _The documents the executor made (P91)._ A link to a document the
+     - _The documents the executor made (P131)._ A link to a document the
        executor made is stored as a link to the entity `of:<identifier>`, and a
        link to an input is stored as a link to its entity. The process that made
        a document knows which is which from a table in memory (`#byEntity`). A
@@ -13492,7 +13492,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        stream (`#linkToResult`), and a resumed adapter reads it to tell the two
        apart (`#heldDocumentOf`). The serving loop finds the piece of a document
        by the same link (note 804).
-     - _The counts that names are formed from (P92), a soundness defect found
+     - _The counts that names are formed from (P132), a soundness defect found
        and closed._ The executor names the run of a handler by the number of
        events the process handled, and a document a body makes with no cause of
        its own by the number of such documents the process made (`#bindEvent`,
@@ -13555,9 +13555,9 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
      The third item is the large one: the executor's assembly holds every row in
      memory today.
 804. **Step 3: the piece under the serving loop, as built (provisional decisions
-     P93 to P96).** One piece of space scope, started by a client and run by the
+     P133 to P136).** One piece of space scope, started by a client and run by the
      serving runtime of its space.
-     - _The client sets the piece up and runs nothing (P93, P96)._
+     - _The client sets the piece up and runs nothing (P133, P136)._
        `setUpCompiledPiece(runtime, tx, artifact, argument, resultCell)` writes
        three documents and no result: the compiled pattern, as the JSON text of
        its artifact in an entity named by that text; a document named from the
@@ -13575,7 +13575,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        handler both call `ensurePieceRunningVerdict`, which follows the `result`
        links from the document it was given to the result document
        (`followResultCellChain`). Every document the executor makes carries that
-       link (P91). Where the result document names no pattern, `ensureVerdict`
+       link (P131). Where the result document names no pattern, `ensureVerdict`
        asks `Runtime.compiledPieceLoader`, under the experimental option alone.
        `serveCompiledPieces` installs a loader that reads the pointer and the
        compiled pattern, parses a compiled pattern once per process, brings the
@@ -13589,7 +13589,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        handler. The loop stamps the transaction of the handler and of the
        derivation action with the context of the run and seals it into the wave,
        as it does for an action of today's piece.
-     - _The load is one transaction of the wave (P94)._ A transaction that the
+     - _The load is one transaction of the wave (P134)._ A transaction that the
        loop did not stamp is refused at the seal ("unstamped transaction sealed
        into a wave"). The loader stamps the transaction of the load as a
        derivation with no acting principal (`stampWaveRunContext`), and starts
@@ -13597,7 +13597,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        bounded load commits by itself are ones the wave has no run for. The
        loader does not wait for the outcome of the commit, which the wave
        settles after the cycle the load runs in.
-     - _A rejected wave (P95), a soundness defect found and closed._ A
+     - _A rejected wave (P135), a soundness defect found and closed._ A
        transaction sealed into a wave settles with no error before the wave
        commits. Where the wave is then rejected, the replica takes the writes
        back and the loop queues the event again. The piece heard of a refused
@@ -13650,7 +13650,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
         nothing, so it is not durable.
      6. _A conflict leaves out the derived write that conflicts and what used
         it_ (§5.5). The piece restores every document the withdrawn transaction
-        wrote, the result document whole (P95).
+        wrote, the result document whole (P135).
      7. _The context of an evaluation: the acting principal, the scope key and
         the read ceiling per cone instance_ (§10.3). The piece is of space
         scope, the load is a derivation with no acting principal, and a handler
@@ -13673,16 +13673,16 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        installs the loader; a toolshed must not, until the server compiles
        (§10.5) or the artifact carries the integrity of compiled output, and
        until the value code runs in the sandbox.
-     - _A rejected wave left the executor ahead of the storage_ (note 804, P95),
+     - _A rejected wave left the executor ahead of the storage_ (note 804, P135),
        closed with a test. Not closed: the restore follows the size of the
        result, and a wave that holds the transactions of two pieces restores
        each.
      - _The names of handler runs and of the documents handlers make restarted
-       from zero in a second process_ (note 802, P92), closed with a test.
+       from zero in a second process_ (note 802, P132), closed with a test.
      - _A resume reads the whole board and evaluates the whole derivation_ (note
        802), not closed: the plan is note 803. Every start of a serving loop
        over a space pays it for every piece that is demanded.
-     - _The load under the serving loop is one transaction of one wave_ (P94),
+     - _The load under the serving loop is one transaction of one wave_ (P134),
        not closed. It commits at 10,000 rows (note 807), since the wave's commit
        is no client message and the limit of slots of note 603 does not apply to
        it, but the bounded load of P65 is not in use there, and a reader sees
@@ -13706,7 +13706,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        the same memory server had its first nine waves rejected as replays
        ("commit replay mismatch"). That is a property of the test's restart in
        one process and was not followed further; the piece converged through the
-       rejections once P95 was in.
+       rejections once P135 was in.
 807. **Step 4: one event under server execution, measured.**
      `compare/serving-path.ts`, one process per run, a memory server that
      listens on a websocket with the serving loop on the same thread, two
@@ -13731,7 +13731,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
      - _What the columns compare._ The reader's column is the served path on
        both arms. Today's sender runs the handler itself and shows the result
        from its own speculation, which is why its figure is below the reader's;
-       the compiled piece has no speculation on a client (P96), so its two
+       the compiled piece has no speculation on a client (P136), so its two
        columns are the same path.
      - _A rename_ of one item is flat to within a factor of two from 100 to
        10,000 rows on both arms, 17 to 37 ms compiled and 22 to 44 ms today. The
@@ -13744,7 +13744,7 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        outside the piece. They were not profiled. The handler's write of the
        array of the input and the derivation's write of the array of the result
        each change a document that holds one link per member.
-     - _The load_ of the compiled piece is one transaction of one wave (P94),
+     - _The load_ of the compiled piece is one transaction of one wave (P134),
        7.0 s at 10,000 rows against 96 s for today's piece.
      - _Not comparable with note 585._ `runner-path.ts` runs with
        `cfcFlowLabels` at `persist` and an input under a clause; the serving
@@ -13823,19 +13823,19 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
        documents of another space (the dynamic reads of kind `space`), which
        neither the piece nor the serving loader of this round does. The tables
        are in the folder of the round, `step5-*.txt` and `step5-*.json`.
-810. **Provisional decisions of the round.** P90: a resume evaluates the first
+810. **Provisional decisions of the round.** P130: a resume evaluates the first
      derivation again and writes the paths that differ, with no record of the
      plan, so a path it writes takes the join of the transaction (note 802).
-     P91: each document the executor makes carries the `result` link to the
-     result document (note 802). P92: the counts that name the runs of handlers
+     P131: each document the executor makes carries the `result` link to the
+     result document (note 802). P132: the counts that name the runs of handlers
      and the documents handlers make are kept in a document of the piece (note
-     802). P93: a document named from the result document names the compiled
+     802). P133: a document named from the result document names the compiled
      pattern of a piece, and the compiled pattern is a document that holds the
-     artifact as text, which a client writes (note 804). P94: the load of a
+     artifact as text, which a client writes (note 804). P134: the load of a
      piece on a serving runtime is one transaction of a wave, stamped as a
-     derivation with no acting principal (note 804). P95: the replica's revert
+     derivation with no acting principal (note 804). P135: the replica's revert
      of a transaction that had settled is a refused commit of the piece (note
-     804). P96: a client under server execution runs nothing of a compiled piece
+     804). P136: a client under server execution runs nothing of a compiled piece
      (note 804). Not done: the basis index (note 803), a bounded load under the
      serving loop, the resume of an instance a handler made, events a handler
      sends as durable entries, the profile of an append under server execution,
@@ -13846,32 +13846,32 @@ crate refuses of FabriChat and Home. The notes are numbered from 800.
 
 Noted and not resolved, by the owner's instruction of 2026-11-22.
 
-1. A resume gives no record for a path whose value it finds stored (P90). An
+1. A resume gives no record for a path whose value it finds stored (P130). An
    input whose label changed while no runtime ran the piece, with its value
    unchanged, leaves the labels of what was derived from it as they were stored.
    Whether a resume has to form the labels again, and from what.
 2. A path a resume writes takes the join of everything the derivation read
-   (P90): an over-label that grows with the board.
-3. The document of the counts (P92) and the document that names the compiled
-   pattern (P93) are written with no record of a plan. The first holds how many
+   (P130): an over-label that grows with the board.
+3. The document of the counts (P132) and the document that names the compiled
+   pattern (P133) are written with no record of a plan. The first holds how many
    events the piece handled and how many documents its handlers made, under the
    join of the transaction that wrote it. Which label each should have, and
    whether a reader may read them.
-4. The `result` link (P91) is a meta field the adapter writes on each document
+4. The `result` link (P131) is a meta field the adapter writes on each document
    with the runtime's authorization for raw meta writes. Whether a compiled
    piece may write it, and whether a resume may take it as proof that the
    executor made the document.
 5. The load on a serving runtime is stamped as a derivation with no acting
-   principal (P94), though a client's setup caused it and the client chose the
+   principal (P134), though a client's setup caused it and the client chose the
    argument. Whether the load is a derivation or the consequence of the client's
    act, and under which principal its labels are formed.
-6. A client writes the argument document and the compiled pattern (P93), and the
+6. A client writes the argument document and the compiled pattern (P133), and the
    serving runtime takes both as it finds them: the artifact has no integrity of
    compiled output, and the argument has the label of the client's commit.
    Beside the soundness finding of note 806, which integrity the derived values
    of such a piece may claim: the atom `TransformedBy` names a compiled pattern
    that nobody attested.
-7. The restore after a rejected wave (P95) reads the documents the withdrawn
+7. The restore after a rejected wave (P135) reads the documents the withdrawn
    transactions wrote outside any transaction of the piece, and the derivation
    that follows gives every row its record again. Whether those rows may be
    stored under labels formed in the later transaction when their values are
