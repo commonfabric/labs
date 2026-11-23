@@ -6,7 +6,7 @@
  *
  *   deno run -A --no-check \
  *     runtime/runner/test/link-document-patch-cost-probe.ts \
- *     [sizes] [--storage=emulated|socket] [--labels] [--timings] \
+ *     [sizes] [--storage=emulated|socket] [--labels] [--typed] [--timings] \
  *     [--cpu-profile=<directory>] [--no-own-write-echo]
  *
  * For each size a runtime of its own holds one document of that many links to
@@ -28,7 +28,13 @@
  *
  * With `--labels`, the documents are written under a schema that declares a
  * confidentiality clause and the runtime persists flow labels, so each commit
- * runs the preparation of Contextual Flow Control with stored labels.
+ * runs the preparation of Contextual Flow Control with stored labels. That
+ * schema declares no type, so the memory server's watch of each document
+ * follows every link it holds without a schema to narrow the walk.
+ *
+ * With `--typed`, the schema declares the array's items and the record's
+ * members as objects with a `title`, as a pattern's list of pieces does, so
+ * the watch follows each link under the member's schema.
  *
  * Each line of JSON on stdout holds the step, the size, the bytes of the
  * array document as JSON, and the median, minimum and maximum of the timed
@@ -118,6 +124,7 @@ const measure = async (
   size: number,
   options: {
     labels: boolean;
+    typed: boolean;
     storage: Storage;
     timings: boolean;
     profileDirectory: string | undefined;
@@ -137,10 +144,26 @@ const measure = async (
     storageManager,
     ...(labels ? { cfcFlowLabels: "persist" as const } : {}),
   });
-  const schema = labels
+  const ifc = labels
+    ? { ifc: { confidentiality: [{ anyOf: [{ type: "space", id: space }] }] } }
+    : {};
+  const member = {
+    type: "object",
+    properties: { title: { type: "string" } },
+  };
+  const schemas = (labels || options.typed)
     ? {
-      ifc: { confidentiality: [{ anyOf: [{ type: "space", id: space }] }] },
-    } as unknown as JSONSchema
+      list: {
+        ...(options.typed ? { type: "array", items: member } : {}),
+        ...ifc,
+      } as unknown as JSONSchema,
+      record: {
+        ...(options.typed
+          ? { type: "object", additionalProperties: member }
+          : {}),
+        ...ifc,
+      } as unknown as JSONSchema,
+    }
     : undefined;
   const commit = async (write: (tx: ReturnType<Runtime["edit"]>) => void) => {
     const tx = runtime.edit();
@@ -155,11 +178,15 @@ const measure = async (
     (_, index) =>
       runtime.getCell<{ title: string }>(space, `patch-cost member ${index}`),
   );
-  const list = runtime.getCell<unknown[]>(space, "patch-cost list", schema);
+  const list = runtime.getCell<unknown[]>(
+    space,
+    "patch-cost list",
+    schemas?.list,
+  );
   const record = runtime.getCell<Record<string, unknown>>(
     space,
     "patch-cost record",
-    schema,
+    schemas?.record,
   );
   await commit((tx) => {
     members.forEach((member, index) =>
@@ -196,7 +223,7 @@ const measure = async (
         ? undefined
         : `${options.profileDirectory}/${storage}-${
           labels ? "labels" : "plain"
-        }-${size}-${name}.cpuprofile`,
+        }${options.typed ? "-typed" : ""}-${size}-${name}.cpuprofile`,
       async () => {
         for (let turn = 0; turn < STEPS; turn++) {
           const began = performance.now();
@@ -209,6 +236,7 @@ const measure = async (
       step: name,
       storage,
       labels,
+      typed: options.typed,
       size,
       bytes,
       ms: round(median(times)),
@@ -256,6 +284,7 @@ if (import.meta.main) {
   for (const size of sizes.length > 0 ? sizes : [1000, 2000, 4000, 8000]) {
     await measure(size, {
       labels: Deno.args.includes("--labels"),
+      typed: Deno.args.includes("--typed"),
       storage,
       timings: Deno.args.includes("--timings"),
       profileDirectory: flag("cpu-profile"),
