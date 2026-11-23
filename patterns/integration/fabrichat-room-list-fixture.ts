@@ -217,10 +217,21 @@ export class RoomListServer {
    * Disposes of every runtime `startRecording` started that is still running.
    * The outermost block holding a scenario's tests does this after them, so
    * that no client of one scenario is still running while the next one is set
-   * up.
+   * up. It tries every runtime, and then throws the errors any disposals
+   * threw, together.
    */
   async disposeClients(): Promise<void> {
-    for (const controller of [...this.#live]) await this.dispose(controller);
+    const failures: unknown[] = [];
+    for (const controller of [...this.#live]) {
+      try {
+        await this.dispose(controller);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Disposing of the clients failed");
+    }
   }
 
   /**
