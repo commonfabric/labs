@@ -356,7 +356,8 @@ place (P70); over a record the instance computed it is evaluated whole.
 over the entries of a record are evaluated whole. The owner named these on 2026-11-23 as the
 recognition to do before `Object.groupBy`, which is in the plan's section
 "After the launch". Under `patterns/`, 59 `.tsx` files call one of the
-three functions, 25 of them outside tests; with `.ts` files it is 133.
+three functions; 25 of those are not named `*.test.tsx`. Counting `.ts`
+and `.tsx` files together it is 133.
 
 **Authored `computed` bodies that are not promoted** (all branches).
 `language-subset.md` §6.1 promotes a `computed` whose body is

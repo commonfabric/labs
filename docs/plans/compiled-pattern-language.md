@@ -17751,7 +17751,8 @@ the instance computed it is a plain array generated from scratch and is
 evaluated whole. `Object.keys(x).map`, `Object.values(x).map`, and a
 `filter` or a `flatMap` over the entries of a record are not built. Under
 `patterns/`, 59 `.tsx` files call `Object.keys`, `Object.values` or
-`Object.entries`, 25 of them outside tests; with `.ts` files it is 133. This is work before the launch; the
+`Object.entries`; 25 of those are not named `*.test.tsx`. Counting `.ts`
+and `.tsx` files together it is 133. This is work before the launch; the
 [handoff document](compiled-pattern-language-handoff.md) lists it among the
 open lines of work.
 
