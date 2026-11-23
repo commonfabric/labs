@@ -79,6 +79,7 @@ import {
   type SlotBindings,
   type Template,
 } from "./plan-write.ts";
+import { freezeModuleData, hardenFunction } from "./frozen.ts";
 
 /** One step of where a declaration sits (PL §1.1, `WithinStep`). */
 type Step = { element?: number; site?: Name };
@@ -4017,11 +4018,23 @@ export class Instance {
       while (found instanceof Thunk) found = found.evaluate(host);
       return found;
     };
+    // Value code reads the host of no cone as a member of `$rt`.
+    Object.freeze(none);
     return {
       nohost: none,
       // What `[SELF]` of the pattern's parameter names: the result.
       self: new Ref(this.id, []),
       setups: this.#setups,
+      // The value of a constant of frozen data, and an authored function
+      // of module scope (`language-subset.md` §3.3, "Emitted code").
+      data: freezeModuleData,
+      fn: hardenFunction,
+      // The body of a pattern compiled in, evaluated for one call of it.
+      inline: (context: number, given: unknown, host: Host) => {
+        const setup = this.#setups[context];
+        if (setup === undefined) throw new Unsupported("no setup function");
+        return setup(given, host);
+      },
       external: (specifier: string) => instance.#external(specifier),
       dataFile: (index: number): string => {
         const text = instance.code.dataFiles?.[index]?.text;
@@ -4125,8 +4138,11 @@ export class Instance {
   loading = false;
 
   #load() {
-    // Value code is handed this object and can replace none of its members.
-    this.#runtimeObject = Object.freeze(this.#runtime());
+    // Value code is handed this object and can replace none of its
+    // members, and no function of it holds a property the code can set.
+    const runtime = this.#runtime();
+    for (const member of Object.values(runtime)) hardenFunction(member);
+    this.#runtimeObject = Object.freeze(runtime);
     this.loading = true;
     this.#module(this.code.main);
     for (const { module } of this.code.modules) this.#module(module);
@@ -4154,6 +4170,9 @@ export class Instance {
       ...globals.map(([name]) => name),
     ]);
     run(this.#runtimeObject, exports, ...globals.map(([, value]) => value));
+    // The text has defined its exports. Another module is handed this
+    // object for a namespace import, and adds or replaces no member.
+    Object.freeze(exports);
     return exports;
   }
 
@@ -13723,12 +13742,10 @@ const absent = (instance: Instance, name: string): unknown =>
  * for each builder, whose function the value code holds already.
  */
 const commonfabric = (instance: Instance): unknown => {
-  const marker = (kind: string) => (..._given: unknown[]) => {
-    const made = () => {
+  const marker = (kind: string) => (..._given: unknown[]) =>
+    hardenFunction(() => {
       throw new Unsupported(`a ${kind} called in a function body`);
-    };
-    return made;
-  };
+    });
   const caused = new Map<string, Handle>();
   // A cell constructor is called with `new` or through `of`.
   const cells = Object.assign(function (value: unknown) {
@@ -13754,6 +13771,8 @@ const commonfabric = (instance: Instance): unknown => {
   cells.perSpace = cells;
   cells.perUser = cells;
   cells.perSession = cells;
+  for (const member of Object.values(cells)) hardenFunction(member);
+  hardenFunction(cells);
   const known: Record<string, unknown> = {
     UI: "$UI",
     NAME: "$NAME",
@@ -13766,24 +13785,25 @@ const commonfabric = (instance: Instance): unknown => {
     // A pattern is, in value code, a factory that holds the identity of
     // the pattern: a function body that calls it instantiates the
     // pattern (ES §2.8).
-    pattern: (id: unknown) => (argument: unknown) => {
-      if (instance.loading) {
-        throw new Unsupported("a pattern called at module scope");
-      }
-      return instance.instantiate(id, argument);
-    },
+    pattern: (id: unknown) =>
+      hardenFunction((argument: unknown) => {
+        if (instance.loading) {
+          throw new Unsupported("a pattern called at module scope");
+        }
+        return instance.instantiate(id, argument);
+      }),
     // A handler is a factory that a function body can call with the
     // state: the call binds the handler (PL §3.14).
     handler: (...given: unknown[]) => {
       const run = given.findLast((member) => typeof member === "function") as
         | ((...given: unknown[]) => unknown)
         | undefined;
-      return (state: unknown) => {
+      return hardenFunction((state: unknown) => {
         if (instance.loading || run === undefined) {
           throw new Unsupported("a handler called in a function body");
         }
         return instance.bind(run, state);
-      };
+      });
     },
     lift: marker("lift"),
     action: marker("action"),
@@ -13840,6 +13860,11 @@ const commonfabric = (instance: Instance): unknown => {
       "kind",
     ]),
   };
+  // What a module imports is the same for every call of its functions:
+  // no function of it holds a property a body can set, and a namespace
+  // import adds or replaces no member.
+  for (const member of Object.values(known)) hardenFunction(member);
+  Object.freeze(known);
   return new Proxy(known, {
     get: (target, name) => {
       if (typeof name !== "string" || name in target) {

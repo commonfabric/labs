@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 
 use crate::plan::{Place, Root, SlotKey};
 use crate::program::Resolver;
-use crate::syntax::{static_key_name, unwrap, FunctionLike};
+use crate::syntax::{offsets, static_key_name, unwrap, FunctionLike};
 
 thread_local! {
     static REQUESTED: Cell<bool> = const { Cell::new(false) };
@@ -420,6 +420,11 @@ struct Rewriter<'g, 'r, 'm, 'a> {
     /// Whether the code being written is registered outside the block
     /// it is written in, where no `const` of that block is in scope.
     outside_block: bool,
+    /// The initializers of the `const` declarations of module scope in
+    /// the statement being written, by their spans: the code of each is
+    /// wrapped in the call that freezes its value (`language-subset.md`
+    /// §3.3, "Emitted code").
+    module_inits: HashSet<(u32, u32)>,
     edits: Vec<(u32, u32, String)>,
 }
 
@@ -1741,11 +1746,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         }
         let argument = format!("{{ {} }}", given.join(", "));
         if within {
-            format!("$rt.setups[{context}]({argument}, $h)")
+            format!("$rt.inline({context}, {argument}, $h)")
         } else {
             let name = self.generator.fresh("s");
             self.generator.hoist(format!(
-                "const {name} = $rt.setups[{context}]({argument}, $h);"
+                "const {name} = $rt.inline({context}, {argument}, $h);"
             ));
             format!("$rt.force({name}, $h)")
         }
@@ -2549,7 +2554,27 @@ impl<'a> Visit<'a> for Rewriter<'_, '_, '_, 'a> {
                 }
             }
         }
+        let frozen = it
+            .init
+            .as_ref()
+            .filter(|init| self.module_inits.remove(&offsets(init.span())));
+        let Some(init) = frozen else {
+            walk::walk_variable_declarator(self, it);
+            return;
+        };
+        // The edits the walk makes inside the initializer are applied
+        // here, since an edit inside another one is left out.
+        let before = self.edits.len();
         walk::walk_variable_declarator(self, it);
+        let span = init.span();
+        let (inside, outside): (Vec<_>, Vec<_>) = self
+            .edits
+            .split_off(before)
+            .into_iter()
+            .partition(|(start, end, _)| span.start <= *start && *end <= span.end);
+        self.edits.extend(outside);
+        let code = self.apply(span, inside);
+        self.edit(span.start, span.end, frozen_code(init, &code));
     }
 
     fn visit_statement(&mut self, it: &Statement<'a>) {
@@ -2591,6 +2616,36 @@ impl<'a> Visit<'a> for Rewriter<'_, '_, '_, 'a> {
     }
 }
 
+/// The code of the value of a `const` of module scope or of a default
+/// export, given the code of its initializer: a function is hardened and
+/// any other value is frozen deeply before a function can observe it
+/// (`language-subset.md` §3.3, "Emitted code"). The result of a builder is
+/// a function of the executor, which `$rt.data` freezes as one.
+/// A literal that is no container is written as it is.
+fn frozen_code(init: &Expression<'_>, code: &str) -> String {
+    if FunctionLike::of(init).is_some() {
+        return format!("$rt.fn({code})");
+    }
+    match unwrap(init) {
+        Expression::NumericLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::BigIntLiteral(_) => code.to_string(),
+        _ => format!("$rt.data({code})"),
+    }
+}
+
+/// The spans of the initializers of a `const` declaration of module scope.
+fn module_inits(variable: &VariableDeclaration<'_>) -> HashSet<(u32, u32)> {
+    variable
+        .declarations
+        .iter()
+        .filter_map(|declarator| declarator.init.as_ref())
+        .map(|init| offsets(init.span()))
+        .collect()
+}
+
 /// The JavaScript of one module's own code of module scope: its imports
 /// as reads of other modules, its exports as members of `$exports`, and
 /// its declarations with their types removed.
@@ -2601,6 +2656,8 @@ fn module_text(rewriter: &mut Rewriter<'_, '_, '_, '_>, module: usize) -> String
     let program = parsed.program;
     let mut lines: Vec<String> = Vec::new();
     let mut exports: Vec<(String, String)> = Vec::new();
+    // The functions declared at module scope, by name.
+    let mut declared: Vec<String> = Vec::new();
     let name_of = |name: &ModuleExportName<'_>| match name {
         ModuleExportName::IdentifierName(name) => name.name.to_string(),
         ModuleExportName::IdentifierReference(name) => name.name.to_string(),
@@ -2657,6 +2714,7 @@ fn module_text(rewriter: &mut Rewriter<'_, '_, '_, '_>, module: usize) -> String
                     let span = declaration.span();
                     match declaration {
                         Declaration::VariableDeclaration(variable) => {
+                            rewriter.module_inits = module_inits(variable);
                             for declarator in &variable.declarations {
                                 let mut names = Vec::new();
                                 bound_names(&declarator.id, &mut names);
@@ -2666,6 +2724,9 @@ fn module_text(rewriter: &mut Rewriter<'_, '_, '_, '_>, module: usize) -> String
                         Declaration::FunctionDeclaration(function) => {
                             if let Some(id) = &function.id {
                                 exports.push((id.name.to_string(), id.name.to_string()));
+                                if function.body.is_some() {
+                                    declared.push(id.name.to_string());
+                                }
                             }
                         }
                         Declaration::ClassDeclaration(class) => {
@@ -2710,7 +2771,7 @@ fn module_text(rewriter: &mut Rewriter<'_, '_, '_, '_>, module: usize) -> String
                     let code = rewriter.rewritten(function.span, |rewriter| {
                         walk::walk_function(rewriter, function, ScopeFlags::Function);
                     });
-                    lines.push(format!("const $default = {code};"));
+                    lines.push(format!("const $default = $rt.fn({code});"));
                     exports.push(("default".to_string(), "$default".to_string()));
                 }
                 ExportDefaultDeclarationKind::ClassDeclaration(class) => {
@@ -2724,6 +2785,7 @@ fn module_text(rewriter: &mut Rewriter<'_, '_, '_, '_>, module: usize) -> String
                 other => {
                     if let Some(expression) = other.as_expression() {
                         let code = rewriter.render(expression, Want::Use);
+                        let code = frozen_code(expression, &code);
                         lines.push(format!("const $default = {code};"));
                         exports.push(("default".to_string(), "$default".to_string()));
                     }
@@ -2737,6 +2799,17 @@ fn module_text(rewriter: &mut Rewriter<'_, '_, '_, '_>, module: usize) -> String
                 lines.push(format!("$rt.reexport($exports, {from});"));
             }
             other => {
+                match other {
+                    Statement::VariableDeclaration(variable) => {
+                        rewriter.module_inits = module_inits(variable);
+                    }
+                    Statement::FunctionDeclaration(function) if function.body.is_some() => {
+                        if let Some(id) = &function.id {
+                            declared.push(id.name.to_string());
+                        }
+                    }
+                    _ => {}
+                }
                 let span = other.span();
                 let code = rewriter.rewritten(span, |rewriter| {
                     rewriter.visit_statement(other);
@@ -2744,6 +2817,16 @@ fn module_text(rewriter: &mut Rewriter<'_, '_, '_, '_>, module: usize) -> String
                 lines.push(code);
             }
         }
+    }
+    // A declared function exists before the first statement runs, so each
+    // is hardened before any initializer can call a function that reaches
+    // it.
+    if !declared.is_empty() {
+        let hardened: Vec<String> = declared
+            .iter()
+            .map(|name| format!("$rt.fn({name});"))
+            .collect();
+        lines.insert(0, hardened.join(" "));
     }
     for (exported, local) in exports {
         lines.push(format!(
@@ -2843,6 +2926,7 @@ pub(crate) fn generate(
         cone: None,
         to_body: false,
         outside_block: false,
+        module_inits: HashSet::new(),
         edits: Vec::new(),
     };
     rewriter.generator.setups.insert(0);
