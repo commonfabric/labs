@@ -23209,3 +23209,119 @@ the session. The notes are numbered from 980.
        `dev/test/cfc-trusted-write/frozen.tsx` and `main.tsx`,
        `dev/test/writer-policy/main.tsx`, and the two
        `cfc-trusted-component-examples` modules.
+982. **What holds after the merge of `claude/compiled-pattern-serving-m6` at
+     `c0e0a41014`, and what does not pass.**
+     - _What each resolution keeps._ `Instance.restore` drops the memo entries
+       of the cones that wrote a restored document for the scope key acting
+       (this branch) and forgets the digests of the inputs of records
+       (`recordsRefused`, the other); `CompiledPiece.#refused` calls
+       `recordsRefused` once more for a refusal that restores nothing, before
+       restoring each document for the identity that wrote it. A row array of
+       the adapter is counted by the trunk's `#rowArraysNamed` and has its list
+       document. `CompiledPiece.derive` stands beside `#bring` and `#take`. A
+       serving runtime passes `actsFor`, `lists`, `listWhole`, `wishes` and
+       `builtins` to its pieces. The FabriChat harness keeps the home, the
+       stand-ins and the gesture of this branch and takes the serving arm and
+       the count of changed documents of the other.
+     - _A defect neither parent had, closed: a wake by units left no row of a
+       list in documents._ With the lists of links as documents of their own by
+       default (P392), `RuntimeTransactions.heldResult` found a link to the list
+       document where it looked for an array of links to row documents, so a
+       wake by units evaluated every row, and with `arrays` it took the array
+       that holds the link to a list document for an array of one row. It now
+       follows the link to the list document of the path and to its chunks
+       (`#linksThroughList`), telling chunks from rows by the first member, and
+       `rowsHeld` gives the array the layout of its list as the storage holds it
+       (`#adoptList`), so a later change writes the chunks it changes. 35 cases
+       of the trunk's `unit-resume*.test.ts` and
+       `compiled-serving-takeover*.test.ts` failed before it, on rows left as
+       stored (0 where 4 or 100). Those tests read the links of the rows, and
+       the rows of a list of 1,000 rows through a client, through the list now
+       (`storedList`, and `rowsRead` and `rowCell` of `test/compiled/storage.ts`
+       for a list a client reads as an array of chunks, P393), as the serving
+       branch changed its own 33 reads (note 924).
+     - _Three tests of this branch and of the trunk handed the executor an event
+       themselves_ and relied on the derivation that the records given again
+       after a commit that stored a label alone caused; the serving branch
+       removed those records (`722cf63107`) and changed its own two cases.
+       `staged-read.test.ts` and `unit-resume-refused.test.ts` now call
+       `CompiledPiece.derive` as the scheduler's handler does.
+     - _Not passing: a piece started over 201 items each under a confidentiality
+       clause of its own._ The case "writes the links of one chunk at most ...
+       of 4 members as of 200" of `row-documents.test.ts` (the serving branch's)
+       is refused with `MessageTooLargeError`: the commit of the start stands
+       for 1.44 million array slots and record members, where the memory server
+       admits one million. Each document of the parts of the lists of the
+       readers (P271) and of the parts of the basis is written by
+       `RuntimeTransactions.writeOwn` with no record of a plan, so each stores
+       the join of what the transaction read, here 200 clauses of about 13,000
+       slots; the parts of the lists of the readers give 1.07 million, those of
+       the basis 0.35 million. The trunk head `7b2a492b82` alone refuses the
+       same start: its own case "... of 4 members as of 40" with 201 items in
+       the place of 41 fails the same way. So this is the trunk's defect, of a
+       size that follows the parts written times the clauses read, which the
+       serving branch's test reaches; the merge did not make it. The label those
+       documents should carry is deferred question 1 of round 13, and nothing
+       was changed here. The same failure occurs over a socket, where the client
+       negotiates `commitLabelTableV1`.
+     - _Gates._ Exit status 0: `deno fmt --check`, `deno lint`,
+       `deno task check`, the six `check-*` tasks, the executor tests (206
+       tests, 1,002 steps), the nine CFC test files with
+       `test/cfc/compiled-writer.test.ts` (11 tests, 344 steps), `cargo test`
+       (586 tests), `cargo fmt --check`, `cargo clippy`. Exit status 1:
+       `test/compiled/` on emulated storage and over a socket, 54 tests passed
+       and the one case above failed in each. The emitted fixtures regenerated
+       with no change.
+     - _Measured,_ one run each at a load average of 35 to 63.
+       `compare/serving-path.ts` at 1,000 rows finds the piece current after a
+       takeover with no evaluation and evaluates 6 entries at the wake, with the
+       lists in documents and in place. With the links in place
+       (`SCALE_LISTS=in-place`) the first event after the takeover is read after
+       30 ms (the trunk: about 31). With the lists in documents a client reads a
+       list of 1,000 rows as an array of chunks, and the harness now watches the
+       whole list: a rename is read after 3.4 s at the second client and an add
+       after 13 s, against 17 and 42 ms in place, while the piece spends 50 ms
+       in all its events and derivations. That is the cost of a client reading a
+       list in chunks whole, which note 925 leaves open, and not of the piece;
+       it was not profiled. `compare/both-paths.ts`: 12 of 14 equal, as after
+       note 981. `compare/fabrichat/scale.ts runner room
+       100` with the
+       stand-ins of the serving branch (`SCALE_STAND_INS=table`): a send takes
+       200 to 217 ms (the serving branch: 197 to 207), gives 688 to 698 records
+       (189), and changes 18 documents of 585 to 592 KB (24 of 410 KB). The
+       records added are those of `messageRights`, a `map` over the stored
+       messages, an array of references, whose result is of the scope `session`:
+       this branch stores such an output whole in its scope instance with the
+       records of its paths (note 889), so a send gives about five records for
+       each message held, 65 at 13 messages where the serving branch gives none.
+       That is a composition of the two branches and not a defect of the merge;
+       it makes a send grow with the room again.
+     - _The corpus,_ one run of each mode, as started, every event handled, no
+       commit refused, equal: runner path 259, 217, 249, 230; serving 235, 202,
+       221, 211; after a resume 259, 215, 251, 228 (121 found current); serving
+       with a resume 235, 201, 221, 210 (73 found current, rows left in 18);
+       with `--references` 235, 202, 221, 206 (73, rows left in 19). Every line
+       equals the line of the merge before or of the serving branch but three,
+       each of which varies between runs of the same code:
+       `examples/fair-share/main.tsx` (three refusals; one in a second run
+       alone), `system/profile-embed/profile-embed.tsx` (note 980) and
+       `apps/agent/agent.tsx` after a resume (three refusals; two in note 981).
+     - _The branches._ Because one case of a parent's tests does not pass,
+       `claude/compiled-pattern-sandbox-m5` was left at the merge of the
+       write-integrity branch and its note, and this merge with its fixes is the
+       local branch `merge-attempt/serving-m6`.
+
+### CFC questions deferred, round seventeen
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Question 1 of round 13 (the label of the lists of the readers, and of the
+   basis) has a consequence beyond the label: written with the join of what the
+   transaction read, these documents make the commit that starts a piece over
+   about 150 items under distinct clauses larger than the memory server admits,
+   on the trunk as after this merge.
+2. `#adoptList` and `#linksThroughList` read the list document and its chunks in
+   a transaction of their own that the piece aborts, as `#storedRowLinks` of the
+   serving branch does, so the layout a wake adopts is read under no label. A
+   reader of the layout learns the order of the rows and the number of chunks,
+   which follow from the stored result.
