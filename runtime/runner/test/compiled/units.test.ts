@@ -67,6 +67,7 @@ const reads = (key: string, doc: string) => ({
   collection: 0,
   key,
   plain: true,
+  position: false,
   reads: [{ doc, path: ["title"], own: false }],
 });
 

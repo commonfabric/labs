@@ -48,12 +48,25 @@ describe("storedRowCollections()", () => {
     expect([...storedRowCollections(artifact, new Set())]).toEqual([]);
   });
 
-  it("leaves out a `map` whose element body holds another collection", async () => {
+  it("gives a `map` whose element body holds another collection", async () => {
     // `index-in-body.tsx`: the body of the `map` over the groups maps the
     // bucket of an index.
     const artifact = await artifactOf("index-in-body");
 
     expect([...rowDocumentCollections(artifact)]).toEqual([0]);
+    expect(storedOf(artifact).map(([collection]) => collection)).toEqual([0]);
+  });
+
+  it("leaves out a `map` whose element body holds another collection whose element body binds a handler", async () => {
+    const artifact = structuredClone(await artifactOf("index-in-body"));
+    const inner = artifact.plan.collections.findIndex(({ within }) =>
+      within.some((step) => step.element === 0)
+    );
+    // A binding declared inside the element body of the inner collection.
+    artifact.plan.bindings.push(
+      { within: [{ element: 0 }, { element: inner }] } as never,
+    );
+
     expect(storedOf(artifact)).toEqual([]);
   });
 

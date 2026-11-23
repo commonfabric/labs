@@ -88,6 +88,7 @@ import {
 import { freezeModuleData, hardenFunction } from "./frozen.ts";
 import {
   boundInElement,
+  type ElementReads,
   STORED_ROW,
   storedRowCollections,
   type StoredUnits,
@@ -6670,6 +6671,7 @@ export class Instance {
     }
     for (const unit of this.#indexUnits.values()) this.#storeIndex(unit);
     this.#arrange();
+    this.#noteRows();
   }
 
   /**
@@ -7072,6 +7074,7 @@ export class Instance {
     if (bindings.length > 0) units.bound(bindings, keys);
     this.counts.rowsLeftStored += keys.length - due.size;
     this.#seeds.set(name, { collection, path: held.path, on, targets });
+    this.#watchPositions(collection, keys.filter((key) => !due.has(key)));
     return value;
   }
 
@@ -7145,6 +7148,7 @@ export class Instance {
         stored,
         first: host.dependencies.length,
       });
+      this.#watchPositions(collection, [...stored]);
       return left;
     }
     if (seed.stored === undefined) return undefined;
@@ -7163,9 +7167,13 @@ export class Instance {
       before[before.length - 1 - tail] ===
         elements[elements.length - 1 - tail].key
     ) tail += 1;
+    // A row that depends on the position of its element is left where the
+    // position is the one the unit holds it at.
+    const shifted = elements.length !== before.length &&
+      units.positioned(collection);
     elements.forEach(({ key, source }, index) => {
       if (!seed.stored?.has(key) || !(source instanceof Ref)) return;
-      if (index >= head && index < elements.length - tail) return;
+      if (index >= head && (shifted || index < elements.length - tail)) return;
       const body = this.#name("element", collection, [], key);
       if (this.#memo.has(body)) return;
       const slot = this.#slots.get(body);
@@ -7175,6 +7183,25 @@ export class Instance {
     seed.stored = new Set(left.keys());
     seed.first = host.dependencies.length;
     return left;
+  }
+
+  /**
+   * Where the rows of `collection` that the storage holds depend on the
+   * position of their elements (`StoredUnits.positioned`): registers the
+   * body of the element of each of `keys`, whose row is left as stored, as
+   * a reader of the position of its element, so that a change of the
+   * position evaluates the body (`#moved`).
+   */
+  #watchPositions(collection: number, keys: readonly string[]): void {
+    if (this.options.units?.positioned(collection) !== true) return;
+    for (const key of keys) {
+      const under = this.#name("under", collection, [], key);
+      const body = this.#name("element", collection, [], key);
+      const readers = this.#indexReaders.get(under) ?? new Set();
+      readers.add(body);
+      this.#indexReaders.set(under, readers);
+      this.#slot(body);
+    }
   }
 
   /**
@@ -7319,22 +7346,75 @@ export class Instance {
   }
 
   /**
-   * Tells the store that keeps the units what an evaluation of the body
-   * of an element of a collection of `#listed` read.
+   * The elements of the collections of `#listed` under whose key an entry
+   * was evaluated since the store step last told the store that keeps the
+   * units what their rows read, by the name of the entry of the body.
    */
-  #noteElement(collection: number, key: string, entry: Entry): void {
-    this.options.units?.read({
-      collection,
-      key,
-      plain: entry.dependencies.length === 0 && entry.writers.length === 0 &&
-        entry.indexes.size === 0 &&
-        entry.reads.every(({ keyed }) => keyed === undefined),
-      reads: entry.reads.map(({ doc, path, own }) => ({
-        doc,
-        path,
-        own: own === true,
-      })),
-    });
+  readonly #rowsDue = new Map<string, { collection: number; key: string }>();
+
+  /**
+   * An entry `name` that is kept under the key of an element of a
+   * collection of `#listed` was evaluated under `context`. The store that
+   * keeps the units is told what the row read once the store step ran
+   * (`#noteRows`). Where the row is left as stored and the entry is no
+   * part of an evaluation of its body, the body is marked: the row is
+   * evaluated, so that the lists hold what the entry read now.
+   */
+  #underListed(collection: number, context: Context, name: string): void {
+    const element = context.get(collection);
+    if (element === undefined) return;
+    const body = this.#name("element", collection, [], element.key);
+    this.#rowsDue.set(body, { collection, key: element.key });
+    if (name === body || this.#memo.has(body) || this.#open.has(body)) return;
+    if (!this.#seeds.has(this.#name("assembly", collection, []))) return;
+    this.#adoptStored(collection, element.key, body);
+    this.#mark(this.#slot(body));
+  }
+
+  /**
+   * Tells the store that keeps the units what the row of each element of
+   * `#rowsDue` read: the body, and each entry that is kept under the key
+   * of the element, as a cone of the body with an instance of its own, the
+   * assembly of a collection inside the body and the bodies of its
+   * elements. The stored row holds what those entries gave, whether the
+   * body used them or returned a reference to them. The row is plain where
+   * none of them used something that is kept elsewhere
+   * (`ElementReads.plain`).
+   */
+  #noteRows(): void {
+    const units = this.options.units;
+    for (const [body, { collection, key }] of this.#rowsDue) {
+      if (!this.#memo.has(body) || units === undefined) continue;
+      const under = this.#underKey.get(
+        this.#name("under", collection, [], key),
+      ) ?? new Set([body]);
+      let plain = true;
+      let position = false;
+      const reads: ElementReads["reads"] = [];
+      for (const name of under) {
+        const one = this.#memo.get(name);
+        if (one === undefined) continue;
+        if (one.writers.length > 0 || one.always === true) plain = false;
+        for (const indexed of one.indexes.keys()) {
+          if (indexed === collection) position = true;
+          else if (!this.#outerOf(indexed).includes(collection)) plain = false;
+        }
+        for (const { doc, path, own, keyed } of one.reads) {
+          if (keyed !== undefined) plain = false;
+          reads.push({ doc, path, own: own === true });
+        }
+        for (const { on } of one.dependencies) {
+          // The element table of a collection inside the body is formed
+          // by its assembly.
+          const used = on?.startsWith(TABLE_PREFIX)
+            ? on.slice(TABLE_PREFIX.length)
+            : on;
+          if (used === undefined || !under.has(used)) plain = false;
+        }
+      }
+      units.read({ collection, key, plain, position, reads });
+    }
+    this.#rowsDue.clear();
   }
 
   /** The entry of a computation that has not been evaluated. */
@@ -7514,6 +7594,9 @@ export class Instance {
     };
     this.#memo.set(key, entry);
     this.#keep(key, cone, within, context);
+    if (within.length > 0 && this.#listed?.has(within[0]) === true) {
+      this.#underListed(within[0], context, key);
+    }
     // The bindings are kept for the write records of a store outside the
     // executor (`TransactionHooks`), and for nothing else.
     if (this.root.options.transactions !== undefined) {
@@ -7922,14 +8005,11 @@ export class Instance {
           collection,
         ]);
       }
-      const before = this.#memo.get(name);
       this.#adoptStored(collection, key, name);
-      const entry = this.#ensure(name, inner, cone, "element", run, [
+      return this.#ensure(name, inner, cone, "element", run, [
         ...outer,
         collection,
       ]);
-      if (entry !== before) this.#noteElement(collection, key, entry);
-      return entry;
     };
   }
 
