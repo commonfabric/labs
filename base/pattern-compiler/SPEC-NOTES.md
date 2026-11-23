@@ -15724,3 +15724,293 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 8. A `computed` whose body moved into an authored function (note 724) has the
    label of the whole body where the promoted form had one for each path of its
    result. That is an over-label, and the paths it widens were not listed.
+
+## FabriChat round two: what a send costs
+
+The round of 2026-11-23 on what the FabriChat room and Home cost on the runner
+path, from the commit `8bd945fc66`. Its tables, profiles and traces are in the
+folder of the round, `r10-fabrichat/`.
+
+732. **What the round did.** In order: a profile and the counters of a send and
+     of Home's event, with each piece of work that follows the messages held
+     named by function (notes 733 to 735); four changes of the executor and the
+     adapter that the profiles asked for (note 736); two changes of the copy of
+     the room (note 737); today's runtime beside the harness (note 738); the two
+     gaps of the runner path that note 727 named (note 739); and the tables
+     (note 740). Not reached: a send that does not grow with the room. A send
+     into a room of 1,000 messages takes 1.7 to 1.8 s on the runner path, from
+     about 9 s by the slope of note 728, and 0.28 s on the executor in memory,
+     as before. What is left follows the messages held in the pattern's own body
+     `facts`, in the executor's assembly of a `map` over the result of a body,
+     and in the records of the labels of each row. Stubbed with a plan: `facts`
+     on the constructs (note 737), the assembly of a `map` over the result of a
+     body by its keys (note 735), and the sync of a document of another space
+     (note 739).
+733. **Structure and scale: why Home's event took 643 ms in the piece, and a
+     send 180 ms at 10 messages.** `Instance.#elementsBound` of
+     `exec/executor.ts` binds a slot below the elements of a collection that no
+     element was read for. For each such slot it formed the canonical text of
+     the root and path of every slot of the plan, so the work of one record was
+     the square of the number of slots of the plan. Home's plan is large and its
+     event gives 63 records: 630 of the 700 ms of the profile were in that
+     function and in `canonical`. A send into the room spent 310 ms of about
+     1,000 there at 100 messages. `Instance.#valueSlotsAt` now holds the slots
+     at each root and path, made once for an instance. Home's event takes 93 ms
+     on the runner path (47 ms in the piece), from 690 to 850. The 5 commits of
+     a send are the design and not a defect: the handler of `sendMessage`, the
+     handler of the stream `tellJoined` that it sends to, the first derivation
+     of the row instance the handler made (ruling Z87), and two derivations. The
+     seed took 270 ms for each message because each of its sends is a send into
+     the room as it stands, so the seed of N messages is the square of N.
+734. **Soundness: a place of the result that held a time of the data model was
+     not written when the time changed.** `put` in `Instance.#place` compared a
+     place with what it holds by the text of JSON, which is `{}` for every
+     `FabricEpochNsec` (note 726 left 41 such places unread). The window
+     `messages.latest.messages` of the room, which holds the 100 newest messages
+     by value, kept at each position the `sentAt` of the message that stood
+     there before the window moved. The comparison is now by `canonical`. Test:
+     `exec/test/window.test.ts` over `compare/fixtures/window.tsx`, "holds the
+     time of each record after the window moved by one", seen to fail on the
+     times `0n, 1n, 2n` where `3n,
+     4n, 5n` were expected. The other 40
+     texts of JSON in `exec/executor.ts` are still unread.
+735. **What follows the messages held, by function.** Measured with
+     `SCALE_CPU_PROFILE` and `SCALE_TRACE` of `compare/fabrichat/scale.ts`, at
+     the commit `61ec40d489` for the runner arm at 1,000 messages (three sends,
+     6.3 s of samples) and for the executor in memory (three sends, 0.77 s).
+     - _The pattern's own._ `facts` (`messageFacts` and `messageEntries` of the
+       copies) reads every message at each send: the record, `sentAt` and `body`
+       again by their own cells, and the author through the link
+       `authorProfile`, the outcome of the `wish` and the profile. That is 5
+       positions read for each message, and it is the design of the pattern.
+       `rowFactsForSession` reads the rights of every message and forms a record
+       with an entry for each. `threadMessages`, `participants` and the members
+       of the result under `messages` read what `facts` returns.
+     - _The executor's, on both arms._ (a) A read of a value copies what it
+       reads, each link followed (`Host.v`, `Store.read`, `Store.#deep`,
+       `Store.#copy`): 115 ms of a send of 257 ms in memory at 1,000. Note 666
+       has the plan for a read without a copy; it is not built. (b) The `map`
+       over `facts.main` that makes the rows of the conversation has the result
+       of a body as its source, and `Instance.#reassemble` brings an assembly up
+       to date only over a stored array or over another collection: this one is
+       formed whole at each send, which checks the dependencies of every row and
+       its state cells (`dependEntry`, `stateCellDocument`; 42 ms of a send in
+       memory at 1,000). The plan: a third branch of `#reassemble` for a source
+       that an output computes, which takes the keys of the array the output
+       holds now, finds the one run that differs from the keys of the table
+       (`spliceBetween` of the adapter does this for values), and applies it as
+       the splices of a stored array are applied. (c) The canonical text of what
+       `facts` returns, formed to see whether it changed, and the registration
+       of each position it read (`canonical`, `Instance.#watch`,
+       `Instance.#register`): 70 ms of a send in memory at 1,000.
+     - _The executor's and the adapter's, on the runner path alone._ (d) A send
+       stores another label on the document of the messages, at the position of
+       the message appended. `Instance.labelsChanged` then finds every record
+       that read that document, and `Instance.#readsChangedLabel` asks the
+       adapter for each position of each record whether it consumes another
+       label (`RuntimeTransactions.#labelIn`, twice for each of three classes):
+       480 ms of a send at 1,000. The adapter now answers each path and class
+       once for a change (note 736). (e) The records of the rows of
+       `messageRights` are among those that read a changed label: the record of
+       a row names the position `*` below the messages for a slot that no
+       evaluation bound (`Instance.#elementsBound`), and a path that names every
+       element is taken to have changed. So `Instance.#relabel` gives the 4
+       records of every row again at each send (177 ms at 1,000), and the
+       preparation instantiates their templates (`planLabelsFor`, 65 ms of the
+       244 ms of the preparation). This is the same finding as CFC question 4 of
+       the sixth round of milestone 3 for the rows of the pivot, and is deferred
+       question 1 below. (f) `Instance.#unchangedOutput` gives a record for
+       every place of the result that a comparison left as it was (160 ms at
+       1,000), each time the result is stored. (g) Every stored link to a
+       message carries the schema of the message, 1.5 KB, where the handle that
+       the body returned was typed (`Instance.stored` for a `Ref` with a
+       schema): the result document of a room of 203 messages is 1.29 MB in the
+       executor's store, 335 KB of it `messageRights`, 496 KB `$VIEWS` and 428
+       KB `$UI`, so about 6 KB for each message held. The storage interns the
+       schemas of links (`runtime/memory/v2/schema-table-links.ts`); the
+       executor and the adapter form the text of each, compare it and encode it.
+       Whether a stored link to a typed handle has to carry the schema was not
+       decided.
+736. **Four changes of the executor and the adapter.**
+     - `Instance.#valueSlotsAt` (note 733). No test was written first: the
+       values are the same, and the existing tests of the records pass.
+     - `put` of `Instance.#place` compares by `canonical` (note 734), and an
+       array that holds another value at every position is written once
+       (provisional decision P200, `differsThroughout`): the window of the room
+       was written member by member, 100 writes of `body` and 100 records,
+       twice, for each send into a room of 100 messages or more. A send at 100
+       took 620 ms with them and 265 ms without. Test:
+       `exec/test/window.test.ts`, "writes the window once where every position
+       holds another record", seen to fail on the three writes `latest/0/text`
+       to `latest/2/text`.
+     - `Instance.#place` forms the inputs of a cone instance once for the
+       records of the places it leaves as they are (`#placing`), where
+       `#unchangedOutput` forgot them for each place. A write in between forgets
+       them as before (`#writesOf`). No test was written first.
+     - `RuntimeTransactions.#reportLabels` answers `LabelChange.unchanged` once
+       for a path and a class. Under `labelsChanged`, three sends at 200
+       messages take 4 ms, from 62. No test was written first.
+737. **The copy of the room: two changes, and `facts` stubbed with a plan.**
+     - `messageRightsForSession` is a `map` over the stored messages
+       (`messages.map((record, index) => ...)`, with the cell of the message
+       from `storedMessageAt`), where a `computed` mapped `facts.entries`. That
+       `map` was over the result of a body, was formed whole at each send, and
+       held a copy of each message in the result. Over the stored array the
+       assembly takes the splice of the message sent, and a row holds a link to
+       its message. A message the room cannot read has a row here, where the
+       entries left it out. The time of a send did not change by this alone,
+       because of (d) and (e) of note 735.
+     - `indexesOf` reads the length of a list at its member `length`
+       (`list.key("length").get()`), where it read the list whole for it: the
+       executor copied every message through its link for that read. A send in
+       memory at 100 takes 39 ms, from 44.
+     - Declaring the messages as an array of cells, so that `map` gives the cell
+       of each (`Cell<MessageCell[]>` assigned from `messages`), is refused by
+       the checker as it has to be: a cell that can be read and written holds
+       one type.
+     - _`facts` on the constructs: not done, a plan._ The entries are a `map`
+       over the stored messages, each entry from its own message (`key`,
+       `sentAt`, the keys of what it replies to, `inMain`, `live`, `authorKey`).
+       `main` is a `filter` of them by `inMain` and a `map` to the cell, which
+       is an array of references that the rows of the conversation are a `map`
+       over. `places` is a `groupBy` of the entries by the key of their thread,
+       and a row reads `lookup(key)` for the count of replies and the newest of
+       them. `authors` is the keys of a `groupBy` by `authorKey`, in the order
+       the buckets came to exist. `count` is the length of the messages.
+       `latest` is the last 100 of `main`, which needs a construct the language
+       does not have, a window of the newest members of a collection that is
+       brought up to date by the splice of its source; until then a body reads
+       `main` whole. `threads` is a `flatMap` over `main` with the bucket of
+       each root. `legacyReplies` is the length of a `filter`.
+       `rowFactsForSession` goes away: a row derives its own controls from its
+       message and from what the session holds, as a row of `messageRights` does
+       now. What the emitter lacks for this is in note 724: a guard in the
+       callback of a collection method, and `elementById` and `resolveAsCell` in
+       the reactive tier.
+738. **Today's runtime beside it.**
+     `patterns/integration/fabrichat-room-send-scale.ts` runs the room of
+     `patterns/system/fabrichat/room.tsx` in the fixture
+     `fabrichat-room-profile-wish` on `MultiRuntimeHarness`: the person's home
+     lists a profile, the person's runtime runs the room in a Deno worker on an
+     in-process storage server, with the labels and the write policies the
+     pattern declares and server execution off. A send is timed from the event
+     to the end of `MultiRuntimeHarness.settle()`. The comparison is not like
+     with like in four respects. The compiled arm runs with the write policies,
+     the added integrity and the write authorizations removed from the schemas
+     (P196), so its preparation checks no policy. It answers `wish` and about 20
+     built-ins with constants. Its storage is in the thread of the runtime,
+     where today's arm has two runtimes of the person in workers, the one that
+     set the profile up and the one that sends, and both run the room; a settle
+     is at least two rounds over both. And today's arm keeps the links to the
+     messages as links, where the compiled arm holds the schema of the message
+     in each. So today's figures are an upper bound of what a send costs today
+     in one runtime, and the compiled figures a lower bound of what the compiled
+     path will cost with policies checked. With that said: today's send grows
+     with the room as the compiled one does, and steeper.
+739. **Two gaps of the runner path, built small.**
+     - _A handler that sends to a stream which the state of a binding alone
+       holds._ `RuntimeTransactions.markedStream` writes the marker of such a
+       stream into the handed transaction of the handler that first sends to it,
+       and `CompiledPiece.#registerStream` takes the queued events inside that
+       transaction. Test:
+       `runtime/runner/test/compiled/state-held-stream.test.ts` over
+       `compare/fixtures/state-held-stream.tsx`, seen to fail on the aborted
+       transaction. The copy of the room still holds `tellJoined` in its result;
+       it no longer has to. Not verified: a resume of a piece whose marker was
+       written this way.
+     - _A document of another space._ `RuntimeTransactions.#decode` keeps, for
+       the document a link leads to, the space the link names where it is
+       another than the piece's; `load` and every read then address the document
+       there, and the subscription takes the commits of that space for the
+       documents it holds of it. Test:
+       `runtime/runner/test/compiled/foreign-space.test.ts` over
+       `compare/fixtures/foreign-read.tsx`: the read, a change of the document,
+       and the result stored in the piece's space alone; the first seen to fail
+       on `hello undefined`. What the adapter still needs: (1) the sync of a
+       document the replica does not hold, which is not a synchronous read:
+       `load` finds nothing, the piece asks the storage for the document and
+       derives again when it is there, as the runner's pre-sync does; (2) the
+       space of a link that names none inside a document of another space, which
+       is that document's space, so `#decode` needs the document it decodes; (3)
+       an identifier of the executor for a document that includes its space,
+       since two spaces can hold documents of one entity and the executor names
+       a document by its entity alone; (4) the read recorded for the basis with
+       its space (`PieceBasis.source` takes the name of the document), so that a
+       resume asks the right replica for its sequence number. The harness of
+       FabriChat still seeds the profile in the room's space.
+740. **Measured.** One run of each cell, three sends, on an Apple M5 Max with 18
+     cores at a load average of 6 to 12 from other work, at the commit
+     `676f1c6f3d`. Milliseconds.
+
+     | Step                         | Messages held | Executor in memory | Compiled piece in the runner | In the piece | Today's runtime    |
+     | ---------------------------- | ------------- | ------------------ | ---------------------------- | ------------ | ------------------ |
+     | Room, send                   | 10            | 8.5 to 9.7         | 72 to 74                     | 31 to 33     | 690 to 757         |
+     | Room, send                   | 100           | 45 to 49           | 236 to 244                   | 116 to 119   | 1,654 to 1,770     |
+     | Room, send                   | 256           |                    |                              |              | 4,188 to 4,231     |
+     | Room, send                   | 1,000         | 259 to 285         | 1,690 to 1,802               | 892 to 974   | not reached        |
+     | Room, the sends that fill it | 100           | 2,404              | 15,174                       |              | 106,284            |
+     | Room, the sends that fill it | 1,000         | 151,924            | 900,644                      |              | 256 in ten minutes |
+     | Home, start                  |               | 45                 | 221                          |              |                    |
+     | Home, one event              |               | 5.8                | 83                           | 26           |                    |
+     | Manager, start               |               | 25                 | 129                          |              |                    |
+
+     A send on the runner path at 10, 100 and 1,000 messages reads 93, 543 and
+     5,043 positions, stages 10 writes at each, gives 137, 499 and 4,099
+     records, and is 5 commits. At the head the round started from, a send took
+     180 ms at 10 and 940 to 1,000 ms at 100, and Home's event 690 ms. The
+     compiled path is below today's runtime in this harness at each size both
+     reached, by 9 times at 10 messages and 7 times at 100, with the caveats of
+     note 738. It is not below the owner's own 1.2 s at 30 messages on a
+     deployment at every size: it passes that between 500 and 1,000 messages. It
+     grows with the room, by about 1.7 ms for each message held, so the owner's
+     rule is not met. The corpus on the runner path (`corpus.jsonl` of the
+     folder): 258 modules start, 219 take every event, 228 hold the values of
+     the executor in memory, as against 258, 219 and 226. Six lines changed, all
+     by the marker of note 739: `apps/bookmarks/bookmarks.tsx` and
+     `apps/contacts/contact-book.tsx` hold equal values and no refusal;
+     `examples/nested-counter/nested-counter.tsx` has no refusal;
+     `product/primitives/demo/atoms-demo.tsx` handles 7 of 20 events where it
+     handled 10, and `showcase/inductor/pool/inductor-pool.tsx` 0 of 3 where it
+     handled 1, each with "the handler did not commit" where a transaction was
+     aborted before; and `apps/redactor/vault.tsx` holds its refusal of writer
+     fit twice where it held it 3 times. Why the two handle fewer was not looked
+     into.
+741. **Provisional decision of the round, and what was not done.** P200: a place
+     of the result that holds an array of the same length with another value at
+     every position is written once, at the path of the array (note 736). Not
+     done: `facts` on the constructs (note 737); the assembly of a `map` over
+     the result of a body by its keys, a read without a copy, and the schema in
+     each stored link to a typed handle (note 735); the records of every row
+     given again at each send (deferred question 1); the sync of a document of
+     another space (note 739); tests written first for the three changes of note
+     736 that change no value; today's runtime at 1,000 messages and under
+     server execution.
+
+### CFC questions deferred, FabriChat round two
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. The record of a row of a `map` over a stored array names the position `*`
+   below the array for a slot that no evaluation bound
+   (`Instance.#elementsBound`). An append to the array stores a label at the new
+   position, and every row's record is then given again, since a path that names
+   every element is taken to consume another label
+   (`Instance.#readsChangedLabel`). Whether the label of a row has to follow the
+   labels of the other members of the array, and if not, which position such a
+   slot is bound to. Until then a send gives 4 records for each message held.
+2. `put` of `Instance.#place` writes an array whole where every position differs
+   (P200). The record given is then that of the output at the path of the array
+   and no longer one for each member. Whether the label entries below the array
+   that the member writes stored are the ones the write of the array has to
+   store.
+3. A row of `messageRights` exists for a message the room cannot read, where the
+   entries of `facts` left such a message out (note 737). The row holds a link
+   to the message and the rights computed from what the read of it gave.
+4. The marker of a stream that the state of a binding alone holds is written by
+   the transaction of the handler that first sends to the stream (note 739),
+   under no record of the plan. Which label the marker and its link in the
+   result have.
+5. A compiled piece that reads a document of another space reads it through its
+   own transaction (note 739). The read is of another space than the one the
+   commit writes; what the preparation takes of the labels of that document, and
+   what the basis of the piece records for it, were not read.
