@@ -684,6 +684,19 @@ A diff shows its whole-diff change totals at the top right corner of its first
 line: the added line count and the removed line count, colored like additions
 and removals.
 
+A diff colors its lines from the complete files on both sides of each change,
+and parsing large files can take seconds. The interactive pager parses up to
+131,072 characters of those files before it shows the diff, and shows the lines
+of the rest as plain text. It parses them in the background while it takes keys,
+and colors them as they finish. Meanwhile, the status bar shows a spinner and a
+gauge of how much of their source has been parsed, before the current file's
+name, with the word "Highlighting" when there is room. Key hints make way for
+the gauge, except the first two, Help and Quit. When files cannot be parsed, the
+status line says so, with the reason the first one failed, and they stay plain.
+A file saved before its parse finishes is parsed again as saved, and a file
+opened from the viewer stops the parses. Output that is not to a terminal is
+colored in full before it is written.
+
 Dialogs share Up / Down, Page Up / Page Down, and Home / End for navigation.
 Ctrl-F / Ctrl-B also page down / up. Pages follow the dialog's visible height,
 with one row of overlap. While browsing, `j` / `k` and `J` / `K` move down / up,
