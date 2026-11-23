@@ -40,6 +40,10 @@
  * evaluations by then; `after takeover 0` and `after takeover 1` are two
  * edits of the title of the first topic after it.
  *
+ * `SCALE_CREATES` is the number of creates, three by default. With
+ * `SCALE_SCOPES` set, each step lists the scope instances the executor of
+ * the piece holds, each with its size as JSON.
+ *
  * With `SCALE_PROFILE_STEP` naming a step and `SCALE_CPU_PROFILE` a file,
  * the sampling profile of the process over that step is written there.
  *
@@ -571,6 +575,19 @@ export const runServing = async (
         derivations: running.counts.derivations,
         ownMs: running.counts.ownMs,
         evaluations: running.instance.counts.evaluations,
+        // Every count of the executor and of the transactions, by name.
+        ...Object.fromEntries(
+          [
+            ...Object.entries(running.instance.counts).map((
+              [name, count],
+            ) => [`i.${name}`, count]),
+            ...Object.entries(running.transactions.counts).map((
+              [name, count],
+            ) => [`t.${name}`, count]),
+          ].filter((entry): entry is [string, number] =>
+            typeof entry[1] === "number"
+          ),
+        ),
         reads: running.transactions.counts.reads,
         writes: running.transactions.counts.writes,
         recordsGiven: running.transactions.counts.recordsGiven,
@@ -749,6 +766,17 @@ export const runServing = async (
         preparations: preparedAfter.count - preparedBefore.count,
         prepareMs: round(preparedAfter.ms - preparedBefore.ms),
         ...(step === "load" ? { storedLabels: storedLabels() } : {}),
+        // With `SCALE_SCOPES` set: each scope instance the executor of the
+        // piece holds, by its name, with its size as JSON.
+        ...(Deno.env.get("SCALE_SCOPES") === undefined ? {} : {
+          scopes: Object.fromEntries(
+            [...(piece()?.instance.store.docs ?? [])]
+              .filter(([, { kind }]) => kind === "scope instance")
+              .map((
+                [id, { value }],
+              ) => [id, JSON.stringify(value ?? null).length]),
+          ),
+        }),
         ...(after === undefined ? {} : {
           compiled: Object.fromEntries(
             Object.entries(after).map(([name, value]) => [
@@ -904,7 +932,9 @@ export const runServing = async (
           }),
       );
     }
-    for (let turn = 0; turn < 3; turn++) {
+    // `SCALE_CREATES` is the number of creates, three by default.
+    const creates = Number(Deno.env.get("SCALE_CREATES") ?? 3);
+    for (let turn = 0; turn < creates; turn++) {
       await measure(
         `create ${turn}`,
         ["topicCount"],
@@ -975,7 +1005,7 @@ export const runServing = async (
           late,
           result,
           ["topicCount"],
-          (value) => value === size + 3,
+          (value) => value === size + creates,
         );
         await serving.host.whenQuiescent();
         const quiescent = performance.now();
