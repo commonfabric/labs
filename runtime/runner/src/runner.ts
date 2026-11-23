@@ -4535,7 +4535,10 @@ export class Runner {
     // decides nothing written; the pinned limit is in
     // `sub-pattern-update-labels.test.ts`.
     const previousResult = writableResultCell.getRaw({
-      meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
+      meta: Object.freeze({
+        ...ignoreReadForScheduling,
+        ...writeDestinationRead,
+      }),
     });
     const storedName = options.preserveName && !isCellLink(result) &&
         isObjectOrArray(previousResult) && !isCellLink(previousResult)
@@ -4744,11 +4747,15 @@ export class Runner {
     for (const slot of Object.keys(top as object)) {
       if (skip.has(slot)) continue;
       const position = { ...document, path: [...document.path, slot] };
-      const reference = readStoredReference(tx, position, {
-        ...linkResolutionProbe,
-        ...machineryRead,
-        ...ignoreReadForScheduling,
-      });
+      const reference = readStoredReference(
+        tx,
+        position,
+        Object.freeze({
+          ...linkResolutionProbe,
+          ...machineryRead,
+          ...ignoreReadForScheduling,
+        }),
+      );
       stored[slot] = reference !== undefined && isCellLink(reference)
         ? reference
         : tx.readValueOrThrow(position, { meta: ignoreReadForScheduling });
