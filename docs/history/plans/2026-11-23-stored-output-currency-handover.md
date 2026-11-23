@@ -172,11 +172,18 @@ nothing has changed it since the run handed its writes over
   handover.** A run's change arrives after another run has opened in about
   5% of cases in `executor-fan-out.test.ts`, so the ratchet can move in
   between.
-- **A superseded slot is recorded, not left out.** Leaving it out lets the
-  judgment take the slot for one the slice's runs never wrote, which the
-  slice at the slot's own key can answer for. One FabriChat run of that
-  variant left 50 roots unstarted against 0 to 27 in 16 earlier runs.
-  Whether those were wrong servings was not confirmed.
+- **A superseded slot is recorded, not left out.** Its row is stored behind
+  the slot's head. Such a row marks no slice and counts as current for
+  nothing. What it does is refuse a root to a viewer of that slice's own
+  chain who demands the slot, and it does so also where a broader slice of
+  the same chain holds a row at the head: at the granularity of a document
+  the index cannot tell whether the broader run's write covers what the
+  narrower run would write. One start clears it. A review thread on #10143
+  argues for passing the root in that case, and was left open. Leaving the
+  row out instead lets the judgment take the slot for one the slice's runs
+  never wrote, which the slice at the slot's own key can answer for. One
+  FabriChat run of that variant left 50 roots unstarted against 0 to 27 in
+  16 earlier runs. Whether those were wrong servings was not confirmed.
 - **Granularity is the document instance, not the path.** Two computations
   that write different paths of one document supersede each other. Within
   one slice that does not matter, since a slot one computation of the slice
@@ -411,10 +418,17 @@ env EXPERIMENTAL_SERVER_EXECUTION=true \
   CF_LOG_LEVEL=silent \
   deno bench --json -A --v8-flags=--expose-gc "$@" "$BENCH" \
   > "$OUT/bench.json" 2> "$OUT/bench.stderr"
+# Kept past the cleanup below, which would otherwise decide the exit status.
+brc=$?
 curl -s localhost:8000/api/health/stats > "$OUT/stats-after.json"
 cp runtime/toolshed/local-dev-toolshed.log "$OUT/toolshed.log"
 ./scripts/stop-local-dev.sh >> "$OUT/stop.log" 2>&1
+echo "bench exit $brc" | tee "$OUT/timing.txt"
+exit $brc
 ```
+
+The script does not use `set -e`: the start is retried on a failure, and the
+counters and logs are collected whether or not the benchmark passed.
 
 The counters are `.servingLoop.currency` in `stats-after.json`, and the cost
 of each request to the memory server is under `.timingStats.executor`. A
