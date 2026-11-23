@@ -1531,7 +1531,7 @@ interface ThreadComposerOutput {
 
 /** Owns one thread's session draft under its root's mapped occurrence identity. */
 const FabriChatThreadComposer = pattern<{
-  root: Cell<RepliedMessage>;
+  root: MessageCell;
   disabled: boolean | Default<true>;
   myProfile: ProfileCell | undefined;
   messages: MessagesCell;
@@ -1836,7 +1836,7 @@ export const FabriChatRoomCore = pattern<
   });
   const hasThread = computed(() => openThreadKey !== "");
   const threadComposerRoots = computed(
-    (): PerSession<Cell<RepliedMessage>[]> => {
+    (): PerSession<MessageCell[]> => {
       const root = composer.get()?.thread;
       return openThreadKey === "" || root === undefined
         ? []

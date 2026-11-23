@@ -222,10 +222,10 @@ export interface RepliedMessage {
  */
 export interface StoredReply {
   /** The root of the thread the message joins; absent for none. */
-  thread?: Cell<RepliedMessage>;
+  thread?: Cell<MessageRecord>;
 
   /** The message this one answers; absent for a plain post. */
-  quotes?: Cell<RepliedMessage>;
+  quotes?: Cell<MessageRecord>;
 
   /** Where the message is shown. */
   shownIn: ShownIn;
@@ -902,7 +902,7 @@ export interface ComposerState {
    * The thread shown beside the conversation, by its root, read as a message
    * a reply names is.
    */
-  thread?: Cell<RepliedMessage>;
+  thread?: Cell<MessageRecord>;
 
   /** The message of the open thread the next send there answers. */
   threadQuotes?: MessageCell;
