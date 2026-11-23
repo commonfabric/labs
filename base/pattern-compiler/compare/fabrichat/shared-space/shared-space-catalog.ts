@@ -88,7 +88,10 @@ export interface SharedSpaceProfileRecord {
  * space's DID. The validating reader selects every stored field, for the
  * reason {@link SharedSpaceCatalogStorage} gives.
  */
-export type SharedSpaceProfileStorage = Record<string, any>;
+export type SharedSpaceProfileStorage = Record<
+  string,
+  SharedSpaceProfileRecord
+>;
 
 /** A target whose root, access, and kind the registering application vetted. */
 export interface SharedSpaceRegistration {
@@ -186,7 +189,7 @@ export type SharedSpaceRetitleResult =
  * The validating reader deliberately selects every stored field. A narrower
  * schema can omit a malformed optional value before the validator sees it.
  */
-export type SharedSpaceCatalogStorage = Record<string, any>;
+export type SharedSpaceCatalogStorage = Record<string, unknown>;
 
 /** The catalog's writable binding, held by Home and its handlers. */
 export interface SharedSpaceCatalogState {
@@ -568,7 +571,7 @@ function profileStanding(
 
 // Retain every event field for validation, including linked payloads whose
 // stored schema would otherwise omit a malformed optional field.
-const eventSchema = toSchema<Record<string, any>>();
+const eventSchema = toSchema<Record<string, unknown>>();
 
 /**
  * Registers an admitted space without changing any existing membership, as

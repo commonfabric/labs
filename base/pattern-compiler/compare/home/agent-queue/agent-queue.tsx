@@ -18,7 +18,6 @@ import {
   type Cfc,
   computed,
   type CurrentPrincipal,
-  type Default,
   handler,
   type JSONSchema,
   NAME,
@@ -123,10 +122,10 @@ const removeEntry = handler<
 export type AgentQueueOutput = {
   [NAME]: string;
   [UI]: VNode;
-  entries: Writable<AgentQueueEntry[] | Default<[]>>;
-  agentRunner?: OwnerProtectedQueueWrite<
-    AgentRunnerEntry,
-    typeof setAgentRunner
+  entries: Writable<MaterializedAgentQueueEntry[]>;
+  agentRunner?: Writable<
+    | OwnerProtectedQueueWrite<AgentRunnerEntry, typeof setAgentRunner>
+    | undefined
   >;
   setAgentRunner: Stream<SetAgentRunnerEvent>;
 };
@@ -251,9 +250,9 @@ const AgentQueue = pattern(
       ) as VNode,
       // The local view materializes run links, while the exported queue keeps
       // them as cells so clients can address each durable record.
-      entries: entries as any,
-      agentRunner: agentRunner as any,
-      setAgentRunner: setAgentRunner({ agentRunner: agentRunner as any }),
+      entries,
+      agentRunner,
+      setAgentRunner: setAgentRunner({ agentRunner }),
     };
   },
   agentQueueArgumentSchema,

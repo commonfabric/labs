@@ -60,7 +60,7 @@ type ProfileElementCell = {
 // casts later in this file are required until the CFC wrapper / pattern-factory
 // types expose a typed cell ref and `.for()`. Tracked for a proper type fix.
 export type ProfileElement = {
-  cell: any;
+  cell: unknown;
   tag: string;
   userTags: readonly string[];
   title?: string;
@@ -76,7 +76,7 @@ export type AddProfileElementEvent = {
 };
 
 export type RemoveProfileElementEvent = {
-  cell: any;
+  cell: unknown;
 };
 
 /**
@@ -92,7 +92,7 @@ export type MutateProfileElementsEvent = {
   title?: string;
   tag?: string;
   userTags?: readonly string[];
-  cell?: any;
+  cell?: unknown;
   // "addPiece" inputs: a link to an EXISTING deployed piece (CT-1755). The
   // card becomes a followable reference to the live piece rather than a local
   // title-only placeholder. `pieceSpace` is the target space DID; `pieceId` is
@@ -660,7 +660,7 @@ export const mutateElements = handler<
     //               `event.cell ?? state.cell`; no-op without one.
     mode: "add" | "addCard" | "addLink" | "addPiece" | "remove";
     // Per-row remove binding ("remove" mode).
-    cell?: any;
+    cell?: unknown;
     // Link form binding ("addLink" mode).
     patternUrl?: Writable<string>;
     title?: Writable<string>;
@@ -689,7 +689,7 @@ export const mutateElements = handler<
       const title = (state.title?.get() ?? "").trim() || url;
       const tag = (state.tag?.get() ?? "").trim() || url;
       appendElement({
-        cell: (UrlPatternReference({ title, url }) as any).for(tag),
+        cell: UrlPatternReference({ title, url }).for(tag),
         source: "url",
         title,
         tag,
@@ -737,7 +737,7 @@ export const mutateElements = handler<
     }
     case "addCard": {
       appendElement({
-        cell: (ProfileCatalogCard({ title: "Profile card" }) as any).for(
+        cell: ProfileCatalogCard({ title: "Profile card" }).for(
           "profile-card",
         ),
         source: "catalog",
@@ -756,9 +756,9 @@ export const mutateElements = handler<
       const tag = event.tag ?? event.catalogId ?? event.patternUrl ??
         "profile";
       const cell = source === "url"
-        ? (UrlPatternReference({ title, url: event.patternUrl ?? "" }) as any)
+        ? UrlPatternReference({ title, url: event.patternUrl ?? "" })
           .for(tag)
-        : (ProfileCatalogCard({ title }) as any).for(tag);
+        : ProfileCatalogCard({ title }).for(tag);
       appendElement({
         cell,
         tag,
