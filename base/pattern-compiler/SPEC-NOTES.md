@@ -19976,3 +19976,155 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    was not looked into.
 5. Questions 1 and 4 of round 13 stand: the label of the lists of the readers,
    and a fold over a collection whose rows are left as stored (P273).
+
+## Six fixes carried onto the runner branch
+
+Carried on 2026-11-23, on the branch `claude/compiled-pattern-carry` from the
+commit `aabee19586` of `claude/compiled-pattern-runner-m3`. The notes are
+numbered from 940. Whenever a note says `map` or `filter`, it names the case.
+The tables and logs are in the folder `work/carry` of the session.
+
+940. **What each fix is.**
+     - _The value comparison and arrays of two lengths._ `firstDifference` in
+       `compare/values.ts` read a position past the end of the shorter of two
+       arrays as `undefined`, so `[]` and `[undefined]` compared as equal. It
+       now compares the two lengths behind the positions and reports the
+       difference at `length`.
+     - _The element of a stream of a nested collection._ `Instance.#contextOf`
+       looked for the key of each step of a stream in every element table of the
+       step's collection and kept the last match. It reads the one table that
+       the collection has for the elements found around it, so an event sent
+       through a stored link to a stream of an element of an inner collection
+       runs with the inner element of its own group.
+     - _The left operand of `??`, `||` and `&&`._ Value code wrote
+       `(left operator right)` with the left operand as its value, so an output
+       that the operator computes stored a copy of a record that the left
+       operand refers to. `structure` in `src/emit.rs` writes
+       `$h.operand(operator, test, () => left, () => right)` and `Host.operand`
+       passes on the selected operand (note 942).
+     - _A replay of saved corpus results._ `again` of `compare/values-corpus.ts`
+       ran a line of `stubbed` with the seeded home alone and the clock at now.
+       A line of a run whose executor had stubs holds whether they had the table
+       of `stubs.ts` and what their clock held, `replayed()` runs it with the
+       same stubs and that clock, and `normalize` takes the clock it reads a
+       number as a time against.
+     - _`Object.fromEntries`._ The arm of `static_call` in `src/footprint.rs`
+       recorded nothing. It records `enumeration` at a projection `e` and
+       `value` at `e/*/0`, and gives a bag of `e/*/1` (FA §3.4, P411). For pairs
+       that the body built it records `value` at the key of each pair that is a
+       projection: a list written with every position keeps its members in order
+       (`Built.positions`), which nothing else reads. Of a pair built another
+       way the key is not told from the value, and `value` is recorded at each
+       member that is a projection, which is more than the rule asks for. A list
+       of pairs with static keys gives a bag and not a record. `concat` already
+       recorded `enumeration` at an operand that is a projection of array type;
+       a test holds it.
+     - _A document that a refused commit took back._ Note 943.
+
+941. **The comparisons that use the comparator, before and after its fix.** No
+     count changed and no path newly differs.
+     - `compare/values-fixtures.ts`, one process for each fixture: 64 runs
+       executed, 1,043 of 1,056 values equal, before and after, and at the head
+       with all six fixes. The script as it stands ends on the first of two
+       fixtures that today's runtime refuses to compile (`computed-row-cone`,
+       where the transformer refuses a `.get()` with no site that can carry it,
+       and `time-of-day`, where `crypto` is not found), so it prints no table
+       when it runs every fixture in one process.
+     - `compare/values-corpus.ts run` at `aabee19586`: 288 modules, 250 run by
+       today's runtime, 244 executed, 217 with every value equal and every event
+       handled, 7,463 values compared, 7,314 equal, 149 that differ in 27
+       modules. `again` on that file with the comparator before and after the
+       fix gives the same lines, at the commit of the fix and at the head with
+       the fix of the left operand. A second `run` with the first five fixes
+       gives the same counts. **Note 571 has 7,325 of 7,463 equal over 287
+       modules**: the count at the commit this branch starts from is 11 lower,
+       with no change of this branch in it. Which change since note 571 lowered
+       it was not looked for.
+     - `compare/values-corpus.ts stubbed` with the fixed comparator: 56 modules,
+       51 run by today's runtime, 46 executed, 21 with every value equal, 6,362
+       values compared, 6,061 equal. `again` on that file with the comparator
+       before and after the fix gives the same lines (6,041 equal, where the
+       lines hold no stubs and the replay answers no request). One module,
+       `dev/experimental/folksonomy-stress-test.tsx`, took about five minutes of
+       the eight.
+     - `compare/runner-corpus.ts` does not use the comparator. It has a
+       `firstDifference` of its own that compares the JSON text of two values,
+       in which `[]` and `[undefined]` differ, and `[undefined]` and `[null]` do
+       not. One run on the runner path with the first four fixes and one with
+       all six: 272 modules are run, 258 start, 219 take every event, 228 hold
+       the values of the executor in memory and 194 pass, as in note 702.
+     - `pattern-compiler emit --corpus` does not panic on this branch: it takes
+       5 seconds for 375 modules.
+     - _The replay with the stubs of the run._ The lines of the `stubbed` run,
+       given the stub mode and a clock ten minutes before the replay, give the
+       lines of the run again in every module but one:
+       `apps/lunch-poll/main.tsx` has 14 values that differ where the run had
+       none, each a day label that reads "Wednesday, Jan 1" in the run and
+       "Wednesday, Dec 31" in the replay. The executor before the fix of the
+       left operand gives the same 14, so the fix is not the cause. What in the
+       run gives the executor the other day was not found.
+
+942. **The left operand: the label, and what a reader consumes.** The plan is
+     not changed by the fix: its templates already give the result of the
+     operator as the selected operand, and only the value code copied the left
+     one. The test of the operator is read as before, through the slot it was
+     read through, inside the `$h.select` that reports the selection: a first
+     form of the port that tested the operand through its `identity` slot failed
+     the check of the stored labels against the values on the fixture
+     `held-in-place` ("output $UI depends on area"), which is why the left
+     operand is rendered twice. With the form that was kept, the label tests of
+     `compare/test/` and of `runtime/runner/test/` pass with no change, and the
+     fixture table of note 941 is the same line for line, the counts of the
+     documents included. A reader of the result now follows a link where it read
+     a copy: a default that the schema of the operand declares reaches it, a
+     write through the result reaches the operand, and a per-element construct
+     over the result runs over the stored array. The last changes what is
+     consumed: for a `filter` over `items.get() || []`, with `items` an array of
+     plain values in place, the slot of an element was bound to `items` whole
+     and is bound to the position the element read (`items/0/done`), as for a
+     `filter` over `items` itself. The case of an array in memory is held by the
+     new fixture `filter-of-fallback`. A left operand that holds a scalar is
+     passed on as its value, and the plan of this branch lists an operand of a
+     scalar type as a `value` slot at the right as well, so `label ?? fallback`
+     stores a text and no link. The left operand is evaluated a second time
+     where it is selected and holds a record or an array.
+
+943. **A cone whose side-write a refused commit took back was not evaluated
+     again.** `Instance.restore` takes what the storage holds for a document
+     that a refused commit wrote, and marks what read it. The memo entry of a
+     cone that wrote the document stayed current against what the cone read. On
+     the fixture `staged-read` as a compiled piece: a session whose `items` is
+     stale handles `stage` and then `look`, which reads `joined` as the cone
+     `_join` wrote it from the first handler's write, and both commits are
+     refused with the derivations behind them. The piece then held and stored
+     `joined` and `loud` as they were before the events, beside `items` as the
+     other session wrote it, and a further derivation did not change that.
+     `Instance.#wrote` keeps which cone instances wrote each document as a
+     side-write, and `Instance.restore` drops their memo entries, as
+     `Instance.#abort` does. The map has an entry for each document a cone
+     instance wrote and is not trimmed when an element leaves. The other cases
+     asked for hold with no change: a handler that pushes onto an input, reads a
+     derived value and throws; one whose commit `refuses` rejects; and the next
+     event of a batch behind a withdrawn one. A handler body does not read what
+     follows from its own write: the cones it reads are evaluated before the
+     body, and a read through a handle in the body reads the store.
+
+944. **Found and not changed.**
+     - A handler whose state holds a handle on a kept output of the pattern
+       (`count: ReadonlyCell<number>`) reads the position of the result
+       document, which the store step of a derivation writes. In a batch of two
+       events of `Instance.batch()`, the second body read `count.get()` as 0
+       beside `joined.get()` as `"a"`: the cone of `count` was evaluated before
+       the body, and its value was not at the position the handle reads. Not
+       tried on the runner path. The fixture reads `count` as a value for that
+       reason.
+     - A handler of a compiled piece that throws leaves an "Uncaught error in
+       action" in the log: `CompiledPiece.#keepMinted` writes the counts into
+       the transaction that the failed handler aborted
+       (`StorageTransactionAborted`). The values are as they should be.
+     - `new Map(v)` in `src/footprint.rs` records `enumeration` at `v` and no
+       `value` at `v/*/0`, which FA §3.4 asks for where the keys are compared.
+     - In a pattern whose cone lists the left operand of `??` as an `identity`
+       slot alone, the test reads the value of the operand through that slot,
+       before the fix and after. Whether the label of the result then covers the
+       test was not examined.

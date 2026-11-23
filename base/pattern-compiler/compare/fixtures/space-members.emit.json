@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/space-members.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"spaceMembers\": spaceMembers, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:c0e01687f6539a7e285f9c19262f31a78f04d45ef8c4915fe0b05686c92d3863\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(3, ($h) => ($h.at(((Object).keys($h.v(($h.select(0, $h.v($h.at(spaceMembers($h.slot(0)), [\"principals\"])), true) ?? ({  }))))), [\"length\"])));\nreturn $rt.thunk(($h) => (({ members: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"spaceMembers\": spaceMembers, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:c0e01687f6539a7e285f9c19262f31a78f04d45ef8c4915fe0b05686c92d3863\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(3, ($h) => ($h.at(((Object).keys($h.v($h.operand(\"??\", $h.select(0, $h.v($h.at(spaceMembers($h.slot(0)), [\"principals\"])), true), () => $h.at(spaceMembers($h.slot(0)), [\"principals\"]), () => ({  }))))), [\"length\"])));\nreturn $rt.thunk(($h) => (({ members: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],

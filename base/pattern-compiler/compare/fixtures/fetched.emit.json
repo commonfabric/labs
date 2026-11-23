@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/fetched.tsx",
-              "source": "const { \"computed\": computed, \"fetchJson\": fetchJson, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:206c2ce0e2bc60de37005e95ff88e7bd2fcf962439644ee4119907028c2270e7\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ url: $h.slot(0) })]));\n$rt.value(1, ($h) => (($h.select(0, $h.v($h.slot(3)), true) ?? (\"none\"))));\n$rt.value(4, ($h) => (($h.select(1, $h.v($h.slot(4))) ? (\"pending\") : ($h.select(2, $h.v($h.slot(5))) ? (\"failed\") : (\"settled\")))));\nreturn $rt.thunk(($h) => (({ title: $h.output(0), status: $h.output(1) })));\n});"
+              "source": "const { \"computed\": computed, \"fetchJson\": fetchJson, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:206c2ce0e2bc60de37005e95ff88e7bd2fcf962439644ee4119907028c2270e7\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ url: $h.slot(0) })]));\n$rt.value(1, ($h) => ($h.operand(\"??\", $h.select(0, $h.v($h.slot(3)), true), () => $h.slot(3), () => (\"none\"))));\n$rt.value(4, ($h) => (($h.select(1, $h.v($h.slot(4))) ? (\"pending\") : ($h.select(2, $h.v($h.slot(5))) ? (\"failed\") : (\"settled\")))));\nreturn $rt.thunk(($h) => (({ title: $h.output(0), status: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],

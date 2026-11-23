@@ -612,6 +612,10 @@ struct Built {
     /// The values spread into the record: a member the record does not
     /// name is the member of one of them.
     spreads: Vec<Val>,
+    /// The members of a list written with every position, in order,
+    /// which are also in `bag`: `Object.fromEntries` tells the key of a
+    /// pair from its value by them.
+    positions: Vec<Val>,
 }
 
 impl Built {
@@ -647,6 +651,7 @@ impl Val {
             fields,
             bag,
             spreads: Vec::new(),
+            positions: Vec::new(),
         })))
     }
 
@@ -793,12 +798,13 @@ impl Val {
                 }
                 let copy = Rc::new(RefCell::new(Built::default()));
                 copies.insert(Rc::as_ptr(built), copy.clone());
-                let (fields, bag, spreads) = {
+                let (fields, bag, spreads, positions) = {
                     let built = built.borrow();
                     (
                         built.fields.clone(),
                         built.bag.clone(),
                         built.spreads.clone(),
+                        built.positions.clone(),
                     )
                 };
                 *copy.borrow_mut() = Built {
@@ -808,6 +814,10 @@ impl Val {
                         .collect(),
                     bag: bag.iter().map(|member| member.fresh(copies)).collect(),
                     spreads: spreads.iter().map(|member| member.fresh(copies)).collect(),
+                    positions: positions
+                        .iter()
+                        .map(|member| member.fresh(copies))
+                        .collect(),
                 };
                 Val::Built(copy)
             }
@@ -1972,6 +1982,31 @@ impl<'a> Analyzer<'_, '_, 'a> {
         }
     }
 
+    /// The first and the second member of a pair: `v/0` and `v/1` of a
+    /// projection, and the two positions of a list the body wrote with
+    /// two members. Of another value the body built, the analysis does
+    /// not tell the two apart, and each is the join of its members.
+    fn pair(&mut self, val: &Val) -> (Val, Val) {
+        match val {
+            Val::Proj(_) => (self.extend(val, "0"), self.extend(val, "1")),
+            Val::Alts(members) => {
+                let (keys, values) = members.iter().map(|member| self.pair(member)).unzip();
+                (Val::alts(keys), Val::alts(values))
+            }
+            Val::Built(built) => {
+                let positions = built.borrow().positions.clone();
+                match positions.as_slice() {
+                    [key, value] => (key.clone(), value.clone()),
+                    _ => {
+                        let member = self.member(val);
+                        (member.clone(), member)
+                    }
+                }
+            }
+            _ => (Val::Computed, Val::Computed),
+        }
+    }
+
     fn bind_pattern(&mut self, pattern: &BindingPattern<'a>, val: Val) {
         self.bind_typed(pattern, val, None);
     }
@@ -2569,14 +2604,16 @@ impl<'a> Analyzer<'_, '_, 'a> {
             Expression::ObjectExpression(object) => self.object(object),
             Expression::ArrayExpression(array) => {
                 let mut members = Vec::new();
+                let mut positional = true;
                 for element in &array.elements {
                     match element {
                         ArrayExpressionElement::SpreadElement(spread) => {
                             let val = self.eval(&spread.argument);
                             self.observe(&val, Class::Enumeration);
                             members.push(self.member(&val));
+                            positional = false;
                         }
-                        ArrayExpressionElement::Elision(_) => {}
+                        ArrayExpressionElement::Elision(_) => positional = false,
                         other => {
                             if let Some(expression) = other.as_expression() {
                                 members.push(self.eval(expression));
@@ -2584,7 +2621,16 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         }
                     }
                 }
-                Val::built(BTreeMap::new(), members)
+                let positions = if positional {
+                    members.clone()
+                } else {
+                    Vec::new()
+                };
+                let list = Val::built(BTreeMap::new(), members);
+                if let Val::Built(built) = &list {
+                    built.borrow_mut().positions = positions;
+                }
+                list
             }
             Expression::TemplateLiteral(template) => {
                 for substitution in &template.expressions {
@@ -3694,10 +3740,17 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     Val::bag(member)
                 }
             }
+            // "For a projection `e`, `enumeration` at `e` and `value` at
+            // `e/*/0`. For a list or a bag the body built, `value` at the
+            // key of each pair that is a projection" (FA §3.4). The
+            // result is a bag of the second members of the pairs.
             ("Object", "fromEntries") => {
                 let val = self.eval(first);
+                self.observe(&val, Class::Enumeration);
                 let pair = self.member(&val);
-                Val::bag(self.member(&pair))
+                let (key, value) = self.pair(&pair);
+                self.observe(&key, Class::Value);
+                Val::bag(value)
             }
             ("Object", "assign") => {
                 let values: Vec<Val> = arguments

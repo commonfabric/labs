@@ -874,3 +874,84 @@ fn a_walk_over_a_value_of_no_declared_type_records_entries_bounded_by_its_keys_n
     );
     assert_eq!(shallow.reads.len(), deep.reads.len(), "{:?}", deep.reads);
 }
+
+// ----- §3.4: `Object.fromEntries` and `concat` -----
+
+#[test]
+fn from_entries_over_a_projection_enumerates_it_and_reads_the_key_of_each_pair() {
+    // "For `(pairs: [string, number][]) =>
+    // Object.keys(Object.fromEntries(pairs)).length` the footprint is
+    // `enumeration` at `pairs` and `value` at `pairs/*/0`."
+    let record = analyze(
+        "const f = lift((pairs: [string, number][]) => Object.keys(Object.fromEntries(pairs)).length);\n",
+    );
+    assert_eq!(
+        record.reads,
+        ["pairs : enumeration", "pairs/*/0 : value"],
+        "{:?}",
+        record.reads
+    );
+}
+
+#[test]
+fn the_result_of_from_entries_over_a_projection_is_a_bag_of_the_second_members() {
+    let record =
+        analyze("const f = lift((pairs: [string, Donut][]) => Object.fromEntries(pairs));\n");
+    assert_eq!(
+        record.reads,
+        [
+            "pairs : enumeration",
+            "pairs/*/0 : value",
+            "pairs/*/1 : identity"
+        ],
+        "{:?}",
+        record.reads
+    );
+    assert_eq!(
+        record.outputs,
+        ["* : oneOf pairs/*/1"],
+        "{:?}",
+        record.outputs
+    );
+}
+
+#[test]
+fn from_entries_over_pairs_the_body_built_reads_each_key_that_is_a_projection() {
+    // The pairs that the callback of a `map` over an array of plain values
+    // in place returns: the key of each is `input.donuts/*/name`.
+    let mapped = analyze(
+        "const f = lift((input: { donuts: Donut[] }) => Object.keys(Object.fromEntries(input.donuts.map((donut) => [donut.name, donut]))).length);\n",
+    );
+    assert_eq!(
+        mapped.reads,
+        ["input.donuts : enumeration", "input.donuts/*/name : value"],
+        "{:?}",
+        mapped.reads
+    );
+    // A list of pairs written at the call. The second member of a pair
+    // is not read.
+    let written = analyze(
+        "const f = lift((input: { a: Donut; b: Donut }) => Object.keys(Object.fromEntries([[input.a.name, input.a], [input.b.name, input.b.price]])).length);\n",
+    );
+    assert_eq!(
+        written.reads,
+        ["input.a/name : value", "input.b/name : value"],
+        "{:?}",
+        written.reads
+    );
+}
+
+#[test]
+fn concat_enumerates_each_operand_that_is_a_projection_of_array_type() {
+    // "`enumeration`, at `v` and at each operand of `concat` that is a
+    // projection of array type."
+    let record = analyze(
+        "const f = lift((input: { a: Donut[]; b: Donut[]; c: Donut }) => input.a.concat(input.b, input.c).length);\n",
+    );
+    assert_eq!(
+        record.reads,
+        ["input.a : enumeration", "input.b : enumeration"],
+        "{:?}",
+        record.reads
+    );
+}

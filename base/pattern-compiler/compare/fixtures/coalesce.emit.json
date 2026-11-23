@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/coalesce.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:5dcb9696612920cbdd1305907b6ca173426c6a80f5650b0c3d709c10715018df\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(2, ($h) => (($h.v(($h.select(0, $h.v($h.slot(1)), true) ?? (\"\"))).toUpperCase())));\nreturn $rt.thunk(($h) => (({ shout: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:5dcb9696612920cbdd1305907b6ca173426c6a80f5650b0c3d709c10715018df\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(2, ($h) => (($h.v($h.operand(\"??\", $h.select(0, $h.v($h.slot(1)), true), () => $h.slot(1), () => (\"\"))).toUpperCase())));\nreturn $rt.thunk(($h) => (({ shout: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],

@@ -241,6 +241,20 @@ sandboxed body becomes `$h.invoke(body, computed)`, a type annotation is
 removed, and a JSX element becomes a call that builds a view node. `$h` is the
 host object of `execution-and-storage.md` §2.2.
 
+A `??`, `||` or `&&` of the reactive tier becomes
+`$h.operand(operator, test, () => left, () => right)`. `test` is the left
+operand read as its value, inside the `$h.select` that reports the selection
+where the plan has a selector for the expression, and `left` and `right` are the
+operands as the references they are. The executor passes on the operand that is
+selected (PL §3.5): the right one as it is, and the left one as the reference
+where it holds a record or an array, so an output that the operator computes
+stores the link, and as its value where it holds a scalar
+(`compare/fixtures/selected-operand.tsx`). A per-element construct over such a
+result runs over the stored array where the left operand is an array of plain
+values in place (`compare/fixtures/filter-of-computed.tsx`), and over an array
+in memory where the right operand builds one
+(`compare/fixtures/filter-of-fallback.tsx`).
+
 The artifact's `code` has these members.
 
 | Member                | Holds                                                                                                                             |
@@ -836,11 +850,14 @@ deno run -A --no-check base/pattern-compiler/compare/growth.ts 100 1000 10000
 
 `alone` runs the modules that need `wish` or request an effect on the executor,
 with the answers of `compare/stubs.ts`, and `stubbed` runs them on today's
-runtime as well, with `fetch` replaced by a function that answers the same.
-`sizes.ts` prints the size of each plan of the corpus with its largest members,
-and `growth.ts` what one change of a list costs the executor at several lengths.
-Notes 479 on of `SPEC-NOTES.md` have what was tested, what the documents do not
-decide, and the figures.
+runtime as well, with `fetch` replaced by a function that answers the same. A
+line of a run whose executor had stubs holds whether they had the table of
+`compare/stubs.ts` and what their clock held, and `again` runs such a line with
+the same stubs and that clock, and compares a number within a day of that clock
+as a time. `sizes.ts` prints the size of each plan of the corpus with its
+largest members, and `growth.ts` what one change of a list costs the executor at
+several lengths. Notes 479 on of `SPEC-NOTES.md` have what was tested, what the
+documents do not decide, and the figures.
 
 A pattern that calls `wish` is compared in a seeded home
 (`compare/wish-home.ts`), by `corpus.ts run`, `values-corpus.ts run`,
