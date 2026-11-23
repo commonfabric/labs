@@ -28,7 +28,10 @@
  *
  * The path of the caption in the rendered tree is found before the steps
  * by a third client that reads the tree down to the first card and is then
- * disposed, so the two measured clients hold no query over the tree.
+ * disposed, so the two measured clients hold no query over the tree. The
+ * reader then holds, beside the sink of each step, a sink on the caption of
+ * each of the first 20 cards, as a reader that shows the first screen of
+ * the board does.
  *
  * With `SCALE_TAKEOVER` set, another serving loop then takes the space
  * over: `takeover` holds the time until a client that holds nothing reads
@@ -113,6 +116,12 @@ export type ServingStep = {
   compiled?: Record<string, number>;
   /** The reason of each commit of the piece the storage refused so far. */
   refusals?: string[];
+  /**
+   * With `SCALE_COMMITS` set: each document a change of which the reader
+   * was delivered in the step, with the size of what the reader holds of
+   * it as JSON text, largest first.
+   */
+  documents?: { id: string; bytes: number }[];
 };
 
 /** What another serving loop that takes the space over did. */
@@ -229,6 +238,9 @@ const startProfile = async (file: string): Promise<() => Promise<void>> => {
     await Deno.writeTextFile(file, JSON.stringify(profile));
   };
 };
+
+/** How many cards a reader of the board holds: one screen of them. */
+const FIRST_SCREEN = 20;
 
 /** The mark of the caption of a card (`cardTextOf` of `card-text.ts`). */
 const CAPTION = " comments · by ";
@@ -365,6 +377,12 @@ export const runServing = async (
   const serving: CompiledServingMemoryServer =
     await listenCompiledServingMemoryServer({
       compile: emitProgram,
+      // The serving runtime reads its space from the store, as a toolshed's
+      // does by default. `SCALE_READ_THROUGH=off` has it read over its
+      // session.
+      ...(Deno.env.get("SCALE_READ_THROUGH") === "off"
+        ? {}
+        : { policy: { storeReadThrough: true } }),
       pieces: {
         piece: { now: 1_000_000 },
         resumed: (_result, piece) => resumed.push(piece),
@@ -393,6 +411,8 @@ export const runServing = async (
     const { error } = await tx.commit().settled;
     if (error !== undefined) throw error;
   };
+  /** What ends the sinks the reader holds on the first screen of cards. */
+  const screenSinks: (() => void)[] = [];
   try {
     // Every cell exists before any is set, since a topic may mention one
     // after it.
@@ -453,6 +473,24 @@ export const runServing = async (
       const stopProfile = Deno.env.get("SCALE_PROFILE_STEP") === step
         ? await startProfile(Deno.env.get("SCALE_CPU_PROFILE") ?? "")
         : undefined;
+      // With `SCALE_COMMITS` set: the documents whose changes the reader
+      // was delivered in the step.
+      const delivered = new Set<string>();
+      const deliveries = {
+        next(
+          notification: Parameters<
+            Parameters<Runtime["storageManager"]["subscribe"]>[0]["next"]
+          >[0],
+        ) {
+          if (notification.type === "reset") return undefined;
+          for (const { address } of notification.changes) {
+            delivered.add(address.id);
+          }
+          return undefined;
+        },
+      };
+      const logged = Deno.env.get("SCALE_COMMITS") !== undefined;
+      if (logged) reader.storageManager.subscribe(deliveries);
       const visible = [sender, reader].map((runtime) =>
         seen(runtime, result, path, test)
       );
@@ -470,10 +508,26 @@ export const runServing = async (
         throw new Error(`The serving runtime failed: ${failures[0]}`);
       }
       const after = countsOf();
+      if (logged) reader.storageManager.unsubscribe?.(deliveries);
+      const documents = [...delivered].map((id) => {
+        const tx = reader.edit();
+        try {
+          const held = tx.readValueOrThrow({
+            space,
+            id: id as `${string}:${string}`,
+            path: [],
+            scope: "space",
+          });
+          return { id, bytes: JSON.stringify(held ?? null).length };
+        } finally {
+          tx.abort();
+        }
+      }).sort((a, b) => b.bytes - a.bytes);
       record({
         arm,
         size,
         step,
+        ...(logged ? { documents } : {}),
         sender: round(first - began),
         reader: round(second - began),
         quiescent: round(quiescent - began),
@@ -537,6 +591,24 @@ export const runServing = async (
       );
     } finally {
       await probe.dispose();
+    }
+
+    // The reader holds what a reader of the board holds: the result
+    // document, and the first screen of cards, each by a sink on its
+    // caption, which follows the link to the card's document and no link
+    // of the card. It holds no topic and no query over every card.
+    if (captionAt !== undefined) {
+      const screen = Math.min(size, FIRST_SCREEN);
+      for (let card = 0; card < screen; card++) {
+        // deno-lint-ignore no-explicit-any
+        let caption: any = reader.getCellFromLink(
+          result.getAsNormalizedFullLink(),
+        ).key("$UI" as never);
+        for (
+          const segment of [...captionAt.cards, card, ...captionAt.caption]
+        ) caption = caption.key(segment);
+        screenSinks.push(caption.sink(() => {}));
+      }
     }
 
     // The sender holds the marker of the stream, by which a send to the
@@ -713,6 +785,7 @@ export const runServing = async (
       }
     }
   } finally {
+    for (const cancel of screenSinks.splice(0)) cancel();
     await serving.host.close();
     await sender.dispose();
     await reader.dispose();

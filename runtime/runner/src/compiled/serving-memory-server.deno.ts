@@ -5,7 +5,8 @@
  * `executor/serving-memory-server.deno.ts` with the experimental option
  * `compiledPatterns` on and the loader installed on each serving runtime,
  * which compiles the source a client wrote with one compiler of the server.
- * The loop runs on this thread, over a non-persistent store.
+ * The loop runs on this thread, over a non-persistent store, and its
+ * runtimes read their space from the store unless the policy says otherwise.
  *
  * Deno-only, as the server it listens with is.
  */
@@ -69,6 +70,14 @@ export const listenCompiledServingMemoryServer = async (
   options: {
     /** Experimental options of the serving runtimes, beside the forced ones. */
     experimental?: ExperimentalOptions;
+    /**
+     * The policy of the serving loop. Where it leaves `storeReadThrough`
+     * unset, the serving runtimes read their space from the store, as those
+     * of a toolshed do by default: a serving runtime then holds no query of
+     * a session over the inputs of a piece, which the memory server would
+     * evaluate again, over every link the changed document reaches, for each
+     * change of an input.
+     */
     policy?: SpaceServerPolicy;
     /**
      * What compiles the source a client wrote. The default is one
@@ -151,7 +160,7 @@ export const listenCompiledServingMemoryServer = async (
           return outcome;
         },
       }),
-      ...(options.policy === undefined ? {} : { policy: options.policy }),
+      policy: { storeReadThrough: true, ...options.policy },
       ensureSpaceRoots: false,
       server: standalone.server,
       serviceIdentity: serviceIdentity.did(),

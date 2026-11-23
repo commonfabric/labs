@@ -274,6 +274,15 @@ describe("a compiled piece under the serving loop", () => {
     expect(compiledPiecesOf(first)).toEqual([]);
   });
 
+  it("has the serving runtime read the documents of the piece from the store, where no policy says otherwise", async () => {
+    const first = client();
+    const { artifact, result } = await setUp(first, 3);
+
+    await holds(first, reading(first, result), inMemory(artifact, 3, []));
+
+    expect(serving.host.stats().storeReads).toBeGreaterThan(0);
+  });
+
   it("handles the events two clients send, and both converge on what the executor in memory gives for the same order of events", async () => {
     const first = client();
     const second = client();
