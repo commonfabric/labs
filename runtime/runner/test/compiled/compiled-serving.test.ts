@@ -13,6 +13,7 @@ import {
   type CompiledServingMemoryServer,
   listenCompiledServingMemoryServer,
 } from "../../src/compiled/serving-memory-server.deno.ts";
+import type { ResumedPiece } from "../../src/compiled/resume.ts";
 import {
   compiledPiecesOf,
   type PatternProgram,
@@ -119,6 +120,8 @@ describe("a compiled piece under the serving loop", () => {
   let compiled: PatternProgram[];
   /** How many module texts of value code the serving runtime evaluated. */
   let evaluated: number;
+  /** The pieces a serving runtime resumed from their basis. */
+  let resumed: ResumedPiece[];
 
   /**
    * A client of the serving memory server, over its websocket, with server
@@ -142,6 +145,7 @@ describe("a compiled piece under the serving loop", () => {
     space = signer.did();
     compiled = [];
     evaluated = 0;
+    resumed = [];
     const evaluate = compartmentEvaluator();
     serving = await listenCompiledServingMemoryServer({
       // The crate's binary is not run here. What stands in its place gives
@@ -171,6 +175,7 @@ describe("a compiled piece under the serving loop", () => {
             return evaluate(module, parameters);
           },
         },
+        resumed: (_result, piece) => resumed.push(piece),
       },
     });
     clients = [];
@@ -337,6 +342,69 @@ describe("a compiled piece under the serving loop", () => {
     // each event of a rejected wave is handled again.
     expect(serving.pieces().length).toBe(1);
     expect(serving.pieces()[0].counts.events).toBeGreaterThanOrEqual(2);
+  });
+
+  it("evaluates nothing when another serving loop takes over a space whose piece is current, and starts the executor for the next event", async () => {
+    const sender = client();
+    const { artifact, result } = await setUp(sender, 3);
+    const cell = reading(sender, result);
+    await holds(sender, cell, inMemory(artifact, 3, []));
+    for (const [index, [name, event]] of EVENTS.slice(0, 2).entries()) {
+      streamOf(cell, name).send(event);
+      await holds(
+        sender,
+        cell,
+        inMemory(artifact, 3, EVENTS.slice(0, index + 1)),
+      );
+    }
+    await serving.host.whenQuiescent();
+    expect(evaluated).toBe(1);
+
+    await serving.restart();
+    // The read of a client that holds nothing is the demand that has the
+    // loop reach the piece.
+    const reader = client();
+    await holds(
+      reader,
+      reading(reader, result),
+      inMemory(artifact, 3, EVENTS.slice(0, 2)),
+    );
+    await serving.host.whenQuiescent();
+
+    expect(resumed.map(({ current }) => current)).toEqual([true]);
+    expect(evaluated).toBe(1);
+    expect(serving.pieces()).toEqual([]);
+
+    streamOf(cell, EVENTS[2][0]).send(EVENTS[2][1]);
+    await holds(sender, cell, inMemory(artifact, 3, EVENTS.slice(0, 3)));
+
+    expect(evaluated).toBe(2);
+    expect(serving.pieces().length).toBe(1);
+  });
+
+  it("starts the executor of a piece that was resumed current when a client changes an item", async () => {
+    const sender = client();
+    const { artifact, result } = await setUp(sender, 3);
+    const cell = reading(sender, result);
+    await holds(sender, cell, inMemory(artifact, 3, []));
+    await serving.host.whenQuiescent();
+    await serving.restart();
+    const reader = client();
+    const read = reading(reader, result);
+    await holds(reader, read, inMemory(artifact, 3, []));
+    await serving.host.whenQuiescent();
+    expect(resumed.map(({ current }) => current)).toEqual([true]);
+    expect(serving.pieces()).toEqual([]);
+
+    const first = sender.getCell<Item>(space, "item 0");
+    await first.sync();
+    await commit(sender, (tx) => first.withTx(tx).key("title").set("first"));
+
+    await holds(reader, read, {
+      labels: ["first!", "t1!", "t2!"],
+      events: 0,
+    });
+    expect(serving.pieces().length).toBe(1);
   });
 
   it("handles an event again from what the storage holds when the wave that held it is rejected", async () => {

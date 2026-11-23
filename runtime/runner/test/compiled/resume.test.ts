@@ -254,7 +254,7 @@ describe("resumeCompiledPiece()", () => {
       expect(heard.filter((ids) => ids.length > 4)).toEqual([]);
     });
 
-    it("derives again what an input that changed while no runtime ran the piece makes stale, and writes that alone", async () => {
+    it("derives again what an input that changed while no runtime ran the piece makes stale, and writes that and the basis alone", async () => {
       const first = session();
       const { artifact, result } = await startedList(first, 3);
       await send(first, result, "rename", { at: 1, title: "renamed" });
@@ -283,8 +283,9 @@ describe("resumeCompiledPiece()", () => {
         ) => row.label),
       ).toEqual(["t0!", "renamed!", "late!"]);
       expect(read(second, result, "events")).toBe(1);
-      // One commit, of the document of the one row.
-      expect(heard.map((ids) => ids.length)).toEqual([1]);
+      // One commit, of the document of the one row and of the basis, which
+      // takes the number the item has now.
+      expect(heard.map((ids) => ids.length)).toEqual([2]);
     });
   });
 

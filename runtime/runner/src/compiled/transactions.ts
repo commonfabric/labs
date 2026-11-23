@@ -247,6 +247,8 @@ type Handed = {
   created: string[];
   /** The documents of the executor the transaction wrote. */
   written: string[];
+  /** The transaction, where something observes the sources of the piece. */
+  tx?: IExtendedStorageTransaction;
   /**
    * Whether the commit of the transaction settled with no error. For a
    * transaction that a serving runtime sealed into a wave, that is before
@@ -256,6 +258,47 @@ type Handed = {
   settled?: boolean;
   /** Whether the piece was told that the transaction was refused. */
   refused?: boolean;
+};
+
+/**
+ * What hears of the documents the derivation of a piece reads and does not
+ * derive, and of the transactions that write them (`compiled/basis.ts`).
+ */
+export type SourceObserver = {
+  /**
+   * The executor read a document that exists outside it from the replica,
+   * or a place of its own that the storage holds no document of.
+   */
+  read(doc: string): void;
+  /**
+   * The replica applied or took back a commit, of this runtime or another,
+   * that changed a document the adapter knows. With `taken`, the change is
+   * of another writer and the executor took it into the document it holds.
+   * `by` is the handed transaction whose commit the replica applied, where
+   * it is one: a commit changes a document it wrote no value of where it
+   * stores a label there.
+   */
+  changed(
+    doc: string,
+    taken: boolean,
+    by?: IExtendedStorageTransaction,
+  ): void;
+  /**
+   * A transaction the adapter was handed wrote `written`, of which a
+   * transaction of the executor that was no derivation wrote `sources`.
+   */
+  handed(
+    tx: IExtendedStorageTransaction,
+    written: readonly string[],
+    sources: ReadonlySet<string>,
+  ): void;
+  /** The commit of a handed transaction was refused or taken back. */
+  refused(tx: IExtendedStorageTransaction): void;
+  /**
+   * The executor made a document that is neither a row nor the result
+   * document, or the adapter made the entity of a stream.
+   */
+  made(doc: string): void;
 };
 
 /**
@@ -484,6 +527,18 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #onChanges: ((changes: ChangeByOther[]) => void) | undefined;
   readonly #onLabels: (() => void) | undefined;
   readonly #onApplied: (() => void) | undefined;
+  /**
+   * For a resumed instance: the documents of the executor that the replica
+   * held when the instance was resumed and that this runtime has not
+   * written.
+   */
+  readonly #heldBefore = new Set<string>();
+  readonly #sources: SourceObserver | undefined;
+  /**
+   * The documents the transaction in progress wrote in a transaction of
+   * the executor that was no derivation.
+   */
+  readonly #writtenAsSource = new Set<string>();
   readonly #onRefused:
     | ((reason: string, restored?: Restored[]) => void)
     | undefined;
@@ -556,6 +611,8 @@ export class RuntimeTransactions implements TransactionHooks {
        * wrote, which the executor's store is then ahead of.
        */
       refused?: (reason: string, restored?: Restored[]) => void;
+      /** What hears of the sources of the piece and of what writes them. */
+      sources?: SourceObserver;
       /**
        * Whether the storage holds the documents of the instance from a run
        * before. `load()` then gives a document the executor names by an
@@ -574,6 +631,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#onLabels = options.labels;
     this.#onApplied = options.applied;
     this.#onRefused = options.refused;
+    this.#sources = options.sources;
     this.#resume = options.resume === true;
     this.#resuming = this.#resume;
     this.#countRecordBytes = options.countRecordBytes === true;
@@ -581,7 +639,10 @@ export class RuntimeTransactions implements TransactionHooks {
         !runtime.experimental.compiledPatterns || !runtime.servingPosture
       ? undefined
       : this.#register(options.artifact);
-    if (this.#compiledPattern !== undefined || this.#onChanges !== undefined) {
+    if (
+      this.#compiledPattern !== undefined || this.#onChanges !== undefined ||
+      this.#sources !== undefined
+    ) {
       // A commit of the space, the executor's own or another's, can change
       // the labels of a document whose positions the executor grouped
       // elements by, and another writer's can change a value the executor
@@ -605,6 +666,13 @@ export class RuntimeTransactions implements TransactionHooks {
           for (const { address, before, after } of notification.changes) {
             const doc = this.#byEntity.get(address.id);
             if (doc === undefined) continue;
+            this.#sources?.changed(
+              doc,
+              false,
+              own && notification.type === "commit"
+                ? this.#own.get(source!)?.tx
+                : undefined,
+            );
             this.#labelIds.delete(doc);
             if (this.#entries.has(doc)) {
               this.#touched.add(doc);
@@ -669,6 +737,7 @@ export class RuntimeTransactions implements TransactionHooks {
               );
               continue;
             }
+            this.#sources?.changed(doc, true);
             if (!Array.isArray(now) || !Array.isArray(then)) {
               byOther.push({ ...place, value: this.#decode(now) });
               continue;
@@ -700,6 +769,7 @@ export class RuntimeTransactions implements TransactionHooks {
               handed.refused !== true
             ) {
               handed.refused = true;
+              if (handed.tx !== undefined) this.#sources?.refused(handed.tx);
               this.#onRefused?.(
                 `${notification.reason.name}: ${notification.reason.message}`,
                 this.#restored(handed),
@@ -976,6 +1046,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#stagedState = 0;
     this.#created = [];
     this.#createdStreams = [];
+    this.#writtenAsSource.clear();
   }
 
   /**
@@ -1068,13 +1139,16 @@ export class RuntimeTransactions implements TransactionHooks {
       unchanged: new Map(this.#unchanged),
       created: [...this.#created, ...this.#createdStreams],
       written: [...this.#written.keys()],
+      tx,
     };
+    this.#sources?.handed(tx, handed.written, this.#writtenAsSource);
     this.#unchanged.clear();
     this.#own.set(tx.tx, handed);
     tx.addCommitCallback((_tx, { error }) => {
       if (error === undefined) handed.settled = true;
       if (error === undefined || handed.refused === true) return;
       handed.refused = true;
+      this.#sources?.refused(tx);
       this.#onRefused?.(
         `${error.name}: ${error.message}`,
         this.#restored(handed),
@@ -1117,6 +1191,7 @@ export class RuntimeTransactions implements TransactionHooks {
       unchanged: new Map(),
       created: documents,
       written: documents,
+      tx,
     };
     this.#own.set(tx.tx, handed);
     tx.addCommitCallback((_tx, { error }) => {
@@ -1307,6 +1382,11 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     if (this.#read.has(text)) return;
     this.#read.add(text);
+    // A place of the executor's own that the storage holds no document of.
+    if (
+      this.#sources !== undefined && !doc.startsWith("of:") &&
+      !this.#documents.has(doc)
+    ) this.#sources.read(doc);
     if (!wrote) this.#readBeforeWrite.add(text);
     this.#counts.reads += 1;
     const address = this.#address(doc, path);
@@ -1536,6 +1616,15 @@ export class RuntimeTransactions implements TransactionHooks {
     if (path.length === 0 && this.#heldWhole.delete(doc)) return;
     this.#counts.writes += 1;
     this.#stagedState += 1;
+    // What a derivation writes is derived. What a handler, the creation
+    // of the instance, a request or its completion writes is a source.
+    if (this.#cause !== "derivation" && doc !== this.#owner) {
+      this.#writtenAsSource.add(doc);
+    }
+    // The runtime that made a document enrolled it as a store the instance
+    // owns. A runtime that resumed the instance enrolls it with its first
+    // write of it.
+    if (this.#heldBefore.delete(doc)) this.#enroll(tx, doc);
     const written = this.#written.get(doc) ?? [];
     this.#written.set(doc, written);
     const document = store.docs.get(doc);
@@ -1588,6 +1677,7 @@ export class RuntimeTransactions implements TransactionHooks {
       // written.
       this.#documents.add(doc);
       this.#created.push(doc);
+      if (doc !== this.#owner) this.#sources?.made(doc);
       // The executor makes the result document of a resumed instance empty
       // and derives into it, and the storage keeps what it holds until a
       // path of the derivation differs.
@@ -2850,6 +2940,7 @@ export class RuntimeTransactions implements TransactionHooks {
     if (!this.#streams.has(entity)) {
       this.#streams.set(entity, stream);
       this.#createdStreams.push(entity);
+      this.#sources?.made(entity);
       this.#open().writeValueOrThrow(
         { space: this.#space, id: entity, path: [], scope: "space" },
         { $stream: true },
@@ -2904,6 +2995,8 @@ export class RuntimeTransactions implements TransactionHooks {
     if (value === undefined && this.#tx !== undefined) {
       value = this.#tx.readValueOrThrow(address);
     }
+    // The result document is derived, and no source of the piece.
+    if (id !== this.#owner) this.#sources?.read(id);
     if (value === undefined) return undefined;
     this.#documents.add(id);
     return { kind: "external", value: this.#decode(value) };
@@ -2928,6 +3021,7 @@ export class RuntimeTransactions implements TransactionHooks {
       return undefined;
     }
     this.#documents.add(id);
+    this.#heldBefore.add(id);
     return { kind: "held", value: this.#decode(value) };
   }
 
@@ -2954,11 +3048,73 @@ export class RuntimeTransactions implements TransactionHooks {
   ): void {
     const doc = this.#mintedDocument();
     tx.writeValueOrThrow(this.#address(doc, []), { ...minted });
+    if (this.#heldBefore.delete(doc)) this.#enroll(tx, doc);
     if (!this.#documents.has(doc)) {
       this.#documents.add(doc);
       this.#enroll(tx, doc);
       this.#linkToResult(tx, doc);
     }
+  }
+
+  /**
+   * Writes `value` at `path` of a document that the piece keeps beside
+   * those of the executor, into `tx`: the document is one the instance
+   * owns, as the document of the counts is.
+   */
+  writeOwn(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    path: readonly string[],
+    value: FabricValue,
+  ): void {
+    tx.writeValueOrThrow(this.#address(doc, path), value);
+    if (this.#heldBefore.delete(doc)) this.#enroll(tx, doc);
+    if (!this.#documents.has(doc)) {
+      this.#documents.add(doc);
+      this.#enroll(tx, doc);
+      this.#linkToResult(tx, doc);
+    }
+  }
+
+  /**
+   * What the replica holds of a document that the piece keeps beside those
+   * of the executor, as stored. The document counts as one the storage
+   * holds where it holds one.
+   */
+  heldOwn(doc: string): FabricValue | undefined {
+    const read = this.#runtime.edit();
+    let value: FabricValue | undefined;
+    try {
+      value = read.readValueOrThrow(this.#address(doc, []));
+    } finally {
+      read.abort();
+    }
+    if (value !== undefined) {
+      this.#documents.add(doc);
+      this.#heldBefore.add(doc);
+    }
+    return value;
+  }
+
+  /** Reads a document whole in `tx`, so that its commit depends on it. */
+  readWhole(tx: IExtendedStorageTransaction, doc: string): void {
+    tx.readValueOrThrow(this.#address(doc, []));
+  }
+
+  /**
+   * The sequence number the replica's confirmed view of a document stands
+   * at, 0 for one it has taken no accepted write of, and nothing for a
+   * document of another space than the instance's.
+   */
+  confirmedSeqOf(doc: string): number | undefined {
+    if (this.#spaceOf(doc) !== this.#space) return undefined;
+    return this.#runtime.storageManager.open(this.#space).replica
+      .confirmedDocumentSeq(this.entityOf(doc));
+  }
+
+  /** The document that keeps what the instance counted. */
+  get mintedDocument(): string {
+    return this.#mintedDocument();
   }
 
   /** Ends the first derivation of a resumed instance. */

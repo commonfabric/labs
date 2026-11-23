@@ -1761,7 +1761,9 @@ export class Runtime {
 
   /**
    * Starts the piece whose result document is at `root` from a compiled
-   * pattern, where the storage names one for it, and says whether it runs.
+   * pattern, where the storage names one for it, and says whether it is
+   * served. `why.forEvent` says that an event to a stream of the piece
+   * waits for its handler.
    * `serveCompiledPieces()` of `compiled/serving.ts` installs it; the
    * runtime asks it only under the experimental option `compiledPatterns`,
    * for a result document that names no pattern.
@@ -1769,6 +1771,7 @@ export class Runtime {
   compiledPieceLoader:
     | ((
       root: Pick<NormalizedFullLink, "space" | "id" | "scope">,
+      why?: { forEvent?: boolean },
     ) => Promise<boolean>)
     | undefined;
 

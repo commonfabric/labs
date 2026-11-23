@@ -24,16 +24,21 @@
 import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.ts";
 import { getLogger } from "@commonfabric/logger";
 import { stampWaveRunContext } from "../executor/wave.ts";
+import type { JSONSchema } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
 import {
-  type CompiledPiece,
+  CompiledPiece,
   type CompiledPieceOptions,
   startCompiledPiece,
 } from "./piece.ts";
-import { resumeCompiledPiece, syncCompiledPiece } from "./resume.ts";
+import {
+  resumeCompiledPieceFromBasis,
+  type ResumedPiece,
+  syncCompiledPiece,
+} from "./resume.ts";
 import {
   compiledFailureOf,
   compiledPointerOf,
@@ -56,10 +61,16 @@ export type CompilePatternProgram = (program: PatternProgram) => Promise<{
 
 const logger = getLogger("compiled-serving");
 
-/** The pieces a runtime runs or is starting, by the result document. */
+/**
+ * A piece a serving runtime serves: one that runs, or one that was resumed
+ * from its basis, which runs once it is woken.
+ */
+type Served = CompiledPiece | ResumedPiece;
+
+/** The pieces a runtime serves or is starting, by the result document. */
 const loading = new WeakMap<
   Runtime,
-  Map<string, Promise<CompiledPiece | undefined>>
+  Map<string, Promise<Served | undefined>>
 >();
 /** The pieces a runtime runs. */
 const running = new WeakMap<Runtime, CompiledPiece[]>();
@@ -91,8 +102,13 @@ export type ServeCompiledPiecesOptions = {
    * code where that is not a compartment of the piece's own.
    */
   piece?: Pick<CompiledPieceOptions, "artifacts" | "now" | "evaluate">;
-  /** Called with each piece the runtime started. */
+  /** Called with each piece the runtime started, when its executor runs. */
   started?: (piece: CompiledPiece) => void;
+  /**
+   * Called with each piece the runtime resumed from its basis, whether the
+   * basis matched the storage or not.
+   */
+  resumed?: (result: string, piece: ResumedPiece) => void;
   /**
    * Called where a piece did not start, or where the commit of its load
    * failed, with the result document and the error.
@@ -214,9 +230,10 @@ const compiledFor = async (
 /**
  * Starts the piece whose result document is at `root`, where the storage
  * names the source of a pattern for it: from the stored argument alone
- * where the result document is empty, in the bounded transactions of a
- * load, and otherwise as a resume (`resumeCompiledPiece`). Where the source
- * is refused, the reason is stored for the client and nothing is started.
+ * where the result document is empty, and otherwise from its basis
+ * (`resumeCompiledPieceFromBasis`), which starts no executor where the
+ * stored result is current. Where the source is refused, the reason is
+ * stored for the client and nothing is started.
  */
 const start = async (
   runtime: Runtime,
@@ -224,7 +241,7 @@ const start = async (
   failed: (piece: CompiledPiece, error: Error) => void,
   refused: (error: unknown) => void,
   { compile, piece: options = {} }: ServeCompiledPiecesOptions,
-): Promise<CompiledPiece | undefined> => {
+): Promise<Served | undefined> => {
   const { space, id } = root;
   let compiled: Awaited<ReturnType<CompilePatternProgram>> | undefined;
   try {
@@ -251,15 +268,21 @@ const start = async (
     path: [],
     scope: "space",
   });
-  await syncCompiledPiece(runtime, artifact, resultCell);
   const opened = stamp(id, "load");
+  // The result document alone: a piece that is resumed from its basis
+  // reads none of its rows.
+  await runtime.getCellFromLink(
+    { space, id, path: [], scope: "space" },
+    false as JSONSchema,
+  ).sync();
   if (held(runtime, space, id) !== undefined) {
-    return await resumeCompiledPiece(runtime, artifact, resultCell, {
+    return await resumeCompiledPieceFromBasis(runtime, artifact, resultCell, {
       ...pieceOptions,
       opened,
       sealed: { failed },
     });
   }
+  await syncCompiledPiece(runtime, artifact, resultCell);
   const tx = runtime.edit();
   opened(tx);
   let piece: CompiledPiece;
@@ -299,10 +322,14 @@ export const serveCompiledPieces = (
   runtime: Runtime,
   options: ServeCompiledPiecesOptions,
 ): void => {
-  const pieces = new Map<string, Promise<CompiledPiece | undefined>>();
+  const pieces = new Map<string, Promise<Served | undefined>>();
   loading.set(runtime, pieces);
   running.set(runtime, []);
-  runtime.compiledPieceLoader = async (root) => {
+  const runs = (piece: CompiledPiece) => {
+    running.get(runtime)?.push(piece);
+    options.started?.(piece);
+  };
+  runtime.compiledPieceLoader = async (root, why) => {
     let piece = pieces.get(root.id);
     if (piece === undefined) {
       const failed = (stopped: CompiledPiece, error: Error) => {
@@ -319,9 +346,15 @@ export const serveCompiledPieces = (
       const refused = (error: unknown) => options.failed?.(root.id, error);
       piece = start(runtime, root, failed, refused, options).then((started) => {
         if (started === undefined) pieces.delete(root.id);
+        else if (started instanceof CompiledPiece) runs(started);
         else {
-          running.get(runtime)?.push(started);
-          options.started?.(started);
+          options.resumed?.(root.id, started);
+          // The piece runs once it is woken: here for an event, or by a
+          // change of a document its basis names.
+          started.woken.then(runs, (error) => {
+            pieces.delete(root.id);
+            options.failed?.(root.id, error);
+          });
         }
         return started;
       }, (error) => {
@@ -331,6 +364,13 @@ export const serveCompiledPieces = (
       });
       pieces.set(root.id, piece);
     }
-    return await piece !== undefined;
+    const served = await piece;
+    if (served === undefined) return false;
+    // A piece whose stored result is current answers a read as it is. An
+    // event needs its handlers, which the executor registers.
+    if (why?.forEvent === true && !(served instanceof CompiledPiece)) {
+      await served.wake();
+    }
+    return true;
   };
 };

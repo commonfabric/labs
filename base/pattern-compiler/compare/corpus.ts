@@ -362,7 +362,7 @@ export const sourceOf = (module: string): string => `${patterns}${module}`;
  * module exports as its default, written in place or by name, and
  * otherwise the first one it exports by name.
  */
-export const mainPattern = async <P extends { name: string }>(
+export const mainPattern = async <P extends { name?: string }>(
   module: { module: string; patterns: P[] },
 ): Promise<{ pattern: P; isDefault: boolean } | undefined> => {
   const source = await Deno.readTextFile(`${patterns}${module.module}`);

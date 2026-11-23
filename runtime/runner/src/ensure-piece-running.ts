@@ -776,7 +776,9 @@ async function ensureVerdict(
           runtime.prepareTxForCommit(tx);
           await tx.commit().settled;
           signal?.throwIfAborted();
-          if (await loadCompiled(root)) {
+          if (
+            await loadCompiled(root, { forEvent: options?.forEvent === true })
+          ) {
             options?.onOwningRoot?.(root);
             return {
               started: true,

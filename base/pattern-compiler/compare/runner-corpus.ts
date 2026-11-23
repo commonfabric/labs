@@ -9,11 +9,11 @@
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`:
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume | --serving] [--evaluate=function]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume | --serving] [--evaluate=function] [--detail]`
  * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report <results.jsonl>`
  *
  * With `--resume`, a second runtime on the same memory server takes the
- * piece over after the first half of the events (`resumeCompiledPiece`):
+ * piece over after the first half of the events (`resumeCompiledPieceFromBasis`):
  * the first runtime is disposed, the second starts the piece from what the
  * storage holds and handles the other half. The run then also says how
  * many documents the resume wrote.
@@ -48,7 +48,7 @@ import {
 } from "../../../runtime/runner/src/compiled/piece.ts";
 import { sendEvent } from "../../../runtime/runner/src/cell.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
-import { resumeCompiledPiece } from "../../../runtime/runner/src/compiled/resume.ts";
+import { resumeCompiledPieceFromBasis } from "../../../runtime/runner/src/compiled/resume.ts";
 import { listenCompiledServingMemoryServer } from "../../../runtime/runner/src/compiled/serving-memory-server.deno.ts";
 import { setUpCompiledPiece } from "../../../runtime/runner/src/compiled/setup.ts";
 import {
@@ -97,13 +97,39 @@ type Outcome = {
    */
   equal?: boolean;
   difference?: string;
+  /** With `--detail`: what each of the two holds at the difference. */
+  detail?: { here: string; there: string };
   /**
    * With `--resume`: the events the first runtime handled before the
    * second took the piece over, the documents the resume wrote, or why the
    * piece did not resume.
    */
-  resume?: { after: number; documents?: number; failure?: string };
+  resume?: {
+    after: number;
+    /** Whether the basis of the piece matched the storage. */
+    current?: boolean;
+    /** How many documents the comparison of the basis read. */
+    checked?: number;
+    documents?: number;
+    failure?: string;
+  };
 };
+
+/**
+ * A value as text, with the members of each record in the order of their
+ * names: a record the storage gave has them in that order, and one the
+ * process wrote has them in the order they were written.
+ */
+const ordered = (value: unknown): string =>
+  JSON.stringify(
+    value,
+    (_name, member) =>
+      typeof member === "object" && member !== null && !Array.isArray(member)
+        ? Object.fromEntries(
+          Object.entries(member).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+        )
+        : member,
+  ) ?? "undefined";
 
 /** The path of the first difference between two values, as text. */
 const firstDifference = (
@@ -111,7 +137,7 @@ const firstDifference = (
   b: unknown,
   path = "",
 ): string | undefined => {
-  if (JSON.stringify(a) === JSON.stringify(b)) return undefined;
+  if (ordered(a) === ordered(b)) return undefined;
   if (
     typeof a === "object" && a !== null && typeof b === "object" &&
     b !== null && Array.isArray(a) === Array.isArray(b)
@@ -129,6 +155,16 @@ const firstDifference = (
   return path === "" ? "/" : path;
 };
 
+/** What a value holds at a path that `firstDifference` gave, as text. */
+const valueAt = (value: unknown, path: string): string => {
+  let at = value;
+  for (const segment of path.split("/").slice(1)) {
+    if (segment === "") continue;
+    at = (at as Record<string, unknown> | undefined)?.[segment];
+  }
+  return (JSON.stringify(at) ?? "undefined").slice(0, 600);
+};
+
 /** Why a plan cannot run on the runner path, where it cannot. */
 const needs = (plan: Artifact["plan"]): string | undefined => {
   const operations =
@@ -140,7 +176,7 @@ const needs = (plan: Artifact["plan"]): string | undefined => {
   return undefined;
 };
 
-const runOne = async (
+export const runOne = async (
   module: EmittedModule,
   artifacts: (id: string) => Artifact | undefined,
   resume: boolean,
@@ -266,15 +302,24 @@ const runOne = async (
           },
         });
         try {
-          piece = await resumeCompiledPiece(
+          // The piece is resumed from its basis first, which evaluates
+          // nothing where the stored result is current, and then woken for
+          // the events that follow.
+          const fromBasis = await resumeCompiledPieceFromBasis(
             runtime,
             artifact,
             runtime.getCellFromLink(result.getAsNormalizedFullLink()),
-            { artifacts, now },
+            { artifacts, now, ...(evaluate === undefined ? {} : { evaluate }) },
           );
+          piece = await fromBasis.wake();
           await runtime.scheduler.idleWithPendingCommits();
           await runtime.storageManager.synced();
-          resumed = { after: half, documents: written.size };
+          resumed = {
+            after: half,
+            current: fromBasis.current,
+            checked: fromBasis.checked,
+            documents: written.size,
+          };
         } catch (error) {
           return {
             ...base,
@@ -325,6 +370,12 @@ const runOne = async (
       refusals: [...piece.refusals].map((reason) => reason.slice(0, 200)),
       equal: difference === undefined,
       ...(difference === undefined ? {} : { difference }),
+      ...(difference === undefined || !Deno.args.includes("--detail") ? {} : {
+        detail: {
+          here: valueAt(here, difference),
+          there: valueAt(there, difference),
+        },
+      }),
       ...(resumed === undefined ? {} : { resume: resumed }),
     };
   } catch (error) {
@@ -562,6 +613,11 @@ const report = async (file: string) => {
   if (resumes.length > 0) {
     const taken = resumes.filter(({ failure }) => failure === undefined);
     console.log(`resumed by a second runtime: ${taken.length}`);
+    console.log(
+      `  the basis matched the storage, and nothing was evaluated before the wake: ${
+        taken.filter(({ current }) => current).length
+      }`,
+    );
     console.log(
       `  the resume wrote no document: ${
         taken.filter(({ documents }) => documents === 0).length
