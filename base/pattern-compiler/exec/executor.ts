@@ -30,6 +30,7 @@ import {
   type ElementPart,
   type ErrorState,
   errorState,
+  type Handed,
   identifierOf,
   isErrorState,
   isKeySegment,
@@ -1762,6 +1763,60 @@ export class Handle {
 }
 
 /**
+ * The stored containers that a body is handed with the address they were
+ * read from, as the objects the store holds (`Store.handed`): the value
+ * of each `value` entry of its argument, and each stored container in a
+ * copy that such an entry holds. A container below one of them has the
+ * address `Store.addressesBelow` gives, which is found for all of them
+ * when one is first asked for, so a body that passes none of them on
+ * costs nothing for them.
+ */
+class HandedValues {
+  readonly #store: Store;
+  readonly #roots = new Map<object, Handed>();
+  #below: Map<object, Ref> | undefined;
+
+  constructor(store: Store) {
+    this.#store = store;
+  }
+
+  /** Notes what a read gave a body, straight after the read. */
+  note(value: unknown): void {
+    if (typeof value !== "object" || value === null) return;
+    if (this.#store.holds(value)) {
+      const handed = this.#store.handed.get(value);
+      if (handed !== undefined) {
+        this.#roots.set(value, handed);
+        this.#below = undefined;
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const member of value) this.note(member);
+    } else if (
+      Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null
+    ) {
+      for (const member of Object.values(value)) this.note(member);
+    }
+  }
+
+  /** The address a container was handed with, where it was with one. */
+  addressOf(value: object): Ref | undefined {
+    const root = this.#roots.get(value);
+    if (root !== undefined) return root.at;
+    if (this.#roots.size === 0) return undefined;
+    if (this.#below === undefined) {
+      this.#below = new Map();
+      for (const [container, handed] of this.#roots) {
+        this.#store.addressesBelow(container, handed, this.#below);
+      }
+    }
+    return this.#below.get(value);
+  }
+}
+
+/**
  * What the runtime hands a cone's value function (ES §2.2, `ConeHost`),
  * with the reads its evaluation made.
  */
@@ -1843,10 +1898,14 @@ export class Host {
       instance.bindSlot(this, index, from, found);
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    const value = withDefaults(
-      this.v(found, this.#handsHandles(index) ? membersUnread(schema) : schema),
-      schema,
-    );
+    const bound = this.#handsHandles(index) ? membersUnread(schema) : schema;
+    const read = this.v(found, bound);
+    // A stored container that the read gave as the object the store holds
+    // lacks no default of the schema it was read under.
+    const value =
+      found instanceof Ref && bound === schema && instance.store.plain(read)
+        ? read
+        : withDefaults(read, schema);
     instance.bindSlot(this, index, from, found);
     return value;
   }
@@ -2075,6 +2134,8 @@ export class Host {
     if (value instanceof Assembled || value instanceof IndexHandle) {
       return this.whole(this.settled(value));
     }
+    // A stored container holds no reference to an assembled collection.
+    if (this.#instance.store.plain(value)) return value;
     if (Array.isArray(value)) return value.map((member) => this.whole(member));
     if (isRecord(value)) {
       return Object.fromEntries(
@@ -2216,9 +2277,9 @@ export class Host {
         this.#instance.store.locate(operand, true, this.reads, true);
       }
     }
-    const seen = this.#instance.same(a, b);
+    const seen = this.#instance.same(a, b, true);
     this.dependencies.push({
-      stamp: () => this.#instance.same(a, b),
+      stamp: () => this.#instance.same(a, b, true),
       seen,
     });
     return seen;
@@ -2243,6 +2304,9 @@ export class Host {
     // A marker is read through by nothing: it stays the marker.
     if (value instanceof StreamMarker) return value;
     if (value instanceof Handle) return value.get();
+    // A stored container holds no reference, and each record in it holds
+    // its members in the order of the storage.
+    if (this.#instance.store.plain(value)) return value;
     if (Array.isArray(value)) return value.map((member) => this.v(member));
     if (isRecord(value)) {
       // A record a computation made, in the order a read of it from the
@@ -2271,7 +2335,11 @@ export class Host {
       } else if (found instanceof StreamRef || found instanceof StreamMarker) {
         return undefined;
       } else {
-        found = (found as Record<string, unknown>)[`${segment}`];
+        const holder = found;
+        found = (holder as Record<string, unknown>)[`${segment}`];
+        // A member of a stored container that a read gave as the object
+        // the store holds carries its address as the container does.
+        this.#instance.store.handMember(holder, `${segment}`, found);
       }
     }
     return found;
@@ -2301,6 +2369,24 @@ export class Host {
     if (run === undefined) {
       throw new Unsupported("a body that has no function");
     }
+    const handed = new HandedValues(instance.store);
+    return instance.handing(
+      handed,
+      () => this.#invoke(body, run, computed, handed),
+    );
+  }
+
+  /**
+   * `invoke`, for the function `run` of the body and what the body is
+   * handed with an address (`handed`).
+   */
+  #invoke(
+    body: number,
+    run: (...given: unknown[]) => unknown,
+    computed: unknown,
+    handed: HandedValues,
+  ): unknown {
+    const instance = this.#instance;
     // What the body reads as a value, of the computed part and of the
     // slot part: a reference the cone computed that leads to a place a
     // `value` entry of `Body.reads` is at or below is read as a value too,
@@ -2412,6 +2498,7 @@ export class Host {
       const given = observes === "identity"
         ? instance.handleOf(read, this, slot, handle && schema)
         : read;
+      if (observes !== "identity") handed.note(given);
       if (given === undefined) {
         // The result of an operation is a record that is there while
         // its members hold nothing: a body that names `fetched.result`
@@ -2563,6 +2650,13 @@ export class Host {
     }
     // A handle that value code made for a constant stays the handle.
     if (value instanceof Handle) return value;
+    // A stored container is frozen and holds no reference, no marker and
+    // no error state: the body is handed the container itself, unless the
+    // caller fills a path below it.
+    if (
+      this.#instance.store.plain(value) &&
+      (narrowed?.filled === undefined || !filledBelow(narrowed.filled, path))
+    ) return value;
     if (Array.isArray(value)) {
       return value.map((member, index) =>
         this.pass(member, narrowed, [...path, `${index}`])
@@ -2578,6 +2672,21 @@ export class Host {
     return value;
   }
 }
+
+/** Whether one of `filled`, paths as JSON text, is below `path`. */
+const filledBelow = (
+  filled: ReadonlySet<string>,
+  path: readonly string[],
+): boolean => {
+  for (const text of filled) {
+    const other = JSON.parse(text) as string[];
+    if (
+      other.length > path.length &&
+      path.every((segment, index) => segment === other[index])
+    ) return true;
+  }
+  return false;
+};
 
 /**
  * The schema a stored value is read under where a body observes nothing
@@ -3031,8 +3140,43 @@ export class Instance {
    */
   readonly #bound = new Map<
     string,
-    { run: (...given: unknown[]) => unknown; state: unknown }
+    {
+      run: (...given: unknown[]) => unknown;
+      state: unknown;
+      /** What the body that bound the handler was handed with an address. */
+      handed?: HandedValues;
+    }
   >();
+  /**
+   * On the root: what each body being run was handed with an address,
+   * the innermost last.
+   */
+  readonly #handing: HandedValues[] = [];
+
+  /** Runs `run` as the work of a body that was handed `handed`. */
+  handing<T>(handed: HandedValues, run: () => T): T {
+    const { root } = this;
+    root.#handing.push(handed);
+    try {
+      return run();
+    } finally {
+      root.#handing.pop();
+    }
+  }
+
+  /**
+   * The address a container was read from, where it carries one: a copy
+   * that a read made, by `Store.addresses`, and a stored container that a
+   * read gave as the object the store holds, by what the body being run
+   * was handed. With `reactive` the asker is no body: such a container
+   * then has the address its last read was made at (`Store.handed`).
+   */
+  addressRead(value: object, reactive = false): Ref | undefined {
+    const read = this.store.addresses.get(value);
+    if (read !== undefined) return read;
+    if (reactive) return this.store.handed.get(value)?.at;
+    return this.root.#handing.at(-1)?.addressOf(value);
+  }
   /**
    * On the root: each instance a function body made, by the identifier
    * that the run and the ordinal give it now: the instance, the run,
@@ -5236,8 +5380,11 @@ export class Instance {
   returned(value: unknown): unknown {
     if (value instanceof Handle) return targetOf(value);
     if (typeof value === "object" && value !== null) {
-      const read = this.store.addresses.get(value);
+      const read = this.addressRead(value);
       if (read !== undefined) return new Ref(read.doc, read.path);
+      // A stored container that the body was handed with no address is
+      // the value it holds, as a copy of it is.
+      if (this.store.holds(value)) return value;
     }
     if (Array.isArray(value)) {
       return value.map((member) => this.returned(member));
@@ -5333,7 +5480,7 @@ export class Instance {
    * to, or `undefined` for a value with no place in the graph (provisional
    * decision P41, `equalsKey`).
    */
-  equalsKey(value: unknown): string | undefined {
+  equalsKey(value: unknown, reactive = false): string | undefined {
     const named = value instanceof Handle ? targetOf(value) : undefined;
     if (named instanceof StreamRef) {
       const { instance, binding, keys } = named;
@@ -5346,7 +5493,7 @@ export class Instance {
       : value instanceof Ref
       ? value
       : typeof value === "object" && value !== null
-      ? this.store.addresses.get(value)
+      ? this.addressRead(value, reactive)
       : undefined;
     // A key that no position holds resolves to no position: the
     // reference is compared as the key it holds.
@@ -5364,8 +5511,11 @@ export class Instance {
    * by key to the element that is at the position at that time, and to
    * the cell of the element where the position holds a link.
    */
-  same(a: unknown, b: unknown): boolean {
-    const [left, right] = [this.equalsKey(a), this.equalsKey(b)];
+  same(a: unknown, b: unknown, reactive = false): boolean {
+    const [left, right] = [
+      this.equalsKey(a, reactive),
+      this.equalsKey(b, reactive),
+    ];
     if (left !== undefined && right !== undefined) return left === right;
     // A value read from a stored address and one that was not are two.
     if (left !== undefined || right !== undefined) return false;
@@ -5442,9 +5592,7 @@ export class Instance {
       : {};
     members[first] = this.placed(members[first], rest, value);
     // A reference stand-in that gets a member is the stand-in still.
-    const address = isRecord(holder)
-      ? this.store.addresses.get(holder)
-      : undefined;
+    const address = isRecord(holder) ? this.addressRead(holder) : undefined;
     if (address !== undefined) this.store.addresses.set(members, address);
     return members;
   }
@@ -8170,7 +8318,7 @@ export class Instance {
       if (assembled !== undefined) assembledElements.set(result, assembled);
     }
     const read = result !== null && typeof result === "object"
-      ? this.store.addresses.get(result)
+      ? this.addressRead(result, true)
       : undefined;
     const stored = result instanceof Ref ? result : read;
     if (stored !== undefined) {
@@ -9505,7 +9653,12 @@ export class Instance {
   bind(run: (...given: unknown[]) => unknown, state: unknown): StreamRef {
     const { cause, ordinal } = this.#next();
     const key = identifierOf(cause, { bound: ordinal });
-    this.root.#bound.set(key, { run, state });
+    const handed = this.root.#handing.at(-1);
+    this.root.#bound.set(key, {
+      run,
+      state,
+      ...(handed === undefined ? {} : { handed }),
+    });
     this.#bindings.add(key);
     return new StreamRef(-1, [key], this.#owner);
   }
@@ -13275,7 +13428,10 @@ export class Instance {
           error: "the stream of a binding that does not exist",
         };
       }
-      return this.#run(binding, undefined, bound.run, event, bound.state);
+      return this.handing(
+        bound.handed ?? new HandedValues(this.store),
+        () => this.#run(binding, undefined, bound.run, event, bound.state),
+      );
     }
     // A binding of an element body has its stream while its key is in
     // the collection: an event for the stream of a key that left is
@@ -13302,6 +13458,7 @@ export class Instance {
     // A handler is given the reference its row's cones hold for the
     // element (ES §2.6, "A handler bound in the body").
     const host = new Host(this, context, undefined);
+    const handed = new HandedValues(this.store);
     // The state: each slot of the body with root `binding`, resolved to
     // the place the binding's state entry names (PL §1.1).
     let state: unknown = {};
@@ -13401,6 +13558,7 @@ export class Instance {
       let given = read.observes === "identity"
         ? this.handleOf(found, undefined, slot)
         : host.v(found, givesWay ? CHILDREN_UNREAD : undefined);
+      if (read.observes !== "identity") handed.note(given);
       // A write through a handle to a value the instance computes fails
       // (PL §3.11).
       if (reference && given instanceof Handle) {
@@ -13435,10 +13593,16 @@ export class Instance {
       // path that is absent does not make a container there (ES §2.4,
       // "A path the body does not read is absent from the argument").
       if (given === undefined) continue;
-      state = this.placed(state, read.path, given);
+      state = this.handing(
+        handed,
+        () => this.placed(state, read.path, given),
+      );
     }
     this.#bindEvent(host, body, stream);
-    return this.#run(binding, body, run, event, state, host);
+    return this.handing(
+      handed,
+      () => this.#run(binding, body, run, event, state, host),
+    );
   }
 
   /**

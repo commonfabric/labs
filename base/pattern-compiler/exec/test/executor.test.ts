@@ -3917,6 +3917,16 @@ describe("the stream of a binding of an inner `map` that a `flatMap` callback re
 // references is keyed by its cells, and declared key fields change
 // nothing for it.
 describe("the key of a plain value", () => {
+  /** The address that `member`, a container in what a read gave, carries. */
+  const addressIn = (store: Store, read: object, member: object): Ref => {
+    const below = new Map<object, Ref>();
+    const handed = store.handed.get(read);
+    if (handed !== undefined) store.addressesBelow(read, handed, below);
+    return (store.addresses.get(member) ?? below.get(member))!;
+  };
+  const addressOfFirst = (store: Store, read: object[]): Ref =>
+    addressIn(store, read, read[0]);
+
   const SECRET = "the secret of the space";
   const repo = (id: number, name: string) => ({
     id,
@@ -4175,9 +4185,10 @@ describe("the key of a plain value", () => {
   it("forms the keys of an array that is read whole with the key fields that the schema of the array declares beside `items`", () => {
     const store = start();
     const first = (schema: Schema) =>
-      store.addresses.get(
-        (store.read(new Ref("d", ["saved"], schema)) as object[])[0],
-      )!;
+      addressOfFirst(
+        store,
+        store.read(new Ref("d", ["saved"], schema)) as object[],
+      );
 
     expect(first(arrayByKey("id")).path).toEqual(["saved", SEVEN]);
     expect(first(arrayByKey("name")).path).toEqual([
@@ -4229,9 +4240,10 @@ describe("the key of a plain value", () => {
       },
     });
     const first = (name: string, schema: Schema) =>
-      store.addresses.get(
-        (store.read(new Ref("holder", [name], schema)) as object[])[0],
-      )!.path;
+      addressOfFirst(
+        store,
+        store.read(new Ref("holder", [name], schema)) as object[],
+      ).path;
 
     expect(first("keyed", arrayByKey())).toEqual(["saved", SEVEN]);
     expect(first("outer", arrayByKey())).toEqual(["saved", SEVEN]);
@@ -4259,7 +4271,10 @@ describe("the key of a plain value", () => {
     const read = store.read(
       new Ref("above", [], { properties: { saved: arrayByKey() } }),
     ) as { saved: object[] };
-    expect(store.addresses.get(read.saved[0])!.path).toEqual(["saved", SEVEN]);
+    expect(addressIn(store, read, read.saved[0]).path).toEqual([
+      "saved",
+      SEVEN,
+    ]);
   });
 
   it("re-keys the element on a write to a key field and on no other write, and counts equal values of the fields", () => {

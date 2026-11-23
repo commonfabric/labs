@@ -711,6 +711,22 @@ export type Located = {
   fallback: unknown;
 };
 
+/**
+ * Where a read gave a stored container as the object the store holds
+ * (`Store.handed`): the address the container was read from, in the form
+ * that names it, and what the read was made under, which the keys of the
+ * arrays below it are formed with.
+ */
+export type Handed = {
+  at: Ref;
+  /** The schema the read was made under at the container. */
+  shape: Schema | undefined;
+  /** The schema that a link the read resolved through holds for it. */
+  given: Schema | undefined;
+  /** Whether the read was made under `shape` (`Store.read`, `bound`). */
+  bounded: boolean;
+};
+
 type StoredLink = { $link: { doc: string; path: string[]; schema?: Schema } };
 type StoredStream = {
   $stream: { binding: number; keys: string[]; instance?: string };
@@ -1029,9 +1045,10 @@ export class Store {
 
   /**
    * For each container that the store holds or held: how many of its
-   * members are a link or a stream, or hold one at any depth. A container
-   * with an entry is frozen with every container in it, and each record in
-   * it holds its members in the order of the storage (`inStorageOrder`).
+   * members are a link, a stream or an error state, or hold one at any
+   * depth. A container with an entry is frozen with every container in it,
+   * and each record in it holds its members in the order of the storage
+   * (`inStorageOrder`).
    */
   readonly #linksIn = new WeakMap<object, number>();
 
@@ -1041,10 +1058,304 @@ export class Store {
   /** How many containers the reads copied. */
   copiedByReads = 0;
 
-  /** Whether a value is a link or a stream, or a container that holds one. */
+  /**
+   * Whether a value is a link, a stream or an error state, or a container
+   * that holds one.
+   */
   #holdsLinks(value: unknown): boolean {
     return typeof value === "object" && value !== null &&
       (this.#linksIn.get(value) ?? 1) > 0;
+  }
+
+  /**
+   * Whether a value is a container the store holds or held with no link, no
+   * stream and no error state at any depth. Such a container is frozen
+   * with all it holds, and a read of it replaces nothing in it.
+   */
+  plain(value: unknown): value is object {
+    return typeof value === "object" && value !== null &&
+      this.#linksIn.get(value) === 0;
+  }
+
+  /** Whether a value is a container the store holds or held. */
+  holds(value: unknown): boolean {
+    return typeof value === "object" && value !== null &&
+      this.#linksIn.has(value);
+  }
+
+  /**
+   * Where the last read that gave a stored container as the object the
+   * store holds read it from, by the container. A read gives such a
+   * container where it would copy it member for member: the container is
+   * `plain`, the read is no read through a handle, and the schema of the
+   * read leaves no member out and fills in no default. The containers
+   * below it carry no address of their own: `addressesBelow` gives them.
+   */
+  readonly handed = new WeakMap<object, Handed>();
+
+  /**
+   * For each stored array and each schema of its elements: whether a read
+   * under a schema with those `items` leaves no member of an element out
+   * (`#nothingLeftOut`), and whether it fills in no default
+   * (`#noDefaults`). An array has an entry for a schema once a read asked,
+   * and the copy that replaces the array after a change gets the entries
+   * that hold for the members the change put in (`#replaced`).
+   */
+  readonly #wholeUnder = new WeakMap<object, Map<Schema, boolean>>();
+  readonly #fullUnder = new WeakMap<object, Map<Schema, boolean>>();
+
+  /**
+   * How many members of stored arrays the reads examined one by one to
+   * find whether a read gives the array as the store holds it.
+   */
+  membersExamined = 0;
+
+  /**
+   * Whether `holds` is true of each member of a stored array. A loop by
+   * position: `every` of a frozen array costs several times as much.
+   */
+  #everyMember(
+    array: readonly unknown[],
+    holds: (member: unknown) => boolean,
+  ): boolean {
+    for (let index = 0; index < array.length; index++) {
+      this.membersExamined += 1;
+      if (!holds(array[index])) return false;
+    }
+    return true;
+  }
+
+  /** Notes what a check of an array under a schema of its elements found. */
+  #noteChecked(
+    table: WeakMap<object, Map<Schema, boolean>>,
+    array: object,
+    items: Schema,
+    holds: boolean,
+  ): boolean {
+    let known = table.get(array);
+    if (known === undefined) {
+      known = new Map();
+      table.set(array, known);
+    }
+    // A reader that makes a schema for each read leaves an entry for each.
+    if (known.size >= 8) known.delete(known.keys().next().value!);
+    known.set(items, holds);
+    return holds;
+  }
+
+  /**
+   * Whether a read of the plain container `value` under `shape` leaves no
+   * member out: each record in it holds only members that the schema at
+   * its place declares, where that schema declares some and admits no
+   * other (`declaredMembers`).
+   */
+  #nothingLeftOut(value: unknown, shape: Schema | undefined): boolean {
+    if (typeof value !== "object" || value === null) return true;
+    const outer = containerOf(shape);
+    if (typeof outer !== "object") return true;
+    if (Array.isArray(value)) {
+      const { items } = outer;
+      if (
+        typeof items !== "object" ||
+        (items.properties === undefined && items.items === undefined &&
+          items.anyOf === undefined)
+      ) return true;
+      const known = this.#wholeUnder.get(value)?.get(items);
+      if (known !== undefined) return known;
+      return this.#noteChecked(
+        this.#wholeUnder,
+        value,
+        items,
+        this.#everyMember(
+          value,
+          (member) => this.#nothingLeftOut(member, items),
+        ),
+      );
+    }
+    if (outer.properties === undefined) return true;
+    const declared = declaredMembers(shape);
+    const record = value as Record<string, unknown>;
+    for (const name of Object.keys(record)) {
+      if (declared !== undefined && !declared.includes(name)) return false;
+      if (!this.#nothingLeftOut(record[name], outer.properties[name])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether `withDefaults` fills in nothing for the plain container or the
+   * scalar `value` under `schema`.
+   */
+  #noDefaults(value: unknown, schema: Schema | undefined): boolean {
+    if (typeof schema !== "object") return true;
+    if (value === undefined) return schema.default === undefined;
+    if (typeof value !== "object" || value === null) return true;
+    if (Array.isArray(value)) {
+      const { items } = schema;
+      if (
+        typeof items !== "object" ||
+        (items.properties === undefined && items.items === undefined &&
+          items.default === undefined)
+      ) return true;
+      const known = this.#fullUnder.get(value)?.get(items);
+      if (known !== undefined) return known;
+      return this.#noteChecked(
+        this.#fullUnder,
+        value,
+        items,
+        this.#everyMember(
+          value,
+          (member) => this.#noDefaults(member, items),
+        ),
+      );
+    }
+    if (schema.properties === undefined) return true;
+    const record = value as Record<string, unknown>;
+    for (const [name, member] of Object.entries(schema.properties)) {
+      if (!this.#noDefaults(record[name], member)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Gives the entries of `#wholeUnder` and `#fullUnder` that hold for the
+   * array `from` to `next`, the copy that replaces it, where they hold for
+   * each of `put`, the members the change put into the copy.
+   */
+  #checkedStill(from: object, next: object, put: readonly unknown[]): void {
+    const tables = [
+      [
+        this.#wholeUnder,
+        (member: unknown, items: Schema) => this.#nothingLeftOut(member, items),
+      ],
+      [
+        this.#fullUnder,
+        (member: unknown, items: Schema) => this.#noDefaults(member, items),
+      ],
+    ] as const;
+    for (const [table, check] of tables) {
+      const known = table.get(from);
+      if (known === undefined) continue;
+      for (const [items, holds] of known) {
+        if (!holds || !put.every((member) => check(member, items))) continue;
+        this.#noteChecked(table, next, items, true);
+      }
+    }
+  }
+
+  /**
+   * Names the address of `member`, the member at `segment` of `parent`,
+   * where `parent` is a container that a read gave as the object the
+   * store holds and `member` is a container too: the address `handed`
+   * then holds for `member` is the one `addressesBelow` gives it. Whoever
+   * steps from a value to one of its members calls this, so that the
+   * member carries its address as the value does.
+   */
+  handMember(parent: object, segment: string, member: unknown): void {
+    if (typeof member !== "object" || member === null) return;
+    if (!this.#linksIn.has(member)) return;
+    const handed = this.handed.get(parent);
+    if (handed === undefined) return;
+    const { shape, given, bounded } = handed;
+    const outer = bounded ? containerOf(shape) : shape;
+    if (!Array.isArray(parent)) {
+      this.handed.set(member, {
+        at: new Ref(handed.at.doc, [...handed.at.path, segment]),
+        shape: schemaBelow(outer, segment),
+        given: schemaBelow(given, segment),
+        bounded,
+      });
+      return;
+    }
+    if (!/^\d+$/.test(segment)) return;
+    const declared = keyFieldsOf(shape);
+    const keys = this.#keysOf(
+      parent,
+      new Ref(handed.at.doc, handed.at.path),
+      parent,
+      declared.length > 0 ? declared : keyFieldsOf(given),
+      true,
+    );
+    this.handed.set(member, {
+      at: new Ref(handed.at.doc, [
+        ...handed.at.path,
+        keySegment(keys[Number(segment)]),
+      ]),
+      shape: typeof outer === "object" ? outer.items : undefined,
+      given: typeof given === "object" ? given.items : undefined,
+      bounded,
+    });
+  }
+
+  /**
+   * Adds to `into` the address of each container below `root`, a
+   * container that a read gave as the object the store holds (`handed`):
+   * what a read that copies registers for each copy as it makes it. A
+   * member of a record has the path of the record and its name, and a
+   * member of an array the path of the array and the key of the member,
+   * formed with the key fields the read declares for the array.
+   */
+  addressesBelow(root: object, handed: Handed, into: Map<object, Ref>): void {
+    const walk = (
+      value: object,
+      // The address with a position for each array crossed below the root,
+      // and the address in the form that names the container.
+      here: Ref,
+      named: Ref,
+      shape: Schema | undefined,
+      given: Schema | undefined,
+    ): void => {
+      const outer = handed.bounded ? containerOf(shape) : shape;
+      if (Array.isArray(value)) {
+        let containers = false;
+        for (let index = 0; index < value.length && !containers; index++) {
+          containers = typeof value[index] === "object" &&
+            value[index] !== null;
+        }
+        if (!containers) return;
+        const declared = keyFieldsOf(shape);
+        const keys = this.keysOf(
+          value,
+          here,
+          value,
+          declared.length > 0 ? declared : keyFieldsOf(given),
+          true,
+        );
+        const items = typeof outer === "object" ? outer.items : undefined;
+        for (let index = 0; index < value.length; index++) {
+          const member = value[index];
+          if (typeof member !== "object" || member === null) continue;
+          const at = named.key(keySegment(keys[index]));
+          into.set(member, at);
+          walk(
+            member,
+            here.key(`${index}`),
+            at,
+            items,
+            typeof given === "object" ? given.items : undefined,
+          );
+        }
+        return;
+      }
+      const record = value as Record<string, unknown>;
+      for (const name of Object.keys(record)) {
+        const member = record[name];
+        if (typeof member !== "object" || member === null) continue;
+        const at = named.key(name);
+        into.set(member, at);
+        walk(
+          member,
+          here.key(name),
+          at,
+          schemaBelow(outer, name),
+          schemaBelow(given, name),
+        );
+      }
+    };
+    const at = new Ref(handed.at.doc, handed.at.path);
+    walk(root, at, at, handed.shape, handed.given);
   }
 
   /**
@@ -1068,6 +1379,11 @@ export class Store {
     if (isStream(value)) {
       Object.freeze(value.$stream.keys);
       Object.freeze(value.$stream);
+      this.#linksIn.set(Object.freeze(value), 1);
+      return value;
+    }
+    if (isErrorState(value)) {
+      Object.freeze(value.$error);
       this.#linksIn.set(Object.freeze(value), 1);
       return value;
     }
@@ -1144,10 +1460,17 @@ export class Store {
    * its members that hold a link, and for an array its keys, what stands
    * for it through its changes, and whether a whole read formed its keys.
    */
-  #replaced(from: object, next: object, links: number): void {
+  #replaced(
+    from: object,
+    next: object,
+    links: number,
+    /** The members the change put into the copy. */
+    put: readonly unknown[],
+  ): void {
     this.#linksIn.set(Object.freeze(next), links);
     this.copiedByWrites += 1;
     if (!Array.isArray(from) || !Array.isArray(next)) return;
+    this.#checkedStill(from, next, put);
     const states = this.#states.get(from);
     if (states !== undefined) {
       this.#states.delete(from);
@@ -1232,7 +1555,7 @@ export class Store {
         }
       }
       if (!removed && this.#holdsLinks(next)) links += 1;
-      this.#replaced(from, copy, links);
+      this.#replaced(from, copy, links, removed ? [] : [next]);
       next = copy;
       removed = false;
     }
@@ -1259,7 +1582,7 @@ export class Store {
     let links = this.#linksOf(held);
     for (const member of taken) if (this.#holdsLinks(member)) links -= 1;
     for (const member of kept) if (this.#holdsLinks(member)) links += 1;
-    this.#replaced(held, next, links);
+    this.#replaced(held, next, links, kept);
     this.#setAt(document, path, next);
     return taken;
   }
@@ -2645,6 +2968,13 @@ export class Store {
    * does not declare is left out, and a link at a position the schema
    * types `unknown` is given as a reference stand-in, an object with no
    * member that carries the address, and not followed.
+   *
+   * A read without `copies` gives a container that holds no link, no
+   * stream and no error state as the frozen object the store holds, where
+   * the schema of the read leaves no member of it out and fills in no
+   * default. The work of such a read does not follow the size of the
+   * container. Its address is in `handed`, and those of the containers
+   * below it are what `addressesBelow` gives.
    */
   read(ref: Ref, reads?: Position[], copies = false, bound?: Schema): unknown {
     const outer = this.#reached;
@@ -2684,6 +3014,24 @@ export class Store {
     if (reached?.has(id)) return reached.get(id);
     if (located.value === undefined && isStreamSchema(located.ref.schema)) {
       return { $stream: true };
+    }
+    const shape = bound ?? located.ref.schema;
+    if (
+      !copies && this.plain(located.value) &&
+      (bound === undefined || this.#nothingLeftOut(located.value, shape)) &&
+      this.#noDefaults(located.value, shape)
+    ) {
+      this.handed.set(located.value, {
+        at: located.named,
+        shape,
+        given: located.given,
+        bounded: bound !== undefined,
+      });
+      if (this.#reached !== undefined) {
+        if (!this.#reached.has(bound)) this.#reached.set(bound, new Map());
+        this.#reached.get(bound)!.set(id, located.value);
+      }
+      return located.value;
     }
     open.add(id);
     const copied = copies && located.inPlace;
