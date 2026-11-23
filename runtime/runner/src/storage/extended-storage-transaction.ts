@@ -1751,11 +1751,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         ? storedMetaFields(
           this.tx.read(address, {
             nonRecursive: true,
-            meta: {
+            meta: Object.freeze({
               ...ignoreReadForScheduling,
               ...ignoreReadForCommit,
               ...allowMutableTransactionRead,
-            },
+            }),
           }).ok?.value,
         ).filter((field) => !written.includes(field))
         : NO_META_FIELDS;
@@ -1836,11 +1836,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           path: ["value", "defaultPattern"],
         }, {
           nonRecursive: true,
-          meta: {
+          meta: Object.freeze({
             ...ignoreReadForScheduling,
             ...ignoreReadForCommit,
             ...allowMutableTransactionRead,
-          },
+          }),
         }).ok?.value;
         if (slot === undefined) {
           // A serving runtime's handler waits for the Home's own server to
@@ -1932,11 +1932,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       value,
       (sibling) =>
         this.tx.read({ ...address, path: [sibling] }, {
-          meta: {
+          meta: Object.freeze({
             ...ignoreReadForScheduling,
             ...ignoreReadForCommit,
             ...internalVerifierRead,
-          },
+          }),
         }).ok?.value,
     );
     for (const [sibling, change] of changes) {
@@ -2090,7 +2090,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
     return {
       ...options,
-      meta: { ...this.#ambientReadMeta, ...options?.meta },
+      meta: Object.freeze({ ...this.#ambientReadMeta, ...options?.meta }),
     };
   }
 
@@ -4295,6 +4295,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return this.tx.getPotentiallyExternalReadActivities?.();
   }
 
+  /** @inheritDoc */
+  freezeReadActivityRecords(): number | undefined {
+    return this.tx.freezeReadActivityRecords?.();
+  }
+
   getWriteAttemptLog(): readonly IWriteAttempt[] {
     // Absent source (a custom transaction with neither a native log nor a
     // journal) degrades to an empty log; the CFC prefix gate then finds no
@@ -5669,6 +5674,11 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.getPotentiallyExternalReadActivities?.();
   }
 
+  /** @inheritDoc */
+  freezeReadActivityRecords(): number | undefined {
+    return this.#wrapped.freezeReadActivityRecords?.();
+  }
+
   getWriteAttemptLog(): readonly IWriteAttempt[] {
     return this.#wrapped.getWriteAttemptLog?.() ??
       getTransactionWriteAttempts(this.#wrapped.tx) ?? [];
@@ -5709,7 +5719,7 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     }
     return {
       ...options,
-      meta: { ...options?.meta, ...ignoreReadForScheduling },
+      meta: Object.freeze({ ...options?.meta, ...ignoreReadForScheduling }),
     };
   }
 

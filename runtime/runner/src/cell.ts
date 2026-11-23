@@ -420,7 +420,10 @@ const storedSchemaForWritePolicyInput = (
     type: "application/json",
     path: [],
   }, {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   });
   if (!isObjectOrArray(stored) || stored.value === undefined) {
     return undefined;
@@ -609,11 +612,11 @@ const arrayItemPolicyInput = (
   // too.
   const held = tx.readValueOrThrow(parent, {
     nonRecursive: true,
-    meta: {
+    meta: Object.freeze({
       ...ignoreReadForScheduling,
       ...internalVerifierRead,
       ...excludeReadFromConflict,
-    },
+    }),
   });
   if (
     !Array.isArray(held) &&
@@ -2562,10 +2565,13 @@ export class CellImpl<T extends FabricValue>
     // each addressed from `resolvedToValueLink`, which the unmarked
     // resolution above produced.
     if (
-      this.isStream(resolvedToValueLink, {
-        ...ignoreReadForScheduling,
-        ...writeDestinationRead,
-      })
+      this.isStream(
+        resolvedToValueLink,
+        Object.freeze({
+          ...ignoreReadForScheduling,
+          ...writeDestinationRead,
+        }),
+      )
     ) {
       // Stream behavior
 
@@ -2981,11 +2987,11 @@ export class CellImpl<T extends FabricValue>
             // carries is no input of this run (CFC §18.6.2, write-destination
             // reads; `docs/specs/cfc-write-destination-reads.md`).
             const currentEntries = this.#tx.readValueOrThrow(entriesLink, {
-              meta: {
+              meta: Object.freeze({
                 ...ignoreReadForScheduling,
                 ...mergeableOpRead,
                 ...writeDestinationRead,
-              },
+              }),
             });
             const emittedEntry = {
               eventId: emittedId,
@@ -3492,7 +3498,7 @@ export class CellImpl<T extends FabricValue>
     // exposing content or length to the caller. It joins neither observed
     // labels nor conflict preconditions; explicit handler reads retain both.
     const currentValue = this.#tx.readValueOrThrow(resolvedLink, {
-      meta: { ...mergeableOpRead, ...writeDestinationRead },
+      meta: Object.freeze({ ...mergeableOpRead, ...writeDestinationRead }),
     });
     const cause = this.#frame?.cause;
 
@@ -4601,7 +4607,10 @@ export class CellImpl<T extends FabricValue>
     // with this cell's own value).
     if (onlyIfDifferent) {
       const current = this.#tx.readValueOrThrow(this.#link, {
-        meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+        meta: Object.freeze({
+          ...ignoreReadForScheduling,
+          ...internalVerifierRead,
+        }),
       });
       if (valueEqual(current, inlined)) return;
     }
@@ -4640,7 +4649,10 @@ export class CellImpl<T extends FabricValue>
       "writeRedirect",
     );
     const value = this.#tx.readValueOrThrow(writeLink, {
-      meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
+      meta: Object.freeze({
+        ...markReadAsAttemptedWrite,
+        ...allowMutableTransactionRead,
+      }),
     });
     if (value === undefined) {
       throw new Error("Cannot apply a CFC schema to an absent value");
@@ -4654,7 +4666,10 @@ export class CellImpl<T extends FabricValue>
 
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined {
     const metaReadOptions = {
-      meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+      meta: Object.freeze({
+        ...ignoreReadForScheduling,
+        ...internalVerifierRead,
+      }),
     };
     const linkObj = this.getMetaRaw("argument", metaReadOptions);
     if (linkObj === undefined) return undefined;

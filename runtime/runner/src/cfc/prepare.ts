@@ -8494,6 +8494,24 @@ type InputRead = Omit<IReadActivity, "journalIndex"> & {
   journalIndex: number;
 };
 
+/** Metadata with no marker of its own, which says what it inherits. */
+const UNMARKED_METADATA: NonNullable<IReadActivity["meta"]> = Object.freeze(
+  {},
+);
+
+/**
+ * Whether what `meta` says of its reads can no longer change: it is absent,
+ * or frozen with a prototype that is `Object.prototype` or none. What
+ * `Object.prototype` says is compared apart
+ * (`InputReadSnapshot.inheritedInternal`).
+ */
+const classificationIsFixed = (meta: IReadActivity["meta"]): boolean => {
+  if (meta === undefined) return true;
+  if (!Object.isFrozen(meta)) return false;
+  const prototype = Object.getPrototypeOf(meta);
+  return prototype === Object.prototype || prototype === null;
+};
+
 /** The reads an `InputReadView` holds, and what they were built from. */
 type InputReadSnapshot = {
   // What the reads were copied from: every record the transaction offered,
@@ -8501,9 +8519,18 @@ type InputReadSnapshot = {
   // metadata object classed its reads as the verifier's own. A record keeps
   // its place in the transaction's list while that classification changes,
   // by its metadata being replaced or changed in place.
+  // `list` is the object the transaction handed out, and `revision` what it
+  // returned on freezing the records of that list, or `undefined` where it
+  // froze none.
+  list: Iterable<IReadActivity>;
+  revision: number | undefined;
   records: readonly IReadActivity[];
   metas: readonly IReadActivity["meta"][];
-  internalByMeta: ReadonlyMap<IReadActivity["meta"], boolean>;
+  // The distinct metadata objects whose classification can change, each
+  // with how it classed its reads, and how metadata that carries no marker
+  // of its own classed its reads, which is what its prototype says.
+  openMetas: readonly (readonly [IReadActivity["meta"], boolean])[];
+  inheritedInternal: boolean;
   triggerCount: number;
   reads: readonly InputRead[];
   // The value path each read observes, or `undefined` for a read of one of
@@ -8652,7 +8679,11 @@ const buildGatedInputReads = (
  * the reads again only when the records differ, one carries another
  * metadata object, or a metadata object classes its reads otherwise than
  * it did, so a read recorded or reclassified during the pass reaches the
- * targets verified after it.
+ * targets verified after it. Each ask has the transaction freeze the
+ * records it lists (`freezeReadActivityRecords`), so a record the view has
+ * copied refuses another metadata object, and an ask of a transaction that
+ * lists the records it listed classifies each distinct metadata object
+ * again and compares no record.
  * The resolver's generation says whether a write retired an envelope the
  * view resolved. The view is deliberately class-blind (`consumes: "all"`):
  * the gate is a screen over everything the transaction consumed, and
@@ -8684,9 +8715,30 @@ export class InputReadView {
     gatedReads: ReturnType<typeof buildGatedInputReads>;
   };
 
+  #recordsCompared = 0;
+  #metadataObjectsClassified = 0;
+
   /** Binds the view to the transaction whose reads it holds. */
   constructor(tx: IExtendedStorageTransaction) {
     this.#tx = tx;
+  }
+
+  /**
+   * How many records the asks so far compared with the copy the view held:
+   * every record at each ask of a transaction that does not freeze its
+   * records or hands out another list, and none otherwise.
+   */
+  get recordsCompared(): number {
+    return this.#recordsCompared;
+  }
+
+  /**
+   * How many metadata objects the asks so far classified again: at each
+   * ask that held a copy, each distinct object of that copy that is not
+   * frozen.
+   */
+  get metadataObjectsClassified(): number {
+    return this.#metadataObjectsClassified;
   }
 
   /**
@@ -8840,13 +8892,24 @@ export class InputReadView {
     const rawList: readonly IReadActivity[] = Array.isArray(raw)
       ? raw
       : [...raw];
+    const revision = tx.freezeReadActivityRecords?.();
     const triggers = triggerReadSources(tx);
-    if (
-      this.#reads !== undefined &&
-      this.#reads.triggerCount === triggers.length &&
-      InputReadView.#stands(this.#reads, rawList)
-    ) {
-      return this.#reads;
+    const held = this.#reads;
+    if (held !== undefined && held.triggerCount === triggers.length) {
+      // The transaction says its list holds the records it held, each frozen
+      // with the metadata object it had, so only what those objects say can
+      // differ.
+      const sameRecords = revision !== undefined &&
+        revision === held.revision && raw === held.list &&
+        rawList.length === held.records.length;
+      if (!sameRecords) this.#recordsCompared += rawList.length;
+      this.#metadataObjectsClassified += held.openMetas.length;
+      if (
+        (sameRecords || InputReadView.#sameRecords(held, rawList)) &&
+        InputReadView.#classifiedAsHeld(held)
+      ) {
+        return held;
+      }
     }
     let clockLessReads = 0;
     const metas: IReadActivity["meta"][] = [];
@@ -8875,13 +8938,20 @@ export class InputReadView {
         journalIndex: -Infinity,
       });
     }
+    const openMetas: [IReadActivity["meta"], boolean][] = [];
+    for (const entry of internalByMeta) {
+      if (!classificationIsFixed(entry[0])) openMetas.push(entry);
+    }
     this.#reads = {
+      list: raw,
+      revision,
       // A copy, so the records compared at the next ask are the ones this
       // snapshot was built from even where the transaction hands out its
       // own growing list.
       records: [...rawList],
       metas,
-      internalByMeta,
+      openMetas,
+      inheritedInternal: isInternalVerifierRead(UNMARKED_METADATA),
       triggerCount: triggers.length,
       reads,
       gatePaths: reads.map((read) => canonicalizeDocumentPath(read.path)),
@@ -8901,15 +8971,11 @@ export class InputReadView {
 
   /**
    * Helper for `#current()`, which says whether `held` was built from
-   * exactly `records`, each classified as it is now. The transaction keeps a
-   * record whose classification is not sealed so that a consumer reads its
-   * metadata again, so every ask reads every record's metadata: a record
-   * carrying another metadata object ends the snapshot, and so does a
-   * metadata object that classes its reads otherwise than it did. The
-   * classification is the metadata object's, and a transaction's records
-   * share a few of them, so each distinct one is classified once per ask.
+   * exactly `records`, each carrying the metadata object it carried. It
+   * reads every record, which a record that is not frozen needs: its
+   * metadata can be replaced while it keeps its place.
    */
-  static #stands(
+  static #sameRecords(
     held: InputReadSnapshot,
     records: readonly IReadActivity[],
   ): boolean {
@@ -8920,7 +8986,23 @@ export class InputReadView {
         return false;
       }
     }
-    for (const [meta, internal] of held.internalByMeta) {
+    return true;
+  }
+
+  /**
+   * Helper for `#current()`, which says whether each metadata object of
+   * `held` classes its reads as it did. The classification is the metadata
+   * object's, which can change in place unless the object is frozen, so
+   * each distinct object that is not is classified once per ask. The count
+   * of those is what an ask costs: a site that records each read under a
+   * metadata object of its own makes that count follow the reads unless it
+   * freezes the object.
+   */
+  static #classifiedAsHeld(held: InputReadSnapshot): boolean {
+    if (isInternalVerifierRead(UNMARKED_METADATA) !== held.inheritedInternal) {
+      return false;
+    }
+    for (const [meta, internal] of held.openMetas) {
       if (isInternalVerifierRead(meta) !== internal) return false;
     }
     return true;
