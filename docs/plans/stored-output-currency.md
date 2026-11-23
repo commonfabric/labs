@@ -489,8 +489,9 @@ say so, and both are required:
   being stored is to name the slot as one the slice decides. One it names
   as holding a later write, or does not name, is not counted.
 
-A row stored behind the slot's head answered for nothing, and is not
-checked. Where a revision of the slot above the slice's row is another
+A row the last record stored as superseded answered for nothing, and is
+not checked; a row that answered for the slot and has the slot's head above
+it since is the one the check asks about. Where a revision of the slot above the slice's row is another
 slice's run's, or names no run, the slot is not counted either, whatever the
 slice's own run wrote after it: a piece's reads of its own outputs are not
 among the inputs the check compares, so the record cannot say whether that

@@ -1603,6 +1603,7 @@ export const storeCurrencyRecords = (
     }) as Array<{ id: string; instance_key: string; seq: number }>).map((
       { id, instance_key, seq },
     ) => ({ id, scopeKey: instance_key, seq }));
+
     // A revision that is no derivation is a change from outside, and
     // whatever the piece wrote after it was prompted.
     for (const { id, scopeKey, seq } of [...vouched, ...decided]) {
@@ -1677,6 +1678,7 @@ export const storeCurrencyRecords = (
         read(engine, { id, scopeKey: scopeKey as ScopeKey, seq }),
         read(engine, { id, scopeKey: scopeKey as ScopeKey }),
       );
+
     return vouched.some(differs) ||
       decided.some((slot) =>
         decides.some(({ id, scopeKey }) =>

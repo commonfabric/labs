@@ -1430,6 +1430,7 @@ describe("currency-index", () => {
 
         /** The shared slot Alice's run leaves a redirect at. */
         const SLOT = { id: "computed:out", scopeKey: "space" };
+
         const PREFS = { id: "of:prefs", scope: "session" as const };
         let holder: string;
 
