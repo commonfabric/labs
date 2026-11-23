@@ -9,8 +9,21 @@
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`:
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--evaluate=function]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume | --serving] [--evaluate=function] [--detail]`
  * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report <results.jsonl>`
+ *
+ * With `--resume`, a second runtime on the same memory server takes the
+ * piece over after the first half of the events (`resumeCompiledPieceFromBasis`):
+ * the first runtime is disposed, the second starts the piece from what the
+ * storage holds and handles the other half. The run then also says how
+ * many documents the resume wrote.
+ *
+ * With `--serving`, each module runs under the serving loop: a memory
+ * server that listens on a websocket of this process, with a serving loop
+ * on this thread, and one client with server execution on that sets the
+ * piece up (`setUpCompiledPiece`) and appends each event with `Cell.send`
+ * on the entity of its stream. The piece is the one the serving runtime
+ * runs, and its values are compared as above.
  *
  * `run` appends one line per module and leaves out a module the file
  * already has. The inputs are plain values in the argument, so the run
@@ -33,8 +46,16 @@ import {
   type CompiledPiece,
   startCompiledPiece,
 } from "../../../runtime/runner/src/compiled/piece.ts";
+import { sendEvent } from "../../../runtime/runner/src/cell.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
-import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
+import { resumeCompiledPieceFromBasis } from "../../../runtime/runner/src/compiled/resume.ts";
+import { listenCompiledServingMemoryServer } from "../../../runtime/runner/src/compiled/serving-memory-server.deno.ts";
+import { setUpCompiledPiece } from "../../../runtime/runner/src/compiled/setup.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "../../../runtime/runner/src/storage/cache.deno.ts";
 import {
   type Artifact,
   evaluateWithFunction,
@@ -46,6 +67,7 @@ import {
   corpusModules,
   eventOrder,
   mainPattern,
+  sourceOf,
 } from "./corpus.ts";
 import { generateEvent, generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
@@ -75,7 +97,39 @@ type Outcome = {
    */
   equal?: boolean;
   difference?: string;
+  /** With `--detail`: what each of the two holds at the difference. */
+  detail?: { here: string; there: string };
+  /**
+   * With `--resume`: the events the first runtime handled before the
+   * second took the piece over, the documents the resume wrote, or why the
+   * piece did not resume.
+   */
+  resume?: {
+    after: number;
+    /** Whether the basis of the piece matched the storage. */
+    current?: boolean;
+    /** How many documents the comparison of the basis read. */
+    checked?: number;
+    documents?: number;
+    failure?: string;
+  };
 };
+
+/**
+ * A value as text, with the members of each record in the order of their
+ * names: a record the storage gave has them in that order, and one the
+ * process wrote has them in the order they were written.
+ */
+const ordered = (value: unknown): string =>
+  JSON.stringify(
+    value,
+    (_name, member) =>
+      typeof member === "object" && member !== null && !Array.isArray(member)
+        ? Object.fromEntries(
+          Object.entries(member).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+        )
+        : member,
+  ) ?? "undefined";
 
 /** The path of the first difference between two values, as text. */
 const firstDifference = (
@@ -83,7 +137,7 @@ const firstDifference = (
   b: unknown,
   path = "",
 ): string | undefined => {
-  if (JSON.stringify(a) === JSON.stringify(b)) return undefined;
+  if (ordered(a) === ordered(b)) return undefined;
   if (
     typeof a === "object" && a !== null && typeof b === "object" &&
     b !== null && Array.isArray(a) === Array.isArray(b)
@@ -101,6 +155,16 @@ const firstDifference = (
   return path === "" ? "/" : path;
 };
 
+/** What a value holds at a path that `firstDifference` gave, as text. */
+const valueAt = (value: unknown, path: string): string => {
+  let at = value;
+  for (const segment of path.split("/").slice(1)) {
+    if (segment === "") continue;
+    at = (at as Record<string, unknown> | undefined)?.[segment];
+  }
+  return (JSON.stringify(at) ?? "undefined").slice(0, 600);
+};
+
 /** Why a plan cannot run on the runner path, where it cannot. */
 const needs = (plan: Artifact["plan"]): string | undefined => {
   const operations =
@@ -112,10 +176,12 @@ const needs = (plan: Artifact["plan"]): string | undefined => {
   return undefined;
 };
 
-const runOne = async (
+export const runOne = async (
   module: EmittedModule,
   artifacts: (id: string) => Artifact | undefined,
-  evaluate: ModuleEvaluator | undefined,
+  resume: boolean,
+  serving = false,
+  evaluate: ModuleEvaluator | undefined = undefined,
 ): Promise<Outcome> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -153,17 +219,35 @@ const runOne = async (
     }
   });
 
+  if (serving) {
+    try {
+      return await runServed(
+        base,
+        artifact,
+        argument,
+        events,
+        alone,
+        artifacts,
+        now,
+      );
+    } catch (error) {
+      return { ...base, started: false, startFailure: categoryOf(error) };
+    }
+  }
   const signer = await Identity.fromPassphrase("pattern-compiler-compare");
   const space = signer.did();
-  const storageManager = StorageManager.emulate({ as: signer });
-  const runtime = new Runtime({
-    apiUrl: new URL(import.meta.url),
-    storageManager,
-    cfcFlowLabels: "persist",
-    experimental: { compiledPatterns: true },
-    servingPosture: true,
-  });
+  const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+  const session = () =>
+    new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+  let runtime = session();
   let piece: CompiledPiece | undefined;
+  let resumed: Outcome["resume"];
   try {
     const result = runtime.getCell<unknown>(space, "corpus on the runner");
     const tx = runtime.edit();
@@ -196,7 +280,59 @@ const runOne = async (
     }
     let handled = 0;
     const failures: string[] = [];
-    for (const { binding, event } of events) {
+    const half = Math.floor(events.length / 2);
+    for (const [index, { binding, event }] of events.entries()) {
+      if (resume && index === half) {
+        // The second runtime takes the piece over from the storage.
+        piece.stop();
+        await runtime.scheduler.idleWithPendingCommits();
+        await runtime.storageManager.synced();
+        await runtime.dispose();
+        piece = undefined;
+        runtime = session();
+        const written = new Set<string>();
+        runtime.storageManager.subscribe({
+          next(notification) {
+            if (notification.type === "commit") {
+              for (const { address } of notification.changes) {
+                written.add(address.id);
+              }
+            }
+            return undefined;
+          },
+        });
+        try {
+          // The piece is resumed from its basis first, which evaluates
+          // nothing where the stored result is current, and then woken for
+          // the events that follow.
+          const fromBasis = await resumeCompiledPieceFromBasis(
+            runtime,
+            artifact,
+            runtime.getCellFromLink(result.getAsNormalizedFullLink()),
+            { artifacts, now, ...(evaluate === undefined ? {} : { evaluate }) },
+          );
+          piece = await fromBasis.wake();
+          await runtime.scheduler.idleWithPendingCommits();
+          await runtime.storageManager.synced();
+          resumed = {
+            after: half,
+            current: fromBasis.current,
+            checked: fromBasis.checked,
+            documents: written.size,
+          };
+        } catch (error) {
+          return {
+            ...base,
+            started: true,
+            resume: {
+              after: half,
+              failure: `${categoryOf(error).category}: ${
+                categoryOf(error).detail
+              }`,
+            },
+          };
+        }
+      }
       const stream = piece.instance.streams().find((held) =>
         held.binding === binding && held.instance === undefined &&
         held.elements !== undefined
@@ -234,6 +370,13 @@ const runOne = async (
       refusals: [...piece.refusals].map((reason) => reason.slice(0, 200)),
       equal: difference === undefined,
       ...(difference === undefined ? {} : { difference }),
+      ...(difference === undefined || !Deno.args.includes("--detail") ? {} : {
+        detail: {
+          here: valueAt(here, difference),
+          there: valueAt(there, difference),
+        },
+      }),
+      ...(resumed === undefined ? {} : { resume: resumed }),
     };
   } catch (error) {
     return {
@@ -244,7 +387,149 @@ const runOne = async (
   } finally {
     piece?.stop();
     await runtime.dispose();
-    await storageManager.close();
+    await server.close();
+  }
+};
+
+/**
+ * One module under the serving loop: `events` are those of the scenario,
+ * and `alone` the executor in memory that handled them.
+ */
+const runServed = async (
+  base: { module: string; pattern: string | undefined },
+  artifact: Artifact,
+  argument: unknown,
+  events: { binding: number; event: unknown }[],
+  alone: ExecutorRun,
+  artifacts: (id: string) => Artifact | undefined,
+  now: number,
+): Promise<Outcome> => {
+  const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+  const space = signer.did();
+  // The piece the serving runtime starts, or why it did not start.
+  const loaded = Promise.withResolvers<CompiledPiece>();
+  loaded.promise.catch(() => {});
+  const main = `/${base.module.replace(/^\/+/, "")}`;
+  const program = {
+    main,
+    files: [{
+      name: main,
+      contents: await Deno.readTextFile(sourceOf(base.module)),
+    }],
+  };
+  const serving = await listenCompiledServingMemoryServer({
+    // The crate compiled the corpus in one run (`emit --corpus`). What
+    // compiles here gives the artifact of that run for the module the
+    // client wrote the main file of, and no other.
+    compile: (given) =>
+      given.main === main
+        ? Promise.resolve({ main: artifact, artifacts })
+        : Promise.reject(new Error(`Not the module of the run: ${given.main}`)),
+    pieces: {
+      piece: { now },
+      started: (piece) => loaded.resolve(piece),
+      failed: (_result, error) => loaded.reject(error),
+    },
+  });
+  const client = new Runtime({
+    apiUrl: serving.url,
+    storageManager: StorageManager.open({
+      as: signer,
+      memoryHost: serving.url,
+    }),
+    experimental: { serverExecution: true },
+  });
+  try {
+    const result = client.getCell<unknown>(space, "corpus on the runner");
+    const tx = client.edit();
+    setUpCompiledPiece(client, tx, program, argument, result.withTx(tx));
+    const { error } = await tx.commit().settled;
+    if (error !== undefined) {
+      return {
+        ...base,
+        started: false,
+        startFailure: {
+          category: `the setup was refused: ${error.name}`,
+          detail: `${error.message}`.split("\n")[0].slice(0, 200),
+        },
+      };
+    }
+    // The client's read of the result is the demand that has the serving
+    // loop start the piece.
+    const read = client.getCellFromLink(result.getAsNormalizedFullLink());
+    const cancel = read.sink(() => {});
+    let piece: CompiledPiece;
+    try {
+      piece = await loaded.promise;
+    } catch (error) {
+      cancel();
+      return { ...base, started: false, startFailure: categoryOf(error) };
+    }
+    await serving.host.whenQuiescent();
+    let handled = 0;
+    const failures: string[] = [];
+    for (const { binding, event } of events) {
+      const stream = piece.instance.streams().find((held) =>
+        held.binding === binding && held.instance === undefined &&
+        held.elements !== undefined
+      );
+      const entity = stream === undefined
+        ? undefined
+        : piece.transactions.entityOfStream({
+          binding: stream.binding,
+          keys: stream.keys,
+        });
+      if (entity === undefined) {
+        failures.push("no stream of the binding is stored");
+        continue;
+      }
+      const before = piece.counts;
+      const target = client.getCellFromLink({
+        space,
+        id: entity,
+        path: [],
+        scope: "space",
+      });
+      await target.sync();
+      const appended = Promise.withResolvers<void>();
+      try {
+        sendEvent(
+          target,
+          piece.transactions.encode(event) as never,
+          undefined,
+          { onAppended: () => appended.resolve() },
+        );
+      } catch (error) {
+        failures.push(
+          `the client did not append: ${categoryOf(error).detail}`,
+        );
+        continue;
+      }
+      await appended.promise;
+      await serving.host.whenQuiescent();
+      const after = piece.counts;
+      if (
+        after.events > before.events &&
+        after.eventsRefused === before.eventsRefused
+      ) handled += 1;
+      else failures.push("the handler did not commit");
+    }
+    cancel();
+    const here = normalize(piece.instance.result());
+    const there = normalize(alone.result());
+    const difference = firstDifference(here, there);
+    return {
+      ...base,
+      started: true,
+      events: { sent: events.length, handled, failures },
+      refusals: [...piece.refusals].map((reason) => reason.slice(0, 200)),
+      equal: difference === undefined,
+      ...(difference === undefined ? {} : { difference }),
+    };
+  } finally {
+    await serving.host.close();
+    await client.dispose();
+    await serving.close();
   }
 };
 
@@ -262,6 +547,8 @@ const readResults = async (file: string): Promise<Outcome[]> => {
 const run = async (
   file: string,
   part: string | undefined,
+  resume: boolean,
+  serving: boolean,
   evaluate: ModuleEvaluator | undefined,
 ) => {
   const modules = await corpusModules() as EmittedModule[];
@@ -272,7 +559,7 @@ const run = async (
     if (part !== undefined && !module.module.includes(part)) continue;
     let outcome: Outcome;
     try {
-      outcome = await runOne(module, artifacts, evaluate);
+      outcome = await runOne(module, artifacts, resume, serving, evaluate);
     } catch (error) {
       outcome = {
         module: module.module,
@@ -322,6 +609,26 @@ const report = async (file: string) => {
       started.filter(({ equal }) => equal).length
     }`,
   );
+  const resumes = outcomes.flatMap(({ resume }) => resume ?? []);
+  if (resumes.length > 0) {
+    const taken = resumes.filter(({ failure }) => failure === undefined);
+    console.log(`resumed by a second runtime: ${taken.length}`);
+    console.log(
+      `  the basis matched the storage, and nothing was evaluated before the wake: ${
+        taken.filter(({ current }) => current).length
+      }`,
+    );
+    console.log(
+      `  the resume wrote no document: ${
+        taken.filter(({ documents }) => documents === 0).length
+      }`,
+    );
+    for (
+      const [reason, n] of count(({ resume }) =>
+        resume?.failure?.replaceAll(/of:[\w:-]+/g, "<entity>").slice(0, 110)
+      )
+    ) console.log(`  did not resume, ${n}: ${reason}`);
+  }
   for (
     const [reason, n] of count(({ events }) => events?.failures[0])
   ) console.log(`  an event failed, ${n}: ${reason}`);
@@ -333,17 +640,19 @@ const report = async (file: string) => {
 };
 
 if (import.meta.main) {
-  const [command, file, part] = Deno.args.filter((argument) =>
-    !argument.startsWith("--")
+  const [command, file, part] = Deno.args.filter((one) =>
+    !one.startsWith("--")
   );
+  const resume = Deno.args.includes("--resume");
   const evaluate = Deno.args.includes("--evaluate=function")
     ? evaluateWithFunction
     : undefined;
-  if (command === "run" && file !== undefined) await run(file, part, evaluate);
-  else if (command === "report" && file !== undefined) await report(file);
+  if (command === "run" && file !== undefined) {
+    await run(file, part, resume, Deno.args.includes("--serving"), evaluate);
+  } else if (command === "report" && file !== undefined) await report(file);
   else {
     console.error(
-      "usage: runner-corpus.ts run <results.jsonl> [part of a module path] | report <results.jsonl>",
+      "usage: runner-corpus.ts run <results.jsonl> [part of a module path] [--resume | --serving] | report <results.jsonl>",
     );
     Deno.exit(2);
   }

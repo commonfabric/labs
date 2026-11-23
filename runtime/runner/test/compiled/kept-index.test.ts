@@ -16,7 +16,7 @@ import {
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /** The pattern `which` of `compare/fixtures/kept-index.tsx`. */
 const artifact = async (which: string): Promise<Artifact> => {
@@ -42,14 +42,14 @@ type Read = { name: string; titles: string[] };
 // no bucket, and of the occupied keys consumes the clause of every item.
 describe("a collection index that a compiled piece keeps, and a second piece that looks up a key in it", () => {
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
 
   beforeEach(async () => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,

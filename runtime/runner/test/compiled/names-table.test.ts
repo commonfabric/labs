@@ -14,7 +14,7 @@ import {
 } from "../../src/compiled/piece.ts";
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /** The default pattern of `compare/fixtures/<name>.tsx`. */
 const artifact = async (name: string): Promise<Artifact> => {
@@ -40,14 +40,14 @@ const artifact = async (name: string): Promise<Artifact> => {
 // stored in a document of its own (provisional decision P54).
 describe("a `map` over the entries of a record of references, whose rows are documents of their own", () => {
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
 
   beforeEach(async () => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,

@@ -18,7 +18,7 @@ import {
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /**
  * The artifact of a pattern of a fixture of `base/pattern-compiler`, by
@@ -73,7 +73,7 @@ const withoutSchemas = (value: unknown): unknown => {
 
 describe("the rows of a `map` over an array declared as references", () => {
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
   /** The entities each commit changed since the list was cleared. */
@@ -84,7 +84,7 @@ describe("the rows of a `map` over an array declared as references", () => {
     // (`scenarioAudience`).
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,

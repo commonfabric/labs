@@ -4,7 +4,11 @@
  * from the write that causes it until the runtime is settled (milestone 3
  * of `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [--inputs-first] [--evaluate=function] [--lockdown] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [--inputs-first] [--server=socket] [--evaluate=function] [--lockdown] [lengths]`
+ *
+ * With `--server=socket` each arm runs against a memory server of its own
+ * that is reached over a websocket of this process, in place of the emulated
+ * storage.
  *
  * With `--evaluate=function` the value code of the compiled piece is
  * evaluated in the realm of the harness and not in a compartment. The
@@ -48,6 +52,7 @@ import {
   getTimingStatsBreakdown,
   resetAllTimingStats,
 } from "../../logger/src/logger.ts";
+import { StandaloneMemoryServer } from "../../../runtime/memory/v2/standalone.ts";
 import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
 import {
   type Cell,
@@ -191,6 +196,12 @@ export const running = async (
     space: MemorySpace,
     tx: ReturnType<Runtime["edit"]>,
   ) => void,
+  /**
+   * Whether the memory server is reached over a websocket of this process
+   * (`StandaloneMemoryServer`), in place of the emulated storage. It takes
+   * the default limit of slots, so `slots` is not given with it.
+   */
+  socket = false,
 ): Promise<{ running: Running; load: StepCost; inputs?: StepCost }> => {
   // The identity whose space is the audience that every generated clause
   // names as an alternative (`scenarioAudience`).
@@ -204,7 +215,10 @@ export const running = async (
     subscriptionRefreshDelayMs: 0,
     untrustedMessageSlots: slots,
   });
-  const storageManager = server === undefined
+  const listening = socket ? StandaloneMemoryServer.start() : undefined;
+  const storageManager = listening !== undefined
+    ? StorageManager.open({ as: signer, memoryHost: listening.url })
+    : server === undefined
     ? StorageManager.emulate({ as: signer })
     : EmulatedStorageManager.connectTo(server, { as: signer });
   const runtime = new Runtime({
@@ -323,6 +337,7 @@ export const running = async (
         await runtime.dispose();
         await storageManager.close();
         await server?.close();
+        await listening?.close();
       },
     },
   };
@@ -378,6 +393,8 @@ const growthArm = async (
   slots: number | undefined,
   /** Whether the inputs are committed before the piece is started. */
   inputsFirst: boolean,
+  /** Whether the memory server is reached over a websocket. */
+  socket: boolean,
   /** What evaluates the value code, where it is not a compartment. */
   evaluate?: ModuleEvaluator,
 ) => {
@@ -468,6 +485,7 @@ const growthArm = async (
       return { result };
     },
     inputsFirst ? makeInputs : undefined,
+    socket,
   );
   const { runtime, space } = run;
   const list = (tx: ReturnType<Runtime["edit"]>) => items!.withTx(tx);
@@ -583,6 +601,7 @@ if (import.meta.main) {
             flag("rows") === "in-place" ? "in-place" : "documents",
             flag("slots") === undefined ? undefined : Number(flag("slots")),
             flags.includes("--inputs-first"),
+            flag("server") === "socket",
             flag("evaluate") === "function" ? evaluateWithFunction : undefined,
           )),
         });

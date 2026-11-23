@@ -1182,8 +1182,92 @@ documents and in place, `refused-commit.test.ts`, and `created-members.test.ts`
 for an instance that a handler makes, `value-code.test.ts` for the compartment,
 and `compile.test.ts` for `PatternCompiler`, with a shell script in the place of
 the binary. They load the artifacts of `compare/fixtures/`, so they need no
-build of the crate. `compare/test/compile-on-load.test.ts` runs the release
-binary. Notes 579 on of `SPEC-NOTES.md` have what is stubbed and the figures.
+build of the crate. `compare/test/compile-on-load.test.ts` and
+`compare/test/serving-compile.test.ts` run the release binary. Notes 579 on of
+`SPEC-NOTES.md` have what is stubbed and the figures.
+
+## A compiled piece under server execution
+
+Milestone 6 of the same plan runs a compiled piece in the serving runtime of its
+space, and starts one from what the storage holds.
+
+- **The basis.** A piece keeps a document that records the documents its
+  derivation read and does not derive, its sources, with the sequence number
+  each had when the stored result was derived from it
+  (`runtime/runner/src/compiled/basis.ts`). A source the piece itself wrote,
+  whose commit the replica has not confirmed, is listed apart: the transaction
+  that writes the basis reads it, and it counts as unchanged while its head is
+  not behind the head of the basis. The basis also lists the documents the piece
+  made that are no rows.
+- **Resume.** `resumeCompiledPieceFromBasis(runtime, artifact, resultCell)` of
+  `runtime/runner/src/compiled/resume.ts` brings the basis and the sources it
+  names, without what they link to, and compares the numbers. Where they match
+  it evaluates nothing, reads no row, starts no executor and commits nothing,
+  and the returned `ResumedPiece` waits until it is woken: by its caller before
+  an event, or by a commit that changes a source. Where they do not match, and
+  at a wake, `resumeCompiledPiece` brings the documents of the piece and of its
+  inputs, evaluates the whole derivation again against the stored argument and
+  the stored state cells, and writes the paths whose value differs, in one
+  transaction. The executor keeps which cone instances are current in memory
+  alone, so that evaluation is made whole.
+- **The documents of a piece.** Each document the executor makes carries the
+  `result` link to the result document. A resumed piece tells by it a document
+  the executor named from one that exists outside the piece, and the serving
+  loop finds the piece of a document by it. The counts that the names of handler
+  runs and of the documents handlers make are formed from are kept in a document
+  of the piece, and a resume goes on from them.
+- **Setup by a client.**
+  `setUpCompiledPiece(runtime, tx, program, argument, resultCell)` of
+  `compiled/setup.ts` writes the source of the pattern (the files of the program
+  and the name of the main file), the document that names it for the result
+  document, and the argument document. A client with server execution on then
+  appends events with `Cell.send` and runs nothing of the piece.
+- **The serving runtime.** `serveCompiledPieces(runtime)` of
+  `compiled/serving.ts` installs `Runtime.compiledPieceLoader`, which
+  `ensurePieceRunningVerdict` asks for a result document that names no pattern.
+  The loader compiles the source the storage names for the piece with the
+  compiler it was given (`ServeCompiledPiecesOptions.compile`, for which
+  `listenCompiledServingMemoryServer()` takes one `PatternCompiler`), keeps what
+  the compiler gave by the document of the source, and starts the piece from the
+  storage: a load where the result document is empty, and otherwise a resume
+  from the basis, which starts no executor for a piece that is only read. The
+  value code is evaluated in a compartment. Where the document names no source,
+  or the compiler refuses it, nothing is evaluated and the reason is written
+  into the document `compiledFailureOf(result)`, which the client reads. The
+  handlers and the derivation are the scheduler's, so the loop's event drain
+  reaches the handlers and its waves hold what they write. A wave that is
+  rejected takes its writes back from the replica, and the piece then restores
+  the documents the withdrawn transactions wrote from the storage.
+  `listenCompiledServingMemoryServer()` of
+  `compiled/serving-memory-server.deno.ts` gives a test a memory server on a
+  websocket with such a serving loop.
+
+Nothing but the helper for tests installs the loader. Note 812 of
+`SPEC-NOTES.md` lists what a toolshed needs before it may.
+
+```sh
+COMPILED_PIECE_STORAGE=socket deno test --no-check -A runtime/runner/test/compiled/
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --server=socket --no-pull --inputs-first --case=declared 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run resume.jsonl --resume
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run serving.jsonl --serving
+deno run -A --no-check base/pattern-compiler/compare/serving-path.ts --events=7 100 1000
+deno run -A --no-check base/pattern-compiler/compare/serving-path.ts --arms=compiled --events=7 10000
+deno run -A --no-check base/pattern-compiler/compare/serving-path.ts --arms=compiled --events=7 --profile=appends.cpuprofile 1000
+```
+
+`COMPILED_PIECE_STORAGE=socket` runs the tests of a compiled piece against a
+memory server reached over a websocket of the process, and `--server=socket`
+does the same for `runner-path.ts`. `runner-corpus.ts --resume` hands each
+module to a second runtime after half of its events, which resumes it from its
+basis and then wakes it, and `--serving` runs each under the serving loop with
+one client. `serving-path.ts` times one event of `fixtures/serving-list.tsx`
+from the send on a client until that client and a second one read the result,
+for a compiled piece and for today's piece of the same pattern, and then what
+another serving loop reads and evaluates when it takes the space over. The tests
+are `resume.test.ts`, `basis.test.ts` and `compiled-serving.test.ts` in
+`runtime/runner/test/compiled/`, and `compare/test/resume-corpus.test.ts`. Notes
+800 on of `SPEC-NOTES.md` have what is stubbed, where the serving loop differs
+from the specification, and the figures.
 
 ## Topics
 

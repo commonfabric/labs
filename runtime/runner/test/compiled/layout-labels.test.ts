@@ -13,7 +13,7 @@ import {
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /**
  * A pattern of `compare/fixtures/runner-lists.tsx`, or of
@@ -56,14 +56,14 @@ const PROBES: [string, string[]][] = [
 // an under-label of the other.
 describe("what a read of a compiled result consumes, with rows as documents and in place", () => {
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
 
   beforeEach(async () => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,

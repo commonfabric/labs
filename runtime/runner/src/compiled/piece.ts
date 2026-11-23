@@ -39,7 +39,10 @@ import {
   bucketDocumentCollections,
   rowDocumentCollections,
 } from "../../../../base/pattern-compiler/exec/row-documents.ts";
-import { Ref } from "../../../../base/pattern-compiler/exec/store.ts";
+import {
+  argumentOf,
+  Ref,
+} from "../../../../base/pattern-compiler/exec/store.ts";
 import { makeFrame, runInFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";
 import { type Cell, convertCellsToLinks } from "../cell.ts";
@@ -47,6 +50,13 @@ import type { Runtime } from "../runtime.ts";
 import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import type { FabricValue } from "@commonfabric/data-model";
+import {
+  basisDocumentOf,
+  basisPartDocumentOf,
+  PieceBasis,
+  storedBasisOf,
+} from "./basis.ts";
 import {
   type ChangeByOther,
   type Restored,
@@ -92,6 +102,21 @@ export type CompiledPieceOptions = {
    */
   loadRows?: number;
   /**
+   * Whether the storage holds the piece from a run before, in this runtime
+   * or another (`resumeCompiledPiece()`). The argument is then the one the
+   * storage holds, a state cell keeps what its document holds, and the
+   * first derivation writes the paths whose value differs from what is
+   * stored, in the handed transaction.
+   */
+  resume?: boolean;
+  /**
+   * Whether the argument is the one the storage holds in the argument
+   * document of the result cell, which a client wrote
+   * (`setUpCompiledPiece`). The argument given to `startCompiledPiece()` is
+   * then not read.
+   */
+  storedArgument?: boolean;
+  /**
    * What makes the functions of the value code. The default is a
    * compartment of the piece's own (`compartmentEvaluator`). A caller that
    * starts many pieces can give them one evaluator. An evaluator that
@@ -125,6 +150,10 @@ export class CompiledPiece {
   /** The store that keeps the executor's documents in the runtime. */
   readonly transactions: RuntimeTransactions;
   readonly #runtime: Runtime;
+  /** The identifier of the result document. */
+  readonly #result: string;
+  /** The record of what the stored result was derived from. */
+  readonly #basis: PieceBasis<IExtendedStorageTransaction>;
   readonly #cancels: Cancel[] = [];
   readonly #derive: Action;
   readonly #refusals: string[] = [];
@@ -135,6 +164,8 @@ export class CompiledPiece {
     changesByOthers: 0,
     ownMs: 0,
   };
+  /** The counts of the instance that the storage holds. */
+  #minted = { events: 0, created: 0 };
   /** The instance exists: a change by another writer can be applied. */
   #started = false;
   #stopped = false;
@@ -154,6 +185,7 @@ export class CompiledPiece {
       throw new Error("The result cell of a compiled piece is a whole entity.");
     }
     const { space } = result;
+    this.#result = result.id;
     const rowDocuments = options.rows === "in-place"
       ? undefined
       : rowDocumentCollections(artifact);
@@ -163,6 +195,7 @@ export class CompiledPiece {
     const transactions = new RuntimeTransactions(runtime, space, {
       owner: result.id,
       artifact,
+      resume: options.resume,
       countRecordBytes: options.countRecordBytes,
       ...(rowDocuments === undefined ? {} : { rowDocuments }),
       ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
@@ -173,8 +206,52 @@ export class CompiledPiece {
         if (this.#started && this.instance.relabelPending) this.#invalidate();
       },
       refused: (reason, restored) => this.#refused(reason, restored ?? []),
+      sources: {
+        read: (doc) => this.#basis.source(doc),
+        changed: (doc, taken, by) => {
+          if (taken) this.#basis.source(doc);
+          this.#basis.changed(doc);
+          // A commit of the piece that stores a label on a source writes
+          // the source, though the executor wrote no value of it. Where
+          // the basis was recorded before, the derivation records it again.
+          if (by !== undefined && this.#basis.wrote(by, [doc], [])) {
+            this.#invalidate();
+          }
+        },
+        handed: (handed, written, sources) => {
+          this.#basis.wrote(handed, written, sources);
+        },
+        refused: (handed) => this.#basis.refused(handed),
+        made: (doc) => this.#basis.made(doc),
+      },
     });
     this.transactions = transactions;
+    const basisDocument = basisDocumentOf(result.id);
+    this.#basis = new PieceBasis(
+      artifact,
+      {
+        seqOf: (doc) => transactions.confirmedSeqOf(doc),
+        write: (handed, part, path, value) =>
+          transactions.writeOwn(
+            handed,
+            part === undefined
+              ? basisDocument
+              : basisPartDocumentOf(result.id, part),
+            path,
+            value as FabricValue,
+          ),
+        affirm: (handed, doc) => transactions.readWhole(handed, doc),
+        confirmedAt: (handed) => handed.committedSeq?.(space),
+        failed: (handed) => handed.status().status === "error",
+        writtenIn: (handed) =>
+          (handed.getWriteAttemptLog?.() ?? []).flatMap((attempt) =>
+            attempt.space === space ? [transactions.documentOf(attempt.id)] : []
+          ),
+      },
+      options.resume === true ? this.#storedBasis(basisDocument) : undefined,
+    );
+    this.#basis.source(argumentOf(result.id));
+    this.#basis.source(transactions.mintedDocument);
     this.#derive = (given) => {
       this.#counts.derivations += 1;
       const began = performance.now();
@@ -194,13 +271,28 @@ export class CompiledPiece {
       } finally {
         this.#counts.ownMs += performance.now() - began;
       }
+      this.#keepMinted(given);
+      // The basis is of a derivation that brought everything up to date.
       if (first) this.#invalidate();
+      else {
+        this.#basis.record(
+          given,
+          (given.getWriteAttemptLog?.().length ?? 0) > 0,
+        );
+      }
     };
+    const resumed = options.resume === true;
+    const minted = resumed ? transactions.heldMinted() : undefined;
+    if (minted !== undefined) this.#minted = minted;
     this.instance = transactions.within(tx, () =>
       new Instance(
         artifact,
-        transactions.decode(convertCellsToLinks(argument as never)),
+        resumed || options.storedArgument === true
+          ? transactions.heldArgument(argumentOf(result.id))
+          : transactions.decode(convertCellsToLinks(argument as never)),
         {
+          resume: resumed,
+          ...(minted === undefined ? {} : { minted }),
           space,
           id: result.id,
           secret: options.secret ?? space,
@@ -215,7 +307,13 @@ export class CompiledPiece {
           ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
           load: (id) => transactions.load(id),
         },
-      ), { loadRows: options.loadRows ?? 250 });
+      ), { loadRows: resumed ? Infinity : options.loadRows ?? 250 });
+    transactions.resumed();
+    // A place the resumed executor found no document of is a source: the
+    // next resume then brings it before it starts the executor.
+    for (const doc of transactions.absent) this.#basis.source(doc);
+    this.#keepMinted(tx);
+    this.#basis.record(tx, true);
     this.#started = true;
     this.#cancels.push(
       runtime.scheduler.subscribe(
@@ -245,11 +343,52 @@ export class CompiledPiece {
     return this.#refusals;
   }
 
+  /**
+   * The basis the replica holds of the piece, for a resume, with the
+   * sequence number of the document that holds it.
+   */
+  #storedBasis(
+    document: string,
+  ):
+    | { stored: NonNullable<ReturnType<typeof storedBasisOf>>; seq: number }
+    | undefined {
+    const stored = storedBasisOf(
+      this.transactions.heldOwn(document),
+      (part) =>
+        this.transactions.heldOwn(basisPartDocumentOf(this.#result, part)),
+    );
+    const seq = this.transactions.confirmedSeqOf(document);
+    return stored === undefined || seq === undefined
+      ? undefined
+      : { stored, seq };
+  }
+
+  /** How many documents the basis of the piece names. */
+  get sources(): number {
+    return this.#basis.size;
+  }
+
   /** Stops the piece: its handlers and its derivation no longer run. */
   stop(): void {
     if (this.#stopped) return;
     this.#stopped = true;
     for (const cancel of this.#cancels.splice(0)) cancel();
+  }
+
+  /**
+   * Writes into `tx` what the instance counted, where a count went on
+   * since the last write: the names of the runs of its handlers and of the
+   * documents its bodies make are formed from the counts, and a resume
+   * goes on from what is stored.
+   */
+  #keepMinted(tx: IExtendedStorageTransaction): void {
+    const { events, created } = this.instance.minted;
+    if (
+      events === this.#minted.events && created === this.#minted.created
+    ) return;
+    this.#minted = { events, created };
+    this.transactions.writeMinted(tx, this.#minted);
+    this.#basis.wrote(tx, [this.transactions.mintedDocument], []);
   }
 
   /** Has the scheduler run the derivation action. */
@@ -289,6 +428,7 @@ export class CompiledPiece {
         this.#counts.ownMs += performance.now() - began;
       }
       if (!outcome.committed) this.#counts.eventsRefused += 1;
+      this.#keepMinted(tx);
       // An event a handler sends to a stream of the piece is an event of
       // the scheduler's queue like one sent from outside.
       for (const sent of this.instance.takeQueued()) {

@@ -354,12 +354,15 @@ export const eventOrder = (plan: Plan, order: EventOrder): number[] => {
   return groups.flat().map(({ index }) => index);
 };
 
+/** The path of the source of a module of the corpus. */
+export const sourceOf = (module: string): string => `${patterns}${module}`;
+
 /**
  * The pattern of a module that a run of the corpus runs: the one the
  * module exports as its default, written in place or by name, and
  * otherwise the first one it exports by name.
  */
-export const mainPattern = async <P extends { name: string }>(
+export const mainPattern = async <P extends { name?: string }>(
   module: { module: string; patterns: P[] },
 ): Promise<{ pattern: P; isDefault: boolean } | undefined> => {
   const source = await Deno.readTextFile(`${patterns}${module.module}`);

@@ -9,7 +9,7 @@ import {
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { openStorage, type TestStorage } from "./storage.ts";
 
 /** The artifacts of `compare/fixtures/created-members.tsx`. */
 const artifacts = async (): Promise<Artifact[]> => {
@@ -30,14 +30,14 @@ describe("a member that a handler of a compiled piece makes", () => {
   // row of its result.
 
   let runtime: Runtime;
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let storageManager: TestStorage;
   let space: MemorySpace;
   let pieces: CompiledPiece[];
 
   beforeEach(async () => {
     const signer = await Identity.fromPassphrase("compiled created members");
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
+    storageManager = openStorage(signer);
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,
