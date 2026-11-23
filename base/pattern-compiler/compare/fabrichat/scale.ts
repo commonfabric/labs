@@ -41,6 +41,10 @@
  * `room` and the event of `home` are sampled and the profile is written
  * to that path followed by the size.
  *
+ * With `SCALE_LISTS=documents`, the arms `runner` and `serving` store the
+ * links to the row documents of the room in documents of their own
+ * (`CompiledPieceOptions.lists`).
+ *
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
  *
@@ -284,6 +288,9 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       now: Date.now(),
       wishes: home.wishes,
       builtins: builtinsOf(space, space),
+      ...(Deno.env.get("SCALE_LISTS") === "documents"
+        ? { lists: "documents" as const }
+        : {}),
     });
   } catch (error) {
     tx.abort();
