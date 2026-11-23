@@ -227,4 +227,40 @@ describe("a collection index that a compiled piece keeps, and a second piece tha
 
     expect(valueOf(read)).toEqual({ name: "odd", titles: ["ib", "ic", "id"] });
   });
+
+  it("gives one record of the occupied keys, and none of a position among them, when a key leaves the middle of them and another enters", async () => {
+    const { result, items } = await kept();
+    await commit((tx) =>
+      items.forEach((item, index) =>
+        item.withTx(tx).key("tag").set(`t${index}`)
+      )
+    );
+    const recorded: string[] = [];
+    pieces[0].transactions.onRecorded((writes) => {
+      for (const { target } of writes) recorded.push(target.path.join("/"));
+    });
+
+    await commit((tx) => items[0].withTx(tx).key("tag").set("t9"));
+
+    expect((valueOf(result).byTag as { keys: string[] }).keys).toEqual([
+      "t1",
+      "t2",
+      "t3",
+      "t9",
+    ]);
+    expect(recorded.filter((path) => path.startsWith("byTag/keys/")))
+      .toEqual([]);
+    expect(recorded.filter((path) => path === "byTag/keys")).toEqual([
+      "byTag/keys",
+    ]);
+    expect(consumed(result, ["byTag", "keys"])).toEqual(EVERY_ITEM);
+    // The buckets that stayed, the one that came to exist, and a key that
+    // has no bucket any more.
+    for (const key of ["s:t1", "s:t9", "s:t0"]) {
+      expect(consumed(result, ["byTag", "buckets", key])).toEqual(EVERY_ITEM);
+      expect(consumed(result, ["byTag", "buckets", key, "length"])).toEqual(
+        EVERY_ITEM,
+      );
+    }
+  });
 });

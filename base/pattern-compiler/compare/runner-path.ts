@@ -4,11 +4,17 @@
  * from the write that causes it until the runtime is settled (milestone 3
  * of `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [--inputs-first] [--server=socket] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [--inputs-first] [--server=socket] [--evaluate=function] [--lockdown] [lengths]`
  *
  * With `--server=socket` each arm runs against a memory server of its own
  * that is reached over a websocket of this process, in place of the emulated
  * storage.
+ *
+ * With `--evaluate=function` the value code of the compiled piece is
+ * evaluated in the realm of the harness and not in a compartment. The
+ * compartment locks the realm down, which freezes the intrinsics the
+ * runtime and the executor use too; `--lockdown` locks it down for a run
+ * that makes no compartment, so that the two effects are measured apart.
  *
  * With `--inputs-first` the inputs are written in a transaction of their
  * own (`inputs`), which is committed before the piece is started (`load`).
@@ -60,12 +66,17 @@ import {
 import { diffAndUpdate } from "../../../runtime/runner/src/data-updating.ts";
 import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
+import { ensureSESLockdown } from "../../../runtime/runner/src/sandbox/ses-runtime.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
   StorageManager,
 } from "../../../runtime/runner/src/storage/cache.deno.ts";
-import type { Artifact } from "../exec/executor.ts";
+import {
+  type Artifact,
+  evaluateWithFunction,
+  type ModuleEvaluator,
+} from "../exec/executor.ts";
 import { inputClause } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 
@@ -384,6 +395,8 @@ const growthArm = async (
   inputsFirst: boolean,
   /** Whether the memory server is reached over a websocket. */
   socket: boolean,
+  /** What evaluates the value code, where it is not a compartment. */
+  evaluate?: ModuleEvaluator,
 ) => {
   const audience = await scenarioAudience();
   const ifc = { confidentiality: [inputClause("items", audience)] };
@@ -452,7 +465,7 @@ const growthArm = async (
           artifact,
           { items },
           result.withTx(tx),
-          { rows },
+          { rows, ...(evaluate === undefined ? {} : { evaluate }) },
         );
         return { result, piece };
       }
@@ -558,6 +571,7 @@ if (import.meta.main) {
   const lengths = given.length > 0 ? given.map(Number) : [100, 1_000];
   const flag = (name: string) =>
     flags.find((one) => one.startsWith(`--${name}=`))?.split("=")[1];
+  if (flags.includes("--lockdown")) ensureSESLockdown();
   const later = Number(flag("later") ?? 5);
   const arms = (flag("arms") ?? "compiled,today").split(",") as Arm[];
   // `--profile=<file>` with `--operation=<name>`: a CPU profile of the
@@ -588,6 +602,7 @@ if (import.meta.main) {
             flag("slots") === undefined ? undefined : Number(flag("slots")),
             flags.includes("--inputs-first"),
             flag("server") === "socket",
+            flag("evaluate") === "function" ? evaluateWithFunction : undefined,
           )),
         });
         await stopLoadProfile?.();

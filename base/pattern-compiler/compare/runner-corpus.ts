@@ -9,7 +9,7 @@
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`:
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume | --serving]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume | --serving] [--evaluate=function]`
  * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report <results.jsonl>`
  *
  * With `--resume`, a second runtime on the same memory server takes the
@@ -33,6 +33,10 @@
  * the stream's marker, which is where `Cell.send` on the member of the
  * result arrives.
  *
+ * The value code of a piece is evaluated in a compartment
+ * (`compartmentEvaluator`), and with `--evaluate=function` in the realm of
+ * the harness, as the executor in memory evaluates it.
+ *
  * A module that needs `wish` or requests an effect is left out: nothing
  * answers a request of a compiled piece on the runner path.
  */
@@ -52,7 +56,11 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "../../../runtime/runner/src/storage/cache.deno.ts";
-import type { Artifact } from "../exec/executor.ts";
+import {
+  type Artifact,
+  evaluateWithFunction,
+  type ModuleEvaluator,
+} from "../exec/executor.ts";
 import {
   artifactsOf,
   type CorpusModule,
@@ -136,6 +144,7 @@ const runOne = async (
   artifacts: (id: string) => Artifact | undefined,
   resume: boolean,
   serving = false,
+  evaluate: ModuleEvaluator | undefined = undefined,
 ): Promise<Outcome> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -212,7 +221,7 @@ const runOne = async (
         artifact,
         argument,
         result.withTx(tx),
-        { artifacts, now },
+        { artifacts, now, ...(evaluate === undefined ? {} : { evaluate }) },
       );
     } catch (error) {
       tx.abort();
@@ -473,6 +482,7 @@ const run = async (
   part: string | undefined,
   resume: boolean,
   serving: boolean,
+  evaluate: ModuleEvaluator | undefined,
 ) => {
   const modules = await corpusModules() as EmittedModule[];
   const artifacts = artifactsOf(modules as unknown as CorpusModule[]);
@@ -482,7 +492,7 @@ const run = async (
     if (part !== undefined && !module.module.includes(part)) continue;
     let outcome: Outcome;
     try {
-      outcome = await runOne(module, artifacts, resume, serving);
+      outcome = await runOne(module, artifacts, resume, serving, evaluate);
     } catch (error) {
       outcome = {
         module: module.module,
@@ -562,8 +572,11 @@ if (import.meta.main) {
     !one.startsWith("--")
   );
   const resume = Deno.args.includes("--resume");
+  const evaluate = Deno.args.includes("--evaluate=function")
+    ? evaluateWithFunction
+    : undefined;
   if (command === "run" && file !== undefined) {
-    await run(file, part, resume, Deno.args.includes("--serving"));
+    await run(file, part, resume, Deno.args.includes("--serving"), evaluate);
   } else if (command === "report" && file !== undefined) await report(file);
   else {
     console.error(

@@ -250,7 +250,7 @@ pub fn is_element_method(name: &str) -> bool {
 pub fn is_selector_method(name: &str) -> bool {
     matches!(
         name,
-        "count" | "sum" | "min" | "max" | "minBy" | "maxBy" | "groupBy" | "keyBy"
+        "count" | "sum" | "min" | "max" | "minBy" | "maxBy" | "groupBy" | "keyBy" | "sortBy"
     )
 }
 

@@ -32,8 +32,8 @@ const declaresReferenceEntries = (schema: Schema | undefined): boolean => {
  * - its source is a slot whose schema declares the array or its members as
  *   cells, the entries of a record whose schema declares its values as
  *   cells, the result of a `lift` or a `computed` whose body gives a
- *   reference at each member (`Body.outputs` at `*`), or a `filter` over
- *   such a source, which gives the same references;
+ *   reference at each member (`Body.outputs` at `*`), or a `filter` or a
+ *   `sortBy` over such a source, which gives the same references;
  * - the plan has an output below a row, so a row is a record or a view node
  *   and no scalar.
  *
@@ -67,7 +67,8 @@ export const rowDocumentCollections = (artifact: Artifact): Set<number> => {
       );
     }
     return source.collection !== undefined &&
-      plan.collections[source.collection].construct === "filter" &&
+      (plan.collections[source.collection].construct === "filter" ||
+        plan.collections[source.collection].construct === "sortBy") &&
       references(source.collection);
   };
   const found = new Set<number>();

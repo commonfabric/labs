@@ -348,6 +348,30 @@ export type Code = {
   unsupported: { kind: string; file: string; start: number }[];
 };
 
+/**
+ * Makes a function of the text of a module of value code: the statements
+ * of `source` are its body, in strict mode, and `parameters` are the names
+ * of its parameters, which the statements read as free names. What other
+ * free names the statements can read is the evaluator's to decide.
+ */
+export type ModuleEvaluator = (
+  module: { path: string; source: string },
+  parameters: readonly string[],
+) => (...given: unknown[]) => void;
+
+/**
+ * The evaluator that confines nothing: the function is made in the realm
+ * the executor runs in, and its free names are the globals of that realm.
+ */
+export const evaluateWithFunction: ModuleEvaluator = (
+  { path, source },
+  parameters,
+) =>
+  new Function(
+    ...parameters,
+    `"use strict";\n${source}\n//# sourceURL=compiled:${path}`,
+  ) as (...given: unknown[]) => void;
+
 /** One pattern of the output of `pattern-compiler emit`. */
 export type Artifact = {
   name?: string;
@@ -363,6 +387,29 @@ export class Unsupported extends Error {
     super(kind);
   }
 }
+
+/**
+ * Whether two arrays of one length hold scalars alone and differ at more
+ * than one position, as a list does that one member left and another
+ * entered: such an array is written whole, as one of another length is,
+ * and not position by position, which is a write and a record for each
+ * position behind the member that left.
+ */
+const shiftedScalars = (
+  form: readonly unknown[],
+  held: readonly unknown[],
+): boolean => {
+  let differing = 0;
+  for (let index = 0; index < form.length; index++) {
+    const [now, was] = [form[index], held[index]];
+    if (
+      (now !== null && typeof now === "object") ||
+      (was !== null && typeof was === "object") || typeof now === "symbol"
+    ) return false;
+    if (now !== was) differing += 1;
+  }
+  return differing > 1;
+};
 
 /**
  * The assembled result of a `map`, a `filter` or a `flatMap`, as value
@@ -467,7 +514,38 @@ const encodeIndexKey = (
 
 /** Whether a construct assembles an array of rows. */
 const assemblesRows = (construct: string): boolean =>
-  construct === "map" || construct === "filter" || construct === "flatMap";
+  construct === "map" || construct === "filter" || construct === "flatMap" ||
+  construct === "sortBy";
+
+/**
+ * The order of two keys of a sort (note 614 of `SPEC-NOTES.md`): numbers
+ * by their value, texts by their code units, `false` before `true`; a key
+ * of one kind before a key of another in the order number, text, boolean;
+ * and `null`, `undefined` and `NaN` behind every other key. Zero for two
+ * keys that the sort keeps in the order of the source.
+ */
+const compareSortKeys = (a: unknown, b: unknown): number => {
+  const rank = (key: unknown) =>
+    typeof key === "number"
+      ? (Number.isNaN(key) ? 3 : 0)
+      : typeof key === "string"
+      ? 1
+      : typeof key === "boolean"
+      ? 2
+      : 3;
+  const [left, right] = [rank(a), rank(b)];
+  if (left !== right) return left - right;
+  if (left === 3) return 0;
+  return (a as number) < (b as number)
+    ? -1
+    : (a as number) > (b as number)
+    ? 1
+    : 0;
+};
+
+/** Whether a value is one a sort orders by: no container and no reference. */
+const isSortKey = (key: unknown): boolean =>
+  key === null || typeof key !== "object";
 
 /** A value of the reactive tier held for a later host. */
 class Thunk {
@@ -600,7 +678,7 @@ const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
  * formed again (`#reassemble`).
  */
 type Rows = {
-  construct: "map" | "filter" | "flatMap";
+  construct: "map" | "filter" | "flatMap" | "sortBy";
   /**
    * For a collection over a stored array: the reference that the array
    * was found through, its name, and of the keys of the array the
@@ -635,7 +713,36 @@ type Rows = {
   flags?: boolean[];
   /** For a collection index: the index, which the results are the keys of. */
   index?: Index;
+  /**
+   * For a `flatMap` whose body returned, for every element, the assembled
+   * result of another per-element construct: how many members the segment
+   * of each element has, in the order of the table, and the key of the
+   * element that each name of an inner assembly is the segment of. The
+   * dependency on the inner assembly of the element at a position of the
+   * table stands behind those of the elements, at the same position.
+   */
+  segments?: { lengths: number[]; of: Map<string, string> };
+  /**
+   * For a sort by a key: the key each element was placed by, by the key of
+   * the element. `members` holds the elements in the sorted order.
+   */
+  sortKeys?: Map<string, unknown>;
 };
+
+/**
+ * The source of a member of a segment of a `flatMap` that is an element of
+ * the assembled result of an inner per-element construct: the result of
+ * the inner construct's body, for the element keys `inner` that the
+ * callback was evaluated under.
+ */
+const segmentSource = (
+  source: Element["source"],
+  inner: Context,
+): Element["source"] =>
+  source instanceof Ref || !("entry" in source) ? source : {
+    entry: () => source.entry(inner),
+    at: source.at,
+  };
 
 /** Stands for the source of an element that is not found yet. */
 const PENDING = new Ref("", []);
@@ -1024,6 +1131,12 @@ export type Counts = {
   elementEvaluations: number;
   /** Of those, the assemblies of a collection, which no cone computes. */
   assemblies: number;
+  /**
+   * Segments of a `flatMap` formed: one for each element of the source
+   * where the assembly is formed whole, and one for each element whose
+   * segment changed where it is brought up to date.
+   */
+  segmentsFormed: number;
   /** Reads of a slot that the cone of the reading code does not list. */
   slotsNotListed: number;
   /** Reads by root and path, where the value code names no slot. */
@@ -1115,11 +1228,18 @@ const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
  * writes go to the position the handle names.
  */
 export class Handle {
+  /**
+   * The instance, and the host of the cone the body runs in, which records
+   * its reads. A body is handed the handle, so the two are private: what
+   * reads a member of the handle reaches neither.
+   */
+  readonly #instance: Instance;
+  readonly #host: Host | undefined;
+
   constructor(
-    readonly instance: Instance,
+    instance: Instance,
     readonly target: Ref | StreamRef,
-    /** The host of the cone the body runs in, which records its reads. */
-    readonly host: Host | undefined,
+    host: Host | undefined,
     /** The `identity` slot of the handle, and the path below its cell. */
     readonly slot: number | undefined,
     readonly below: readonly string[],
@@ -1130,14 +1250,30 @@ export class Handle {
     readonly declared?: Schema,
     /** The handle is to a value with no stored address: a write fails. */
     readonly fixed = false,
-  ) {}
+  ) {
+    this.#instance = instance;
+    this.#host = host;
+  }
+
+  /** A handle of `instance` to the same position that refuses a write. */
+  refusingWrites(instance: Instance): Handle {
+    return new Handle(
+      instance,
+      this.target,
+      this.#host,
+      this.slot,
+      this.below,
+      this.declared,
+      true,
+    );
+  }
 
   get(): unknown {
     if (this.target instanceof StreamRef) return { $stream: true };
     const target = this.target;
-    return this.instance.readThrough(
+    return this.#instance.readThrough(
       this,
-      () => this.#typed(target, this.declared, this.host?.reads, 0),
+      () => this.#typed(target, this.declared, this.#host?.reads, 0),
     );
   }
 
@@ -1153,7 +1289,7 @@ export class Handle {
     reads: Position[] | undefined,
     depth: number,
   ): unknown {
-    const { store } = this.instance;
+    const { store } = this.#instance;
     // A plain value in place that the body reads is a copy (ruling Z25).
     if (!declaresHandle(schema, depth)) {
       return store.read(ref, reads, true, schema);
@@ -1163,7 +1299,7 @@ export class Handle {
     const member = (segment: string, at: Ref) => {
       const below = schemaBelow(schema, segment);
       return typeof below === "object" && below.asCell !== undefined
-        ? new Handle(this.instance, at, this.host, undefined, [], below)
+        ? new Handle(this.#instance, at, this.#host, undefined, [], below)
         : this.#typed(at, below, reads, depth + 1);
     };
     if (Array.isArray(located.value)) {
@@ -1206,9 +1342,9 @@ export class Handle {
   key(segment: string | number): Handle {
     if (this.target instanceof StreamRef) return this;
     return new Handle(
-      this.instance,
+      this.#instance,
       this.target.key(`${segment}`),
-      this.host,
+      this.#host,
       this.slot,
       [...this.below, `${segment}`],
       schemaBelow(this.declared, `${segment}`),
@@ -1226,14 +1362,14 @@ export class Handle {
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    const recorded = this.instance.written(this);
+    const recorded = this.#instance.written(this);
     try {
-      this.instance.store.write(
+      this.#instance.store.write(
         this.target,
-        this.instance.detached(
+        this.#instance.detached(
           this.target,
-          this.instance.anchored(
-            this.instance.stored(this.instance.returned(value)),
+          this.#instance.anchored(
+            this.#instance.stored(this.#instance.returned(value)),
           ),
         ),
       );
@@ -1254,12 +1390,12 @@ export class Handle {
    */
   update(members: Record<string, unknown>): Handle {
     const at = this.target instanceof Ref
-      ? this.instance.store.locate(this.target, true)
+      ? this.#instance.store.locate(this.target, true)
       : undefined;
     const base = at === undefined || at.missing ? this : new Handle(
-      this.instance,
+      this.#instance,
       at.ref,
-      this.host,
+      this.#host,
       this.slot,
       this.below,
       this.declared,
@@ -1286,7 +1422,7 @@ export class Handle {
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    const located = this.instance.store.locate(this.target, true);
+    const located = this.#instance.store.locate(this.target, true);
     // Where the place holds nothing, the array starts from the default
     // that the place declares, as a write below the root of a state cell
     // does: the default nearest the end of the links the handle resolves
@@ -1300,20 +1436,20 @@ export class Handle {
       : Array.isArray(declared)
       ? structuredClone(declared)
       : [];
-    const recorded = this.instance.written(this.key("*"), decided);
+    const recorded = this.#instance.written(this.key("*"), decided);
     try {
       // A record that is pushed gets a document of its own, as a record
       // in a list that is set does (`Instance.anchored`).
-      const pushed = this.instance.anchored(
+      const pushed = this.#instance.anchored(
         members.map((member) =>
-          this.instance.stored(this.instance.returned(member))
+          this.#instance.stored(this.#instance.returned(member))
         ),
       ) as unknown[];
       // An array that is stored is changed in place, as a splice.
       if (Array.isArray(located.value)) {
-        this.instance.store.splice(this.target, held.length, 0, pushed);
+        this.#instance.store.splice(this.target, held.length, 0, pushed);
       } else {
-        this.instance.store.write(this.target, [...held, ...pushed]);
+        this.#instance.store.write(this.target, [...held, ...pushed]);
       }
     } finally {
       recorded();
@@ -1335,7 +1471,7 @@ export class Handle {
     first = false,
   ): { positions: number[]; read: Observed[]; list?: Address } {
     if (this.target instanceof StreamRef) return { positions: [], read: [] };
-    const { store } = this.instance;
+    const { store } = this.#instance;
     const list = this.target;
     const located = store.locate(list, true);
     if (!Array.isArray(located.value)) return { positions: [], read: [] };
@@ -1350,7 +1486,9 @@ export class Handle {
       const at = list.key(`${index}`);
       // A position that holds a link is compared as the reference it
       // holds, which reads nothing of the document the link names.
-      let same = this.instance.unreported(() => this.instance.same(at, member));
+      let same = this.#instance.unreported(() =>
+        this.#instance.same(at, member)
+      );
       if (isLink(held)) {
         read.push({
           address: { doc, path: [...path, `${index}`] },
@@ -1361,7 +1499,7 @@ export class Handle {
           address: { doc, path: [...path, `${index}`] },
           observes: "value",
         });
-        same ||= this.instance.same(
+        same ||= this.#instance.same(
           store.read(located.ref.key(`${index}`), undefined, true),
           member,
         );
@@ -1383,9 +1521,9 @@ export class Handle {
    */
   #kept(through: Handle, decided: Observed[], list: Address | undefined): void {
     if (list === undefined) return;
-    const recorded = this.instance.written(through, decided, false);
+    const recorded = this.#instance.written(through, decided, false);
     try {
-      this.instance.membersKept(list);
+      this.#instance.membersKept(list);
     } finally {
       recorded();
     }
@@ -1405,7 +1543,7 @@ export class Handle {
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    const recorded = this.instance.written(this, decided);
+    const recorded = this.#instance.written(this, decided);
     try {
       // From the last position on, so that each position named is the one
       // the member holds when it is removed, and each run of positions next
@@ -1416,7 +1554,7 @@ export class Handle {
         while (end + 1 < last.length && last[end + 1] === last[end] - 1) {
           end++;
         }
-        this.instance.store.splice(this.target, last[end], end - run + 1, []);
+        this.#instance.store.splice(this.target, last[end], end - run + 1, []);
         run = end + 1;
       }
     } finally {
@@ -1432,13 +1570,13 @@ export class Handle {
 
   send(event: unknown): void {
     if (this.target instanceof StreamRef) {
-      this.instance.queue(this.target, event);
+      this.#instance.queue(this.target, event);
       return;
     }
-    const located = this.instance.store.locate(this.target, true);
+    const located = this.#instance.store.locate(this.target, true);
     if (isStream(located.value)) {
       const { binding, keys, instance } = located.value.$stream;
-      this.instance.queue(new StreamRef(binding, keys, instance), event);
+      this.#instance.queue(new StreamRef(binding, keys, instance), event);
       return;
     }
     // A stream the instance was given, which the argument holds nothing
@@ -1448,7 +1586,7 @@ export class Handle {
       located.value === undefined &&
       isStreamSchema(located.ref.schema ?? this.declared)
     ) {
-      this.instance.written(this)();
+      this.#instance.written(this)();
       return;
     }
     this.set(event);
@@ -1487,9 +1625,9 @@ export class Handle {
   elementById(key: unknown): Handle {
     if (this.target instanceof StreamRef) return this;
     return new Handle(
-      this.instance,
-      this.instance.keyedElement(this.target, `${key}`),
-      this.host,
+      this.#instance,
+      this.#instance.keyedElement(this.target, `${key}`),
+      this.#host,
       this.slot,
       [...this.below, "*"],
       schemaBelow(this.declared, "0"),
@@ -1497,7 +1635,7 @@ export class Handle {
   }
 
   equals(other: unknown): boolean {
-    return this.instance.same(this, other);
+    return this.#instance.same(this, other);
   }
 
   resolveAsCell(): Handle {
@@ -2736,6 +2874,7 @@ export class Instance {
   readonly code: Code;
   readonly counts: Counts = {
     bucketsChanged: 0,
+    segmentsFormed: 0,
     evaluations: 0,
     elementEvaluations: 0,
     assemblies: 0,
@@ -3308,6 +3447,12 @@ export class Instance {
        */
       globals?: Record<string, unknown>;
       /**
+       * What makes a function of the text of a module of value code
+       * (`ModuleEvaluator`). The default is `evaluateWithFunction`, which
+       * gives the code the globals of the realm.
+       */
+      evaluate?: ModuleEvaluator;
+      /**
        * `patches`: a transaction does not count the bytes of each
        * document it wrote as a whole (`Transaction.bytes`), which costs
        * a pass over the document.
@@ -3865,7 +4010,8 @@ export class Instance {
   loading = false;
 
   #load() {
-    this.#runtimeObject = this.#runtime();
+    // Value code is handed this object and can replace none of its members.
+    this.#runtimeObject = Object.freeze(this.#runtime());
     this.loading = true;
     this.#module(this.code.main);
     for (const { module } of this.code.modules) this.#module(module);
@@ -3886,12 +4032,12 @@ export class Instance {
       throw new Unsupported("an import of a module the artifact does not hold");
     }
     const globals = Object.entries(this.root.options.globals ?? {});
-    const run = new Function(
+    const evaluate = this.root.options.evaluate ?? evaluateWithFunction;
+    const run = evaluate(text, [
       "$rt",
       "$exports",
       ...globals.map(([name]) => name),
-      `"use strict";\n${text.source}\n//# sourceURL=compiled:${text.path}`,
-    );
+    ]);
     run(this.#runtimeObject, exports, ...globals.map(([, value]) => value));
     return exports;
   }
@@ -5799,7 +5945,8 @@ export class Instance {
       if (form === KEPT) return;
       if (
         Array.isArray(form) && Array.isArray(held) &&
-        form.length === held.length && form.length > 0
+        form.length === held.length && form.length > 0 &&
+        !shiftedScalars(form, held)
       ) {
         form.forEach((member, index) =>
           put([...at, `${index}`], member, held[index])
@@ -6612,14 +6759,16 @@ export class Instance {
           });
           // What a later change of the array or of one row is applied to.
           const rows = (
-            construct: "map" | "filter" | "flatMap",
+            construct: "map" | "filter" | "flatMap" | "sortBy",
             members: Element[],
             flags?: boolean[],
+            segmentDependencies = 0,
           ) => {
             const { found, from } = host;
             if (
               host.writers.length > 0 ||
-              host.dependencies.length !== first + elements.length ||
+              host.dependencies.length !==
+                first + elements.length + segmentDependencies ||
               keyOf.size !== elements.length ||
               !this.#mayRefresh
             ) return;
@@ -6745,12 +6894,40 @@ export class Instance {
               ) rows("filter", host.members, flags);
               return keyed(kept.map(given));
             }
+            case "sortBy": {
+              // The elements of the source in the order of their keys,
+              // and in the order of the source among equal keys (note 614
+              // of `SPEC-NOTES.md`). An element of the result is the
+              // source element, passed through, with its key.
+              const sortKeys = results.map((result) => host.v(result));
+              const order = elements.map((_, index) => index).sort((a, b) =>
+                compareSortKeys(sortKeys[a], sortKeys[b]) || a - b
+              );
+              const sorted = order.map((index) => elements[index]);
+              host.members = numbered(sorted);
+              // A later change of one key moves one element
+              // (`#reassemble`), where every key is a scalar the body
+              // gave as the value it is.
+              if (results.every(isSortKey)) {
+                rows("sortBy", host.members);
+                if (host.rows !== undefined) {
+                  host.rows.sortKeys = new Map(
+                    elements.map(({ key }, index) => [key, sortKeys[index]]),
+                  );
+                }
+              }
+              return keyed(sorted.map(given));
+            }
             case "flatMap": {
               // An element of the result has the key of its source
               // element together with a part formed from the member (PL
               // §1.3, "The key of an element that a `flatMap`
               // contributes"; ruling Z22).
               const members: Omit<Element, "index">[] = [];
+              const lengths: number[] = [];
+              // The inner assembly that the body returned for each
+              // element, by its name, while every body returned one.
+              const segmentOf = new Map<string, string>();
               const flat = results.flatMap((result, index) => {
                 const { key } = elements[index];
                 const entry = this.#perElement(collection, key);
@@ -6760,16 +6937,41 @@ export class Instance {
                     index
                   ],
                 ]]);
-                const segment = this.#segment(result, entry, inner, host);
+                this.counts.segmentsFormed += 1;
+                let resolved: { value: unknown } | undefined;
+                if (result instanceof Assembled && !host.done) {
+                  const used = host.dependEntry(this.#assemblyOf(result));
+                  resolved = { value: used.value };
+                  if (used.key !== undefined && used.owner === this) {
+                    segmentOf.set(used.key, key);
+                  }
+                }
+                const segment = this.#segment(
+                  result,
+                  entry,
+                  inner,
+                  host,
+                  resolved,
+                );
                 for (const { part, source } of segment.members) {
                   members.push({ key: memberKey(key, part), source });
                 }
+                lengths.push(segment.members.length);
                 return segment.values;
               });
               host.members = numbered(members);
               // A later mark that names no element whose segment changed
-              // leaves the assembly as it is (`#reassemble`).
-              rows("flatMap", host.members);
+              // leaves the assembly as it is, and one that names an
+              // element or the inner assembly of one splices the segment
+              // of that element (`#reassemble`).
+              if (segmentOf.size === elements.length && elements.length > 0) {
+                rows("flatMap", host.members, undefined, elements.length);
+                if (host.rows !== undefined) {
+                  host.rows.segments = { lengths, of: segmentOf };
+                }
+              } else {
+                rows("flatMap", host.members);
+              }
               return keyed(flat);
             }
             case "some":
@@ -6920,7 +7122,7 @@ export class Instance {
     }
     const changed = new Set<string>();
     for (const used of slot.suspects) {
-      const key = rows.keyOf.get(used);
+      const key = rows.keyOf.get(used) ?? rows.segments?.of.get(used);
       if (key !== undefined) changed.add(key);
       else if (used !== rows.upstream?.name) return undefined;
     }
@@ -7010,14 +7212,16 @@ export class Instance {
     } else {
       return undefined;
     }
-    // The segments of a `flatMap` are not kept apart, so a change of the
-    // source or of what an element's body returned forms the assembly
-    // whole. What is left for this path is a mark that changes neither: a
-    // write to a document an element refers to, at a path that no body of
-    // the collection read.
-    if (rows.construct === "flatMap" && (ops.length > 0 || changed.size > 0)) {
-      return undefined;
-    }
+    // A change of the source of a `flatMap` forms the assembly whole, and
+    // so does a change of what an element's body returned where the
+    // segments are not kept apart (`Rows.segments`). What is left for this
+    // path is a mark that changes neither, as a write to a document an
+    // element refers to at a path that no body of the collection read, and
+    // a change of the segments of some elements, which are spliced.
+    if (
+      rows.construct === "flatMap" &&
+      (ops.length > 0 || (changed.size > 0 && rows.segments === undefined))
+    ) return undefined;
     const { elements, byKey } = table;
     const { results, members, flags } = rows;
     const left = new Set<string>();
@@ -7201,6 +7405,176 @@ export class Instance {
         value = [...results];
         delta = { ops, rows: dirty.filter((key) => byKey.has(key)) };
       }
+    } else if (rows.construct === "sortBy") {
+      // Each element that left is taken out of the order, and each that
+      // entered or whose key changed is put at the place of its key, found
+      // by binary search: behind the elements with a smaller key and behind
+      // those with an equal key that stand before it in the source. No
+      // other element is looked at. An element that only moved in the
+      // source could have changed places with one of an equal key, so the
+      // assembly is then formed whole.
+      const { sortKeys } = rows;
+      if (sortKeys === undefined || !Array.isArray(held.value)) {
+        return undefined;
+      }
+      const entered = new Set(ops.flatMap(({ inserted }) => inserted));
+      if (ops.some(({ removed }) => removed.some((key) => byKey.has(key)))) {
+        return undefined;
+      }
+      rowsNow = [...members];
+      const sorted = [...held.value];
+      const spliced: KeyOp[] = [];
+      // The position of an element in the order, found from the key it
+      // was placed by.
+      const placeOf = (key: string): number => {
+        const placed = sortKeys.get(key);
+        let low = 0;
+        let high = rowsNow.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          const other = sortKeys.get(rowsNow[middle].key);
+          if (compareSortKeys(other, placed) < 0) low = middle + 1;
+          else high = middle;
+        }
+        for (
+          let at = low;
+          at < rowsNow.length &&
+          compareSortKeys(sortKeys.get(rowsNow[at].key), placed) === 0;
+          at++
+        ) {
+          if (rowsNow[at].key === key) return at;
+        }
+        return rowsNow.findIndex((member) => member.key === key);
+      };
+      const take = (key: string) => {
+        const at = placeOf(key);
+        sortKeys.delete(key);
+        if (at < 0) return;
+        rowsNow.splice(at, 1);
+        sorted.splice(at, 1);
+        spliced.push({ start: at, removed: [key], inserted: [] });
+      };
+      for (const key of left) take(key);
+      for (const key of changed) {
+        const element = byKey.get(key);
+        if (element === undefined) continue;
+        const now = results[element.index];
+        if (!isSortKey(now) || !(element.source instanceof Ref)) {
+          return undefined;
+        }
+        const known = sortKeys.has(key) && !entered.has(key);
+        if (known && compareSortKeys(sortKeys.get(key), now) === 0) {
+          sortKeys.set(key, now);
+          continue;
+        }
+        if (known) take(key);
+        let low = 0;
+        let high = rowsNow.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          const other = rowsNow[middle];
+          const order = compareSortKeys(sortKeys.get(other.key), now) ||
+            (byKey.get(other.key)?.index ?? -1) - element.index;
+          if (order < 0) low = middle + 1;
+          else high = middle;
+        }
+        sortKeys.set(key, now);
+        rowsNow.splice(low, 0, element);
+        sorted.splice(low, 0, element.source);
+        spliced.push({ start: low, removed: [], inserted: [key] });
+      }
+      differs = spliced.length > 0;
+      if (differs) {
+        let first = rowsNow.length;
+        for (const { start } of spliced) first = Math.min(first, start);
+        for (let index = first; index < rowsNow.length; index++) {
+          if (rowsNow[index].index !== index) {
+            rowsNow[index] = { ...rowsNow[index], index };
+          }
+        }
+        rows.members = rowsNow;
+        value = sorted;
+        delta = { ops: spliced, rows: [] };
+      }
+    } else if (rows.construct === "flatMap") {
+      const { segments } = rows;
+      if (changed.size > 0) {
+        if (segments === undefined || !Array.isArray(held.value)) {
+          return undefined;
+        }
+        // The segment of each element that changed, in the order of the
+        // table, is put in the place of the one it had: one splice of the
+        // members and of the values for each. The members behind the
+        // first splice are numbered again, and no other work is done for
+        // an element whose segment stayed.
+        const positions = [...changed].flatMap((key) => {
+          const element = byKey.get(key);
+          return element === undefined ? [] : [element.index];
+        }).sort((a, b) => a - b);
+        rowsNow = [...members];
+        const flat = [...held.value];
+        const spliced: KeyOp[] = [];
+        let start = 0;
+        let from = 0;
+        for (const position of positions) {
+          while (from < position) start += segments.lengths[from++];
+          const element = elements[position];
+          const result = results[position];
+          if (!(result instanceof Assembled)) return undefined;
+          const lazy = this.#assemblyOf(result);
+          const inner = lazy(context);
+          if (
+            inner.key === undefined || inner.owner !== this ||
+            inner.members === undefined || !Array.isArray(inner.value)
+          ) return undefined;
+          this.counts.segmentsFormed += 1;
+          const at = rows.first + elements.length + position;
+          const before = dependencies[at]?.on;
+          if (before !== undefined && before !== inner.key) {
+            this.#users.get(before)?.delete(name);
+            slot.uses.delete(before);
+            segments.of.delete(before);
+          }
+          dependencies[at] = {
+            stamp: (now) => lazy(now).changedAt,
+            seen: inner.changedAt,
+            on: inner.key,
+          };
+          this.uses(name, inner.key);
+          segments.of.set(inner.key, element.key);
+          const within = new Map([...context, [collection, element]]);
+          const fresh = inner.members.map(({ key: part, source }): Element => ({
+            key: memberKey(element.key, part),
+            index: -1,
+            source: segmentSource(source, within),
+          }));
+          const gone = spliceIn(
+            rowsNow,
+            start,
+            segments.lengths[position],
+            fresh,
+          );
+          spliceIn(flat, start, segments.lengths[position], inner.value);
+          spliced.push({
+            start,
+            removed: gone.map(({ key }) => key),
+            inserted: fresh.map(({ key }) => key),
+          });
+          segments.lengths[position] = fresh.length;
+        }
+        const first = spliced[0]?.start ?? rowsNow.length;
+        for (let index = first; index < rowsNow.length; index++) {
+          if (rowsNow[index].index !== index) {
+            rowsNow[index] = { ...rowsNow[index], index };
+          }
+        }
+        rows.members = rowsNow;
+        value = flat;
+        delta = { ops: spliced, rows: [] };
+        differs = true;
+      } else {
+        differs = false;
+      }
     } else if (moved || flagged) {
       differs = true;
       rowsNow = [];
@@ -7284,11 +7658,14 @@ export class Instance {
     entry: Lazy,
     inner: Context,
     host: Host,
+    resolved?: { value: unknown },
   ): {
     values: unknown[];
     members: { part: string; source: Element["source"] }[];
   } {
-    const result = Array.isArray(returned)
+    const result = resolved !== undefined
+      ? resolved.value
+      : Array.isArray(returned)
       ? returned.map((member) => host.settled(member))
       : host.settled(returned);
     if (Array.isArray(returned) && Array.isArray(result)) {
@@ -7320,12 +7697,7 @@ export class Instance {
         values: result as unknown[],
         members: assembled.members.map(({ key, source }) => ({
           part: key,
-          // The result of the inner construct's body, for the element
-          // keys the callback was evaluated under.
-          source: source instanceof Ref || !("entry" in source) ? source : {
-            entry: () => source.entry(inner),
-            at: source.at,
-          },
+          source: segmentSource(source, inner),
         })),
       };
     }
@@ -7355,6 +7727,15 @@ export class Instance {
         };
       }),
     };
+  }
+
+  /**
+   * The entry of the assembly that a body returned as the handle
+   * `assembled`, for the element keys the body was evaluated under.
+   */
+  #assemblyOf(assembled: Assembled): Lazy {
+    const entry = this.assembled(assembled.collection);
+    return () => entry(this.freshContext(assembled.context));
   }
 
   /**
@@ -9417,9 +9798,11 @@ export class Instance {
         const inputs = this.#inputsOf(cone, keys);
         if (inputs !== undefined) this.#forget(inputs);
       }
-      this.#regroupKey(at.collection, at.around, at.key);
       // The records whose template folds over the collection hold its
-      // groups, which the change of the element's label changed.
+      // groups. An element whose cone instances consume what they consumed
+      // before is in the group it was in, and those records hold the
+      // label they were given.
+      if (!this.#regroupKey(at.collection, at.around, at.key)) continue;
       for (
         const key of this.root.#recordFolds.get(
           `${this.id}\n${at.collection}`,
@@ -9494,14 +9877,15 @@ export class Instance {
    * the element is a plain value in place, where it is known. Where the
    * set of groups changes, the element of the enclosing collection that
    * holds this one is updated in turn. The work is the number of groups
-   * of the folded collections inside the element.
+   * of the folded collections inside the element. Returns whether the
+   * element is in another group than before.
    */
   #regroupKey(
     collection: number,
     around: readonly string[],
     key: string,
     inPlace?: boolean,
-  ): void {
+  ): boolean {
     const name = this.#name("assembly", collection, around);
     let table = this.#groups.get(name);
     if (table === undefined) {
@@ -9549,6 +9933,7 @@ export class Instance {
     if (inPlace === true) table.notInPlace.delete(key);
     else if (inPlace === false) table.notInPlace.add(key);
     if (changed) this.#regroupEnclosing(collection, around);
+    return was !== id;
   }
 
   /**
@@ -12446,15 +12831,7 @@ export class Instance {
       // A write through a handle to a value the instance computes fails
       // (PL §3.11).
       if (reference && given instanceof Handle) {
-        given = new Handle(
-          this,
-          given.target,
-          given.host,
-          given.slot,
-          given.below,
-          given.declared,
-          true,
-        );
+        given = given.refusingWrites(this);
       }
       this.bindSlot(host, slot, from, found);
       // A literal the binding gives its state is a constant of the plan:

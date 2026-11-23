@@ -33,12 +33,14 @@
 import {
   type Artifact,
   Instance,
+  type ModuleEvaluator,
 } from "../../../../base/pattern-compiler/exec/executor.ts";
 import { rowDocumentCollections } from "../../../../base/pattern-compiler/exec/row-documents.ts";
 import {
   argumentOf,
   Ref,
 } from "../../../../base/pattern-compiler/exec/store.ts";
+import { makeFrame, runInFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";
 import { type Cell, convertCellsToLinks } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
@@ -51,6 +53,7 @@ import {
   RuntimeTransactions,
   type StreamOfExecutor,
 } from "./transactions.ts";
+import { compartmentEvaluator } from "./value-code.ts";
 
 /** What `startCompiledPiece()` takes beside the compiled pattern. */
 export type CompiledPieceOptions = {
@@ -100,6 +103,13 @@ export type CompiledPieceOptions = {
    * then not read.
    */
   storedArgument?: boolean;
+  /**
+   * What makes the functions of the value code. The default is a
+   * compartment of the piece's own (`compartmentEvaluator`). A caller that
+   * starts many pieces can give them one evaluator. An evaluator that
+   * confines nothing is for a measurement of what the compartment costs.
+   */
+  evaluate?: ModuleEvaluator;
 };
 
 /** What a compiled piece did, counted. */
@@ -219,6 +229,7 @@ export class CompiledPiece {
           parts: false,
           events: "queue",
           transactions,
+          evaluate: options.evaluate ?? compartmentEvaluator(),
           ...(rowDocuments === undefined ? {} : { rowDocuments }),
           load: (id) => transactions.load(id),
         },
@@ -295,9 +306,19 @@ export class CompiledPiece {
       const began = performance.now();
       let outcome: ReturnType<Instance["handleEvent"]>;
       try {
-        outcome = transactions.within(
-          tx,
-          () => this.instance.handleEvent(stream, transactions.decode(event)),
+        // The frame of a handler, under which the gated `Date` and `Math`
+        // of the value code give the time of the event and a random draw.
+        outcome = runInFrame(
+          makeFrame({
+            inHandler: true,
+            eventTime: tx.dispatchedEventTime ?? Date.now(),
+          }),
+          () =>
+            transactions.within(
+              tx,
+              () =>
+                this.instance.handleEvent(stream, transactions.decode(event)),
+            ),
         );
       } finally {
         this.#counts.ownMs += performance.now() - began;

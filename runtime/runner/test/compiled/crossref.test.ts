@@ -264,4 +264,17 @@ describe("the stored labels of the inverse of a relation of references: a groupi
     );
     expect(consumed(result, ["rows", "2", "name"])).toEqual(clauses("tc"));
   });
+
+  it("gives no record of the index of the rows by name when another writer writes the title of a topic, which no body reads", async () => {
+    const { result, topics } = await crossed();
+    const recorded: string[] = [];
+    pieces[0].transactions.onRecorded((writes) => {
+      for (const { target } of writes) recorded.push(target.path.join("/"));
+    });
+
+    await commit((tx) => topics[1].withTx(tx).key("title").set("written"));
+
+    expect(recorded.filter((path) => path.startsWith("byName"))).toEqual([]);
+    expect(consumed(result, ["byName", "keys"])).toEqual(clauses(...TOPICS));
+  });
 });

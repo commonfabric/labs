@@ -1066,7 +1066,8 @@ impl<'a> Resolver<'_, 'a> {
             ("reduce" | "reduceRight", 2) => self.of(Shape::Number),
             (
                 "map" | "filter" | "flatMap" | "some" | "every" | "find" | "findIndex" | "findLast"
-                | "findLastIndex" | "forEach" | "count" | "minBy" | "maxBy" | "groupBy" | "keyBy",
+                | "findLastIndex" | "forEach" | "count" | "minBy" | "maxBy" | "groupBy" | "keyBy"
+                | "sortBy",
                 0,
             ) => Ok(element),
             (_, 1) if api::is_element_method(method) || method == "forEach" => {

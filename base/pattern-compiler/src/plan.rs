@@ -3439,7 +3439,11 @@ impl<'a> Emitter<'_, '_, 'a> {
             // A collection index (PL §3.17): the key function is the body
             // of a collection of its own, once per element key, and the
             // index has the template of a bucket's membership.
-            "groupBy" | "keyBy" => {
+            // A sort by a key (note 614 of `SPEC-NOTES.md`) is a collection
+            // of the same kind: the key function is its body, and the
+            // result holds the elements of the source in the order of
+            // their keys.
+            "groupBy" | "keyBy" | "sortBy" => {
                 match arguments.first().and_then(|first| FunctionLike::of(first)) {
                     Some(function) => self.collection(call, receiver, name, function, hint, at),
                     None => {
@@ -3946,6 +3950,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             },
             _ if index => "value",
+            // The key of a sort is compared, so it is observed as a value.
+            _ if via == "sortBy" => "value",
             (true, Some(returned)) => self.test_class(returned),
             (true, None) => "value",
             (false, _) => "identity",
@@ -3983,7 +3989,11 @@ impl<'a> Emitter<'_, '_, 'a> {
             // membership, order included, joined with a `fold` of the key
             // function's template over every element", and an element of a
             // bucket is the source element, passed through.
-            "filter" | "groupBy" | "keyBy" => (
+            // A sort by a key: the order is the source's membership
+            // joined with a `fold` of the key's template over every
+            // element, and an element is the source element, passed
+            // through (note 614 of `SPEC-NOTES.md`).
+            "filter" | "groupBy" | "keyBy" | "sortBy" => (
                 joined(fold(body, None), &iterated),
                 Some(source_element(self)),
                 None,
@@ -6097,7 +6107,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if let (Some(collection), false) = (computed.collection, computed.scan) {
                     // The result of a `filter` is an array the instance
                     // made, of the elements of its source.
-                    if below && self.collections[collection]["construct"] == "filter" {
+                    if below
+                        && matches!(
+                            self.collections[collection]["construct"].as_str(),
+                            Some("filter" | "sortBy")
+                        )
+                    {
                         return match self.source_origin(collection) {
                             Origin::Stored | Origin::Reference => Origin::Reference,
                             other => other,
@@ -6132,7 +6147,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             return self.origin_of(&Place::Value(value as usize, Vec::new()), true);
         }
         if let Some(inner) = source["collection"].as_u64() {
-            if self.collections[inner as usize]["construct"] == "filter" {
+            if matches!(
+                self.collections[inner as usize]["construct"].as_str(),
+                Some("filter" | "sortBy")
+            ) {
                 return match self.source_origin(inner as usize) {
                     Origin::Stored | Origin::Reference => Origin::Reference,
                     other => other,
@@ -7319,7 +7337,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         for (index, collection) in collections.iter().enumerate() {
             if !matches!(
                 collection["construct"].as_str(),
-                Some("map" | "filter" | "flatMap")
+                Some("map" | "filter" | "flatMap" | "sortBy")
             ) {
                 continue;
             }

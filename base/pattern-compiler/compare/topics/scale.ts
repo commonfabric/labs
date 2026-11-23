@@ -115,7 +115,15 @@
  *
  * With `SCALE_CPU_PROFILE` set to the path of a file, the run is sampled
  * every half millisecond and the profile of the whole process is written
- * there when the arm has run, in the format of the V8 inspector.
+ * there when the arm has run, in the format of the V8 inspector. With
+ * `SCALE_PROFILE_STEP` naming a step, the profile is of that step alone;
+ * naming several steps separated by commas, each has a profile of its own
+ * at the path followed by the step's name and `.cpuprofile`.
+ *
+ * With `SCALE_COMMITS` set, each step of the arms of the runtime's own
+ * calls lists its commits (`commitLog`): how many documents each changed,
+ * the size of those documents as JSON after the commit, and the four
+ * largest with the number of paths that changed in each.
  */
 import { Identity } from "@commonfabric/identity";
 import { fromFileUrl } from "@std/path";
@@ -1217,6 +1225,25 @@ export type TodayStep = Step & {
    * after it, and the size of those entries as JSON.
    */
   labelEntries?: { documents: number; entries: number; bytes: number };
+  /** With `SCALE_COMMITS` set: the commits of the step. */
+  commitLog?: CommitOfStep[];
+};
+
+/** A document one commit changed, as `SCALE_COMMITS` reports it. */
+type DocumentOfCommit = {
+  id: string;
+  paths: number;
+  bytes: number;
+  /** The first three paths that changed. */
+  at?: string[];
+};
+
+/** One commit of a step, as `SCALE_COMMITS` reports it. */
+type CommitOfStep = {
+  documents: number;
+  /** The size as JSON, after the commit, of the documents it changed. */
+  bytes: number;
+  largest: DocumentOfCommit[];
 };
 
 const runToday = async (
@@ -1247,12 +1274,40 @@ const runToday = async (
   });
   let piece: CompiledPiece | undefined;
   const changed = new Set<string>();
+  // With `SCALE_COMMITS` set: for each commit since `commitLog` was
+  // cleared, each document it changed, with the paths that changed and
+  // the size of the document as JSON after the commit.
+  const logCommits = Deno.env.get("SCALE_COMMITS") !== undefined;
+  const commitLog: CommitOfStep[] = [];
   storageManager.subscribe({
     // deno-lint-ignore no-explicit-any
     next(notification: any) {
       if (notification.type !== "commit") return undefined;
-      for (const { address } of notification.changes) {
+      const documents = new Map<string, DocumentOfCommit>();
+      for (const { address, after } of notification.changes) {
         changed.add(JSON.stringify([address.id, address.scope]));
+        if (!logCommits) continue;
+        const document = documents.get(address.id) ?? {
+          id: address.id,
+          paths: 0,
+          bytes: after === undefined ? 0 : JSON.stringify(after).length,
+        };
+        document.paths++;
+        if (document.paths <= 3) {
+          (document.at ??= []).push((address.path ?? []).join("/"));
+        }
+        documents.set(address.id, document);
+      }
+      if (logCommits) {
+        commitLog.push({
+          documents: documents.size,
+          bytes: [...documents.values()].reduce(
+            (sum, { bytes }) => sum + bytes,
+            0,
+          ),
+          largest: [...documents.values()].sort((a, b) => b.bytes - a.bytes)
+            .slice(0, 4),
+        });
       }
       return undefined;
     },
@@ -1406,6 +1461,7 @@ const runToday = async (
     const measure = async (step: string, change: () => Promise<void>) => {
       resetAllTimingStats();
       changed.clear();
+      commitLog.length = 0;
       const before = piece === undefined ? undefined : {
         transactions: piece.instance.transactions.length,
         records: piece.transactions.counts,
@@ -1414,8 +1470,16 @@ const runToday = async (
       };
       // `SCALE_PROFILE_STEP` names the one step that `SCALE_CPU_PROFILE` is
       // a profile of, in place of the whole run.
-      const stopStepProfile = Deno.env.get("SCALE_PROFILE_STEP") === step
-        ? await startProfile(Deno.env.get("SCALE_CPU_PROFILE") ?? "")
+      const profiledSteps = Deno.env.get("SCALE_PROFILE_STEP")?.split(",") ??
+        [];
+      const stopStepProfile = profiledSteps.includes(step)
+        ? await startProfile(
+          profiledSteps.length === 1
+            ? Deno.env.get("SCALE_CPU_PROFILE") ?? ""
+            : `${Deno.env.get("SCALE_CPU_PROFILE")}.${
+              step.replaceAll(" ", "-")
+            }.cpuprofile`,
+        )
         : undefined;
       const began = performance.now();
       await change();
@@ -1477,6 +1541,7 @@ const runToday = async (
           }),
         }),
         ...(pull === undefined ? {} : { pull }),
+        ...(logCommits ? { commitLog: commitLog.slice() } : {}),
         work: workOfStep,
         commits: commitsOfStep,
         documents: documentsOfStep,
@@ -1487,6 +1552,23 @@ const runToday = async (
         ...(labeled ? { labelEntries: labelEntries() } : {}),
       });
       consumedAfter(step);
+      if (Deno.env.get("SCALE_RESULT_SHAPE") === "entries") {
+        const tx = runtime.edit();
+        try {
+          const { space, id, scope } = result.getAsNormalizedFullLink();
+          const metadata = readStoredCfcMetadata(
+            tx,
+            { space, id, path: [], scope } as NormalizedFullLink,
+          );
+          for (const entry of metadata?.labelMap.entries ?? []) {
+            console.error(
+              JSON.stringify({ entryAfter: step, entry }),
+            );
+          }
+        } finally {
+          tx.abort();
+        }
+      }
     };
     // With `SCALE_CONSUMED` naming a file, on the arm `runner`: after each
     // step, one line of JSON for each path of the result document, down to
@@ -1594,6 +1676,61 @@ const runToday = async (
           },
         );
       }));
+    // With `SCALE_RECORDS` set: the write records of each commit of the
+    // piece after the load, each with the document and path it names and
+    // its size as JSON, on the error stream.
+    if (Deno.env.get("SCALE_RECORDS") !== undefined && piece !== undefined) {
+      const { transactions } = piece as CompiledPiece;
+      transactions.onRecorded((writes) => {
+        for (const write of writes) {
+          console.error(JSON.stringify({
+            step: steps.length,
+            record: write.record,
+            ...(write.unchanged ? { unchanged: true } : {}),
+            ...(write.relabel ? { relabel: true } : {}),
+            at: `${transactions.documentOf(write.target.id).slice(0, 12)}/${
+              write.target.path.join("/")
+            }`,
+            bytes: JSON.stringify(write).length,
+            ...(Deno.env.get("SCALE_RECORDS") === "full" ? { write } : {}),
+          }));
+        }
+      });
+    }
+    // With `SCALE_RESULT_SHAPE` set: the size as JSON of each member of the
+    // result document, and how many label entries it stores below each, on
+    // the error stream.
+    if (Deno.env.get("SCALE_RESULT_SHAPE") !== undefined) {
+      const tx = runtime.edit();
+      try {
+        const { space, id, scope } = result.getAsNormalizedFullLink();
+        const metadata = readStoredCfcMetadata(
+          tx,
+          { space, id, path: [], scope } as NormalizedFullLink,
+        );
+        const entries: Record<string, { entries: number; bytes: number }> = {};
+        for (const entry of metadata?.labelMap.entries ?? []) {
+          const member = String(entry.path[0] ?? "(root)");
+          entries[member] ??= { entries: 0, bytes: 0 };
+          entries[member].entries++;
+          entries[member].bytes += JSON.stringify(entry).length;
+        }
+        const value = tx.readValueOrThrow(
+          { space, id, path: [], scope } as NormalizedFullLink,
+        ) as Record<string, unknown>;
+        console.error(JSON.stringify({
+          resultShape: Object.fromEntries(
+            Object.entries(value ?? {}).map(([name, member]) => [
+              name,
+              JSON.stringify(member)?.length ?? 0,
+            ]),
+          ),
+          labelEntries: entries,
+        }));
+      } finally {
+        tx.abort();
+      }
+    }
     // With `SCALE_WRITE_ALONE` set, a step `write alone` precedes each
     // edit: the same writer writes a field of the same topic that the
     // board does not read, so the step is what the write itself costs on
