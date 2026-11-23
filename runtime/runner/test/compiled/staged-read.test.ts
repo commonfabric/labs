@@ -187,6 +187,8 @@ describe("the derived values of a compiled piece behind a write that did not rea
             event,
           ),
       );
+      // The piece has the derivation run after an event it handles.
+      piece.derive();
     });
   };
 
