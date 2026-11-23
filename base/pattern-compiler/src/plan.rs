@@ -3260,6 +3260,22 @@ impl<'a> Emitter<'_, '_, 'a> {
                         return place;
                     }
                 }
+                // `Object.entries(record).map(f)` over a record that is an
+                // input: a collection whose elements are the entries of the
+                // record, each keyed by its name. The record is observed
+                // for which names it has, and an entry is read by the body
+                // that reads it.
+                if name == "map" {
+                    let function = arguments.first().and_then(|first| FunctionLike::of(first));
+                    if let (Some(record), Some(function)) =
+                        (self.entries_of_record(&member.object, hint), function)
+                    {
+                        let collection = self.collections.len();
+                        let place = self.collection(call, &record, name, function, hint, at);
+                        self.collections[collection]["source"]["entries"] = json!(true);
+                        return place;
+                    }
+                }
                 let receiver = self.eval(&member.object, hint);
                 self.method(call, &receiver, name, &arguments, hint)
             }
@@ -3724,6 +3740,40 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         };
         (source, iterated)
+    }
+
+    /// The record of `Object.entries(record)`, where the expression is
+    /// that call and the record is a path of an input, written as a name
+    /// or as a member of one.
+    fn entries_of_record(&mut self, expression: &Expression<'a>, hint: &str) -> Option<Place> {
+        let Expression::CallExpression(call) = unwrap(expression) else {
+            return None;
+        };
+        let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+            return None;
+        };
+        let Expression::Identifier(object) = unwrap(&member.object) else {
+            return None;
+        };
+        let global = self
+            .resolver
+            .parsed(self.module)
+            .is_some_and(|parsed| symbol_of(parsed.semantic.scoping(), object).is_none());
+        if !global || object.name != "Object" || member.property.name != "entries" {
+            return None;
+        }
+        let [argument] = call.arguments.as_slice() else {
+            return None;
+        };
+        let argument = argument.as_expression()?;
+        if !matches!(
+            unwrap(argument),
+            Expression::Identifier(_) | Expression::StaticMemberExpression(_)
+        ) {
+            return None;
+        }
+        let place = self.eval(argument, hint);
+        matches!(place, Place::Slot(..)).then_some(place)
     }
 
     /// The collection of the index a place holds, where the place is

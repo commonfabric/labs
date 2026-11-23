@@ -166,7 +166,18 @@ export type Plan = {
     name: Name;
     construct: string;
     within: Step[];
-    source: { slot?: number; collection?: number; output?: number };
+    /**
+     * `entries`: the collection is over the entries of the record the slot
+     * holds, `Object.entries(record)`: an element is the pair of an
+     * entry's name and what the record holds under it, and its key is the
+     * name.
+     */
+    source: {
+      slot?: number;
+      collection?: number;
+      output?: number;
+      entries?: true;
+    };
     /** The label template of what the collection iterates (PL §3.2). */
     membership?: Template;
     /**
@@ -7250,6 +7261,7 @@ export class Instance {
       const base = host.settled(
         host.at(this.rootOf(slot.root, host), slot.path),
       );
+      if (source.entries === true) return this.#entries(base, host);
       if (base instanceof Ref) return this.#stored(base, host, keyFields);
       if (Array.isArray(base)) {
         members = base.map((member) =>
@@ -7405,6 +7417,44 @@ export class Instance {
    * link on the way to the array holds, and from the whole value where
    * no link holds one (ruling Z52).
    */
+  /**
+   * The element table of a collection over the entries of a record: one
+   * element for each name the record has, in the order the store holds
+   * them, keyed by the name. The element is the pair of the name and of
+   * what the record holds under it: the reference to the cell where the
+   * entry is a link, and the reference to the entry's position otherwise.
+   * The read finds which names the record has and reads no entry.
+   */
+  #entries(record: unknown, host: Host): Element[] {
+    const pairs: [string, unknown][] = [];
+    if (record instanceof Ref) {
+      const located = this.store.locate(record, true, host.reads);
+      const held = isRecord(located.value) && !isLink(located.value)
+        ? located.value
+        : {};
+      for (const [name, member] of Object.entries(held)) {
+        pairs.push([
+          name,
+          isLink(member)
+            ? new Ref(member.$link.doc, member.$link.path)
+            : located.named.key(name),
+        ]);
+      }
+    } else if (isRecord(record)) {
+      pairs.push(...Object.entries(record));
+    }
+    // The key of an entry is that of its name as a plain value: a name
+    // stands once in a record.
+    const keys = keysOfParts(
+      pairs.map(([name]): ElementPart => this.store.partOf(name, undefined)),
+    );
+    return pairs.map((pair, index) => ({
+      key: keys[index],
+      index,
+      source: { value: pair },
+    }));
+  }
+
   #stored(array: Ref, host: Host, fields?: readonly string[]): Element[] {
     const before = host.reads.length;
     const located = this.store.locate(array, true, host.reads);

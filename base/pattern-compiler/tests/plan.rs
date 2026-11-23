@@ -5099,3 +5099,40 @@ export const Joined = pattern<
             && plan["slots"][input["slot"].as_u64().unwrap() as usize]["path"] == json!(["name"])
     }));
 }
+
+/// `Object.entries(record).map(f)` over a record that is an input is a
+/// collection over the record's slot, observed as an enumeration, whose
+/// elements are the entries.
+#[test]
+fn a_map_over_the_entries_of_an_input_record_is_a_collection_over_the_record() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { computed, pattern } from "commonfabric";
+interface Item { title: string }
+export const Table = pattern<
+  { byName: Record<string, Item> },
+  { rows: { name: string; title: string }[] }
+>(({ byName }) => {
+  const rows = computed(() =>
+    Object.entries(byName).map(([name, item]) => ({ name, title: item.title }))
+  );
+  return { rows };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Table");
+    let source = &plan["collections"][0]["source"];
+    assert_eq!(source["entries"], json!(true), "{source}");
+    let record = source["slot"].as_u64().expect("the slot of the record") as usize;
+    assert_eq!(plan["slots"][record]["path"], json!(["byName"]));
+    assert_eq!(plan["slots"][record]["observes"], json!("enumeration"));
+    let paths: Vec<&Value> = plan["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .filter(|slot| slot["root"]["kind"] == json!("element"))
+        .map(|slot| &slot["path"])
+        .collect();
+    assert!(paths.contains(&&json!(["0"])), "{paths:?}");
+    assert!(paths.contains(&&json!(["1", "title"])), "{paths:?}");
+}
