@@ -61,6 +61,7 @@ import {
   type PerUser,
   principalOf,
   profileOwnerOf,
+  type ReadonlyCell,
   spaceAccess,
   spaceDeleted,
   spaceOf,
@@ -682,8 +683,8 @@ const inboxPointerOf = (
  * Whether `read`, what a read of a `receive` through an inbox pointer found, is
  * a stream. A stream reads as its handle there, and stored data reads as itself.
  */
-const isStreamHandle = (read: unknown): boolean =>
-  typeof (read as { send?: unknown } | undefined)?.send === "function";
+const hasReceive = (inbox: ReadonlyCell<{ receive?: unknown }>): boolean =>
+  inbox.key("receive").get() !== undefined;
 
 /**
  * Whether the share inbox `pointer` points at takes offers, as this run finds
@@ -697,7 +698,7 @@ const isStreamHandle = (read: unknown): boolean =>
 const takesOffers = (pointer: Cell<ShareInboxPiece>): boolean => {
   const inbox = pointer.resolveAsCell();
   return spaceDeleted(inbox) !== true &&
-    isStreamHandle(inboxOf(inbox).key("receive").get());
+    hasReceive(inbox);
 };
 
 /** A share inbox, and the first of a member's profiles pointing at it. */
