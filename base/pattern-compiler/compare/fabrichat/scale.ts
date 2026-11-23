@@ -23,7 +23,8 @@
  *   with the counters of the executor for that event alone (evaluations,
  *   evaluations of element bodies, assemblies).
  * - `read`: the messages of the result are read, and the step says how
- *   many the room holds and the text of the last.
+ *   many the room holds, the text of the last, and for how many the
+ *   result holds the reader's rights, with those of the last.
  *
  * `manager` and `home` are started, and the step says how many members the
  * result has and which cones ended in an error state. `home` then takes
@@ -507,8 +508,9 @@ for (
       );
     }
     began = performance.now();
-    const { messages } = instance.result() as {
+    const { messages, messageRights } = instance.result() as {
       messages: { count: number; latest: { messages: { body: string }[] } };
+      messageRights: { message: { body: string }; canEdit: boolean }[];
     };
     print({
       ...base,
@@ -516,6 +518,8 @@ for (
       ms: performance.now() - began,
       count: messages.count,
       last: messages.latest.messages.at(-1)?.body,
+      rights: messageRights.length,
+      lastRights: messageRights.at(-1),
     });
   }
   await stop();

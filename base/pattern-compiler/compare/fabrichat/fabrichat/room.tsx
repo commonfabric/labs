@@ -99,6 +99,7 @@ import {
   messageEntries,
   type MessageEntry,
   type MessageRights,
+  messageRightsOf,
   type MessagesCell,
   type MessagesValue,
   NO_MESSAGE_RIGHTS,
@@ -107,7 +108,6 @@ import {
   removalRequestId,
   type RepliedMessage,
   resolvedMessage,
-  rightsOf,
   type RoomStreamEvent,
   type RoomWindowEvent,
   type SetThreadTitleEvent,
@@ -1165,6 +1165,15 @@ const viewerProfileOf = (
 ): ProfileCell | undefined =>
   myProfile?.get() === undefined ? undefined : myProfile.resolveAsCell();
 
+/** The cell of the stored message at `index` of `messages`. */
+const storedMessageAt = (
+  messages: Cell<MessagesValue>,
+  index: number,
+): MessageCell => {
+  const cell: MessageCell = messages.key(index);
+  return cell.resolveAsCell();
+};
+
 /** What a room's reader may do to one of its messages. */
 export interface ChatMessageRights extends MessageRights {
   /**
@@ -1759,27 +1768,27 @@ export const FabriChatRoomCore = pattern<
   // the authenticated actor, whose identity is available only in a handler.
   // It has no default: an empty list is the answer for a room with no
   // messages, so until this session has derived it, a reader reads it absent.
-  const messageRightsForSession = computed(
-    (): PerSession<ChatMessageRights[]> => {
-      const profile = viewerProfileOf(myProfile);
-      const reader = profile === undefined
-        ? undefined
-        : profileOwnerOf(profile);
-      return facts.entries.map((entry) => ({
-        message: entry.cell,
-        ...(canSendForSession && reader !== undefined
-          ? rightsOf(
-            principalOf(entry.cell, "authored-by") === reader,
-            entry.live,
-            entry.authorKey !== undefined,
-            kind,
-            isOwnerForSession,
-            ownersMayObliterate,
-          )
-          : NO_MESSAGE_RIGHTS),
-      }));
-    },
-  );
+  const readerForSession = computed((): PerSession<string | undefined> => {
+    const profile = viewerProfileOf(myProfile);
+    return profile === undefined ? undefined : profileOwnerOf(profile);
+  });
+  // Each message's own cell, in the order recorded. The rights of a message
+  // are a row of a `map` over these references, so a row is derived from
+  // its own message and from what the session holds, and a send derives
+  // the row of the message sent and no other.
+  const messageRightsForSession = messages.map((record, index) => ({
+    message: storedMessageAt(messages, index),
+    ...(canSendForSession && readerForSession !== undefined
+      ? messageRightsOf(
+        record,
+        principalOf(storedMessageAt(messages, index), "authored-by") ===
+          readerForSession,
+        kind,
+        isOwnerForSession,
+        ownersMayObliterate,
+      )
+      : NO_MESSAGE_RIGHTS),
+  }));
   // What every row offers its reader, by the message's key: which of the
   // controls that act on the message show, derived once for the whole list
   // for the session, so a row reads its own entry rather than deriving its
