@@ -201,6 +201,10 @@ installFakeClock({
     // jump is refused as expired. The cases wait on round trips, never on a
     // delay.
     "storage-admission-notice",
+    // A compiled piece under a live ExecutorHost that listens on a websocket,
+    // under the same flush deadline and the same round trips over real I/O
+    // as the two classes above. It waits on the values a client reads.
+    "compiled-serving",
   ],
 });
 

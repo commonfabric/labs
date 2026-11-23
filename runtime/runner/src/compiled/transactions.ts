@@ -247,6 +247,15 @@ type Handed = {
   created: string[];
   /** The documents of the executor the transaction wrote. */
   written: string[];
+  /**
+   * Whether the commit of the transaction settled with no error. For a
+   * transaction that a serving runtime sealed into a wave, that is before
+   * the wave commits, and the replica takes its writes back where the wave
+   * is rejected.
+   */
+  settled?: boolean;
+  /** Whether the piece was told that the transaction was refused. */
+  refused?: boolean;
 };
 
 /**
@@ -671,6 +680,25 @@ export class RuntimeTransactions implements TransactionHooks {
             const handed = this.#own.get(source!);
             if (handed !== undefined) this.#applied(handed);
           }
+          // A transaction that was sealed into a wave of a serving runtime
+          // settled without an error, and the wave was then rejected: the
+          // replica took its writes back. The executor is ahead by them, as
+          // after a commit that was refused. A commit that is refused
+          // outright takes its writes back before it settles with the
+          // error, which the piece is told of then.
+          if (own && notification.type === "revert") {
+            const handed = this.#own.get(source!);
+            if (
+              handed !== undefined && handed.settled === true &&
+              handed.refused !== true
+            ) {
+              handed.refused = true;
+              this.#onRefused?.(
+                `${notification.reason.name}: ${notification.reason.message}`,
+                this.#restored(handed),
+              );
+            }
+          }
           if (byOther.length > 0) this.#onChanges?.(byOther);
           if (labelsByOther) this.#onLabels?.();
           return undefined;
@@ -1037,7 +1065,9 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#unchanged.clear();
     this.#own.set(tx.tx, handed);
     tx.addCommitCallback((_tx, { error }) => {
-      if (error === undefined) return;
+      if (error === undefined) handed.settled = true;
+      if (error === undefined || handed.refused === true) return;
+      handed.refused = true;
       this.#onRefused?.(
         `${error.name}: ${error.message}`,
         this.#restored(handed),
@@ -1083,7 +1113,9 @@ export class RuntimeTransactions implements TransactionHooks {
     };
     this.#own.set(tx.tx, handed);
     tx.addCommitCallback((_tx, { error }) => {
-      if (error === undefined) return;
+      if (error === undefined) handed.settled = true;
+      if (error === undefined || handed.refused === true) return;
+      handed.refused = true;
       this.#onRefused?.(
         `${error.name}: ${error.message}`,
         this.#restored(handed),

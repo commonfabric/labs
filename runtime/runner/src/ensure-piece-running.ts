@@ -766,6 +766,28 @@ async function ensureVerdict(
         resultCell.getMetaRaw("patternIdentity"),
       );
       if (!identityRef) {
+        // A result document that names no pattern can be that of a piece
+        // from a compiled pattern, which the loader the runtime was given
+        // starts from what the storage holds.
+        const loadCompiled = runtime.experimental.compiledPatterns === true
+          ? runtime.compiledPieceLoader
+          : undefined;
+        if (loadCompiled !== undefined) {
+          runtime.prepareTxForCommit(tx);
+          await tx.commit().settled;
+          signal?.throwIfAborted();
+          if (await loadCompiled(root)) {
+            options?.onOwningRoot?.(root);
+            return {
+              started: true,
+              graphIsInstalled: () => true,
+              refusedUpdate: () => undefined,
+              root,
+              observedDocIds,
+              observedDocs,
+            };
+          }
+        }
         logger.debug("ensure-piece", () => [
           `No pattern identity found in result metadata`,
         ]);

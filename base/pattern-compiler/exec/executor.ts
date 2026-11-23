@@ -12634,7 +12634,14 @@ export class Instance {
     const owner = doc === root.id ? root : root.#instances.get(doc);
     if (owner === undefined) {
       if (value === undefined) {
+        // A place that the refused transaction first wrote, as a state
+        // cell, has no document again and keeps what it was declared as,
+        // so a read of it gives the default of its schema.
+        const declared = store.declared.get(doc);
         if (store.docs.has(doc)) store.remove(doc);
+        if (declared !== undefined) {
+          store.declare(doc, declared.kind, declared.default);
+        }
         return;
       }
       if (store.docs.has(doc)) store.write(new Ref(doc, []), value);

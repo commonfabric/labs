@@ -21,6 +21,7 @@ import type { JSONSchema } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   type CompiledPiece,
   type CompiledPieceOptions,
@@ -90,12 +91,29 @@ export const resumeCompiledPiece = async (
   runtime: Runtime,
   artifact: Artifact,
   resultCell: Cell<unknown>,
-  options: Omit<CompiledPieceOptions, "resume" | "loadRows"> = {},
+  options: Omit<CompiledPieceOptions, "resume" | "loadRows"> & {
+    /**
+     * Called with each transaction the resume opens, before anything
+     * reads or writes through it: a serving runtime stamps the context of
+     * the run here, without which its wave takes no transaction.
+     */
+    opened?: (tx: IExtendedStorageTransaction) => void;
+    /**
+     * Whether the resume returns when its transaction was handed to the
+     * commit, without waiting for the outcome: a transaction of a serving
+     * runtime is settled by the wave it joins, which commits after the
+     * cycle that the resume runs in. A commit that fails then stops the
+     * piece and is given to `failed`.
+     */
+    sealed?: { failed: (piece: CompiledPiece, error: Error) => void };
+  } = {},
 ): Promise<CompiledPiece> => {
+  const { opened, sealed, ...pieceOptions } = options;
   const brought = new Set<string>();
   await syncCompiledPiece(runtime, artifact, resultCell);
   while (true) {
     const tx = runtime.edit();
+    opened?.(tx);
     let piece: CompiledPiece;
     try {
       piece = startCompiledPiece(
@@ -104,7 +122,7 @@ export const resumeCompiledPiece = async (
         artifact,
         undefined,
         resultCell.withTx(tx),
-        { ...options, resume: true },
+        { ...pieceOptions, resume: true },
       );
     } catch (error) {
       tx.abort(error);
@@ -118,7 +136,17 @@ export const resumeCompiledPiece = async (
     );
     if (missing.length === 0) {
       runtime.prepareTxForCommit(tx);
-      const { error } = await tx.commit().settled;
+      const { settled } = tx.commit();
+      if (sealed !== undefined) {
+        const resumed = piece;
+        settled.then(({ error }) => {
+          if (error === undefined) return;
+          resumed.stop();
+          sealed.failed(resumed, error);
+        });
+        return piece;
+      }
+      const { error } = await settled;
       if (error !== undefined) {
         piece.stop();
         throw error;
