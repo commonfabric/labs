@@ -528,6 +528,18 @@ const labeledSigner = () => Identity.fromPassphrase("pattern-compiler-compare");
 
 /** The schema a topic is written under: the clause of topic `index`. */
 const topicSchemaOf = (index: number, audience: unknown): JSONSchema => ({
+  // `SCALE_TOPIC_SCHEMA=mentions-as-cells` declares the mentions of a
+  // topic as references. A schema that declares a label and no structure
+  // has the memory server follow every link of a written topic when it
+  // brings the queries that reach the topic up to date.
+  ...(Deno.env.get("SCALE_TOPIC_SCHEMA") === "mentions-as-cells"
+    ? {
+      type: "object",
+      properties: {
+        mentions: { type: "array", items: { asCell: true } },
+      },
+    }
+    : {}),
   ifc: {
     confidentiality: [
       inputClause(
