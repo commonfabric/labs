@@ -1,0 +1,7 @@
+docs/history/INDEX.md merge=union
+
+# Tests, and the code that supports them, whose file names do not say so.
+apple/WeaverProbe/** test
+apple/scripts/**/test[-_]* test
+apple/scripts/fixtures/** test
+android/scripts/test-* test

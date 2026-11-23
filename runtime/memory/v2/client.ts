@@ -2546,10 +2546,11 @@ export class Client {
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
     // `patternLifecycle`, `patternLifecycleOrigins`,
     // `patternLifecycleScopes`, `servedRequests`, `spaceInvites`,
-    // `instanceNameMark` and `branches` are the server's capabilities alone:
-    // the client reads them from `hello.ok` and never offers them. Other
-    // flags an endpoint does not know are ignored there, since the routed
-    // flag allowlists were removed (infra DEVIATIONS row 41).
+    // `spaceInvitesRevision`, `instanceNameMark` and `branches` are the
+    // server's capabilities alone: the client reads them from `hello.ok` and
+    // never offers them. Other flags an endpoint does not know are ignored
+    // there, since the routed flag allowlists were removed (infra DEVIATIONS
+    // row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
@@ -2559,6 +2560,7 @@ export class Client {
       patternLifecycleScopes: _lifecycleScopesServerOnly,
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
+      spaceInvitesRevision: _invitesRevisionServerOnly,
       instanceNameMark: _instanceNameMarkServerOnly,
       branches: _branchesServerOnly,
       ...expectedFlags
@@ -3733,6 +3735,18 @@ export class SpaceSession {
 
   get sessionId(): string {
     return this.#sessionId;
+  }
+
+  /**
+   * The branch this session's opens name (`MountOptions.branch`): the default
+   * branch when they name none. It is the branch the session is of, except
+   * where an open asked the server to fork it (`MountOptions.forkBranch`) for
+   * a principal that may not write to the space: the server then opens the
+   * session on the default branch (04-protocol.md section 4.1.2), and
+   * `session.open` does not say so.
+   */
+  get requestedBranch(): BranchName {
+    return this.#branch ?? DEFAULT_BRANCH;
   }
 
   /** Serving-process provenance from the latest successful session open. */

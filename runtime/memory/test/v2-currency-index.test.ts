@@ -109,6 +109,8 @@ describe("currency-index", () => {
     slices?: CurrencySliceRecord[];
     /** The time the `space` slice expires at. */
     expiresAt?: number;
+    /** Whether the piece records a source origin. */
+    followsOrigin?: boolean;
   };
 
   /** A record of `piece`, vouched for, with `parts` over the empty ones. */
@@ -120,6 +122,8 @@ describe("currency-index", () => {
         vouched: boolean;
         reads: CurrencyRead[];
         vouches: string[];
+        decides?: Array<{ id: string; scopeKey: string }>;
+        superseded?: Array<{ id: string; scopeKey: string }>;
         expiresAt?: number;
       }
     >();
@@ -146,6 +150,15 @@ describe("currency-index", () => {
       merged.vouched &&= given.vouched;
       for (const read of given.reads) merged.reads.push(read);
       for (const id of given.vouches) merged.vouches.push(id);
+      if (given.decides !== undefined) {
+        merged.decides = [...(merged.decides ?? []), ...given.decides];
+      }
+      if (given.superseded !== undefined) {
+        merged.superseded = [
+          ...(merged.superseded ?? []),
+          ...given.superseded,
+        ];
+      }
     }
     return {
       piece,
@@ -153,6 +166,7 @@ describe("currency-index", () => {
       vouched: parts.vouched ?? true,
       writes: [...(parts.writes ?? []), ...(parts.produces ?? [])],
       owned: parts.owned ?? [],
+      ...(parts.followsOrigin === true && { followsOrigin: true }),
       slices: [...slices.values()],
     };
   };
@@ -270,7 +284,7 @@ describe("currency-index", () => {
       expect(advance()).toEqual(["of:piece"]);
     });
 
-    it("marks `1` each clean piece downstream of one that became marked, through a chain", () => {
+    it("marks `1` each clean piece downstream of one that became marked, through a chain, and reports each of those as stale upstream", () => {
       const asOf = write("of:a", "computed:b", "computed:c");
       store(asOf, [
         record("of:pieceB", {
@@ -290,8 +304,20 @@ describe("currency-index", () => {
 
       expect(advanceCurrencyCursor(engine, { space: SPACE })).toEqual([
         { piece: "of:pieceB", slice: "space", seq: changed, under: [] },
-        { piece: "of:pieceC", slice: "space", seq: changed, under: [] },
-        { piece: "of:pieceD", slice: "space", seq: changed, under: [] },
+        {
+          piece: "of:pieceC",
+          slice: "space",
+          seq: changed,
+          under: [],
+          upstream: true,
+        },
+        {
+          piece: "of:pieceD",
+          slice: "space",
+          seq: changed,
+          under: [],
+          upstream: true,
+        },
       ]);
       expect([markOf("of:pieceB"), markOf("of:pieceC"), markOf("of:pieceD")])
         .toEqual([2, 1, 1]);
@@ -1328,6 +1354,61 @@ describe("currency-index", () => {
 
         expect(stored.falseClean).toEqual([]);
       });
+
+      describe("for a piece whose result document each viewer holds an instance of", () => {
+        const ROOT = { id: "of:scoped", scope: "session" as const };
+        const OUT = { id: "computed:out", scope: "session" as const };
+
+        /**
+         * A record of `of:scoped` whose slice for Alice's session read her
+         * instance of the piece's result document, and vouches for it and
+         * for `computed:out`.
+         */
+        const scoped = () =>
+          record("of:scoped", {
+            writes: ["of:scoped", "computed:out"],
+            slices: [{
+              key: ALICE_SESSION,
+              vouched: true,
+              reads: [input("of:scoped", ALICE_SESSION)],
+              vouches: ["of:scoped", "computed:out"],
+            }],
+          });
+
+        it("names no piece that wrote its outputs once the viewer's instance of its result document was made", () => {
+          // The piece does not run for a viewer who holds no instance, so
+          // whoever instantiates it for them makes the instance, and that
+          // prompts what the piece writes.
+
+          const asOf = write("of:a");
+          store(asOf, [scoped()]);
+          const own = write(ROOT, OUT);
+
+          const stored = store(asOf, [scoped()], [own]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names a piece that wrote an output again while the viewer's instance of its result document stood", () => {
+          const asOf = write(ROOT, OUT);
+          store(asOf, [scoped()]);
+          const own = write(OUT);
+
+          const stored = store(asOf, [scoped()], [own]);
+
+          expect(stored.falseClean).toEqual(["of:scoped"]);
+        });
+
+        it("names a piece that wrote the viewer's instance of its result document again, to another value", () => {
+          const asOf = write(ROOT, OUT);
+          store(asOf, [scoped()]);
+          const own = write(ROOT);
+
+          const stored = store(asOf, [scoped()], [own]);
+
+          expect(stored.falseClean).toEqual(["of:scoped"]);
+        });
+      });
     });
   });
 
@@ -1364,7 +1445,7 @@ describe("currency-index", () => {
   describe("judgeCurrencyRoots()", () => {
     const judge = (
       roots: string[],
-      rows: Array<{ id: string; scopeKey: string }>,
+      rows: Array<{ id: string; scopeKey: string; demander?: string }>,
       epoch = EPOCH,
     ) =>
       judgeCurrencyRoots(engine, { space: SPACE, roots, rows, epoch }).servable;
@@ -1372,7 +1453,7 @@ describe("currency-index", () => {
     /** The reason each of `roots` is refused for, by root. */
     const refusals = (
       roots: string[],
-      rows: Array<{ id: string; scopeKey: string }>,
+      rows: Array<{ id: string; scopeKey: string; demander?: string }>,
       epoch = EPOCH,
     ) =>
       Object.fromEntries(
@@ -1415,6 +1496,51 @@ describe("currency-index", () => {
       storeVouching();
 
       expect(judge(["of:unrecorded"], [ROOT_ROW])).toEqual([]);
+    });
+
+    describe("with a piece that records a source origin", () => {
+      /** The pieces a judgment of `of:piece` names as recording an origin. */
+      const origins = () =>
+        judgeCurrencyRoots(engine, {
+          space: SPACE,
+          roots: ["of:piece"],
+          rows: [ROOT_ROW],
+          epoch: EPOCH,
+        }).origins;
+
+      it("names the root's own piece with a root the store can serve", () => {
+        storeVouching({ followsOrigin: true });
+
+        expect(origins()).toEqual([{ root: "of:piece", pieces: ["of:piece"] }]);
+      });
+
+      it("names a piece beneath the root, and no piece that records none", () => {
+        const asOf = storeVouching();
+        store(asOf, [
+          record("of:nested", { under: ["of:piece"], followsOrigin: true }),
+          record("of:plain", { under: ["of:piece"] }),
+        ]);
+
+        expect(origins()).toEqual([{
+          root: "of:piece",
+          pieces: ["of:nested"],
+        }]);
+      });
+
+      it("names no piece once a record of it says it records no origin", () => {
+        const asOf = storeVouching({ followsOrigin: true });
+        store(asOf, [record("of:piece", { produces: ["computed:out"] })]);
+
+        expect(origins()).toEqual([]);
+      });
+
+      it("names none for a root the store cannot serve", () => {
+        storeVouching({ followsOrigin: true, reads: [input("of:state")] });
+        write("of:state");
+        advance();
+
+        expect(origins()).toEqual([]);
+      });
     });
 
     it("returns nothing for a marked root", () => {
@@ -1536,6 +1662,669 @@ describe("currency-index", () => {
       expect(
         refusals(["of:outer"], [{ id: "computed:nested", scopeKey: "space" }]),
       ).toEqual({ "of:outer": "owner-not-clean" });
+    });
+
+    describe("with three pieces, each reading the output of the one before", () => {
+      /**
+       * Stores clean records of `of:a`, which derives `computed:a` from
+       * `of:in`, of `of:b`, which derives `computed:b` from `computed:a`,
+       * and of `of:c`, which derives `computed:c` from `computed:b`.
+       */
+      const storeChain = (): number => {
+        const asOf = write(
+          "of:in",
+          "of:a",
+          "of:b",
+          "of:c",
+          "computed:a",
+          "computed:b",
+          "computed:c",
+        );
+        store(asOf, [
+          record("of:a", {
+            reads: [input("of:in")],
+            produces: ["computed:a"],
+          }),
+          record("of:b", {
+            reads: [derived("computed:a")],
+            produces: ["computed:b"],
+          }),
+          record("of:c", {
+            reads: [derived("computed:b")],
+            produces: ["computed:c"],
+          }),
+        ]);
+        return asOf;
+      };
+
+      /** What a judgment of `roots` holds and names upstream. */
+      const upstreamOf = (roots: string[], running: string[] = []) => {
+        const { servable, refused, held, upstream } = judgeCurrencyRoots(
+          engine,
+          { space: SPACE, roots, rows: [], epoch: EPOCH, running },
+        );
+        return {
+          servable,
+          refused: refused.map(({ root }) => root),
+          held,
+          upstream,
+        };
+      };
+
+      it("holds the last one once an input of the first changed, and names the read of the first one's output that the one between made", () => {
+        storeChain();
+        write("of:in");
+        advance();
+
+        expect(upstreamOf(["of:c"])).toEqual({
+          servable: [],
+          refused: [],
+          held: [{ root: "of:c", readers: ["of:c"] }],
+          upstream: [{
+            reader: "of:c",
+            slice: "space",
+            id: "computed:a",
+            scopeKey: "space",
+            piece: "of:a",
+          }],
+        });
+      });
+
+      it("holds the last one once the output the one between read was overwritten, and names its own read of that one's output", () => {
+        storeChain();
+        write("computed:a");
+        advance();
+
+        expect(upstreamOf(["of:c"])).toMatchObject({
+          held: [{ root: "of:c", readers: ["of:c"] }],
+          upstream: [{
+            reader: "of:c",
+            slice: "space",
+            id: "computed:b",
+            scopeKey: "space",
+            piece: "of:b",
+          }],
+        });
+      });
+
+      it("refuses the one whose own input changed, and names nothing upstream of it", () => {
+        storeChain();
+        write("of:in");
+        advance();
+
+        expect(upstreamOf(["of:a"])).toEqual({
+          servable: [],
+          refused: ["of:a"],
+          held: [],
+          upstream: [],
+        });
+      });
+
+      it("returns the last one as servable while nothing changed", () => {
+        storeChain();
+
+        expect(upstreamOf(["of:c"])).toMatchObject({
+          servable: ["of:c"],
+          held: [],
+          upstream: [],
+        });
+      });
+
+      it("names what is upstream of a running piece asked about, and holds no root for it", () => {
+        storeChain();
+        write("of:in");
+        advance();
+
+        expect(upstreamOf([], ["of:b"])).toEqual({
+          servable: [],
+          refused: [],
+          held: [],
+          upstream: [{
+            reader: "of:b",
+            slice: "space",
+            id: "computed:a",
+            scopeKey: "space",
+            piece: "of:a",
+          }],
+        });
+      });
+
+      it("holds the last one for a viewer whose own instance of what it read no piece vouches for, and names the piece that writes it", () => {
+        // The piece between derived its output for no one but the viewers it
+        // ran for, and the last one read this viewer's instance of it.
+
+        const asOf = storeChain();
+        store(asOf, [
+          record("of:c", {
+            reads: [derived("computed:b")],
+            produces: ["computed:c"],
+            slices: [slice(ALICE_USER, [derived("computed:b", ALICE_USER)])],
+          }),
+        ]);
+
+        expect(upstreamOf(["of:c"], ["of:c"]).upstream).toEqual([{
+          reader: "of:c",
+          slice: ALICE_USER,
+          id: "computed:b",
+          scopeKey: ALICE_USER,
+          piece: "of:b",
+        }]);
+      });
+
+      it("holds a root for a demanded output of a piece beneath it that read the first one's output, and names that piece as the one whose read holds it", () => {
+        // The root's own slice read nothing that changed, so only the
+        // piece beneath it is stale.
+
+        storeChain();
+        const asOf = write("of:outer", "computed:nested");
+        store(asOf, [
+          record("of:nested", {
+            under: ["of:outer"],
+            reads: [derived("computed:a")],
+            produces: ["computed:nested"],
+          }),
+          record("of:outer"),
+        ]);
+        write("of:in");
+        advance();
+
+        const { servable, refused, held, upstream } = judgeCurrencyRoots(
+          engine,
+          {
+            space: SPACE,
+            roots: ["of:outer"],
+            rows: [{ id: "computed:nested", scopeKey: "space" }],
+            epoch: EPOCH,
+          },
+        );
+        expect({ servable, refused, held, upstream }).toEqual({
+          servable: [],
+          refused: [],
+          held: [{ root: "of:outer", readers: ["of:nested"] }],
+          upstream: [{
+            reader: "of:nested",
+            slice: "space",
+            id: "computed:a",
+            scopeKey: "space",
+            piece: "of:a",
+          }],
+        });
+      });
+
+      it("holds a root once for two pieces beneath it that read the first one's output, and names both as the ones whose reads hold it", () => {
+        storeChain();
+        const asOf = write("of:outer", "computed:nestedA", "computed:nestedB");
+        store(asOf, [
+          record("of:nestedA", {
+            under: ["of:outer"],
+            reads: [derived("computed:a")],
+            produces: ["computed:nestedA"],
+          }),
+          record("of:nestedB", {
+            under: ["of:outer"],
+            reads: [derived("computed:a")],
+            produces: ["computed:nestedB"],
+          }),
+          record("of:outer"),
+        ]);
+        write("of:in");
+        advance();
+
+        const { held } = judgeCurrencyRoots(engine, {
+          space: SPACE,
+          roots: ["of:outer"],
+          rows: [
+            { id: "computed:nestedA", scopeKey: "space" },
+            { id: "computed:nestedB", scopeKey: "space" },
+          ],
+          epoch: EPOCH,
+        });
+        expect(held.map(({ root, readers }) => ({
+          root,
+          readers: [...readers].sort(),
+        }))).toEqual([{
+          root: "of:outer",
+          readers: ["of:nestedA", "of:nestedB"],
+        }]);
+      });
+
+      it("refuses the one that read no one instance of what the first one writes, once the first one's input changed", () => {
+        // A read that names no instance names no instance to demand of the
+        // first one, so starting the reader's own piece is what is left.
+
+        const asOf = storeChain();
+        store(asOf, [
+          record("of:b", {
+            reads: [derived("computed:a", ANY_INSTANCE)],
+            produces: ["computed:b"],
+          }),
+        ]);
+        write("of:in");
+        advance();
+
+        expect(upstreamOf(["of:b"])).toEqual({
+          servable: [],
+          refused: ["of:b"],
+          held: [],
+          upstream: [],
+        });
+      });
+
+      it("refuses the last one when what it read is an instance the first one writes and, stored not vouched for, does not vouch for", () => {
+        // The first one ran for the instance and was recorded, so a further
+        // run of it vouches for no more.
+
+        const asOf = storeChain();
+        write("computed:lazy");
+        const stored = write("of:c");
+        store(stored, [
+          record("of:a", {
+            vouched: false,
+            reads: [input("of:in")],
+            produces: ["computed:a"],
+            writes: ["computed:lazy"],
+          }),
+          record("of:c", {
+            reads: [derived("computed:b"), derived("computed:lazy")],
+            produces: ["computed:c"],
+          }),
+        ]);
+        expect(asOf).toBeLessThan(stored);
+
+        expect(upstreamOf(["of:c"])).toMatchObject({
+          refused: ["of:c"],
+          held: [],
+          upstream: [],
+        });
+      });
+
+      it("refuses the last one, and names nothing upstream of it, when the first one's record was stored not vouched for", () => {
+        // A further run of the first one would be recorded the same way, so
+        // starting it would clear nothing.
+
+        const asOf = storeChain();
+        store(asOf, [
+          record("of:a", {
+            vouched: false,
+            reads: [input("of:in")],
+            produces: ["computed:a"],
+          }),
+        ]);
+        advance();
+
+        expect(upstreamOf(["of:c"])).toEqual({
+          servable: [],
+          refused: ["of:c"],
+          held: [],
+          upstream: [],
+        });
+        expect(upstreamOf([], ["of:c"]).upstream).toEqual([]);
+      });
+
+      it("refuses the last one when what it read is also a derived document no recorded piece writes", () => {
+        const asOf = storeChain();
+        store(asOf, [
+          record("of:c", {
+            reads: [derived("computed:b"), derived("computed:unrecorded")],
+            produces: ["computed:c"],
+          }),
+        ]);
+        write("of:in");
+        advance();
+
+        expect(upstreamOf(["of:c"])).toMatchObject({
+          refused: ["of:c"],
+          held: [],
+        });
+      });
+    });
+
+    describe("with a shared slot that one viewer's run wrote", () => {
+      const BOB_SESSION = resolveScopeKey("session", BOB);
+
+      /** The shared slot, as each viewer's session demands it. */
+      const SLOT = { id: "computed:out", scopeKey: "space" };
+      const FOR_ALICE = { ...SLOT, demander: ALICE_SESSION };
+      const FOR_BOB = { ...SLOT, demander: BOB_SESSION };
+
+      /**
+       * A record of `of:piece` whose run for Alice wrote `computed:out` at
+       * her key and left a redirect at the space's, from her prefs.
+       */
+      const storeForAlice = (): number => {
+        const asOf = write(
+          "of:piece",
+          "computed:out",
+          { id: "of:prefs", scope: "user" },
+          { id: "computed:out", scope: "user" },
+        );
+        store(asOf, [
+          record("of:piece", {
+            writes: ["computed:out"],
+            slices: [{
+              key: ALICE_USER,
+              vouched: true,
+              reads: [input("of:prefs", ALICE_USER)],
+              vouches: ["computed:out"],
+              decides: [SLOT],
+            }],
+          }),
+        ]);
+        return asOf;
+      };
+
+      it("returns the root for the viewer whose slice holds a row for the slot", () => {
+        storeForAlice();
+
+        expect(judge(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual([
+          "of:piece",
+        ]);
+      });
+
+      it("refuses the root for a viewer no slice of whose chain holds a row for the slot", () => {
+        // What the slot holds was decided by the other viewer's run, and a
+        // run for this one may write it otherwise.
+
+        storeForAlice();
+
+        expect(refusals(["of:piece"], [ROOT_ROW, FOR_BOB])).toEqual({
+          "of:piece": "unvouched-instance",
+        });
+      });
+
+      it("returns the root for the slot's viewer while another viewer demands something else of the space", () => {
+        storeForAlice();
+
+        expect(
+          judge(["of:piece"], [
+            ROOT_ROW,
+            FOR_ALICE,
+            { id: "of:elsewhere", scopeKey: "space", demander: BOB_SESSION },
+          ]),
+        ).toEqual(["of:piece"]);
+      });
+
+      it("refuses the root for the slot's viewer once an input of the slice that wrote it changed", () => {
+        storeForAlice();
+        write({ id: "of:prefs", scope: "user" });
+        advance();
+
+        expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
+          "of:piece": "owner-not-clean",
+        });
+      });
+
+      it("refuses the root for the slot's viewer once another run wrote the slot, and leaves the viewer's slice clean", () => {
+        // The viewer's row is behind the slot's head, so a start is what
+        // writes the slot as this viewer's run decides it. What else the
+        // slice answers for is as current as it was.
+
+        storeForAlice();
+        write("computed:out");
+        advance();
+
+        expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
+          "of:piece": "unvouched-instance",
+        });
+        expect(markOf("of:piece", ALICE_USER)).toBe(0);
+      });
+
+      /**
+       * Stores a record of `of:reader`, one slice of which read the slot
+       * for Alice and one for Bob.
+       */
+      const storeReaders = () => {
+        const asOf = storeForAlice();
+        const read = { ...derived("computed:out"), scopeKey: "space" };
+        store(Math.max(asOf, write("of:reader")), [
+          record("of:reader", {
+            slices: [
+              {
+                key: ALICE_USER,
+                vouched: true,
+                reads: [read, derived("computed:out", ALICE_USER)],
+                vouches: [],
+              },
+              { key: BOB_USER, vouched: true, reads: [read], vouches: [] },
+            ],
+          }),
+        ]);
+      };
+
+      it("stores clean a slice of another piece that read the slot at the viewer's key, and marked `1` one that read it at another viewer's", () => {
+        // For the other viewer the slot is one no slice of their chain
+        // answers for.
+
+        storeReaders();
+
+        expect([
+          markOf("of:reader", ALICE_USER),
+          markOf("of:reader", BOB_USER),
+        ]).toEqual([0, 1]);
+      });
+
+      it("refuses the root where the slot is demanded and no session is named for it", () => {
+        storeForAlice();
+
+        expect(refusals(["of:piece"], [ROOT_ROW, SLOT])).toEqual({
+          "of:piece": "unvouched-instance",
+        });
+      });
+
+      it("returns the root for another viewer where the `space` slice vouches for the slot as well", () => {
+        const asOf = storeForAlice();
+        store(asOf, [
+          record("of:piece", {
+            produces: ["computed:out"],
+            slices: [{
+              key: ALICE_USER,
+              vouched: true,
+              reads: [input("of:prefs", ALICE_USER)],
+              vouches: ["computed:out"],
+              decides: [SLOT],
+            }],
+          }),
+        ]);
+
+        expect(judge(["of:piece"], [ROOT_ROW, FOR_BOB])).toEqual(["of:piece"]);
+      });
+
+      describe("where a slice is recorded as holding a later write of the slot than its own", () => {
+        /**
+         * Stores a record of `of:piece` in which Alice's run wrote the slot
+         * and something changed it since. `produces` has the `space` slice
+         * vouch for the slot as well.
+         */
+        const storeSuperseded = (produces: boolean) => {
+          const asOf = storeForAlice();
+          store(asOf, [
+            record("of:piece", {
+              ...(produces
+                ? { produces: ["computed:out"] }
+                : { writes: ["computed:out"] }),
+              slices: [{
+                key: ALICE_USER,
+                vouched: true,
+                reads: [input("of:prefs", ALICE_USER)],
+                vouches: ["computed:out"],
+                superseded: [SLOT],
+              }],
+            }),
+          ]);
+          return asOf;
+        };
+
+        it("refuses the root for the slice's viewer, and leaves the slice clean", () => {
+          storeSuperseded(false);
+
+          expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
+            "of:piece": "unvouched-instance",
+          });
+          expect(markOf("of:piece", ALICE_USER)).toBe(0);
+        });
+
+        it("refuses the root for the slice's viewer where the `space` slice vouches for the slot as well", () => {
+          // A viewer whose runs never wrote the slot reads it as the `space`
+          // slice left it. This viewer's run wrote it, so a run for them
+          // may write it otherwise than it stands.
+
+          storeSuperseded(true);
+
+          expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
+            "of:piece": "unvouched-instance",
+          });
+          expect(judge(["of:piece"], [ROOT_ROW, FOR_BOB])).toEqual([
+            "of:piece",
+          ]);
+        });
+
+        it("stores marked `1` a slice of another piece that read the slot at the viewer's key", () => {
+          const asOf = storeSuperseded(false);
+          store(Math.max(asOf, write("of:reader")), [
+            record("of:reader", {
+              slices: [{
+                key: ALICE_USER,
+                vouched: true,
+                reads: [{ ...derived("computed:out"), scopeKey: "space" }],
+                vouches: [],
+              }],
+            }),
+          ]);
+
+          expect(markOf("of:reader", ALICE_USER)).toBe(1);
+        });
+
+        it("returns the root for the slice's viewer once a later record names the slot as one the slice decides", () => {
+          const asOf = storeSuperseded(false);
+          store(asOf, [
+            record("of:piece", {
+              writes: ["computed:out"],
+              slices: [{
+                key: ALICE_USER,
+                vouched: true,
+                reads: [input("of:prefs", ALICE_USER)],
+                vouches: ["computed:out"],
+                decides: [SLOT],
+              }],
+            }),
+          ]);
+
+          expect(judge(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual([
+            "of:piece",
+          ]);
+        });
+
+        it("counts the slot as one the slice decides where a record names it as both", () => {
+          const asOf = storeForAlice();
+          store(asOf, [
+            record("of:piece", {
+              writes: ["computed:out"],
+              slices: [{
+                key: ALICE_USER,
+                vouched: true,
+                reads: [input("of:prefs", ALICE_USER)],
+                vouches: ["computed:out"],
+                decides: [SLOT],
+                superseded: [SLOT],
+              }],
+            }),
+          ]);
+
+          expect(judge(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual([
+            "of:piece",
+          ]);
+        });
+      });
+
+      it("stores clean a slice that read the slot it decides, and marks it alone once its own input changed", () => {
+        const asOf = storeForAlice();
+        store(asOf, [
+          record("of:piece", {
+            writes: ["computed:out"],
+            slices: [{
+              key: ALICE_USER,
+              vouched: true,
+              reads: [
+                input("of:prefs", ALICE_USER),
+                { ...derived("computed:out"), scopeKey: "space" },
+              ],
+              vouches: ["computed:out"],
+              decides: [SLOT],
+            }],
+          }),
+        ]);
+        expect(markOf("of:piece", ALICE_USER)).toBe(0);
+
+        write({ id: "of:prefs", scope: "user" });
+        advance();
+
+        expect([markOf("of:piece", ALICE_USER), markOf("of:piece")]).toEqual([
+          2,
+          0,
+        ]);
+      });
+
+      it("marks `1` a clean slice of another piece that read the slot at the viewer's key, once an input of the slice that wrote it changed", () => {
+        const asOf = storeForAlice();
+        store(Math.max(asOf, write("of:reader")), [
+          record("of:reader", {
+            slices: [{
+              key: ALICE_USER,
+              vouched: true,
+              reads: [{ ...derived("computed:out"), scopeKey: "space" }],
+              vouches: [],
+            }],
+          }),
+        ]);
+        expect(markOf("of:reader", ALICE_USER)).toBe(0);
+
+        write({ id: "of:prefs", scope: "user" });
+        advance();
+
+        expect(markOf("of:reader", ALICE_USER)).toBe(1);
+      });
+
+      it("stores marked `1` a slice of another piece that read the slot at the viewer's key while the slice that wrote it is marked", () => {
+        storeForAlice();
+        write({ id: "of:prefs", scope: "user" });
+        advance();
+        store(write("of:reader"), [
+          record("of:reader", {
+            slices: [{
+              key: ALICE_USER,
+              vouched: true,
+              reads: [{ ...derived("computed:out"), scopeKey: "space" }],
+              vouches: [],
+            }],
+          }),
+        ]);
+
+        expect(markOf("of:reader", ALICE_USER)).toBe(1);
+      });
+
+      it("stores marked `1` a slice at the space that read the slot once another run wrote it", () => {
+        // The row the viewer's slice holds is behind the slot's head, so no
+        // slice answers for what the slot holds now.
+
+        storeForAlice();
+        write("computed:out");
+        advance();
+        store(write("of:reader"), [
+          record("of:reader", {
+            reads: [{ ...derived("computed:out"), scopeKey: "space" }],
+          }),
+        ]);
+
+        expect(markOf("of:reader")).toBe(1);
+      });
+
+      it("marks `1` a slice of another piece that read the slot at the viewer's key once the slice that wrote it is marked", () => {
+        storeReaders();
+        write({ id: "of:prefs", scope: "user" });
+        advance();
+
+        expect(markOf("of:reader", ALICE_USER)).toBe(1);
+      });
     });
 
     describe("with a piece recorded for two viewers", () => {
@@ -2036,6 +2825,38 @@ describe("currency-index", () => {
         writeSource("of:far");
 
         expect(pull()).toEqual([]);
+      });
+
+      it("returns stale what a piece computes, once the source's index starts over with its records dropped", () => {
+        // What `open()` leaves of an index it drops the records of: the rows
+        // the store tells its readers, and no cursor.
+
+        storeReading("of:piece", "computed:far");
+        const asOf = storeProducer();
+        pull();
+        source.database.exec(`
+          DELETE FROM currency_slice;
+          DELETE FROM currency_read;
+          DELETE FROM currency_write;
+          DELETE FROM currency_vouch;
+          DELETE FROM currency_cursor;
+        `);
+
+        const pulled = pullCurrencyExports(source, {
+          space: SOURCE,
+          reader: SPACE,
+          since: selectCurrencySourcePosition(engine, {
+            space: SPACE,
+            source: SOURCE,
+          }),
+        });
+
+        expect(pulled.entries).toEqual([{
+          id: "computed:far",
+          scopeKey: "space",
+          head: asOf,
+          stale: true,
+        }]);
       });
     });
 

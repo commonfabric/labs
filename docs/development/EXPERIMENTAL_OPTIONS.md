@@ -1935,6 +1935,18 @@ the per-epic implementation notes).
 >   session. Only the server advertises it; a client reads it from `hello.ok`
 >   and never offers it. A server that omits it parses as `false`, and
 >   `SpaceInviteClient` then sends administration over HTTP. It is permanent.
+> - **`spaceInvitesRevision`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server's invitation service moves a space's
+>   invitation ledger revision document, `of:space-invites-revision`, on the
+>   space's default branch with every change to the ledger, and tells its own
+>   sessions on the space of the move (the memory protocol chapter's section
+>   4.1.1). It does not depend on `inviteHost`, since the ledger also changes
+>   through the host's HTTP routes. Only the server advertises it; a client
+>   reads it from `hello.ok` on the connection its session is on, for a
+>   session on the default branch (`ISpaceReplica.invitesRevisionWatchable()`),
+>   and never offers it. Older servers omit it, which parses as `false`, and a
+>   client then reads the ledger again itself to learn of a change it did not
+>   make. It is permanent.
 > - **`servedRequests`** is a configuration-derived capability, neither an
 >   experimental toggle nor build-inherent. A memory server advertises it
 >   exactly while its host has installed a served-request handler through
@@ -2504,7 +2516,13 @@ the per-epic implementation notes).
   that space's index does not prove the instance current: `currency.carried`
   counts the rows offered now, and `currency.carriedRefused` the rows a
   space refused, as it does an actor's own instance where the actor may not
-  read the space.
+  read the space. A root that is stale only through what is upstream of it,
+  in its own space, is not made current by starting its piece: the loop
+  demands the instances that keep it stale, which starts the pieces that
+  write them, and holds the watermark until the root is judged again.
+  `currency.heldUpstream` counts the roots `skip` left unloaded for that,
+  and `currency.upstreamAbandoned` the pieces the loop gave up waiting on
+  what is upstream of, which loads a root that was held for them.
   `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a

@@ -281,9 +281,9 @@ does not: the server admitting it also DID the work, so producer
 and admitter share one trust environment at the envelope, and
 envelope identity verifies nothing there. The SpaceServer therefore
 commits under its own service identity — the envelope principal IS
-the lease holder §2 checks — and TWO DISTINCT things ride WITHIN
-the commit. Conflating them is the error this paragraph exists to
-prevent:
+the lease holder §2 checks — and THREE DISTINCT things ride WITHIN
+the commit. Conflating the first two is the error this paragraph
+exists to prevent:
 
 - **ADDRESSING — the explicit `scope_key`, one per scoped write.**
   It names WHICH INSTANCE the row is. The engine keys rows by it
@@ -326,6 +326,19 @@ prevent:
   known scope — attributes it right; counted as
   `earlyEmitRefusals`). Handler runs are unchanged (the event's
   server-stamped `firedAt` is their explicit actor, LD1).
+
+- **PRODUCER — the action id, one per write a run makes (RULED
+  2026-11-22).** The durable identity of the action whose run made
+  the write, the one the run's basis rows are keyed by
+  (serving-loop.md §3b). With the attribution it names the run, so a
+  stored write says which run produced it, and the run's basis rows
+  say what that run read. Every write of a scheduler run and of the
+  serving loop's direct commit carries it, a space-scoped write of
+  a run that acts as nobody included. A write of an effect
+  completion names none: it lands a result, and no run derives it.
+  Recorded, not
+  read, like the attribution: a mechanism that starts DECIDING from
+  it needs a spec edit here first.
 
 Attributed, not signed, today — and RECORDED, not read, today
 (stated after the 2026-08-03 provenance audit asked): no
@@ -996,9 +1009,11 @@ disabled (README §3.5).
   the explicit `scope_key` on every scoped write (addressing) and
   the acting identity on every action RUN's writes, where the run
   has one — §1 (attribution,
-  `action × instance`). The pair's CARRIAGE is server-internal
+  `action × instance`); and the PRODUCER §1 defines, the action id
+  on every write a run makes (RULED 2026-11-22). Their CARRIAGE is
+  server-internal
   admission input (like `commitClass`/`holder`: `ClientCommit`
-  cannot express it), and its STORED form is a per-op-indexed
+  cannot express it), and their STORED form is a per-op-indexed
   sidecar on the commit row — recorded, never wire, never pushed;
   admission consumes only the addressing half, to key scoped rows
   (§1's recorded-not-read attribution). Anything further needs a

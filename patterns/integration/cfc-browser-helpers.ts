@@ -557,6 +557,9 @@ const recordTrustedActionClick = (clickTarget: HTMLElement): void => {
             tagName: node.tagName.toLowerCase(),
             id: node.id,
             dataset,
+            value: "value" in node && typeof node.value === "string"
+              ? node.value
+              : undefined,
           }];
         }),
       };
@@ -3013,6 +3016,7 @@ type TrustedActionProbe = {
       tagName: string;
       id: string;
       dataset: Record<string, string>;
+      value?: string;
     }>;
   };
   matches: Array<{
@@ -3415,7 +3419,8 @@ async function closeClickLanding(
   }, { args: [selector] });
 }
 
-async function readTrustedActionProbe(
+/** Reads the action controls and the last marked click, including input values. */
+export async function readTrustedActionProbe(
   page: Page,
   action: string,
 ): Promise<TrustedActionProbe> {

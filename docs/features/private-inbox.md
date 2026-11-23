@@ -730,8 +730,8 @@ runtime holding the inbox refuses to let another principal's code copy the
 offers anywhere. The label does not stop another principal's runtime reading
 them, as the access section says.
 
-An offer is the envelope a loom share inbox keeps, its nine fields, and one
-more, `receivedAt`:
+An offer is the envelope a loom share inbox keeps, its nine fields, and two
+more, `receivedAt` and, on a notice, `changes`:
 
 - `kind`: what is offered, such as `loom` or `fabrichat-room`. A reader acts
   only on the kinds it knows.
@@ -760,6 +760,14 @@ more, `receivedAt`:
   registers it naming no profile.
 - `receivedAt`: when the inbox received the offer, by its own clock. A
   handler's clock reads to the second, so two offers can share it.
+- `changes`: on a notice that the offered thing changed, rather than an offer
+  of it, the kinds of thing that changed, each set to `true`, such as
+  `{ title: true }`; absent on an offer. A notice carries none of the thing's
+  data, so its `title` is typically empty, and a reader that acts on one reads
+  what changed from the thing itself. A room's notice keeps the room space's
+  `kind`, `fabrichat-room`, and is keyed `changed:` followed by the room's
+  space DID, so the inbox holds one per sender and room. Like `from`, the
+  change set is the sender's claim.
 
 ## Sending one
 
@@ -798,13 +806,22 @@ does, and then checks the sender:
   that is absent or `null`, or whose `space` is absent, `null` or empty once
   trimmed, is kept as `null`. Any other `toProfile`, one that is not a record
   or whose `space` is not a string naming a well-formed DID, is not kept,
-  since the inbox cannot read it as naming no profile. Any other field the
+  since the inbox cannot read it as naming no profile. A `changes` that is a
+  record is kept as the first `OFFER_CHANGES_MAX_KEYS` (8) of its keys that
+  are camelCase identifiers of at most 32 characters, opening with a lowercase
+  letter, and set to `true`; one that is absent or `null` is not kept; and any
+  other is kept as a record naming no change, so a notice the inbox cannot
+  read stays a notice rather than becoming an offer. Any other field the
   envelope does not name is not kept.
 - The event is dropped when its `from` is not the principal sending it, or
   when an offer in the inbox already has its `from` and `id`. So a resend of
   one offer is kept once, the first one kept stays as it was, and no sender
   can take another sender's `id` first. A loom share inbox keys on `id` alone,
-  so this inbox is the stricter of the two.
+  so this inbox is the stricter of the two. A notice is the exception: one
+  whose sender already has a row in the inbox under its `id` replaces that
+  row where it stands, whatever the `sharedAt` of either, so the inbox holds
+  each sender's latest notice of each thing and the rows never accumulate. A
+  reader tells a replaced notice from the one it acted on by its `sharedAt`.
 
 The sender is not told of a drop, but it can read the offers back and look
 for a row with its offer's `id`, `from` and `space`, as a loom sender does.
@@ -813,8 +830,9 @@ for a row with its offer's `id`, `from` and `space`, as a loom sender does.
 
 The owner reads `offers`. Nothing marks an offer as read or removes it, so a
 reader keeps its own record of the offers it has handled, keyed by `from` and
-`id`, wherever it keeps its own state. Two senders may choose the same `id`,
-and the inbox keeps an offer from each.
+`id`, wherever it keeps its own state, and a notice by its `sharedAt` too,
+since a later notice from the same sender takes the earlier one's row. Two
+senders may choose the same `id`, and the inbox keeps an offer from each.
 
 A row's `from` is the sender's claim, not a fact the inbox vouches for.
 `receive` keeps an offer only when `from` is the principal sending it, but

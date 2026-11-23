@@ -25,6 +25,7 @@ import PrivateInbox, {
   isNonListAppendRefusal,
   type Offer,
   OFFER_ADDRESS_MAX_LENGTH,
+  OFFER_CHANGES_MAX_KEYS,
   OFFER_DEFAULT_KIND,
   OFFER_ID_MAX_LENGTH,
   OFFER_KIND_MAX_LENGTH,
@@ -51,6 +52,26 @@ const SOMEONE_ELSE = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
 
 /** A well-formed host origin for an offer to name. */
 const HOST = "https://example.com";
+
+/** The `id` of a notice that the room in {@link ROOM_SPACE} changed. */
+const NOTICE_ID =
+  "changed:did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+/**
+ * A notice from `from` that the room in {@link ROOM_SPACE} changed, shared at
+ * `sharedAt`, with `changes` as its change set.
+ */
+function noticeOf(from: string, sharedAt: number, changes: unknown) {
+  return {
+    kind: "fabrichat-room",
+    id: NOTICE_ID,
+    space: ROOM_SPACE,
+    host: HOST,
+    from,
+    sharedAt,
+    changes,
+  };
+}
 
 /** The offer in `offers` with `id`, if any. */
 function offerWithId(
@@ -556,6 +577,78 @@ export default pattern(() => {
   const assert_duplicate_dropped = assert(() =>
     inbox.offers.filter((each) => each?.id === "loom-shaped").length === 1 &&
     offerWithId(inbox.offers, "loom-shaped")?.title === "Lunch"
+  );
+
+  // A notice that a room changed keeps the kinds of change its `changes`
+  // names, each an identifier set to `true`, and no others.
+  const action_receive_notice = action(() => {
+    inbox.receive.send(
+      noticeOf(me.get(), 1_000, {
+        title: true,
+        members: "yes",
+        "Not an identifier": true,
+        ["x".repeat(40)]: true,
+      }) as never,
+    );
+  });
+  const assert_notice_keeps_its_changes = assert(() => {
+    const notice = offerWithId(inbox.offers, NOTICE_ID);
+    return notice?.sharedAt === 1_000 &&
+      JSON.stringify(notice?.changes) === JSON.stringify({ title: true });
+  });
+  const offersBefore = Writable.of<number>(0);
+  const action_note_offers = action(() =>
+    offersBefore.set(inbox.offers.length)
+  );
+
+  // A notice sent again from its sender replaces the row the first left,
+  // whatever its `sharedAt`, where any other offer keeps the first.
+  const action_resend_notice = action(() => {
+    inbox.receive.send(noticeOf(me.get(), 2_000, { title: true }) as never);
+  });
+  const assert_notice_replaced = assert(() =>
+    inbox.offers.filter((each) => each?.id === NOTICE_ID).length === 1 &&
+    offerWithId(inbox.offers, NOTICE_ID)?.sharedAt === 2_000 &&
+    inbox.offers.length === offersBefore.get()
+  );
+  const action_resend_notice_earlier = action(() => {
+    inbox.receive.send(noticeOf(me.get(), 500, { title: true }) as never);
+  });
+  const assert_notice_replaced_by_earlier = assert(() =>
+    inbox.offers.filter((each) => each?.id === NOTICE_ID).length === 1 &&
+    offerWithId(inbox.offers, NOTICE_ID)?.sharedAt === 500 &&
+    inbox.offers.length === offersBefore.get()
+  );
+
+  // A `changes` that is not a record is kept as one naming no change, so the
+  // row is still a notice, and one naming more kinds than the inbox keeps
+  // keeps the first of them.
+  const action_receive_odd_notices = action(() => {
+    inbox.receive.send({
+      ...noticeOf(me.get(), 1_000, "title"),
+      id: "changes-not-a-record",
+    } as never);
+    inbox.receive.send({
+      ...noticeOf(
+        me.get(),
+        1_000,
+        Object.fromEntries(
+          Array.from(
+            { length: OFFER_CHANGES_MAX_KEYS + 3 },
+            (_, i) => [`kind${i}`, true],
+          ),
+        ),
+      ),
+      id: "too-many-changes",
+    } as never);
+  });
+  const assert_odd_notices_kept = assert(() =>
+    JSON.stringify(
+        offerWithId(inbox.offers, "changes-not-a-record")?.changes,
+      ) === "{}" &&
+    Object.keys(offerWithId(inbox.offers, "too-many-changes")?.changes ?? {})
+        .length === OFFER_CHANGES_MAX_KEYS &&
+    offerWithId(inbox.offers, "loom-shaped")?.changes === undefined
   );
 
   // An inbox whose `offers` a writer replaced with something other than a
@@ -1960,6 +2053,15 @@ export default pattern(() => {
       { assertion: assert_refused_offers_dropped },
       { action: action_receive_duplicate },
       { assertion: assert_duplicate_dropped },
+      { action: action_receive_notice },
+      { assertion: assert_notice_keeps_its_changes },
+      { action: action_note_offers },
+      { action: action_resend_notice },
+      { assertion: assert_notice_replaced },
+      { action: action_resend_notice_earlier },
+      { assertion: assert_notice_replaced_by_earlier },
+      { action: action_receive_odd_notices },
+      { assertion: assert_odd_notices_kept },
       { action: action_receive_into_corrupt },
       { assertion: assert_corrupt_offers_left_as_they_were },
       { assertion: assert_only_a_non_list_refusal_is_passed_over },

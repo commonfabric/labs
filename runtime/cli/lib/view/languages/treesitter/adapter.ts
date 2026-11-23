@@ -147,6 +147,9 @@ interface LoadedGrammar {
 const loaded = new Map<string, LoadedGrammar>();
 const loading = new Map<string, Promise<void>>();
 
+/** The loads that have started and not ended. */
+const unfinished = new Set<Promise<void>>();
+
 /** The runtime shared by every loaded grammar, present once one is loaded. */
 let runtime: TreeSitterModule | undefined;
 
@@ -170,11 +173,32 @@ export function onGrammarLoad(
   return () => loadListeners.delete(listener);
 }
 
+/**
+ * Waits for the grammar loads that have started and not ended, such as one a
+ * parse started on reaching a language embedded in another, and returns
+ * whether there were any. Rejects, once all have ended, with the reason the
+ * first of them to fail did.
+ */
+export async function finishGrammarLoads(): Promise<boolean> {
+  const pending = [...unfinished];
+  for (const outcome of await Promise.allSettled(pending)) {
+    if (outcome.status === "rejected") throw outcome.reason;
+  }
+  return pending.length > 0;
+}
+
 /** Load a grammar's runtime and parser, once per grammar. */
 export function prepareGrammar(grammar: TreeSitterGrammar): Promise<void> {
   if (loaded.has(grammar.id)) return Promise.resolve();
-  const pending = loading.get(grammar.id) ?? loadGrammar(grammar);
+  const started = loading.get(grammar.id);
+  if (started !== undefined) return started;
+  const pending = loadGrammar(grammar);
   loading.set(grammar.id, pending);
+  unfinished.add(pending);
+  pending.then(
+    () => unfinished.delete(pending),
+    () => unfinished.delete(pending),
+  );
   return pending;
 }
 

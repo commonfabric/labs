@@ -32,6 +32,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "currency_read",
   "currency_write",
   "currency_vouch",
+  "currency_decide",
+  "currency_origin",
   "currency_cursor",
   "currency_expiry",
   "currency_slice_source",

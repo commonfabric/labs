@@ -7,12 +7,15 @@ import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
+import { stub } from "@std/testing/mock";
 import { ExecutorHost } from "../../src/executor/host.ts";
 import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
 import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
+import { rawMetaWriteAuthorization } from "../../src/meta-seam.ts";
 import { Runtime } from "../../src/runtime.ts";
+import type { ReconcileOutcome } from "../../src/source-reconciler.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
@@ -73,6 +76,31 @@ const DRAFT_PROGRAM: RuntimeProgram = {
 };
 
 /**
+ * A piece that encloses another whose result is each session's own: the
+ * inner pattern is instantiated at the session's scope, so every session
+ * holds an instance of its result document.
+ */
+const NESTED_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "const Inner = pattern<{ value: number }, { doubled: number }>(",
+      "  ({ value }) => ({ doubled: computed(() => value * 2) }),",
+      ");",
+      "export default pattern<",
+      "  { value: number },",
+      "  { inner: { doubled: number }; tripled: number }",
+      ">(({ value }) => ({",
+      "  inner: Inner.asScope('session')({ value }),",
+      "  tripled: computed(() => value * 3),",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
+/**
  * One demanded document: a watch root, or a document a selector reaches, at
  * the space's instance unless `scopeKey` names another, demanded by the
  * session `viewer` of alice unless `session` names another session or
@@ -95,6 +123,15 @@ describe("SpaceServer", () => {
   let servingRuntime: Runtime | undefined;
   let cycles: ArrivalLog<unknown>;
   let demanded: Demanded[];
+
+  /**
+   * What following a piece's origin answers on each serving runtime made
+   * from here on, or `undefined` to follow origins for real.
+   */
+  let followOutcome: ReconcileOutcome | undefined;
+
+  /** The pieces whose origin a serving runtime followed, and whether each ran. */
+  let follows: Array<{ id: string; running: boolean }>;
   const opened: { runtime: Runtime; manager: EmulatedStorageManager }[] = [];
 
   /** A runtime over the shared server, acting for `as`, that runs nothing. */
@@ -121,6 +158,8 @@ describe("SpaceServer", () => {
     servingRuntime = undefined;
     cycles = new ArrivalLog();
     demanded = [];
+    followOutcome = undefined;
+    follows = [];
     // The demand is the documents each case names, as one session of alice's
     // demands them.
     (server as { demandForSpace: unknown }).demandForSpace = () =>
@@ -170,6 +209,15 @@ describe("SpaceServer", () => {
           experimental: { serverExecution: true },
         });
         servingRuntime = runtime;
+        if (followOutcome !== undefined) {
+          stub(runtime.sourceReconciler, "reconcile", (cell) => {
+            follows.push({
+              id: cell.getAsNormalizedFullLink().id,
+              running: runtime.runner.isRunning(cell),
+            });
+            return Promise.resolve(followOutcome!);
+          });
+        }
         return Promise.resolve({
           runtime,
           dispose: async () => {
@@ -428,6 +476,71 @@ describe("SpaceServer", () => {
         expect(host.stats().currency.rearmed).toBe(0);
         cancel();
       });
+
+      it("leaves unstarted a settled piece that encloses one whose result is the session's own, under `skip`", async () => {
+        // The session watches the outer piece through its result schema,
+        // which reaches the session's instance of the inner piece's result.
+
+        delete (server as { demandForSpace?: unknown }).demandForSpace;
+        host = newHost("skip");
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: aliceSigner,
+        });
+        const alice = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { serverExecution: true },
+        });
+        opened.push({ runtime: alice, manager });
+        const compiled = await alice.patternManager.compilePattern(
+          NESTED_PROGRAM,
+          { space },
+        );
+        const argument = alice.getCell<{ value: number }>(
+          space,
+          "currency nested argument",
+          compiled.argumentSchema,
+        );
+        const result = alice.getCell<
+          { inner: { doubled: number }; tripled: number }
+        >(
+          space,
+          "currency nested result",
+          compiled.resultSchema,
+        );
+        await argument.sync();
+        await result.sync();
+        const tx = alice.edit();
+        argument.withTx(tx).set({ value: 2 });
+        alice.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const cancel = result.sink(() => {});
+        const root = result.getAsNormalizedFullLink();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.recordsStored > 0 && serves(root),
+        );
+        await waitForCellValue(
+          alice,
+          result.key("inner").key("doubled"),
+          (doubled: number | undefined) => doubled === 4,
+          { stuckLabel: "the inner piece's `doubled` to be 4" },
+        );
+        await settled();
+        expect(host.stats().currency.unvouched).toEqual({});
+        await host.spaceServer(space)!.park("test-park");
+
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await settled();
+
+        expect(serves(root)).toBe(false);
+        expect(host.stats().currency.falseClean).toBe(0);
+        cancel();
+      });
     });
 
     describe("noteDemandChanged()", () => {
@@ -455,6 +568,8 @@ describe("SpaceServer", () => {
           expiryWakes: 0,
           carried: 0,
           carriedRefused: 0,
+          heldUpstream: 0,
+          upstreamAbandoned: 0,
           falseClean: 0,
         });
       });
@@ -751,6 +866,63 @@ describe("SpaceServer", () => {
 
         await awaitEach(cycles, () => serves(piece.root));
         expect(host.stats().currency.rearmed).toBe(1);
+      });
+
+      describe("with a piece that records a source origin", () => {
+        /**
+         * Sets up the tripler with a source origin recorded on its root, as
+         * a piece created from a served source carries one.
+         */
+        const setUpTriplerWithOrigin = async () => {
+          const piece = await setUpTripler();
+          const writer = openRuntime(setupSigner);
+          const root = writer.getCellFromLink(piece.root);
+          await root.sync();
+          const tx = writer.edit();
+          root.withTx(tx).setMetaRaw(
+            "patternSource",
+            "system:system/probe/probe.tsx",
+            rawMetaWriteAuthorization,
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+          return piece;
+        };
+
+        it("follows the origin while the piece is stopped and leaves the piece unstarted where the origin has not moved, under `skip`", async () => {
+          followOutcome = "current";
+          host = newHost("skip");
+          const piece = await setUpTriplerWithOrigin();
+          await serveAndPark(piece);
+          follows.length = 0;
+
+          await touchSpace();
+          await awaitEach(
+            cycles,
+            () =>
+              host!.stats().currency.servedFromStore === 1 &&
+              follows.length === 1,
+          );
+          await settled();
+
+          expect(follows).toEqual([{ id: piece.root.id, running: false }]);
+          expect(serves(piece.root)).toBe(false);
+          await outIs(6);
+        });
+
+        it("starts the piece where it adopted new source when its origin was followed, under `skip`", async () => {
+          followOutcome = "current";
+          host = newHost("skip");
+          const piece = await setUpTriplerWithOrigin();
+          await serveAndPark(piece);
+          followOutcome = "updated";
+
+          await touchSpace();
+          await awaitEach(cycles, () => serves(piece.root));
+
+          expect(serves(piece.root)).toBe(true);
+        });
       });
     });
   });

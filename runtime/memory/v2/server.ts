@@ -172,6 +172,7 @@ import {
   type CurrencyMarked,
   type CurrencyRefusal,
   type CurrencyStored,
+  type CurrencyUpstreamRead,
   dropUnreadCurrencyImports,
   forgetCurrencyImports,
   forgetCurrencySource,
@@ -193,12 +194,16 @@ import {
 import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
 import {
-  executeInvite,
+  applyInvite,
   type InviteRequest,
   type InviteResult,
   parseInviteOperation,
 } from "./invites.ts";
-import { type RedeemReceipt, SpaceInviteError } from "../space-invites.ts";
+import {
+  type RedeemReceipt,
+  SPACE_INVITES_REVISION_DOC_ID,
+  SpaceInviteError,
+} from "../space-invites.ts";
 import {
   isGenesisRoot,
   readGenesisRoot,
@@ -5953,7 +5958,11 @@ export class Server {
     }
   }
 
-  /** Executes an authenticated invitation operation with ordinary ACL publication. */
+  /**
+   * Executes an authenticated invitation operation, and publishes what it
+   * committed as any commit is published: a redemption's ACL grant, and the
+   * move of the ledger's revision document (`SPACE_INVITES_REVISION_DOC_ID`).
+   */
   async invite(request: InviteRequest): Promise<InviteResult["result"]> {
     return await this.#withSpacePublicationLock(request.space, async () => {
       if (!(await this.#spaceStoreExists(request.space))) {
@@ -5964,10 +5973,11 @@ export class Server {
         );
       }
       const engine = await this.#openEngine(request.space);
-      const { result, commit } = executeInvite(engine, {
+      const outcome = applyInvite(engine, {
         ...request,
         implicitOwner: this.#isServicePrincipal(request.principal),
       });
+      const { commit, revision } = outcome;
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
         this.#accessListChanged(engine, request.space);
@@ -5982,7 +5992,22 @@ export class Server {
           writes: [{ id: aclDocId(request.space), scopeKey: "space" }],
         });
       }
-      return result;
+      // Published before a refusal is thrown, since a refused preview or
+      // redemption can have retired an invitation.
+      if (revision !== undefined) {
+        this.markSpaceDirty(request.space, [
+          toDirtyKey(SPACE_INVITES_REVISION_DOC_ID),
+        ]);
+        this.#notifyCommitAdmitted({
+          space: request.space,
+          seq: revision.seq,
+          class: "system",
+          sessionId: "invite-service",
+          writes: [{ id: SPACE_INVITES_REVISION_DOC_ID, scopeKey: "space" }],
+        });
+      }
+      if ("failure" in outcome) throw new SpaceInviteError(outcome.failure);
+      return outcome.result;
     });
   }
 
@@ -6033,6 +6058,15 @@ export class Server {
       ) {
         throw new Engine.ProtocolError(
           "direct writes may not delete a space",
+        );
+      }
+      // The invitation service moves its revision document in the
+      // transaction that changes its ledger, and a direct write would say the
+      // ledger moved when it had not, which the store refuses of any commit
+      // but a system one (`refuseInviteRevisionWritesOutsideTheService`).
+      if (id === SPACE_INVITES_REVISION_DOC_ID) {
+        throw new Engine.ProtocolError(
+          "direct writes may not move the invitation service's revision document",
         );
       }
       if (this.#aclMode() !== "off") {
@@ -13301,19 +13335,37 @@ export class Server {
    * a slice the demand rows are resolved under is followed first: one that
    * `space` is armed with is not asked, and any other is pulled from.
    *
-   * @returns The roots that pass, each with the piece it was judged as, how
-   * many roots each reason refused, the slices marked since `space`'s
-   * serving loop last asked, and the earliest time a slice of `space`
-   * expires at or its arming with a space it reads runs out, where either
-   * does: the roots are to be judged again then, since no commit reports
-   * it.
+   * A root that would pass but for slices that are stale only through
+   * what is upstream of them is held: what the store holds of it is not
+   * current, and starting its piece would not make it so. `running` are
+   * pieces `space`'s serving loop runs already, asked about for what is
+   * upstream of them alone.
+   *
+   * @returns The roots that pass, each with the piece it was judged as, the
+   * roots that are held, the reads that keep a held root or a running piece
+   * stale upstream, each with the piece to start for it, how many roots
+   * each reason refused, the slices marked since `space`'s serving loop
+   * last asked, and the earliest time a slice of `space` expires at or its
+   * arming with a space it reads runs out, where either does: the roots are
+   * to be judged again then, since no commit reports it.
    */
   async judgeCurrencyRoots(
     space: string,
     roots: readonly string[],
-    options: { excludePrincipal?: string; epoch: string },
+    options: {
+      excludePrincipal?: string;
+      epoch: string;
+      running?: readonly string[];
+    },
   ): Promise<{
-    servable: Array<{ root: string; piece: string }>;
+    /**
+     * The roots the store can serve, each with its piece and the pieces it
+     * rests on that record a source origin, which the loop follows before
+     * it leaves the root unstarted.
+     */
+    servable: Array<{ root: string; piece: string; origins: string[] }>;
+    held: Array<{ root: string; piece: string; readers: string[] }>;
+    upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
     marked: CurrencyMarked[];
     nextExpiry?: number;
@@ -13332,7 +13384,10 @@ export class Server {
         ...(nextExpiry !== undefined && { nextExpiry }),
       };
     };
-    if (roots.length === 0) return { servable: [], ...found() };
+    const running = options.running ?? [];
+    if (roots.length === 0 && running.length === 0) {
+      return { servable: [], held: [], upstream: [], ...found() };
+    }
 
     /**
      * The recorded piece `root` leads to: the one piece recorded as deriving
@@ -13367,17 +13422,32 @@ export class Server {
       if (piece !== undefined) pieces.set(root, piece);
       else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
     }
-    if (pieces.size === 0) return { servable: [], ...found() };
+    if (pieces.size === 0 && running.length === 0) {
+      return { servable: [], held: [], upstream: [], ...found() };
+    }
     const demand = this.demandForSpace(
       space,
       options.excludePrincipal === undefined
         ? {}
         : { excludePrincipal: options.excludePrincipal },
     );
-    const rows = function* (): Generator<CurrencyInstance> {
+    // Whose view of a slot is asked about decides which slice answers for
+    // it, and the scope key of a row at the space names no pair. So each row
+    // carries the session key of the pair whose session demands it, where
+    // that session names a principal.
+    const rows = function* (): Generator<
+      CurrencyInstance & { demander?: string }
+    > {
       for (const share of demand) {
         for (const row of share.rows.values()) {
-          yield { id: row.id, scopeKey: row.scopeKey };
+          const { principal, sessionId } = row.identity ?? {};
+          yield {
+            id: row.id,
+            scopeKey: row.scopeKey,
+            ...(principal !== undefined && sessionId !== undefined && {
+              demander: resolveScopeKey("session", { principal, sessionId }),
+            }),
+          };
         }
       }
     };
@@ -13399,21 +13469,36 @@ export class Server {
       roots: [...new Set(pieces.values())],
       rows: rows(),
       epoch: options.epoch,
+      running,
     });
     const passing = new Set(judgment.servable);
+    const holding = new Map(
+      judgment.held.map(({ root, readers }) => [root, readers]),
+    );
     const reasons = new Map(
       judgment.refused.map(({ root, reason }) => [root, reason]),
     );
-    const servable: Array<{ root: string; piece: string }> = [];
+    const origins = new Map(
+      judgment.origins.map(({ root, pieces }) => [root, pieces]),
+    );
+    const servable: Array<
+      { root: string; piece: string; origins: string[] }
+    > = [];
+    const held: Array<{ root: string; piece: string; readers: string[] }> = [];
     for (const [root, piece] of pieces) {
       if (passing.has(piece)) {
-        servable.push({ root, piece });
+        servable.push({ root, piece, origins: origins.get(piece) ?? [] });
+        continue;
+      }
+      const readers = holding.get(piece);
+      if (readers !== undefined) {
+        held.push({ root, piece, readers });
         continue;
       }
       const reason = reasons.get(piece);
       if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
     }
-    return { servable, ...found() };
+    return { servable, held, upstream: judgment.upstream, ...found() };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
@@ -13526,6 +13611,12 @@ export class Server {
    * where this server cannot ask `space`'s store. A row stands until
    * `reader` replaces it or its origin session ends.
    *
+   * `reader` may be `space` itself: its loop then offers the instances its
+   * own index named as stale upstream of what a session demands, so that
+   * the pieces that write them start (serving-loop.md §1, "A root stale
+   * upstream"). Each of those rows stands, and an origin that is a session
+   * of `space` is carried as a pair without the grant being asked.
+   *
    * @returns How many of `rows` were refused.
    */
   async setCarriedDemand(
@@ -13546,7 +13637,10 @@ export class Server {
         rows: Map<string, DemandedInstanceRow>;
       }
     >();
-    /** Whether `principal` holds READ on `space`, asked once for each. */
+    /**
+     * Whether a principal reads `space`, asked once for each, apart for an
+     * origin in `space` and one in another space.
+     */
     const granted = new Map<string, boolean>();
     for (const row of rows) {
       const origin = this.#sessions.peek(
@@ -13563,11 +13657,15 @@ export class Server {
       // Whether the actor holds READ here, and so is carried as a pair.
       let reads = false;
       if (admitted) {
-        let verdict = granted.get(principal!);
+        // A session of `space` itself reads it already: its own loop offers
+        // a row for it, for a piece upstream of what it demands.
+        const own = row.origin.space === space;
+        const asked = `${own}\0${principal!}`;
+        let verdict = granted.get(asked);
         if (verdict === undefined) {
-          verdict = this.#foreignGrantOn(engine!, space, principal!, "READ")
-            .granted;
-          granted.set(principal!, verdict);
+          verdict = own ||
+            this.#foreignGrantOn(engine!, space, principal!, "READ").granted;
+          granted.set(asked, verdict);
         }
         reads = verdict;
         // A serving loop reads a shared instance of another space whoever
@@ -13622,8 +13720,12 @@ export class Server {
     }
     this.#refreshCarriedDemand(space);
     // What is proven current is proven for a reading space that hears of
-    // the next change, so one that offers demand is armed first.
-    if (next.size > 0) await this.#followForCarriedDemand(reader, space);
+    // the next change, so one that offers demand is armed first. A space
+    // that offers demand to itself asks for what its own index named stale,
+    // and every such row stands.
+    if (next.size > 0 && reader !== space) {
+      await this.#followForCarriedDemand(reader, space);
+    }
     return { refused };
   }
 

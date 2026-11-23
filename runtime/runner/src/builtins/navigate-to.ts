@@ -235,7 +235,7 @@ export function navigateTo(
       path: ["entries"],
     } as unknown as NormalizedFullLink;
     const currentEntries = intentTx.readValueOrThrow(entriesLink, {
-      meta: { ...ignoreReadForScheduling, ...mergeableOpRead },
+      meta: Object.freeze({ ...ignoreReadForScheduling, ...mergeableOpRead }),
     });
     const intentEntry = {
       nonce,

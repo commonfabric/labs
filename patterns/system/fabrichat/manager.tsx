@@ -41,8 +41,10 @@
  *
  * The people the user's rooms list, each by the principal their profile
  * attests, are what the manager's rendering offers to name a new group's
- * members by, so that each is offered the group, and what a member added by
- * principal alone is offered a room through.
+ * members by, so that each is offered the group, once a session asks for
+ * them. A member added to a room by principal alone is offered it through the
+ * profiles the rosters of the direct room shared with them, and of the room
+ * itself, list.
  */
 import {
   type Cell,
@@ -415,11 +417,11 @@ export interface ManagerActState {
   listRooms: Stream<ListRoomsEvent>;
 
   /**
-   * The people this user's rooms list, through whose profiles `offerRoom`
-   * offers a room to a member it names by principal alone; absent for every
-   * other act.
+   * Offers a room a member was added to through the profiles found for
+   * them, and records how they were told; absent for every act but
+   * `offerRoom`.
    */
-  people?: PerUser<Record<string, readonly ManagerProfileCell[]>>;
+  offerMember?: Stream<OfferMemberEvent>;
 
   /** The session's group draft, which a rendered create reads. */
   draft: Writable<GroupDraft>;
@@ -946,6 +948,117 @@ const deliverOffers = handler<
     for (const { pointer } of distinctInboxes(event.profiles ?? [])) {
       inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
     }
+  },
+);
+
+/**
+ * What offering a room to a member someone added to it asks: the request,
+ * the room, the member, and where to find their profiles.
+ */
+export interface OfferMemberEvent {
+  /** Keys the request's outcome, and the offer. */
+  requestId: string;
+
+  /** The room. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  room: Cell<ChatRoomLink>;
+
+  /** The room's title, which the offer carries. */
+  title: string;
+
+  /** The member's DID. */
+  member: string;
+
+  /** The member's profiles, when the add named one. */
+  // `Cell<…>` is written out rather than reached through an alias, as for
+  // `room`.
+  profiles: Cell<ChatManagerProfile>[];
+
+  /**
+   * The rooms whose rosters the member's profiles are read from, when the
+   * add named none.
+   */
+  // `Cell<…>` is written out rather than reached through an alias, as for
+  // `room`.
+  rosters: Cell<ChatRoomLink>[];
+}
+
+/** What `offerMember` is bound to. */
+interface OfferMemberState {
+  /** Each request's outcome. */
+  requests: RequestsCell;
+
+  /** Notices waiting for a client to deliver them. */
+  outgoingNotices: NoticesCell;
+
+  /** Offers a room to the members it names. */
+  offerRooms: Stream<OfferRoomEvent>;
+}
+
+/**
+ * The profiles attesting `member` that the rosters of `rooms` list, each
+ * once, in the order the rooms, and then each roster, list them. A room's
+ * roster is read as it was last stored.
+ */
+const memberProfilesIn = (
+  rooms: readonly Cell<ChatRoomLink>[],
+  member: string,
+): Cell<ChatManagerProfile>[] =>
+  rooms.reduce<Cell<ChatManagerProfile>[]>(
+    (found, room) =>
+      (room.key("roster").get() ?? []).reduce(
+        (known, profile) =>
+          profileOwnerOf(profile) !== member ||
+            known.some((each) => equals(each, profile))
+            ? known
+            : [...known, profile],
+        found,
+      ),
+    [],
+  );
+
+/**
+ * Offers the room an add admitted a member to, for `offerRoom`, which has
+ * found that this user may: through the profiles the event names, or, where
+ * it names none, those the rosters of its `rosters` rooms list for the member.
+ * A member with no profile found gets a notice instead, and the request's
+ * outcome says which. The offer is sent by `offerRooms`, an event of its own,
+ * which reads where the profiles point apart from the outcome recorded here.
+ * It runs as an event of its own so that the rosters are read through links
+ * its event types as rooms, and a request with an outcome already recorded
+ * changes nothing.
+ */
+const offerMember = handler<OfferMemberEvent, OfferMemberState>(
+  (event, state) => {
+    const requestId = event?.requestId;
+    if (typeof requestId !== "string") return;
+    const earlier = state.requests.key(requestId).get();
+    if (earlier !== undefined && earlier.status !== "pending") return;
+    const profiles = (event.profiles ?? []).length > 0
+      ? event.profiles
+      : memberProfilesIn(event.rosters ?? [], event.member);
+    if (profiles.length === 0) {
+      state.outgoingNotices.push(
+        noticeFor(event.member, requestId, event.room),
+      );
+      state.requests.key(requestId).set({
+        status: "done",
+        delivery: "noticed",
+      });
+      return;
+    }
+    state.offerRooms.send({
+      room: event.room,
+      id: requestId,
+      title: event.title ?? "",
+      members: [{ recipient: event.member, profiles }],
+    });
+    state.requests.key(requestId).set({
+      status: "done",
+      delivery: "offered",
+    });
   },
 );
 
@@ -1658,32 +1771,25 @@ const performManagerAct = (
       return;
     }
     // A member named by principal alone is offered the room through the
-    // profiles `people` lists for them, so a person this user shares no room
-    // with is offered nothing.
-    // TODO(served-people): Under server execution a served run finds a member
-    // in `people` only where a runtime of this user's, such as a page listing
-    // its rooms, has derived the rooms `people` is drawn from; where none has,
-    // it finds no one, and the member gets a notice. Offer through `people`
-    // there too, once a served run derives what it reads.
-    const profiles = named === undefined
-      ? [...(state.people?.[member] ?? [])]
-      : [named];
-    // A member with no profile to offer through gets a notice at once. Any
-    // other is offered the room by an event of its own, which reads where the
-    // profiles point apart from this request's outcome, and which records
-    // nothing of where they point.
-    if (profiles.length === 0) {
-      outgoingNotices.push(noticeFor(member, requestId, room));
-      recordOutcome(state, requestId, { status: "done", delivery: "noticed" });
-      return;
-    }
-    state.offerRooms.send({
+    // profiles that the roster of the direct room this user shares with
+    // them, and the room's own, list for them: one room besides the room
+    // itself, read by an event of its own, which the links' types there let
+    // read the rosters.
+    const known = named === undefined
+      ? liveDirect(direct.key(member).get())
+      : undefined;
+    state.offerMember?.send({
+      requestId,
       room,
-      id: requestId,
       title: room.key("about").get()?.title ?? "",
-      members: [{ recipient: member, profiles }],
+      member,
+      profiles: named === undefined ? [] : [named],
+      rosters: named !== undefined
+        ? []
+        : known === undefined
+        ? [room]
+        : [linkedRoom(known.room), room],
     });
-    recordOutcome(state, requestId, { status: "done", delivery: "offered" });
     return;
   }
 
@@ -2109,18 +2215,15 @@ export interface FabriChatManagerOutput {
   outgoingNotices: PerUser<ChatManagerNotice[]>;
 
   /**
-   * The people this user's rooms list, other than this user: by the principal
-   * each one's profile attests, the profiles attesting it, each once, in the
-   * order the rooms, newest first, list them. Reading it reads every listed
-   * room's roster; a view reads `askedPeople` instead.
+   * The people this user's rooms list, other than this user, for a session
+   * that has asked for them (`askForPeople`), and no one before: by the
+   * principal each one's profile attests, the profiles attesting it, each
+   * once, in the order the rooms, newest first, list them. Until the session
+   * asks, nothing reading it reads a room's roster.
    */
-  people: PerUser<Record<string, ManagerProfileCell[]>>;
+  people: PerSession<Record<string, ManagerProfileCell[]>>;
 
-  /**
-   * `people`, for a session that has asked for them (`askForPeople`), and no
-   * one before: until a picker of the people is opened, nothing reading it
-   * reads a room's roster.
-   */
+  /** The same as `people`, under the name a view reads it by. */
   askedPeople: PerSession<Record<string, ManagerProfileCell[]>>;
 
   /** Asks for `askedPeople`, for the session, as a picker of them opens. */
@@ -2572,37 +2675,17 @@ export const FabriChatManagerCore = pattern<
     const roomLinksForUser = computed((): PerUser<Cell<unknown>[]> =>
       roomsForUser.map((entry) => entry.room)
     );
-    // Each listed room's roster, each read on its own and per user, as
-    // `roomsForUser` is: a room's space is read under the reader's access.
-    const rostersForUser = roomLinksForUser.map((room) =>
-      RoomRoster.asScope("user")({ room })
-    );
-    // The people the listed rooms' rosters hold, per user, as `roomsForUser`
-    // is: a profile attests no one to a reader its space refuses. Its
-    // binding's name is its cause, as `roomsForUser`'s is. Reading it reads
-    // every listed room's roster, so what the manager's views show is
-    // `peopleForSession`; `offerRoom` reads it as its state, for a member
-    // named by principal alone, and so does a host reading `people`. A
-    // room's roster is a derivation of the room's, which a handler reading
-    // the room finds as it was last stored rather than deriving it, so the
-    // act takes the people derived here rather than reading the rosters
-    // itself.
-    const peopleForUser = computed(
-      (): PerUser<Record<string, ManagerProfileCell[]>> =>
-        peopleIn(rostersForUser, profileOwnerOf(myProfile)),
-    );
     // Whether this session has asked for the people its rooms hold, by
     // opening a picker of them: the group control's, or a room's add-member
     // panel's (`askForPeople`). Each binding's name is its cause.
     const peopleAskedForSession = new Writable.perSession<boolean>(false);
-    // The listed rooms a view's people are drawn from: none until this
-    // session asks for the people, so that a view showing the manager, or a
-    // room showing its picker, reads no room's roster, and holds no room's
-    // space open, until a picker is opened. The people are drawn from them as
-    // `peopleForUser` draws its own, the rooms list being the one
-    // difference: a derivation of `peopleForUser` itself would read it, and
-    // every roster with it, whether or not the session had asked, since a
-    // derivation reads what it is derived from before it runs.
+    // The listed rooms the people are drawn from: none until this session
+    // asks for the people, so that a session showing the manager, or a room
+    // showing its picker, reads no room's roster, and holds no room's space
+    // open, until a picker is opened. The rooms list is what is gated, since
+    // a derivation reads what it is derived from before it runs: a gate on
+    // people drawn from every room would read every roster whether or not
+    // the session had asked.
     const roomsAskedForSession = computed((): PerSession<Cell<unknown>[]> =>
       peopleAskedForSession.get() === true ? [...roomLinksForUser] : []
     );
@@ -2760,7 +2843,11 @@ export const FabriChatManagerCore = pattern<
       offerRoom: commitManager({
         act: "offerRoom",
         ...records,
-        people: peopleForUser,
+        offerMember: offerMember({
+          requests,
+          outgoingNotices,
+          offerRooms: records.offerRooms,
+        }),
       }),
       accept: commitManager({ act: "accept", ...records }),
       joinRoom: commitManager({ act: "joinRoom", ...records }),
@@ -2775,7 +2862,7 @@ export const FabriChatManagerCore = pattern<
       direct,
       requests,
       outgoingNotices: noticesForUser,
-      people: peopleForUser,
+      people: peopleForSession,
       askedPeople: peopleForSession,
       askForPeople: asking,
       ...streams,
