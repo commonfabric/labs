@@ -179,13 +179,13 @@ the fixture `unchanged-place.tsx` is open: a cone that is evaluated again,
 binds a slot to another position and returns an equal value gives no record,
 so the place keeps the label formed from the earlier position.
 
-**More than one user on a piece** (sandbox branch; notes 880 to 891).
+**More than one user on a piece** (sandbox branch; notes 880 to 892).
 Documents of the scopes `user` and `session` are held once per principal.
 Open: the runs of one pass for several principals do not see each other's
 writes, so an entry of a scope that reads a row document written in the same
 pass is refused and runs again (plan: two scheduler actions, one for the
-space and one for the scopes); a piece with a `wish` or scoped state resumes whole and is
-never found current (P354, note 892; needs a basis per scope key); the
+space and one for the scopes); a piece with a `wish` or scoped state resumes
+whole and is never found current (P354, note 892; needs a basis per scope key); the
 assembly of a scoped collection is formed again per principal; memory
 follows the principals ever seen; a `wish` for a seeded profile does not
 resolve under the serving loop (not diagnosed); FabriChat with two users was
