@@ -21912,3 +21912,65 @@ the session. The notes are numbered from 980.
        trunk had three) and `system/fabrichat/message-row.tsx` and
        `system/profile-picker/profile-picker.tsx`, which start here and did not
        on the trunk, as under `--serving` on the sandbox branch.
+981. **What holds after the merge of `claude/compiled-pattern-write-integrity`
+     at `308c6e6d41`.**
+     - _The three commits it cherry-picked_ (the runtime's own `wish`, its
+       built-ins, an event run as the principal of the sender) were taken in
+       this branch's later form: `compiled/wish.ts`, `compiled/builtins.ts`,
+       `test/compiled/wish.test.ts` and `fixtures/runtime-builtins.emit.json`
+       are this branch's, and `compiled-serving-actor.test.ts` is the other
+       branch's, which runs the fixture `authored-by-writer`.
+     - _What each resolution keeps._ `CompiledPiece` keeps the scopes, the
+       outside reads, the bring of documents and `#refusedLast` of this branch,
+       and takes from the other the option `attested`, the handler identity set
+       around a handler's run (`RuntimeTransactions.handlerOf`), the attribution
+       of a start and of a handler's run, and `argumentStored`, which fills the
+       defaults of an argument type that declares a write policy. `#stamp` gives
+       a start and a handler's run the trust snapshot of the principal and acts
+       for them, and a derivation keeps the session of the runtime in its scope
+       key, as on this branch. `Instance` makes the result document of an
+       instance with what the storage holds (`#heldResult`, the trunk's) and the
+       argument document with `argumentStored`. `Entry.scoped` and `markStale`
+       with a scope key are this branch's; `RuntimeTransactions.entityOf` and
+       `holds` are this branch's, which already took a `data:` entity.
+       `runCompiledPatterns` keeps this branch's account of what a compiled
+       piece answers. The corpus harness vouches for the artifacts (`attested`)
+       and keeps `--references`.
+     - _A difference from both parents, by composition._
+       `apps/recommend-a-book/shared-invitation.tsx` starts on the runner path,
+       under the serving loop and after a resume, where neither parent started
+       it: on the write-integrity branch its value code throws (the runtime's
+       `asScope` is a built-in of this branch), and on this branch the commit of
+       the start was refused because it acted for no one, which the start
+       attribution of the other branch now gives it. Four of its six events find
+       no stored stream of their binding.
+     - _Gates,_ each with exit status 0: `deno fmt --check`, `deno lint`,
+       `deno task check`, `deno task check-cfc-correspondence` (no new
+       `SPEC-PENDING` marker), the other five `check-*` tasks, the executor
+       tests (202 tests, 984 steps), `test/compiled/` on emulated storage and
+       over a socket (52 tests, 366 steps each), the nine CFC test files of the
+       write-integrity rounds with `test/cfc/compiled-writer.test.ts` (11 tests,
+       344 steps), `cargo test` (585 tests), `cargo fmt --check` and
+       `cargo clippy`. The emitted fixtures regenerated with no change.
+     - _Measured,_ one run at a load average of 17 to 27:
+       `compare/serving-path.ts` at 1,000 rows finds the piece current after a
+       takeover with no evaluation, and the first event after it takes 47 ms
+       with 6 evaluations at the wake. `compare/both-paths.ts`: 12 of 14
+       scenarios equal; `writer-policy/main` (7 differences) and
+       `fixtures/principal-derived` (4) differ as in note 913.
+     - _The corpus,_ one run of each mode, as started, every event handled, no
+       commit refused, equal: runner path 259, 216, 249, 230; serving 235, 202,
+       221, 211; after a resume 259, 215, 251, 228 (121 found current); serving
+       with a resume 235, 201, 221, 210 (73 found current, rows left in 18);
+       with `--references` as well 235, 202, 221, 206 (rows left in 19). The
+       eight modules of note 913 that declare a writer or a UI contract for an
+       argument field no longer start on the runner path, as on the other
+       branch. Beside `shared-invitation.tsx`, one line differs from both
+       parents: `apps/agent/agent.tsx` after a resume, with two refusals, the
+       count of the run alone of note 980. Under the serving loop with a resume,
+       where the write-integrity branch has no run, six lines differ from this
+       branch's before the merge, and each equals that module's line under
+       `--serving` or `--resume` on the write-integrity branch:
+       `dev/test/cfc-trusted-write/frozen.tsx` and `main.tsx`,
+       `dev/test/writer-policy/main.tsx`, and the two
+       `cfc-trusted-component-examples` modules.
