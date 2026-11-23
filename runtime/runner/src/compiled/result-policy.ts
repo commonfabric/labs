@@ -31,7 +31,7 @@ export type ResultPolicy = {
 
   /**
    * The paths of the result, through properties alone, at which the schema
-   * declares a writer claim.
+   * declares a writer claim or a UI contract.
    */
   readonly claimed: readonly (readonly string[])[];
 };
@@ -42,6 +42,17 @@ export type ResultPolicy = {
  * into `$defs` of `schema`. A branch of a union is kept as it is where any
  * branch declares a policy.
  */
+/**
+ * Whether `schema`, the schema of an array, declares a write policy for the
+ * members of the array.
+ */
+export const declaresMemberPolicy = (schema: unknown): boolean =>
+  isObjectNotArray(schema) && isObjectNotArray(schema.items) &&
+  isObjectNotArray(schema.items.ifc) &&
+  POLICY_KEYS.some((key) =>
+    (schema.items as { ifc: Record<string, unknown> }).ifc[key] !== undefined
+  );
+
 export const writePoliciesOf = (schema: unknown): ResultPolicy | undefined => {
   const claimed: (readonly string[])[] = [];
   const defs = isObjectNotArray(schema) && isObjectNotArray(schema.$defs)
@@ -77,7 +88,7 @@ export const writePoliciesOf = (schema: unknown): ResultPolicy | undefined => {
       if (
         path !== undefined &&
         (ifc.writeAuthorizedBy !== undefined ||
-          ifc.writePolicyAnyOf !== undefined)
+          ifc.writePolicyAnyOf !== undefined || ifc.uiContract !== undefined)
       ) claimed.push(path);
     }
     if (isObjectNotArray(node.properties)) {

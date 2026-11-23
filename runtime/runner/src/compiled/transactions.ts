@@ -86,7 +86,11 @@ import { ignoreReadForScheduling } from "../scheduler.ts";
 import { handlerIdentityOf } from "./handler-identity.ts";
 import { appendedBehind } from "./appended.ts";
 import { isStateCellSeed, recordStateCellSeed } from "./initialization.ts";
-import { type ResultPolicy, writePoliciesOf } from "./result-policy.ts";
+import {
+  declaresMemberPolicy,
+  type ResultPolicy,
+  writePoliciesOf,
+} from "./result-policy.ts";
 import type { URI } from "../sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
@@ -2023,8 +2027,12 @@ export class RuntimeTransactions implements TransactionHooks {
       // holds, with members added behind those it held, wrote the added
       // positions: the storage is given those and the number of members, as
       // for a splice, so that a claim the schema declares for a member is
-      // decided for the members the handler added and for no other.
-      if (splice === undefined && this.#cause === "event") {
+      // decided for the members the handler added and for no other. It is
+      // done where the schema of the write declares a policy for a member.
+      if (
+        splice === undefined && this.#cause === "event" &&
+        declaresMemberPolicy(schema)
+      ) {
         const stored = tx.readValueOrThrow(at(path), {
           meta: ignoreReadForScheduling,
         });
