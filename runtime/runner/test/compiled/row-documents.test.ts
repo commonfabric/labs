@@ -129,26 +129,33 @@ describe("the rows of a `map` over an array declared as references", () => {
     name: string,
     options: CompiledPieceOptions = {},
     fixture?: string,
+    /** The titles of the items; the piece starts over all but the last. */
+    titles: string[] = ["one", "two", "three"],
+    /** What tells the cells of this piece from those of another one. */
+    tag = "",
   ) => {
     const cells = await Promise.all(
-      ["one", "two", "three"].map(async (title, index) => ({
+      titles.map(async (title, index) => ({
         cell: runtime.getCell<Record<string, unknown>>(
           space,
-          `item ${index}`,
+          `${tag}item ${index}`,
           await labeled(`clause-${title}`),
         ),
         value: { id: `i${index}`, title, done: false, note: "" },
       })),
     );
-    const items = runtime.getCell<unknown[]>(space, "items");
-    const result = runtime.getCell<Record<string, unknown>>(space, "result");
+    const items = runtime.getCell<unknown[]>(space, `${tag}items`);
+    const result = runtime.getCell<Record<string, unknown>>(
+      space,
+      `${tag}result`,
+    );
     const artifact = await artifactOf(name, fixture);
     let piece: CompiledPiece | undefined;
     // The inputs are stored before the piece starts, so that the piece
     // reads the labels they store.
     await commit((tx) => {
       for (const { cell, value } of cells) cell.withTx(tx).set(value);
-      items.withTx(tx).set(cells.slice(0, 2).map(({ cell }) => cell));
+      items.withTx(tx).set(cells.slice(0, -1).map(({ cell }) => cell));
     });
     await commit((tx) => {
       piece = startCompiledPiece(
@@ -319,6 +326,108 @@ describe("the rows of a `map` over an array declared as references", () => {
     } finally {
       tx.abort();
     }
+  });
+
+  describe("a change of the members of the array", () => {
+    /** The titles of `count` items. */
+    const titles = (count: number) =>
+      Array.from({ length: count }, (_, index) => `t${index}`);
+
+    /**
+     * `Cells` over all but the last of `count` items, and then `change`,
+     * which is given the cells of the items. Returns the links to row
+     * documents that the change wrote into the array, the row documents
+     * that stayed among the entities its commits wrote, and the write
+     * records the piece gave.
+     */
+    const after = async (
+      count: number,
+      change: (cells: Cell<Record<string, unknown>>[]) => unknown[],
+    ) => {
+      const { piece, result, items, cells } = await started(
+        "Cells",
+        {},
+        undefined,
+        titles(count),
+        `${count} `,
+      );
+      const rowsBefore = storedRows(result).map((row) =>
+        parseLink(row as never).id!
+      );
+      const before = piece.transactions.counts;
+      changed.clear();
+      await commit((tx) => items.withTx(tx).set(change(cells)));
+      expect(piece.refusals).toEqual([]);
+      const counts = piece.transactions.counts;
+      const rowsNow = new Set(
+        storedRows(result).map((row) => parseLink(row as never).id!),
+      );
+      return {
+        result,
+        links: counts.rowLinks - before.rowLinks,
+        stayedWritten: rowsBefore.filter((row) =>
+          changed.has(row) && rowsNow.has(row)
+        ),
+        records: counts.recordsGiven - before.recordsGiven,
+      };
+    };
+
+    it("writes one link, the number of members and one row document for a member added at the end", async () => {
+      const { result, links, stayedWritten } = await after(
+        5,
+        (cells) => cells,
+      );
+
+      expect(rowsOf(result)).toEqual(
+        titles(5).map((title) => ({ label: `${title}!`, done: false })),
+      );
+      expect(links).toBe(1);
+      expect(stayedWritten).toEqual([]);
+      expect(storedRows(result).length).toBe(5);
+    });
+
+    it("writes one link and gives as many records for a member added at the end of 4 members as of 40", async () => {
+      const few = await after(5, (cells) => cells);
+      const many = await after(41, (cells) => cells);
+
+      expect(many.links).toBe(1);
+      expect(many.records).toBe(few.records);
+    });
+
+    it("writes no row document that stayed, and gives as many records, for a member added before 4 members as before 40", async () => {
+      const prepended = (cells: Cell<Record<string, unknown>>[]) => [
+        cells.at(-1)!,
+        ...cells.slice(0, -1),
+      ];
+      const few = await after(5, prepended);
+      const many = await after(41, prepended);
+
+      expect(rowsOf(few.result)).toEqual(
+        ["t4", "t0", "t1", "t2", "t3"].map((title) => ({
+          label: `${title}!`,
+          done: false,
+        })),
+      );
+      expect(few.stayedWritten).toEqual([]);
+      expect(many.stayedWritten).toEqual([]);
+      expect(many.records).toBe(few.records);
+    });
+
+    it("gives as many records for the first member removed of 4 members as of 40", async () => {
+      const removed = (cells: Cell<Record<string, unknown>>[]) =>
+        cells.slice(1, -1);
+      const few = await after(5, removed);
+      const many = await after(41, removed);
+
+      expect(rowsOf(few.result)).toEqual(
+        ["t1", "t2", "t3"].map((title) => ({
+          label: `${title}!`,
+          done: false,
+        })),
+      );
+      expect(few.stayedWritten).toEqual([]);
+      expect(many.records).toBe(few.records);
+    });
   });
 
   describe("over the fixture `handle-reads.tsx`", () => {

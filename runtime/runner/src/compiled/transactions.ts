@@ -138,6 +138,11 @@ export type RuntimeCounts = {
    * it recorded such a write record.
    */
   labelEntriesChanged: number;
+  /**
+   * The links to row documents written into an array of them: one for each
+   * position a change of the array's members wrote.
+   */
+  rowLinks: number;
 };
 
 /**
@@ -305,6 +310,7 @@ export class RuntimeTransactions implements TransactionHooks {
     recordsRecorded: 0,
     recordBytes: 0,
     labelEntriesChanged: 0,
+    rowLinks: 0,
   };
   /** Whether `RuntimeCounts.recordBytes` is counted. */
   readonly #countRecordBytes: boolean;
@@ -1044,9 +1050,22 @@ export class RuntimeTransactions implements TransactionHooks {
       if (array !== undefined && cut !== undefined && Array.isArray(held)) {
         // The records of a splice the executor gives as one of positions
         // (`splice`) are of those positions; the record of any other names
-        // the array, which is then written whole, as links.
-        spliced = splice !== undefined;
+        // the array. An addition at the end of the array is written as
+        // the number of members and the links it adds
+        // (`#recordAppended`), and any other change of the members writes
+        // the array whole, as links.
+        const record = writes?.find(({ target }) =>
+          target.doc === doc && samePath(target.path, path)
+        );
+        const appended = splice === undefined && cut.removed === 0 &&
+          cut.inserted > 0 && cut.start + cut.inserted === held.length &&
+          record?.membersAppended === true && inputs !== undefined;
+        spliced = splice !== undefined || appended;
         this.#spliceRows(tx, store, array, held, cut, written, spliced);
+        if (appended) {
+          this.#recordAppended(array, record, cut, inputs);
+          writes = writes?.filter((write) => write !== record);
+        }
         // The executor gives a record for each position behind the splice,
         // which an array that holds its rows in place writes again. The
         // document of a row that stayed is not written, and the record of
@@ -1349,6 +1368,7 @@ export class RuntimeTransactions implements TransactionHooks {
       scope: "space",
     });
     if (!positions) {
+      this.#counts.rowLinks += held.length;
       tx.writeValueOrThrow(here([]), held.map((_, index) => linkAt(index)));
       return;
     }
@@ -1358,10 +1378,44 @@ export class RuntimeTransactions implements TransactionHooks {
       written.push([...path, "length"]);
       tx.writeValueOrThrow(here(["length"]), held.length);
     }
+    this.#counts.rowLinks += Math.max(0, end - splice.start);
     for (let index = splice.start; index < end; index++) {
       written.push([...path, `${index}`]);
       tx.writeValueOrThrow(here([`${index}`]), linkAt(index));
     }
+  }
+
+  /**
+   * Records an addition at the end of an array whose rows are documents of
+   * their own, which was written as the number of members and the links
+   * added. `record` is the record of the array, which names what decides
+   * its members: it is recorded for the array as that of a write that left
+   * the path as it was, since the transaction holds no write of the array
+   * itself, and for each path written, so that the number and each link
+   * added have the label of the membership and not the join of everything
+   * the transaction read.
+   */
+  #recordAppended(
+    array: RowArray,
+    record: PlanWrite,
+    splice: { start: number; inserted: number },
+    inputs: InputsTable,
+  ): void {
+    this.#record([record], true, inputs);
+    const { membersAppended: _appended, ...positional } = record;
+    const below = ["length"];
+    for (let offset = 0; offset < splice.inserted; offset++) {
+      below.push(`${splice.start + offset}`);
+    }
+    this.#record(
+      below.map((segment) => ({
+        ...positional,
+        target: { doc: array.doc, path: [...array.path, segment] },
+      })),
+      false,
+      inputs,
+      true,
+    );
   }
 
   /**
@@ -1500,6 +1554,11 @@ export class RuntimeTransactions implements TransactionHooks {
     writes: readonly PlanWrite[],
     unchanged: boolean,
     table: InputsTable,
+    /**
+     * The targets are positions of an array of row documents themselves,
+     * which hold the links, and not paths of the rows' documents.
+     */
+    links = false,
   ): void {
     if (this.#compiledPattern === undefined) return;
     // The records of one change of the members of a list hold one array of
@@ -1530,7 +1589,14 @@ export class RuntimeTransactions implements TransactionHooks {
       // one.
       this.#recorded.writes.push({
         inputs: this.#inputs(table, write.inputs),
-        target: this.#cfcAddress(write.target),
+        target: links
+          ? {
+            space: this.#spaceOf(write.target.doc),
+            id: this.entityOf(write.target.doc),
+            scope: "space",
+            path: write.target.path,
+          }
+          : this.#cfcAddress(write.target),
         compiledPattern: pattern,
         record: write.record,
         instance: write.instance,
@@ -2147,15 +2213,17 @@ export class RuntimeTransactions implements TransactionHooks {
 /**
  * The one run of positions in which two arrays differ, as the splice that
  * makes `after` of `before`: the members before the run and behind it are
- * the same in both, by identity or by their JSON text. The work is the
- * number of members.
+ * the same in both, by identity or by their canonical text. The work is
+ * the number of members.
  */
 const spliceBetween = (
   before: readonly unknown[],
   after: readonly unknown[],
 ): { start: number; removed: number; members: unknown[] } => {
+  // A member written again holds its members in another order where the
+  // writer formed it anew, as a link is: the text compared has one order.
   const same = (a: unknown, b: unknown) =>
-    a === b || JSON.stringify(a) === JSON.stringify(b);
+    a === b || canonical(a) === canonical(b);
   const shorter = Math.min(before.length, after.length);
   let start = 0;
   while (start < shorter && same(before[start], after[start])) start += 1;
