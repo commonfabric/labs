@@ -74,11 +74,11 @@ merge is not finished when the conflicts are gone.
 
 Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
-and P350 to P360 sandbox and scopes, P310 to P316 write integrity, P410 and
+and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integrity, P410 and
 P411 specification review; P420 to P425 resume by units, fourth round. Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 891 sandbox, 760 to 772
-write integrity, 851 to 866 serving. The plan documents hold decisions up to
+and 900 to 914 write integrity, 851 to 866 serving. The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
@@ -158,16 +158,35 @@ follows the principals ever seen; a `wish` for a seeded profile does not
 resolve under the serving loop (not diagnosed); FabriChat with two users was
 not run.
 
-**Write integrity** (write-integrity branch; notes 760 to 772). A compiled
-handler is named by the crate's content-addressed module identity and the
-binding path; FabriChat's room sends and Home starts with their declared
-policies. Open: the argument document stores no claims of the argument type;
-a member appended under `AuthoredByCurrentUser` alone stores no claim; no
-harness runs one pattern on both paths with the same gestures; handlers not
-at a module-scope `const` have no identity; no module succession; a caller
-that hands the runtime a ready-made artifact is trusted for its handler
-identities. The rules the specification pull request has to state are the
-first three deferred questions of that round.
+**Write integrity** (write-integrity branch; notes 760 to 772 and 900 to
+914; P310 to P316 and P370 to P382). A compiled handler is named by the
+crate's content-addressed module identity and the binding path, only where a
+writer policy of the program names the binding and the artifact is one the
+runtime compiled or a host vouched for (`CompiledPieceOptions.attested`).
+FabriChat's room sends and Home starts with their declared policies. A
+harness, `compare/both-paths.ts`, runs one scenario on today's path and on
+the compiled path with the same gestures and principals and compares
+commit, message, values and stored claims: 12 of 14 hand-written scenarios
+are equal, and in the 28 corpus modules that declare a write policy and run
+compiled no step is committed on one path and refused on the other. The
+harness found six cases where the compiled path committed what today's
+refuses or stored a weaker claim; all six are fixed. Open:
+
+- A piece a serving runtime starts from a stored argument: the client
+  writes the argument document under no schema, so the claims of the
+  argument type are stored for a field only when a handler of the piece
+  first writes it, and its first values are attributed to no one. This is
+  the path a deployed piece takes, so it is the first thing to close.
+- A state cell document created by a write other than its seed stores no
+  policy of the cell's schema; no path to that state is known.
+- No module succession for a compiled writer (note 910 lists what an update
+  of a compiled pattern needs).
+- FabriChat's room with two principals was not run on both paths.
+- The compiled path is stricter than today's for a computed output whose
+  result type names a writer (P379).
+
+The rules the specification pull request has to state are the first three
+deferred questions of the first round and the first six of the second.
 
 **Stand-ins that remain in the FabriChat and Home copies**
 (`base/pattern-compiler/compare/fabrichat/`, `compare/home/`): `any` and the
