@@ -15401,3 +15401,505 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    when the first compartment evaluator is made. Whether anything of the runtime
    relies on a member of them staying writable was not looked for beyond the
    tests.
+
+## Milestone 6, third round: Topics under the serving loop, and the open items of resume
+
+The third round of milestone 6 of
+`docs/plans/compiled-pattern-language-integration.md` (2026-11-23), on the
+branch `claude/compiled-pattern-serving-m6` from the commit `e86377cca0`, which
+holds a first build of all six milestones. The notes are numbered from 825. The
+provisional decisions are numbered from P150. Whenever a note says `map`, it
+names the case.
+
+825. **What the round did, by step.**
+     - _Topics under the serving loop (step 1), done._ The arms `serving` and
+       `serving-today` of `compare/topics/scale.ts`, in
+       `compare/topics/serving.ts` (note 826). Both boards load, take every edit
+       and every create, and are taken over by another serving loop at 100,
+       1,000 and 2,000 topics. The figures are in note 833.
+     - _One order of the members of a record (step 2), done._ Note 827.
+     - _An event a handler sends, and an instance a handler made (step 3),
+       done._ Notes 828 and 829.
+     - _Resume per unit (step 4), stubbed._ No basis per cone instance was
+       built. What was built is that a wake keeps no query that follows the
+       links of the result, which was the larger part of the time of the first
+       event after a takeover on Topics (note 830). The plan for the rest is
+       note 831.
+     - _The load under the serving loop in bounded transactions (step 5),
+       stubbed._ Not started. Note 832 says why, and what it needs.
+     - _The tables (step 6)._ Notes 833 to 835.
+     - _With the experimental option off._ Every change of the runtime is in
+       `runtime/runner/src/compiled/`, which a runtime that starts no compiled
+       piece does not load. The change of the executor is in
+       `base/pattern-compiler/exec/`.
+826. **Step 1: the arms `serving` and `serving-today`, and what broke.**
+     `compare/topics/serving.ts` starts a memory server on a websocket with the
+     serving loop on the same thread (`listenCompiledServingMemoryServer`) and
+     two clients with server execution on. The sender writes each topic as a
+     document, 500 in a transaction, and the two inputs of the board as cells of
+     their own, and sets the board up: with `setUpCompiledPiece` on the arm
+     `serving`, and with `Runtime.run` on the arm `serving-today`. Each step is
+     timed from the sender's call until the sender and the second client each
+     read the one value the step changes, through a sink on that one path: the
+     title or the `shortName` in the topic's row of `mentionable`, a third
+     member of `mentionedBy` in the row of the first topic of `crossrefs`, the
+     caption of the topic's card, and `topicCount`. With `SCALE_TAKEOVER` set,
+     another serving loop then takes the space over, a client that holds nothing
+     reads `topicCount`, and the sender edits the title of the first topic
+     twice.
+     - _The path of the caption._ The card of a topic is a view node in a
+       document of its own. A third client finds the path of the array of cards
+       and of the caption below a card by reading the stored documents one by
+       one down to the first card (`captionPathOf`), and is disposed. A first
+       version read the rendered tree whole on that client. Every card links to
+       its topic and every topic to the two before it, so the tree read with
+       every link followed has as many copies of the first topics as there are
+       paths to them: the process ran out of memory at 1,000 topics. That was a
+       defect of the harness and of no piece.
+     - _What the board needs of the loader._ Nothing was added. The rows and the
+       buckets are documents by default. The arm `runner` gives the boards no
+       `wishes` either: the one `wish` of a board stays pending.
+     - _The crate's check refuses both measured boards._ `emit --accepted` gives
+       two errors `subset-type:mismatch` for each: the handler `addBoardTopic`
+       declares `names` as a cell of a record of unknown values, and the board
+       hands it a cell of a record of cells. The serving runtime of the arm
+       therefore compiles with `emit`, as the arm `runner` does (`emitProgram`
+       of `serving.ts`), and not with the `PatternCompiler` that
+       `listenCompiledServingMemoryServer` makes by default. A toolshed would
+       refuse these two boards.
+     - _Today's compiler refuses `topic.tsx` of the measurement branch._ The
+       module was changed there for the compiled pattern language (`backlinksOf`
+       reads `from` of each pair), and today's type check fails on it. The arm
+       `serving-today` was therefore run on `main.tsx` of the branch
+       `claude/compiled-pattern-serving-m6`, which holds the program of the
+       repository.
+     - _No label is stored._ The topics and the inputs are under no label and
+       the serving runtime runs with the default of the serving runtime factory,
+       as in `compare/serving-path.ts`. `servingRuntimeFactory` has no option
+       for `cfcFlowLabels`. The figures are therefore not those of the arm
+       `runner` of note 667, which stores labels.
+     - _The first event after a takeover took 18 s at 1,000 topics and 66 to 111
+       s at 2,000._ Found by the first runs of the arm. Note 830.
+827. **Step 2: value code reads the members of a record in the order of the
+     storage (provisional decision P150).**
+     - _What the storage gives._ The JSON codec writes a record with its names
+       in the order of their UTF-8 bytes (`JsonEncodeAct.encodePlainObject`,
+       `utf8SortedKeysOf` of `base/text/src/utf8.ts`). A process that reads a
+       document from the storage holds each record in that order. The process
+       that wrote the record holds it as written until the stored document
+       replaces its own. A record of the language holds a name that is an array
+       index before every other name, in the order of the numbers, in either
+       process.
+     - _What is built._ `membersInOrder` of `exec/store.ts` gives the names of a
+       record in the order of the storage. `Store.#copy` builds the copy of a
+       stored record that a read returns from the names in that order, and
+       `Host.v` of `exec/executor.ts` does the same for a record that a
+       computation made and another reads without the storage between them.
+       Those two are where a value reaches value code: a slot, a handle's `get`,
+       the argument of a body. The names that are in order already, which is
+       every record read from the storage, cost one comparison for each name and
+       no sort.
+     - _What it changes for a reader._ The names of a record that are no array
+       indexes come in the order of their UTF-8 bytes where they came as
+       written: `{ title, tags }` is read as `{ tags, title }`. A `map` over the
+       entries of a record gives its rows in that order. On Topics the names of
+       the namespace are numbers, so nothing changed there.
+     - _Tests._ `exec/test/member-order.test.ts` over the new fixture
+       `compare/fixtures/member-order.tsx`, five cases: a stored record whose
+       document holds the names in another order, a member a handler adds, a
+       handler that reads the record through a handle, a record that one
+       computation made and another reads, and a name beyond the Basic
+       Multilingual Plane beside one within it, which the order of UTF-16 code
+       units and the order of UTF-8 bytes place differently.
+       `runtime/runner/test/compiled/member-order.test.ts`, two cases: the order
+       in the runtime that wrote the record, and a second runtime that resumes
+       the piece, whose wake writes no document but those of the basis.
+       `compare/test/resume-corpus.test.ts` has the two modules of note 816,
+       `dev/gideon-tests/test-record-key-set-56.tsx` and
+       `apps/budget-tracker/expense-form.tsx`. Each case was written first and
+       failed for the stated reason; in the runtime that wrote the record of the
+       fixture the names read `beta,zeta,alpha`.
+     - _An existing assertion changed._ `exec/test/executor.test.ts`, "a debug
+       renderer": the expected text is that of the record with its names in the
+       order of the storage.
+     - _Not changed._ `Store.write` and `Store.put` compare what a position
+       holds with what is written as JSON text, which holds the order. Two
+       records that differ in order alone are taken as a change by the executor,
+       and the runtime's transaction then finds no difference and logs no write.
+       The order in which an index gives its keys was not examined: it is the
+       order in which the buckets came to exist in the process, which a
+       derivation from the start and one that followed the changes can give
+       differently.
+828. **Step 3: an event a handler sends is sent through the cell of its stream
+     in the handler's transaction (provisional decision P151).**
+     - _What was there._ `CompiledPiece` took what a handler sent
+       (`Instance.takeQueued`) and queued it with the scheduler of the process
+       (note 821).
+     - _What is built._ The handler of the scheduler that runs a compiled
+       handler sends each such event with `Cell.send` on the cell of the entity
+       that holds the stream's marker, bound to the transaction the scheduler
+       gave the handler (`CompiledPiece.#registerStream`). The runtime then does
+       what it does for a handler of today's piece. On a serving runtime, under
+       a transaction the wave stamped, `Cell.send` writes the entry into the
+       document of the entries of the stream in that transaction, with the
+       acting principal of the run as `firedAt` (`actingForEmission` of
+       `executor/wave.ts`), records the append as a mergeable one, and queues a
+       copy for the same wave. The entry is stored with what the handler wrote
+       and withdrawn with it. On any other runtime the event is one of the
+       scheduler's queue, as before. No code of the serving loop changed.
+     - _Tests._ `runtime/runner/test/compiled/compiled-serving.test.ts`, "an
+       event a handler sends to a stream of the piece", two cases over the new
+       fixture `compare/fixtures/relay.tsx`, whose handler `relay` counts its
+       runs and sends to the stream `bump`. The second stops the loop between
+       the commit of the handler and the handling of the event it sent: the test
+       drops, in the scheduler of the serving runtime, every event for the
+       stream `bump` that comes from no stored entry, which is the copy the
+       process holds for itself; the commit of the wave that holds the second
+       run of `relay` is the last of that loop to reach the store
+       (`CompiledServingMemoryServer.stopCommittingWhen`); and another serving
+       loop is attached. A client that connects then reads `total` 7 and
+       `relayed` 2: the event was handled once, and `relay` was not run again.
+       Before the change the client read `total` 3.
+       `runtime/runner/test/compiled/handler-send.test.ts` has a send from a
+       handler in a runtime that runs the piece itself, on both storages, which
+       no test covered.
+     - _What the test does not show._ A serving loop that the deadline of a wave
+       cuts between the two handlers by itself. The copy for the same wave is
+       handled in the wave of the handler that sent it in every run seen, so the
+       stop was made by the test.
+829. **Step 3: an instance a handler made is started again at a resume
+     (provisional decision P152).**
+     - _Which instances._ An instance that a `lift` or a `computed` made is made
+       again by the body that made it, when the resumed executor evaluates the
+       body: the name is the same, and the instance is given the options of the
+       root, `resume` among them. No body makes an instance of a handler's run
+       again, since the name of a run of a handler is formed from the count of
+       the events handled.
+     - _What is stored._ `Instance.madeByHandlers` of `exec/executor.ts` gives
+       each instance a handler made that exists, by its identifier with the
+       identity of its pattern. `CompiledPiece.#keepMinted` writes the list into
+       the document of the counts (P132), as the member `made`, in the
+       transaction in which it changed. This is the instances document of
+       `execution-and-storage.md` §2.8 with the run and the ordinal left out,
+       which only a body that runs again reads.
+     - _What a resume does._ `CompiledPiece` reads the list
+       (`RuntimeTransactions.heldMinted`), finds the artifact of each by the
+       identity (`CompiledPieceOptions.artifacts`, which under the serving loop
+       holds the artifacts of the program the server compiled), and gives the
+       executor each with the argument the storage holds for it (`Instance`
+       option `made`). The root makes each before its own first derivation,
+       under the identifier it has. The instance then registers its streams and
+       derives as the root does at a resume, and writes the paths that differ.
+     - _Tests._ `runtime/runner/test/compiled/made-instance-resume.test.ts` over
+       the new fixture `compare/fixtures/made-counter.tsx`, two cases on both
+       storages: an event to a stream of each of two instances after a resume,
+       and an instance made after the resume with a third runtime that starts
+       all three again. Before the change each event to a stream of an instance
+       was dropped ("no handler registered"). The module
+       `dev/self-reference-test/self-reference-test.tsx` of note 816 passes in
+       `compare/test/resume-corpus.test.ts`.
+     - _What it leaves._ The list is written whole when it changes, so a piece
+       whose handlers made N instances writes N entries for the next one: on
+       Topics that is one entry for each topic created through `addTopic`. An
+       instance that was re-keyed (ruling Z41) is listed under the identifier
+       its documents have, and the name it is held under now is not stored.
+       Every listed instance is started at a wake, demanded or not. A resume
+       between the transaction of the event that made an instance and the
+       derivation behind it (`#awaitingFirst`) was not tested.
+830. **Step 4, built: a wake brings the documents of the piece one by one
+     (provisional decision P153).**
+     - _What the first runs of Topics showed._ The first event after a takeover
+       took 0.85, 18.4 and 65.6 s at 100, 1,000 and 2,000 topics on
+       `filing-order` and 0.95, 30.3 and 110.7 s on `sorted-references` (median
+       of three runs, note 833), where the load of the same board took 0.5, 3.2
+       and 7.0 s. In the profile of that step at 1,000 topics (18.8 s sampled)
+       12.3 s are the memory server evaluating the queries of the serving
+       session again (`evaluateTrackedDocument`, `refreshTrackedGraph`,
+       `rewalkDocument` of `memory/v2/query.ts`), 2.8 s the resume itself with
+       its derivation, and 1.4 s garbage collection.
+     - _The cause._ A wake brought the result document and each document its
+       first derivation found absent with a sync under a schema that declares no
+       structure, which follows every link and stays a query of the session
+       (`syncCompiledPiece`). The result of a board links to every row, every
+       card and every bucket, each card links to its topic, and each topic to
+       the two before it. The server walks such a query again when a document it
+       visited changes, and the wake commits documents the query visited. The
+       load on a serving runtime had been taken off that query in the second
+       round (P118), and the wake had not.
+     - _What is built._ `bringReached` of `compiled/resume.ts` brings the result
+       document and what a link leads to from it, at any depth, each document
+       once and each by a sync of that one document under a schema that follows
+       no link. The replica is subscribed to each, and the session holds no
+       query over them. `resumeCompiledPiece` brings the inputs with the query
+       that follows links, as the load does, since that query is how the piece
+       hears of a member another writer adds (note 819). The documents the
+       derivation finds absent are brought the same way, and so are the
+       documents the basis lists as made by the piece.
+     - _Result._ In note 833: the first event after a takeover takes 0.75, 5.5
+       and 12.3 s on `filing-order` and 0.67, 5.4 and 12.0 s on
+       `sorted-references`. What is left of it at 1,000 topics, from one run
+       with the phases timed: 1.3 s for the documents, 2.7 s for the derivation,
+       and 1.1 s for a second derivation.
+     - _The second derivation._ The first derivation of the first resume of a
+       piece finds one place of the board absent that no list names, is aborted,
+       and is made again once the place is brought (note 815). The place is a
+       source from then on, so a later resume brings it first. Which place it is
+       on Topics was not traced.
+     - _No test of its own._ The tests of the resume and of the serving loop
+       pass with it, and the figure is that of the harness.
+831. **Step 4, not built: a wake that evaluates the units an event reaches and
+     no others. What remains, and the plan.** The first event after a takeover,
+     and a piece whose source changed while no runtime ran it, still evaluate
+     the whole derivation: 26,036 evaluations at 2,000 topics for an edit of one
+     title, which evaluates 5 once the executor runs. The executor's memo was
+     not formed from the storage, and no row of a basis per unit is stored. The
+     plan of note 817 stands. What this round adds to it:
+     1. _The order of the work._ The read of the documents (1.3 s at 1,000
+        topics) and the derivation (2.7 s) are of the same size, so a stored
+        entry that reads its value on demand (item 2 of note 817) has to come
+        with a wake that brings the documents of a unit when the unit is
+        evaluated, and not all of them before the executor starts.
+     2. _The least to store._ For each row document, in the document itself
+        beside the value: the identifiers of the documents its evaluation read
+        and the sequence number of each, which is the row of §10.4 with the
+        stored unit as its key (question 22 of the specification). For a bucket
+        document the same. The entries of the pattern's own body, which are few,
+        stay in the document of the basis.
+     3. _What the executor needs first._ An entry whose value is a reference to
+        its stored position and that has no dependencies, an element table built
+        from the stored array and the keys of its rows with no body run, and an
+        assembly that leaves the rows it did not evaluate as stored.
+        `Instance.#ensure`, `#table` and `#reassemble` assume today that every
+        element has an entry with a value in memory.
+     4. _The instances a handler made_ (note 829) are each a root of such units,
+        and are all started at a wake today.
+832. **Step 5, not built: the load under the serving loop in bounded
+     transactions.** The load is one transaction of one wave (P134): 3.2 and 7.0
+     s at 1,000 and 2,000 topics, in which a reader sees nothing of the board.
+     Note 820 has the two ways to bound it. The first, a transaction of a
+     derivation that commits by itself ahead of the wave, needs a ruling on
+     `ServerRunInfo.directCommit` and was not taken without one. The second, a
+     first derivation that stops after a bounded number of rows and goes on in
+     the next cycle, is the change of note 831: an assembly that holds the rows
+     it evaluated and leaves the others. It was not built in this round, so
+     neither was the load.
+833. **Step 6: Topics under the serving loop, measured.** The arms `serving` and
+     `serving-today` of `compare/topics/scale.ts` with `SCALE_TAKEOVER`, one
+     process for each board, size and run, one process at a time, on an 18-core
+     machine at load averages of 7.1 to 12.1 (1 minute) from other sessions.
+     Each cell is the time in milliseconds until the second client, which sent
+     nothing, reads the value, at 100, 1,000 and 2,000 topics. The compiled
+     boards have the median of three runs, with a create as the median of three
+     creates in each run; today's board has one run. No label is stored on
+     either arm (note 826).
+
+     | Step                                  | `filing-order`, compiled | `sorted-references`, compiled | `main.tsx`, today, one run |
+     | ------------------------------------- | ------------------------ | ----------------------------- | -------------------------- |
+     | load                                  | 531, 3,260, 6,429        | 547, 3,370, 6,655             | 2,432, 9,631, 18,665       |
+     | edit of a title, first topic          | 24, 29, 33               | 25, 27, 32                    | 89, 747, 1,479             |
+     | edit of a title, middle topic         | 16, 35, 55               | 19, 37, 56                    | 80, 695, 1,259             |
+     | edit of a title, last topic           | 19, 44, 83               | 17, 46, 81                    | 76, 717, 1,336             |
+     | edit of the mentions                  | 37, 124, 250             | 38, 131, 245                  | 87, 640, 1,907             |
+     | edit of the `shortName`               | 42, 155, 307             | 42, 152, 307                  | 138, 1,342, 2,696          |
+     | edit of `lastActivityAt`              | 13, 15, 15               | 14, 29, 46                    | 365, 3,154, 6,409          |
+     | create                                | 102, 289, 523            | 96, 297, 570                  | 514, 4,208, 9,694          |
+     | takeover: a client reads `topicCount` | 78, 289, 509             | 78, 274, 540                  | 706, 912, 1,898            |
+     | takeover: the loop is quiescent       | 81, 401, 745             | 82, 389, 787                  | 1,081, 8,399, 20,413       |
+     | first edit after the takeover         | 748, 5,485, 12,258       | 669, 5,423, 12,018            | 121, 1,471, 2,966          |
+     | second edit after the takeover        | 60, 22, 19               | 16, 16, 16                    | 118, 1,325, 2,483          |
+
+     The lowest and the highest of the three runs at 2,000 topics on
+     `filing-order`: load 6,095 to 6,661, the edit of the middle title 55 to 58,
+     the edit of the `shortName` 296 to 311, a create 484 to 536, the first edit
+     after the takeover 11,803 to 12,660. The sender of the compiled boards
+     reads within 3 ms of the second client in every cell, since no client runs
+     the board. Today's sender runs the board itself and reads its own
+     speculation first: an edit of a title in 14, 118 and 235 ms, and a create
+     in 183, 1,046 and 3,988 ms. The basis found the compiled board current in
+     every run, after the comparison of 223, 1,280 and 2,284 documents, and the
+     serving runtime evaluated nothing before the first edit. The tables with
+     every row are `tables-before.md` and `tables-after.md` of the round's raw
+     output.
+
+     - _Against the arm `runner`_ (note 667, which stores labels, on the
+       emulated storage, timed until the scheduler of the one runtime is idle):
+       the load is 3.3 s at 1,000 topics where it was 3.8 s. An edit of the
+       middle title is 35 and 55 ms at 1,000 and 2,000 where it was 13 and 14
+       ms, an edit of the `shortName` 155 and 307 ms where it was 27 ms at
+       1,000, an edit of the mentions 124 and 250 ms where it was 23 and 26 ms,
+       and a create 289 and 523 ms where it was 279 and 547 ms.
+     - _What the piece does in a step is what it does on the runner path:_ 5
+       evaluations and 2 ms of its own time for an edit of a title at every
+       size, 7 and 3 ms for an edit of the `shortName`, 10 and 4 ms for an edit
+       of the mentions, and 19, 34 and 50 ms for a create. The rest of each step
+       is outside the piece.
+     - _An edit of one title follows the board and the place of the topic,_ 16,
+       35 and 55 ms for the middle topic and 19, 44 and 83 ms for the last, with
+       2 ms in the piece. It was not profiled. What is known: the serving
+       runtime holds its inputs with a query that follows every link (note 830),
+       each topic of the generated board links to the two before it, and the
+       memory server walks a query again from a document that changed over what
+       it reaches, which from the last topic is every topic. The arm `runner`
+       declares the mentions of a topic as references for that reason
+       (`SCALE_TOPIC_SCHEMA=mentions-as-cells`), and the serving arm writes the
+       topics under no schema.
+     - _An edit of the `shortName` and of the mentions follow the board,_ 307
+       and 250 ms at 2,000 topics with 3 and 4 ms in the piece. Each writes the
+       result document, 2.2 MB at 2,000 topics (note 667), which every holder
+       takes whole (note 819): the two clients hold it, and the serving runtime.
+     - _The first edit after a takeover_ is 0.75, 5.5 and 12.3 s on
+       `filing-order`, from 0.85, 18.4 and 65.6 s before note 830, and 0.67, 5.4
+       and 12.0 s on `sorted-references`, from 0.95, 30.3 and 110.7 s. It is
+       still the whole derivation, 24,000 to 26,000 evaluations at 2,000 topics,
+       and it is longer than the load of the board. Today's piece is loaded by
+       the loop that takes over, 8.4 and 20.4 s until the loop is quiescent, and
+       its first edit after that is as any edit.
+     - _A run that did not start, once._ The first attempt at the final runs
+       stopped at `sorted-references` with 100 topics: the process printed
+       nothing after the line of the experimental options and used 0.9 s of
+       processor time in ten minutes, at a load average of 11. Three runs of the
+       same command after it finished, and so did the nine of the final set. The
+       cause is not known, and the files of that attempt are kept in
+       `after-hung-first-attempt` of the raw output.
+834. **Step 6: the list of `compare/serving-path.ts` again.** One process for
+     each run, the compiled arm three times and today's once, 7 events for each
+     figure, load averages 6.8 to 8.3. The pattern and the columns are those of
+     note 818, and the cells are the median of the runs, in milliseconds.
+
+     |   Rows | Arm      | Runs |   Load | `rename`, sender | `rename`, reader | `add`, sender | `add`, reader |
+     | -----: | -------- | ---: | -----: | ---------------: | ---------------: | ------------: | ------------: |
+     |    100 | compiled |    3 |    129 |             17.3 |             17.8 |          33.2 |          33.5 |
+     |    100 | today    |    1 |    898 |              4.1 |             17.8 |          11.8 |          44.1 |
+     |  1,000 | compiled |    3 |    448 |             17.0 |             18.7 |          61.1 |          61.6 |
+     |  1,000 | today    |    1 |  2,500 |              4.7 |             18.6 |          51.4 |           189 |
+     | 10,000 | compiled |    3 |  4,689 |             32.1 |             32.5 |           525 |           525 |
+     | 10,000 | today    |    1 | 61,450 |              6.5 |             37.7 |           738 |         3,096 |
+
+     After another serving loop takes the space over, from the restart:
+
+     |   Rows | Arm      | A client reads the last row | The loop is quiescent | Documents the comparison read | Evaluations before an event | First event, reader | Evaluations by then | Second event, reader |
+     | -----: | -------- | --------------------------: | --------------------: | ----------------------------: | --------------------------: | ------------------: | ------------------: | -------------------: |
+     |    100 | compiled |                        54.7 |                  56.7 |                           199 |                           0 |                55.8 |                 113 |                 15.5 |
+     |    100 | today    |                         212 |                   220 |                             – |                           – |                15.8 |                   – |                 15.5 |
+     |  1,000 | compiled |                         226 |                   310 |                         1,263 |                           0 |                 309 |               1,013 |                 13.8 |
+     |  1,000 | today    |                       1,432 |                 1,820 |                             – |                           – |                16.1 |                   – |                 14.9 |
+     | 10,000 | compiled |                       1,669 |                 2,776 |                        10,268 |                           0 |               3,675 |              10,013 |                 14.8 |
+     | 10,000 | today    |                      10,361 |               115,266 |                             – |                           – |                44.0 |                   – |                 37.3 |
+
+     The three runs of the compiled arm: load 114 to 131, 402 to 464 and 4,299
+     to 4,758; `add` at the reader 30.2 to 33.7, 59.1 to 66.2 and 513 to 572;
+     the first event after the takeover 50.3 to 58.8, 301 to 334 and 3,635 to
+     4,089. Nothing of this list changed against note 818 beyond the spread of
+     the runs. The first event after a takeover is as it was: this list has no
+     link from a row to another input, so the query that note 830 removed cost
+     little here, and what remains is the read of each document and the whole
+     derivation (note 831). The read of one document for each source at a
+     takeover, 1.7 s at 10,000 rows, was not changed.
+835. **Step 6: the corpus on the runner path, under the serving loop and after a
+     resume.** `compare/runner-corpus.ts`, one run of each over the 376 modules
+     the crate emits on the measurement branch, of which 239 are run. On the
+     runner path 183 pass, as in the rounds before, with 230 that start, 200
+     that handle every event, 215 with no commit refused and 210 equal to the
+     executor in memory. Under the serving loop (`--serving`) the same 183 pass.
+     After a resume (`--resume`) 182 of the 183 pass, against 180 in the second
+     round: 131 modules were resumed, the basis of all 131 matched, and the wake
+     wrote no document for 93 of them. The two modules that render a record as
+     text and the module with an instance a handler made now pass (notes 827 and
+     829). The one that does not is
+     `dev/gideon-tests/test-idempotent-side-effects.tsx`, which counts its own
+     evaluations and is evaluated once more by the wake (note 831).
+836. **Findings on structure, scale and soundness.**
+     - _Scale, part closed: the first event after a takeover grew faster than
+       the board,_ 18 s at 1,000 topics and 66 to 111 s at 2,000, because the
+       wake kept a query that follows every link of the result (note 830). It is
+       5.5 and 12.3 s now and follows the board. Not closed: it is the whole
+       derivation and the read of every document (note 831).
+     - _Scale, not closed: under the serving loop an edit of one title of a
+       board follows the board,_ and the place of the topic in it, with the
+       piece's own work constant (note 833). The query a serving runtime holds
+       over the inputs of a piece follows every link of them and not what the
+       plan reads. _Plan:_ bring the inputs under the schema the plan declares
+       for the argument, with each position the plan reads as a reference not
+       followed, and bring a document a reference leads to when the executor
+       first loads it. It needs the load of a document that the replica does not
+       hold to wait for the document, where `RuntimeTransactions.load` reads the
+       replica alone today and takes an absent document as empty.
+     - _Scale, not closed: a step that writes the result document follows the
+       board on every holder_ (notes 819 and 833): an edit of the `shortName` or
+       of the mentions is 250 to 307 ms at 2,000 topics.
+     - _Structure, not closed: the unit of the basis is the piece_ (note 831),
+       and _the load on a serving runtime is one transaction of one wave_ (note
+       832).
+     - _Soundness, closed: value code observed two orders of the members of one
+       record_ (note 827, P150).
+     - _Soundness, closed: an event a handler sends was kept in the process
+       alone_ (note 828, P151).
+     - _Soundness, closed: an instance a handler made did not run after a
+       resume_ (note 829, P152).
+     - _Structure, not closed: the first resume of a board runs its derivation
+       twice,_ for one place that no list names (note 830).
+     - _Structure, not closed: the list of the instances the handlers of a piece
+       made is written whole when it changes_ (note 829), and every listed
+       instance is started at a wake.
+     - _Structure: the crate's check refuses the two measured boards, and
+       today's compiler refuses `topic.tsx` of the measurement branch_ (note
+       826). The measured boards are run from artifacts no check accepted.
+     - _Seen once, not explained: a run of the harness that did not start_ (note
+       833).
+     - _An observation of the tests, not followed:_ a client that held a sink on
+       the result from before `CompiledServingMemoryServer.restart` did not have
+       the new loop reach the piece, and a client that connected after the
+       restart did. The test of note 828 reads through a client that connects
+       afterwards, as `compare/serving-path.ts` does.
+837. **Provisional decisions of the round, and what was not done.** P150: value
+     code is handed the members of a record in the order of the storage, the
+     names by their UTF-8 bytes, for a stored record and for a record a
+     computation made (note 827). P151: an event a handler of a compiled piece
+     sends is sent with `Cell.send` on the cell of its stream in the handler's
+     transaction (note 828). P152: the instances the handlers of a piece made
+     are listed in the document of the counts, each by its identifier with the
+     identity of its pattern, and a resume starts each before the first
+     derivation of the piece (note 829). P153: a wake brings the result document
+     and what it links to one document at a time and keeps no query that follows
+     the links of the result (note 830). Not done: a basis per unit and a wake
+     that evaluates the stale units alone (note 831); the bounded load under the
+     serving loop (note 832); the inputs of a piece brought under the schema of
+     the plan (note 836); the heads of the sources read without a sync for each;
+     the order in which an index gives its keys, and the comparison of
+     `Store.write` and `Store.put` (note 827); the list of made instances
+     written member by member; the profile of an edit of a title under the
+     serving loop; labels stored under the serving loop on Topics; more than one
+     run of today's arms; a machine with no other load.
+
+### CFC questions deferred, milestone 6, third round
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. An event a handler of a compiled piece sends is written into the document of
+   the entries of its stream in the handler's transaction (P151), with no record
+   of the plan, so under the join of what that transaction read. The plan has a
+   write edge for the send whose target is the stream. Whether the entry should
+   be stored under the label that edge's template gives, and whether the
+   handling of the entry, which runs under the acting principal the entry
+   carries as `firedAt`, reads the payload under that label.
+2. The list of the instances the handlers of a piece made (P152) is in the
+   document of the counts, which is written with no record (CFC question 3 of
+   the first round). It holds the identifier of each instance and the identity
+   of its pattern. Whether a reader of the piece may read how many instances its
+   handlers made and of which patterns.
+3. A resume starts an instance because the document of the counts lists it
+   (P152), and enrolls its documents as stores the piece owns with their first
+   write (P119). Whether the list is proof that a handler of the piece made the
+   instance: a writer that can write the document of the counts can name any
+   document of the space there. Of the kind of CFC question 6 of the second
+   round.
+4. P150 changes no label. It changes which value a computation that reads the
+   order of the members of a record gives, and so what is stored under the label
+   the computation's record gives. Whether the order of the names of a record is
+   a fact of the record's label alone, as the names are, was assumed and not
+   examined.
+5. A wake brings each document of the piece by a sync of its own, outside any
+   transaction (P153), where it kept a query. The reads are those of the serving
+   session, as before. Nothing of the labels changed, and the question is
+   recorded only because the set of documents the session is subscribed to is
+   now every document the result reaches.
