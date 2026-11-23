@@ -416,8 +416,10 @@ are loaded as before. A `computed:` root narrower than the space is judged
 as a space-scoped one is: its instance is one of the demand rows the piece
 that writes it has to vouch for. In the
 `record` mode the same judgment is made and counted, and every root is
-loaded; a loop whose policy names `skip` and no epoch
-(`SpaceServerPolicy.currencyEpoch`) runs in it. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
+loaded. The epoch is the one the loop's policy names
+(`SpaceServerPolicy.currencyEpoch`), and one fixed value shared by every
+build where it names none, so a record is trusted by a later build until an
+input marks it or the policy names another epoch. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
 `judgeCurrencyRoots()` in `runtime/memory/v2/currency-index.ts`; pinned in
 `runtime/runner/test/executor/space-server-currency.test.ts`.
 

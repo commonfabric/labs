@@ -57,7 +57,7 @@ The index holds identifiers and sequence numbers, and for a slice that read
 a clock the time it expires at, overwritten in place. The slice leads every
 key, so reading one viewer's slices reads no other viewer's rows:
 
-- **The slice**: a mark, and the epoch of the build that recorded it. Every
+- **The slice**: a mark, and the epoch it was recorded under. Every
   recorded piece has a `space` slice.
 - **What a slice read**: one row per document instance, `(input space, input
   id, scope key)`, with the sequence number the slice saw that instance at. A
@@ -471,12 +471,16 @@ by whoever instantiates the piece for them, counts as a changed input.
 Whether a piece had been clean is
 kept with its record, so a mark that lands before the next record is stored
 does not hide it. `skip` acts on the
-judgment, and only under an epoch: a record is trusted across builds only by
-the epoch it names, so a serving loop asked to skip with no epoch named runs
-as `record` and logs a warning. A toolshed's epoch is
-`SERVER_EXECUTION_CURRENCY_EPOCH`, or else the commit baked into a compiled
-binary, or else one made up for the process, since a source run's checkout
-can change under the commit it names.
+judgment, under the loop's epoch: a record of another epoch refuses its
+root, so its piece starts. A toolshed's epoch is
+`SERVER_EXECUTION_CURRENCY_EPOCH`, or else the default epoch
+(`DEFAULT_CURRENCY_EPOCH` in `runtime/runner/src/executor/space-server.ts`),
+which a serving loop whose policy names no epoch takes too. The default is
+one fixed value that no build and no process decides, so a deployment trusts
+the records its earlier builds stored, and a toolshed run from source trusts
+those of its earlier runs. Setting the variable to a value no record carries
+is how an operator stops trusting every record stored so far: each piece
+then starts on its next demand and is recorded under the new epoch.
 
 A toolshed runs `skip` by default. `falseClean` is still counted there, for
 each piece that does start, and `SERVER_EXECUTION_CURRENCY_INDEX=record` on a
@@ -501,6 +505,27 @@ wrong.
 
 ## Known limits
 
+- **A record outlives the build that stored it.** The default epoch is the
+  same for every build, and nothing else in the index says which build
+  stored a record. Three things a build can change therefore do not reach a
+  recorded piece until one of its inputs changes or the operator names a
+  new epoch. The first is what an unchanged pattern computes from unchanged
+  inputs, as a fix to the runtime, to a builtin or to the compiler changes
+  it: the stored outputs stay judged current, and they are what a client
+  reads. The second is what a record holds, as a fix to the recording
+  changes it: a record stored with a read or a vouch row wrong stays
+  trusted as it is. The third is what a row means. The index carries no
+  version, and a store's records are dropped when it is opened only where
+  the tables' shapes show an earlier layout
+  (`dropUnslicedCurrencyTables()` and `dropCurrencyRecordsBeforeDecides()`
+  in `runtime/memory/v2/engine.ts`). A build that changes what a row means
+  and keeps the tables' shapes would read the rows of earlier builds under
+  the new meaning, so such a change drops the records at open or changes
+  the value of the default epoch. Two builds that serve one store, as
+  during a deployment, trust each other's records in the same way, and so
+  does a toolshed run from source across an edit to the runtime. Under
+  `record`, a piece whose stored output the running build computes
+  otherwise is counted in `currency.falseClean` when it starts.
 - **A piece is recorded only after a cycle that ran it settled.** A piece
   served before the index was on starts on its first demand.
 - **A slice is marked whole.** A computation that is not live when a record

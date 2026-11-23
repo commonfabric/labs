@@ -2481,14 +2481,21 @@ the per-epic implementation notes).
   select a mode, `off` keeps no index, and anything else warns and leaves
   `skip`. A policy that sets no mode keeps no index, and the test server
   keeps one only for the literal `record` or `skip`.
-  `SERVER_EXECUTION_CURRENCY_EPOCH` names the build whose records are
-  trusted (`SpaceServerPolicy.currencyEpoch`). Unset on toolshed, the epoch
-  is the commit baked into a compiled binary, so a deployment trusts the
-  records of its own build across restarts, and one made up per process for
-  a source run, whose checkout can change under the commit it names. A
-  serving loop asked to `skip` with no epoch named runs as `record`, with a
-  warning. Meaningful only with the serving loop running
-  ([`serverExecution`](#serverexecution) on).
+  `SERVER_EXECUTION_CURRENCY_EPOCH` names the epoch records are stored
+  under and trusted by (`SpaceServerPolicy.currencyEpoch`): a piece recorded
+  under another epoch is started. Unset, the epoch is
+  `DEFAULT_CURRENCY_EPOCH`
+  ([`runtime/runner/src/executor/space-server.ts`](../../runtime/runner/src/executor/space-server.ts)),
+  one fixed value for every build and every process, so a deployment trusts
+  the records of its earlier builds, and a source run those of its earlier
+  runs. A build that changes what an unchanged pattern computes from
+  unchanged inputs, as a fix to the runtime or to a builtin does, therefore
+  leaves the stored outputs judged current until an input of the piece
+  changes. Setting the variable to a value no record carries stops trusting
+  every record stored so far, and each piece starts on its next demand;
+  [the plan](../plans/stored-output-currency.md) lists what else a record
+  carries across builds, under "Known limits". Meaningful only with the
+  serving loop running ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that adds the currency index
   of a space's store.
 - **Purpose.** A serving loop starts a piece whenever a session's demand
@@ -2539,7 +2546,8 @@ the per-epic implementation notes).
   `currency.falseClean` at zero. `SERVER_EXECUTION_CURRENCY_INDEX=off`
   restores a start for every demanded piece, and `record` keeps the index
   and starts every piece.
-- **Status on 2026-11-20.** Implemented, and `skip` by default on toolshed.
+- **Status on 2026-11-23.** Implemented, and `skip` by default on toolshed,
+  under an epoch every build shares.
   The index and its marks are covered in
   `runtime/memory/test/v2-currency-index.test.ts`, what passes between two
   spaces' indexes in

@@ -32,6 +32,7 @@ import type {
   ServedInstantiateReceipt,
   ServedRegistrationPreparation,
 } from "@commonfabric/piece/ops";
+import { DEFAULT_CURRENCY_EPOCH } from "@commonfabric/runner/executor/space-server";
 
 const envOf = (values: Record<string, string | undefined>) => (name: string) =>
   values[name];
@@ -201,6 +202,7 @@ describe("serverExecutionPolicyFromEnv", () => {
       );
     expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "record" })).toEqual({
       currencyIndex: "record",
+      currencyEpoch: DEFAULT_CURRENCY_EPOCH,
       storeReadThrough: true,
     });
     expect(
@@ -227,37 +229,67 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_INDEX");
   });
 
-  it("returns the `record` mode, with a warning, for `skip` with no epoch", () => {
+  it("returns the `skip` mode under the default epoch, with no warning, for `skip` with no epoch named", () => {
     const warnings: string[] = [];
-    expect(
-      serverExecutionPolicyFromEnv(
-        envOf({
-          SERVER_EXECUTION_CURRENCY_INDEX: "skip",
-          SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
-        }),
-        (m) => warnings.push(m),
-      ),
-    ).toEqual({ currencyIndex: "record", storeReadThrough: true });
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_EPOCH");
+    for (const epoch of [undefined, ""]) {
+      expect(
+        serverExecutionPolicyFromEnv(
+          envOf({
+            SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+            SERVER_EXECUTION_CURRENCY_EPOCH: epoch,
+            SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
+          }),
+          (m) => warnings.push(m),
+        ),
+      ).toEqual({
+        currencyIndex: "skip",
+        currencyEpoch: DEFAULT_CURRENCY_EPOCH,
+        storeReadThrough: true,
+      });
+    }
+    expect(warnings).toEqual([]);
   });
 
-  it("returns the `skip` mode under the build's epoch where a build is named and the mode is unset, and the mode and epoch the environment names over those", () => {
+  it("returns one fixed default epoch for every resolution that names none, and the epoch the environment names over it", () => {
+    // A record names its epoch by value, and a later build's judgment has
+    // to match it to trust the record. So the value is written out here: a
+    // change to it stops every deployment trusting the records it holds.
+
+    const policyWith = (
+      env: Record<string, string>,
+      defaultCurrencyIndex?: "record" | "skip",
+    ) =>
+      serverExecutionPolicyFromEnv(envOf(env), () => {}, defaultCurrencyIndex);
+    expect(policyWith({}, "skip").currencyEpoch).toBe("default");
+    expect(policyWith({}, "record").currencyEpoch).toBe("default");
+    expect(
+      policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "skip" }).currencyEpoch,
+    ).toBe("default");
+    expect(DEFAULT_CURRENCY_EPOCH).toBe("default");
+    expect(
+      policyWith({ SERVER_EXECUTION_CURRENCY_EPOCH: "release-7" }, "skip")
+        .currencyEpoch,
+    ).toBe("release-7");
+    // With no index kept there is no epoch to name.
+    expect(policyWith({})).not.toHaveProperty("currencyEpoch");
+  });
+
+  it("returns the given default mode under the default epoch where the mode is unset, and the mode and epoch the environment names over those", () => {
     const warnings: string[] = [];
     const policyWith = (env: Record<string, string>) =>
       serverExecutionPolicyFromEnv(
         envOf({ ...env, SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0" }),
         (m) => warnings.push(m),
-        { currencyEpoch: "build-9" },
+        "skip",
       );
     expect(policyWith({})).toEqual({
       currencyIndex: "skip",
-      currencyEpoch: "build-9",
+      currencyEpoch: DEFAULT_CURRENCY_EPOCH,
       storeReadThrough: true,
     });
     expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "record" })).toEqual({
       currencyIndex: "record",
-      currencyEpoch: "build-9",
+      currencyEpoch: DEFAULT_CURRENCY_EPOCH,
       storeReadThrough: true,
     });
     expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "off" })).toEqual({
@@ -272,7 +304,7 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings).toEqual([]);
     expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "true" })).toEqual({
       currencyIndex: "skip",
-      currencyEpoch: "build-9",
+      currencyEpoch: DEFAULT_CURRENCY_EPOCH,
       storeReadThrough: true,
     });
     expect(warnings.length).toBe(1);

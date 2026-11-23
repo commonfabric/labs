@@ -14,7 +14,7 @@ import {
   experimentalOptionsWithFollowedPosture,
   type RuntimeFetch,
 } from "@commonfabric/runner";
-import { buildInfo, toolshedClientBuild } from "./build-info.ts";
+import { toolshedClientBuild } from "./build-info.ts";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
@@ -23,7 +23,10 @@ import {
   webSocketRoute,
 } from "@commonfabric/runner/executor/routed-plane";
 import { servingLoopDiagnostics } from "@commonfabric/runner/executor/serving-loop-diagnostics";
-import { DEFAULT_FLUSH_DEADLINE_MS } from "@commonfabric/runner/executor/space-server";
+import {
+  DEFAULT_CURRENCY_EPOCH,
+  DEFAULT_FLUSH_DEADLINE_MS,
+} from "@commonfabric/runner/executor/space-server";
 import {
   SERVING_RUNTIME_EXPERIMENTAL,
   servingRuntimeFactory,
@@ -104,12 +107,6 @@ export type ServerExecutionEnvPolicy = {
 };
 
 /**
- * The currency epoch of a run with no baked commit: one per process, so its
- * records are trusted until the process ends and by no other.
- */
-const PROCESS_CURRENCY_EPOCH = `process:${crypto.randomUUID()}`;
-
-/**
  * Resolve the Phase-6 policy knobs from env (serving-loop.md §3's
  * T_flush "tuned in Phase 6 with the other budgets"; §5's per-space
  * budgets). Each is env-overridable; the defaults are the production
@@ -134,12 +131,12 @@ const PROCESS_CURRENCY_EPOCH = `process:${crypto.randomUUID()}`;
  *   built-in default unless overridden; the literal `0` keeps none, and
  *   a value past the longest delay a timer honors reads as unset;
  * - the currency index (`SpaceServerPolicy.currencyIndex`,
- *   SERVER_EXECUTION_CURRENCY_INDEX) defaults to `skip` where `build` names
- *   the epoch of this build, and to none where it does not; the literal
- *   `off` keeps none, `record` and `skip` select a mode, and anything else
- *   warns and keeps the default. Its epoch (`SpaceServerPolicy.currencyEpoch`)
- *   is SERVER_EXECUTION_CURRENCY_EPOCH as written, or else the build's, and
- *   `skip` with neither runs as `record`, with a warning.
+ *   SERVER_EXECUTION_CURRENCY_INDEX) defaults to `defaultCurrencyIndex`,
+ *   and to none where that is not given; the literal `off` keeps none,
+ *   `record` and `skip` select a mode, and anything else warns and keeps the
+ *   default. Its epoch (`SpaceServerPolicy.currencyEpoch`) is
+ *   SERVER_EXECUTION_CURRENCY_EPOCH as written, or else
+ *   `DEFAULT_CURRENCY_EPOCH`, which no build or process decides.
  *
  * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
  * ("abc", "-1", "1.5") falls back to the default and warns, instead of
@@ -151,7 +148,7 @@ const PROCESS_CURRENCY_EPOCH = `process:${crypto.randomUUID()}`;
 export function serverExecutionPolicyFromEnv(
   envGet: EnvReader,
   warn: (message: string) => void = (message) => console.warn(message),
-  build?: { currencyEpoch: string },
+  defaultCurrencyIndex?: "record" | "skip",
 ): ServerExecutionEnvPolicy {
   /** A strictly non-negative decimal integer, or undefined for anything
    * else (garbage, sign, fraction, exponent — `parseInt` would accept
@@ -253,8 +250,7 @@ export function serverExecutionPolicyFromEnv(
     );
   }
   const currencyRaw = readRaw("SERVER_EXECUTION_CURRENCY_INDEX");
-  const currencyDefault = build === undefined ? undefined : "skip";
-  let currencyIndex: "record" | "skip" | undefined = currencyDefault;
+  let currencyIndex = defaultCurrencyIndex;
   if (currencyRaw === "record" || currencyRaw === "skip") {
     currencyIndex = currencyRaw;
   } else if (currencyRaw === "off") {
@@ -264,22 +260,14 @@ export function serverExecutionPolicyFromEnv(
       "Server-execution v2: ignoring SERVER_EXECUTION_CURRENCY_INDEX=" +
         `${JSON.stringify(currencyRaw)} (expected "record", "skip" or ` +
         `"off"); the currency index stays ${
-          currencyDefault === undefined ? "OFF" : `"${currencyDefault}"`
+          defaultCurrencyIndex === undefined
+            ? "OFF"
+            : `"${defaultCurrencyIndex}"`
         }`,
     );
   }
   const currencyEpoch = readRaw("SERVER_EXECUTION_CURRENCY_EPOCH") ??
-    build?.currencyEpoch;
-  // A record is trusted across builds only by the epoch it names, so
-  // leaving pieces unstarted on it takes a named epoch.
-  if (currencyIndex === "skip" && currencyEpoch === undefined) {
-    warn(
-      "Server-execution v2: SERVER_EXECUTION_CURRENCY_INDEX=skip needs " +
-        "SERVER_EXECUTION_CURRENCY_EPOCH; the currency index runs as " +
-        '"record"',
-    );
-    currencyIndex = "record";
-  }
+    DEFAULT_CURRENCY_EPOCH;
   return {
     ...(flushDeadlineMs !== undefined ? { flushDeadlineMs } : {}),
     ...(flushDeadlineMaxMs !== undefined ? { flushDeadlineMaxMs } : {}),
@@ -291,9 +279,7 @@ export function serverExecutionPolicyFromEnv(
       ? { parkedRuntimeRetentionMs }
       : {}),
     ...(currencyIndex !== undefined ? { currencyIndex } : {}),
-    ...(currencyIndex !== undefined && currencyEpoch !== undefined
-      ? { currencyEpoch }
-      : {}),
+    ...(currencyIndex !== undefined ? { currencyEpoch } : {}),
   };
 }
 
@@ -634,12 +620,7 @@ export function startServerExecutionHost(options: {
         "production default is ON)",
     );
   }
-  const policy = serverExecutionPolicyFromEnv(envGet, undefined, {
-    // A compiled binary is the build its baked commit names. A source run
-    // serves whatever the checkout holds, which the commit it names does
-    // not say, so its records are its own process's alone.
-    currencyEpoch: buildInfo.commitSha ?? PROCESS_CURRENCY_EPOCH,
-  });
+  const policy = serverExecutionPolicyFromEnv(envGet, undefined, "skip");
   if (policy.currencyIndex !== "skip") {
     console.log(
       policy.currencyIndex === undefined
@@ -649,6 +630,17 @@ export function startServerExecutionHost(options: {
         : "Server-execution v2: currency index records and judges, and " +
           "starts every demanded piece, by " +
           'SERVER_EXECUTION_CURRENCY_INDEX=record (default is "skip")',
+    );
+  }
+  if (
+    policy.currencyEpoch !== undefined &&
+    policy.currencyEpoch !== DEFAULT_CURRENCY_EPOCH
+  ) {
+    console.log(
+      "Server-execution v2: currency index trusts the records of epoch " +
+        `${JSON.stringify(policy.currencyEpoch)} alone, by ` +
+        "SERVER_EXECUTION_CURRENCY_EPOCH (default is " +
+        `${JSON.stringify(DEFAULT_CURRENCY_EPOCH)})`,
     );
   }
   if (policy.storeReadThrough !== true) {
