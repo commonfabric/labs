@@ -693,11 +693,20 @@ export const runServing = async (
       const began = performance.now();
       await change();
       // With `SCALE_LAYOUT` set: once the serving runtime is quiescent,
-      // how the list the step waits on is laid out, on the error stream.
+      // how the list the step waits on is laid out, how many pieces that
+      // runtime runs, and the refusals and failures so far, on the error
+      // stream.
       if (Deno.env.get("SCALE_LAYOUT") !== undefined) {
         void serving.host.whenQuiescent().then(() =>
           console.error(
-            JSON.stringify({ step, path, layout: layoutOf(`${path[0]}`) }),
+            JSON.stringify({
+              step,
+              path,
+              layout: layoutOf(`${path[0]}`),
+              pieces: serving.pieces().length,
+              refusals: piece()?.refusals.length ?? 0,
+              failures: failures.length,
+            }),
           )
         );
       }
