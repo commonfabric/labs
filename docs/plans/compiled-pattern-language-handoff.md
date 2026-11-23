@@ -23,8 +23,8 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-topics` | `compiled-pattern-topics-merge` | The crate on the corpus of `main`, Topics on the executor | #10016 |
 | `claude/compiled-pattern-runner-m3` | `compiled-pattern-m3` | The trunk of the build: milestones 3 to 6 merged, the store with frozen values, a resume by units | #10140 |
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
-| `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch: the trunk head, the carried fixes, the runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes, write integrity | none |
-| `merge-attempt/serving-m6` | `compiled-pattern-m5` (checked out by the round in progress) | The attempt to merge the serving branch into the merged branch; one test fails | none |
+| `claude/compiled-pattern-sandbox-m5` | none while the merge attempt is checked out in `compiled-pattern-m5`; check it out there when that round ends | The merged branch: the trunk head, the carried fixes, the runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes, write integrity | none |
+| `merge-attempt/serving-m6` | `compiled-pattern-m5` | The attempt to merge the serving branch into the merged branch; one test fails | none |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
 | `claude/compiled-pattern-topics-runs` | `compiled-pattern-topics-runs` | The measured Topics boards; the serving branch is merged into it for measurements (local) | none |
