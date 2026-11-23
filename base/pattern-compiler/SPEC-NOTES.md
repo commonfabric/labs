@@ -13876,3 +13876,675 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    that follows gives every row its record again. Whether those rows may be
    stored under labels formed in the later transaction when their values are
    those of before.
+
+## Milestone 6, second round: the server compiles, and a resume that evaluates nothing
+
+The second round of milestone 6 of
+`docs/plans/compiled-pattern-language-integration.md`, on the branch
+`claude/compiled-pattern-serving-m6`, after a merge of the milestone 3 branch
+with milestone 5 (`8965ed2b8e`). The notes are numbered from 811. The
+provisional decisions P90 to P96 of the first round are renamed P130 to P136,
+since a round of milestone 3 used the same numbers.
+
+811. **What the round built, by step.**
+     - _The serving runtime compiles (step 1)._ `setUpCompiledPiece` writes the
+       program of a pattern, and the loader of `serveCompiledPieces` compiles it
+       and evaluates the value code in a compartment (note 812).
+     - _Resume without deriving again (step 2)._ A piece keeps a basis of the
+       documents its derivation read (`compiled/basis.ts`), and
+       `resumeCompiledPieceFromBasis` of `compiled/resume.ts` starts no executor
+       where the basis matches the storage (notes 813 to 816). The unit of the
+       basis is the piece and not the cone instance: a piece whose basis does
+       not match evaluates its whole derivation, as in the first round. That
+       part of the step is not built, and note 817 has the plan.
+     - _The load and the append under the serving loop (step 3)._ The append is
+       profiled and one of its costs removed (note 819). The bounded load is not
+       in use under the serving loop: note 820 says what a wave needs.
+     - _Handler-made instances and handler-sent events (step 4)._ Note 821.
+     - _Measurements (step 5)._ Notes 818 and 822.
+     - _With the experimental option off._ `ensureVerdict` passes the loader
+       whether an event waits, and asks it only under the option. The other
+       changes are in `runtime/runner/src/compiled/` and
+       `base/pattern-compiler/`.
+812. **Step 1: the server compiles (provisional decisions P110 to P112).**
+     - _What a client writes (P110)._
+       `setUpCompiledPiece(runtime, tx, program,
+       argument, resultCell)`
+       writes the program as JSON text, the files by name, the name of the main
+       file and the name of the export, into an entity named by that text
+       (`patternSourceDocumentOf`), and the document named from the result
+       document holds `{ source }`, the entity of the program. It writes no
+       artifact.
+     - _What the loader does._ It reads the document that names the pattern.
+       Where that holds no `source`, as the form of the first round with its
+       `artifact` does, the loader refuses the piece. Otherwise it parses the
+       program (`patternProgramOf`), and hands it to the compiler it was given
+       (`ServeCompiledPiecesOptions.compile`).
+       `listenCompiledServingMemoryServer` gives one `PatternCompiler` of
+       milestone 5 for the server, which runs the crate's binary with
+       `emit --accepted` and keeps the artifacts in its cache directory. What a
+       compiler gave is kept per compiler by the entity of the source, which the
+       text names, so one compile serves every piece of a source in every space
+       of the process, and a source the compiler refused is not compiled again.
+       The executor is given that artifact and the artifacts of the program by
+       identity, and `startCompiledPiece` evaluates the value code with
+       `compartmentEvaluator`.
+     - _A refusal the client reads (P111)._ Where the document names no source,
+       the source is no program, or the compiler rejects, the loader writes
+       `{ reason }` into the document `compiledFailureOf(result)`, in a
+       transaction stamped as a derivation with no acting principal, starts
+       nothing and answers the loop that the piece is not served. The reason of
+       a refused source is the text of the compiler's diagnostics. The loader
+       writes it once: a later demand finds the compile kept and the reason
+       stored.
+     - _Tests._ `runtime/runner/test/compiled/compiled-serving.test.ts`, the
+       three cases under "the compiled pattern of a piece", with a function in
+       the place of the binary: a source is compiled once and a handler body
+       reads `typeof Deno` as `"undefined"`; a client that writes the document
+       of the first round with an artifact gets no compile and no evaluation and
+       reads the reason; a source whose body names `$h` gets no evaluation and
+       reads the diagnostic. `compare/test/serving-compile.test.ts` runs the
+       release binary for the first and the third.
+       `runner-corpus.ts
+       --serving` writes the main file of each module,
+       and its compiler gives the artifact of the crate's one run over the
+       corpus for that module.
+     - _What the specification asks that is not met_
+       (`scheduler-and-serving-loop.md` §10.5). The compile is a child process
+       that the loader awaits inside the loop's start of the piece, where the
+       specification has the instance stay unloaded with its demand pending. The
+       compiled pattern is not stored as a document of the space with the
+       integrity of compiled output: it is kept in the process and in the cache
+       directory of the compiler. A compiler build is no part of the identity a
+       piece names.
+     - _Two soundness defects of the compartment, found and closed (P112)._
+       `Host`, the object every value function is called with as `$h` and that
+       `$rt.nohost` holds, kept its instance in the public member `instance`:
+       `$rt.nohost.instance.store` was the store of the executor, and through
+       the instance the transactions and the runtime. It is a private field now,
+       as the handle's is since P100. And the compartment evaluator froze
+       `Handle`, `Ref` and `StreamRef` alone: a handler body that assigned to
+       `Object.getPrototypeOf(Object.getPrototypeOf($rt.nohost)).slot` replaced
+       the method for every piece of the process, and the test of it broke the
+       cases that ran after it in the same process. The executor lists the
+       classes whose instances value code is handed, makes or catches
+       (`HANDED_CLASSES`: `Unsupported`, `Assembled`, `Index`, `IndexHandle`,
+       `Thunk`, `ReadsFailure`, `Handle`, `Host`, `NoHost`), and
+       `compartmentEvaluator` freezes each with its prototype, with `Ref`,
+       `StreamRef`, `StreamMarker`, `MissingKey` and `ComputedOutput` of the
+       store. Both need a text that names `$rt` or `$h`, which the crate's check
+       refuses, so they were reachable only by an artifact that no check had
+       accepted, which the loader no longer evaluates. `value-code.test.ts` has
+       three cases.
+     - _What a toolshed still needs before it may install the loader._
+       1. The freeze of module data and the hardening of functions in the
+          emitter (`language-subset.md` §3.3), not built: a module-scope
+          constant is mutable, and one evaluator is not yet safe to share among
+          pieces of different owners. It changes `emit.rs` and every emitted
+          fixture, which the round of milestone 3 edits now. Until then each
+          piece keeps a compartment of its own, which is the default.
+       2. `$rt` and `$h` are still objects of the executor whose methods a text
+          that names them can call. Each reads and writes the instance the code
+          belongs to and no other, so the check's refusal of both names is what
+          keeps a body inside the footprint the plan declares for it, and not
+          what keeps it inside its piece.
+       3. The compile off the loop's thread and outside the loop's wait
+          (`ModuleCompileWorker`, §10.5), a bound on the time and the output of
+          the child process, and a cache directory whose old trees something
+          removes (note 705).
+       4. A decision on who may write the document of the source and the
+          document that names it, and with which label the reason of a refusal
+          is stored (CFC questions 1 and 2 of this round).
+       5. The compiled pattern as a document with the integrity of compiled
+          output, where a client is to speculate (§10.5, "Delivery to clients").
+       6. A check of the crate that refuses an undeclared member of a handle
+          (note 703).
+813. **Step 2: the basis of a piece, as built (provisional decisions P113 to
+     P116 and P120).** `runtime/runner/src/compiled/basis.ts`. A piece keeps one
+     document, named from its result document (`basisDocumentOf`), that says
+     what the stored result was derived from. It is the form of
+     `scheduler-and-serving-loop.md` §10.4 with the piece as the unit: one set
+     of rows, identifiers and sequence numbers by document, for all cone
+     instances of the piece together.
+     - _The sources (P113)._ The documents of the basis are those the derivation
+       reads and does not derive: a document that exists outside the executor
+       and that the executor read (`RuntimeTransactions.load`); the argument
+       document; a document that a transaction of the executor other than a
+       derivation wrote, which is a handler's, the creation of the instance, a
+       request or a completion; a place of the executor's own that was read
+       while the storage held no document of it, such as a state cell nothing
+       has written; a document another writer changed and the executor took the
+       change of; and the document of the counts, which every handled event
+       writes, so that a handler whose transaction committed is known even where
+       it wrote nothing else. A document the derivation alone writes is no
+       source: the result, a row, an output in a document of its own. The
+       adapter tells the piece of each through `SourceObserver`.
+     - _What is stored for a source (P114)._ `inputs[document]` is the sequence
+       number the replica's confirmed view of the document stood at
+       (`ISpaceReplica.confirmedDocumentSeq`) when a derivation ran with no
+       write of the piece to it unconfirmed. The executor holds every source in
+       memory and takes each change of another writer when the replica applies
+       it, so that number names what the derivation saw. The source is unchanged
+       while its head is that number. A source in another space is recorded as
+       never current.
+     - _A source the piece itself wrote (P115)._ A piece cannot know the number
+       its own commit will give a document. In a serving runtime the handler's
+       transaction and the derivation's are sealed into one wave and get one
+       number, after both ran. So the basis has a list `recent` of the sources
+       that a transaction of the piece wrote and that the replica has not
+       confirmed at that transaction's number. The transaction that writes the
+       basis reads each of them whole, so its commit depends on what the
+       document holds, every write of the basis names all of them again, and a
+       counter `revision` makes every write a change. A source of the list is
+       unchanged while its head is not behind the head of the document of the
+       basis. When a later derivation finds the commit confirmed, the source
+       gets its number and leaves the list. _Alternatives considered:_ a second
+       commit after each event that records the number (one more wave per
+       event); the hash of the content of the source (work that follows the size
+       of an array a handler appends to); rows the memory server writes inside
+       the wave's store transaction, which is what §10.4 specifies and what
+       replaces this list (note 817).
+     - _A commit that stores a label writes the document._ A handler that sets a
+       cell to the value it holds writes no value, and its commit still stores a
+       label on the document, which moves its head. The first version of the
+       basis did not count that as a write of the piece, and five modules of the
+       corpus were found stale at every resume (`product/primitives/counter.tsx`
+       among them). The adapter now tells the piece of each document that a
+       commit of a handed transaction changed, and where the basis was recorded
+       before that, the derivation runs once more and records it.
+     - _When the basis is written (P116)._ Only by a transaction of the
+       derivation, after `settle()`, with what the derivation wrote: at the
+       load, at a resume, and in a derivation whose transaction has other writes
+       or behind which a transaction of the piece wrote a source. A change by
+       another writer of a field that no cone reads writes nothing: the
+       derivation runs, evaluates nothing, and leaves the basis one number
+       behind, which the next write of the basis catches up, and until then a
+       resume finds that piece stale. A transaction whose commit is refused, or
+       taken back after a wave was rejected, takes its write of the basis with
+       it, and the piece then writes the document whole.
+     - _The numbers are spread over 256 documents (P120)._ The first version
+       kept every number in the document of the basis. For a list of 10,000
+       references that is a document of 10,000 entries, and each event writes
+       two or three paths of it. A write of one path of a document costs the
+       replica, the server and the commit work that follows the size of the
+       document: a rename under server execution at 10,000 rows took 62 ms with
+       that basis and 29 ms with none, in one run each. The number of a source
+       is now in the document of a part, chosen by a hash of the identifier of
+       the source (`basisPartOf`), and the document of the basis names the parts
+       that exist. A rename then takes 30 to 36 ms in four runs. A resume reads
+       the documents of the parts beside the sources.
+     - _The documents the piece made._ The basis also lists the documents the
+       executor made that are no rows, and the entities of the streams
+       (`documents`). A resume that starts the executor brings each by name
+       (note 815).
+     - _Labels._ The document of the basis is written with no record of a plan,
+       as the document of the counts is (CFC question 3 of this round).
+814. **Step 2: a resume from the basis (provisional decision P117).**
+     `resumeCompiledPieceFromBasis(runtime, artifact, resultCell)` returns a
+     `ResumedPiece`.
+     - _What is read._ The document of the basis, the documents of its parts,
+       and one document for each source it names, each brought with a schema
+       under which the sync follows no link (`false`), outside any transaction.
+       No row, no document of the result, no stream. The replica is subscribed
+       to each of them from then on. For `fixtures/serving-list.tsx` after two
+       events that is eight sources at three items and one added: the argument,
+       the array, its four items, the state cell and the counts. It follows the
+       number of sources, which for a list of references is the number of items
+       (note 818). Nothing bounds it: there is no transaction, and the syncs are
+       sent together.
+     - _What is compared._ The identity of the compiled pattern
+       (`Plan.patterns[0]`), then `basisMatches`: for a source of `recent`, that
+       its head is not behind the head of the basis, and for every other, that
+       its head is the recorded number. The subscription begins before the
+       documents are brought, and a change of one of them that arrives during
+       the comparison makes the piece stale.
+     - _Where they match._ Nothing is evaluated, no `Instance` is made, the
+       value code is not loaded, and nothing is committed. The piece then waits:
+       a commit that changes a document its basis names wakes it, and its caller
+       wakes it (`ResumedPiece.wake`) before an event. Under the serving loop,
+       `Runtime.compiledPieceLoader` is told whether an event to a stream waits
+       (`EnsurePieceOptions.forEvent`): a demand finds the piece served and
+       reads what is stored, and an event wakes it, which registers the
+       handlers.
+     - _Where they do not match, and at a wake._ `resumeCompiledPiece` as in the
+       first round: every document of the piece is brought, the whole derivation
+       is evaluated, and the paths that differ are written, in one transaction,
+       with the basis.
+     - _Tests._ `runtime/runner/test/compiled/basis.test.ts`, five cases on
+       `fixtures/serving-list.tsx`, a `map` over an array of references with
+       rows as documents, on the emulated server and over a socket: a piece
+       found current evaluates no module, commits nothing and leaves the
+       documents of its four rows out of the replica; the events after a wake
+       give the values one runtime gives for all of them, and a third runtime
+       finds the piece current again; an item changed while no runtime ran the
+       piece makes it stale, and the wake writes the one row and the basis; a
+       change of an item wakes a piece that waits; another compiled pattern
+       makes it stale. `compiled-serving.test.ts` has two cases with a second
+       serving loop: it evaluates nothing until an event arrives, and a client's
+       change of an item wakes the piece. `compare/test/resume-corpus.test.ts`
+       runs two modules of the corpus through `runner-corpus.ts --resume`.
+815. **Step 2: three defects of the resume of the first round, found by the
+     corpus and closed.**
+     - _A resumed runtime did not enroll the documents of the piece._ The
+       adapter enrolls a document as a store the instance owns in the
+       transaction that first writes it, and the runtime keeps the enrollment in
+       memory. A second runtime never wrote the document first, so its write was
+       measured for writer-fit and refused
+       (`examples/cfc-exchange-rules/witnessed-chain.tsx`, and the write of the
+       basis in `dev/test/cfc-trusted-write/other-writer.tsx`). A resumed
+       adapter now enrolls each document it holds from the run before with its
+       first write of it.
+     - _A document the result links to by no link a sync follows was read as
+       absent._ The first round brought what the result document links to and
+       the state cells of the pattern's own body. An output that is kept in a
+       document of its own, and the entity of a stream held by a row that is
+       stored in place in such a document, are reached by no runtime link. The
+       resumed executor read them as absent and made them again, and the commit
+       conflicted with the stored document (`showcase/wordsearch/play.tsx`:
+       "stale confirmed read ... at seq 0"). The basis lists the documents the
+       piece made and a resume brings each. The list follows the number of rows
+       where each row has a stream or a document of its own: a scaling limit of
+       the list, not closed.
+     - _The second derivation of a resume._ Where the replica held no document
+       of a state cell of an element body, the first round made the derivation,
+       aborted it, brought the document and made the derivation again, for a
+       cell that nothing had ever written as for one that existed. A place the
+       resumed executor finds no document of is now a source of the basis, so
+       the next resume brings it first.
+816. **Step 2: the eleven modules that failed after a resume, by cause.**
+     `compare/runner-corpus.ts run <file> --resume --detail`, which now resumes
+     from the basis and then wakes the piece. Of the 183 modules that pass on
+     the runner path, 180 pass with the resume, against 172 in the first round.
+     All 131 modules that were resumed were found current: no value code was
+     evaluated before the wake. The eleven:
+     - _Seven compared unequal and were equal._ `simple-list.tsx`,
+       `render-test.tsx`, `test-cell-equals.tsx`,
+       `scoped-group-chat/main-with-writable-inputs.tsx`,
+       `system/self/self.tsx`, and after it `self-reference-test.tsx` at a
+       `props` and `apps/base/contacts.tsx` at a `style`: the harness compared
+       two values as JSON text, and the members of a record that was read from
+       the storage come in the order of their names, where the process that
+       wrote the record holds them in the order they were written. The harness
+       now compares with the members ordered. See the next item for where the
+       order is no artifact of the harness.
+     - _Two differ by the order of the members of a record, in what the pattern
+       renders._ `dev/gideon-tests/test-record-key-set-56.tsx` and
+       `apps/budget-tracker/expense-form.tsx` render a record as text, and the
+       text after a resume lists the members in another order than before it.
+       **A soundness finding, not closed:** the value code observes the order of
+       the members of a stored record (`Object.keys`, a rendering, a `map` over
+       the entries of a record), and that order is the writer's in the process
+       that wrote the record and the order of the names in every process that
+       reads it from the storage. A derivation that depends on it gives one
+       result before a restart and another after it, and the wake of a piece
+       that the basis found current then writes the difference. To close it the
+       executor would iterate the members of a record in one order in every
+       process.
+     - _One counts its own evaluations._
+       `dev/gideon-tests/test-idempotent-side-effects.tsx` holds a computation
+       that is not idempotent, and shows that it ran four times where the
+       executor in memory ran it three times: the wake evaluates everything once
+       more (note 817).
+     - _Two had a commit refused._ `witnessed-chain.tsx` for the missing
+       enrollment, and `wordsearch/play.tsx` for a document that was not brought
+       (note 815). Both pass.
+     - _One has an instance that a handler made._
+       `dev/self-reference-test/self-reference-test.tsx` (its first difference
+       was the order of the members of a `props`, and behind it): a handler
+       instantiates the pattern again as a child, and the resumed executor reads
+       the child's result as a document and does not start the child, so an
+       event after the resume that changes what the child reads leaves the
+       child's tree as it was stored (note 821).
+     - _What the wake of a current piece writes._ For 92 of the 131 modules the
+       wake wrote no document. In the run before the numbers of the basis were
+       spread over parts, it wrote one document for 19, the basis, which takes
+       the places the resumed executor found no document of, and for 20 it wrote
+       2 to 17 documents though the basis matched: the derivation gave another
+       value than the stored one. Those were not traced one by one; the order of
+       the members of a record and a computation that is not a function of its
+       inputs are the two causes seen.
+817. **Not built: a basis per cone instance, and a wake that evaluates the stale
+     units alone. The plan.** The brief of the round asks that a piece whose
+     input changed while no runtime ran it evaluate the units whose basis
+     changed and no others. That is not met. A piece whose basis does not match,
+     and every piece at its first event after a resume, evaluates its whole
+     derivation once, reads every document of the piece in one transaction, and
+     writes what differs with no record of a plan (P130 of the first round, and
+     its CFC questions 1 and 2). What the round built removes that cost from a
+     piece that is only read, and from every piece of a space until it gets an
+     event or an input changes.
+     - _Why not in this round._ The executor's memo entry of a cone instance
+       holds the value as the value code returned it, the positions it read, its
+       dependencies as closures over the hosts of other evaluations, the element
+       tables, the units of the layout, the inputs of its write records and the
+       groups its fold labels are formed from (`Instance.#ensure`, `#evaluated`,
+       `#noteInputs`, `#regroup`). None of that can be made from storage without
+       evaluating, and the code that holds it is what the round of milestone 3
+       edits now.
+     - _The plan._ (1) The executor gives, at the end of each evaluation, the
+       documents the entry read (`Entry.reads`), by the name of the entry. The
+       adapter keeps them as rows keyed by the cone and its element keys
+       (§10.4), for a collection in the document of the row, so that a row that
+       is not demanded is not read. (2) A resumed executor is given, for an
+       entry it has not evaluated, a _stored entry_: the value is read from the
+       stored position when something reads it, the reads are one row entry for
+       each document of its rows, at the root of the document, and it has no
+       dependencies. A change of such a document marks the entry, and its first
+       evaluation replaces it by a precise one (§10.4, "Rows as entries"). (3)
+       The element table of a collection is built from the stored array and its
+       keys with no evaluation of a body, and the assembly writes the rows of
+       the entries that were evaluated. (4) The record of a row that was not
+       evaluated is not held: a change of a label of a document its rows name is
+       a write of that document, so the entry is stale and is evaluated, which
+       gives the record. The groups of a fold are formed from the stored labels
+       of the members. (5) The rows are written by the memory server inside the
+       wave's store transaction, with the wave's number for a document the wave
+       wrote, which removes the list `recent` of P115 and the read of each
+       source by a client. _To decide before it is built:_ whether a row is of a
+       cone instance or of the stored unit (a row document), question 22 of the
+       specification, which the figures of note 818 bear on.
+818. **Steps 2 and 5: one event under server execution, and what another serving
+     loop reads and evaluates, measured.** `compare/serving-path.ts`, one
+     process per run: a memory server that listens on a websocket with the
+     serving loop on the same thread, and two clients over the websocket with
+     server execution on. The pattern is `fixtures/serving-list.tsx` over an
+     array of references, each to an item in a document of its own, and the rows
+     are documents. The serving runtime compiles the source with the crate's
+     release binary, which is part of the load. Each figure of an event is the
+     median of 7 events in one process, in milliseconds, and the table has the
+     median of the runs: 3 runs of the compiled arm and 1 of today's at each
+     length. Load averages of the machine (1 minute) over the runs: 6.2 to 7.2
+     for the compiled arm and 3.9 to 7.4 for today's, from other work. `Rows` is
+     the length of the list at the start.
+
+     |   Rows | Arm      | Runs |   Load | `rename`, sender | `rename`, reader | `add`, sender | `add`, reader |
+     | -----: | -------- | ---: | -----: | ---------------: | ---------------: | ------------: | ------------: |
+     |    100 | compiled |    3 |    120 |             15.9 |             16.4 |          31.8 |          32.0 |
+     |    100 | today    |    1 |    649 |              3.6 |             17.3 |           9.2 |          38.9 |
+     |  1,000 | compiled |    3 |    563 |             19.0 |             19.4 |          66.1 |          66.9 |
+     |  1,000 | today    |    1 |  2,879 |              4.4 |             19.3 |          57.8 |           237 |
+     | 10,000 | compiled |    3 |  4,410 |             30.7 |             31.1 |           492 |           492 |
+     | 10,000 | today    |    1 | 64,951 |             10.2 |             47.1 |           796 |         3,063 |
+
+     The three runs of the compiled arm: load 118 to 135, 549 to 573 and 4,409
+     to 4,787; `add` at the reader 31.8 to 34.6, 63.0 to 67.1 and 465 to 527;
+     `rename` at the reader 15.9 to 17.9, 19.3 to 19.8 and 28.4 to 32.1. Against
+     the first round (note 807: 138, 717 and 7,035 for the load, 34.8, 102 and
+     897 for an append) the load and the append are lower at 1,000 and at 10,000
+     rows. Part of that is note 819, and part may be the machine: the two were
+     not separated at 10,000 rows. Today's arm was run before the last two
+     changes of the compiled path, which do not touch it.
+
+     After the events, another serving loop takes the space over
+     (`CompiledServingMemoryServer.restart`), a client that holds nothing reads
+     the last row, and the sender sends two more events. In milliseconds from
+     the restart, the same runs:
+
+     |   Rows | Arm      | A client reads the last row | The loop is quiescent | Documents the comparison read | Evaluations before an event | First event, reader | Evaluations by then | Second event, reader |
+     | -----: | -------- | --------------------------: | --------------------: | ----------------------------: | --------------------------: | ------------------: | ------------------: | -------------------: |
+     |    100 | compiled |                        49.5 |                  53.7 |                           199 |                           0 |                55.3 |                 113 |                 15.2 |
+     |    100 | today    |                        73.9 |                   211 |                             – |                           – |                14.5 |                   – |                 14.8 |
+     |  1,000 | compiled |                         226 |                   308 |                         1,263 |                           0 |                 335 |               1,013 |                 15.8 |
+     |  1,000 | today    |                       1,744 |                 2,219 |                             – |                           – |                17.5 |                   – |                 20.8 |
+     | 10,000 | compiled |                       1,659 |                 2,752 |                        10,268 |                           0 |               3,537 |              10,013 |                 17.4 |
+     | 10,000 | today    |                      46,883 |                98,609 |                             – |                           – |                47.0 |                   – |                 36.3 |
+
+     - _What the second table says._ The piece was found current in every run.
+       The serving runtime evaluated nothing and started no executor until the
+       first event: `Instance.counts.evaluations` is counted from the wake. What
+       the takeover costs is the read of one document for each source and for
+       each part of the basis, 1,263 and 10,268 documents, each a sync of its
+       own: 0.2 s and 1.7 s. Today's piece is loaded and run again by the loop
+       that takes over: 1.7 s and 47 s until the client reads, 2.2 s and 99 s
+       until the loop is quiescent.
+     - _The first event pays for the wake._ It starts the executor, which brings
+       every document of the piece and evaluates every row once: 0.34 s at 1,000
+       rows and 3.5 s at 10,000, against 17 and 47 ms for today's piece, which
+       the takeover had loaded already. The second event is as an event before
+       the takeover. Note 817 is the plan that removes the first.
+     - _Not measured._ Today's arm has one run at each length. No run has a
+       source changed while no loop served the space, which costs the same wake.
+       The time the compiler takes inside the load was not taken apart from it
+       (note 707: 4 ms for a fixture of one file).
+819. **Step 3: why an append follows the list, profiled, and what was removed
+     (provisional decision P118).** `serving-path.ts
+     --profile=<file>`
+     takes the sampling profile of the process over the seven appends: the
+     memory server, the serving loop and both clients are in that one process.
+     At 10,000 rows, of 4.1 s sampled:
+     - _29 %: the memory server evaluates the queries of its sessions again_
+       (`refreshTrackedGraph`, `rewalkDocument` of `memory/v2/query.ts`). A sync
+       under a schema that follows links stays a query of the session. When a
+       document a query visited changes, the server walks the document again and
+       follows every link of it. An append changes two documents that hold one
+       link per member: the array of the input, which the handler pushes to, and
+       the array of rows in the result document.
+     - _21 %: every replica that holds such a document takes it whole_
+       (`SpaceSession.#onMessage`, `parseWireText`, `deepFreeze`): the two
+       clients and the serving runtime's replica parse and freeze a document of
+       10,000 links for each change of it.
+     - _About 20 %: the commit._ The delivery to the sessions 6 %, the seal of
+       the transactions into the wave 5 %, the wave's commit in the engine 5 %,
+       the replica's comparison of the document before and after 4 %
+       (`storage/differential.ts`), the preparation 2.5 %.
+     - _1 %: the piece_ (`RuntimeTransactions.within`), 44 ms for the 14 events,
+       as the piece's own count says.
+     - _Removed._ The serving loader brought the documents of a piece with a
+       schema that follows every link, the empty result document among them, so
+       the serving session kept a query that the server walked over every row
+       link at each append. The load now brings the result document alone
+       (`syncCompiledPiece` with `rows` false). An append at 1,000 rows went
+       from 102 to 76 ms in one run each, and the load from 730 to 530 ms. A
+       piece that is woken after a resume still brings its rows with such a
+       query, since the runtime offers no sync that follows links once and keeps
+       no query.
+     - _Not removable on the runner path._ The query over the array of the input
+       is how the piece hears of a member another writer adds and gets its
+       document, and the server's walk of a changed document over all of its
+       links is the memory server's. That every holder takes a changed document
+       whole is the protocol's. Both follow from an array of references being
+       one document. _What would remove them:_ a server that evaluates a query
+       again from the change of a document and not from the document, and a
+       delivery of the change in the place of the document; or a list stored as
+       a document per member with an index, which is the layout question of
+       `execution-and-storage.md`.
+820. **Step 3: the bounded load under the serving loop, not built. What a wave
+     needs.** The load of a piece on a serving runtime is still one transaction
+     of one wave (P134). The bounded load of P65 commits the creation and the
+     rows in transactions of its own while the derivation runs, and under the
+     serving loop that fails twice.
+     - _A transaction of the load has no run._ The wave refuses a seal that
+       carries no run context. That part is small: the adapter would stamp each
+       transaction it opens as the loader stamps the one it hands.
+     - _A wave is one commit._ Every transaction sealed in one cycle is
+       committed by the wave as one commit of the store. The load is one
+       synchronous derivation, so all of its transactions are sealed in the
+       cycle that runs it, and the store still takes 10,000 rows in one
+       transaction: bounded transactions inside one wave bound nothing.
+     - _What would bound it._ Either a transaction of a derivation that commits
+       by itself ahead of the wave, as a setup transaction does
+       (`scheduler-and-serving-loop.md` §10.8): the loop has such a commit for
+       its own bookkeeping alone (`ServerRunInfo.directCommit`, which
+       `SpaceServer.#stampRun` refuses for any other kind), so it needs a ruling
+       that the rows of a load may be committed that way, with the labels their
+       records give. Or a load that spans cycles: the executor would derive a
+       bounded number of rows, return to the loop, and go on in the next cycle,
+       which needs a first derivation that can stop and resume, and a reader
+       would see the list grow. The second is the sounder: each wave then holds
+       whole rows under their own records. It is the same change the plan of
+       note 817 needs, an assembly that holds the rows it evaluated and leaves
+       the others as stored.
+821. **Step 4: an instance a handler made, and an event a handler sends, not
+     built. The plans.**
+     - _An instance a handler made is not started at a resume._ The resumed
+       executor reads the result of such an instance as a document. The child
+       has no handlers and no derivation in the resumed runtime, so an event to
+       one of its streams finds no handler, and a change of what it reads leaves
+       its stored result as it was
+       (`dev/self-reference-test/self-reference-test.tsx`, note 816). _Plan:_
+       the executor keeps, on the root, each instance a function body made by
+       the identifier the run and the ordinal give it (`Instance.#made`). The
+       adapter stores that table as the instances document of
+       `execution-and-storage.md` §2.8: for each, the identifier, the identity
+       of the artifact, and the run and the ordinal. A resumed root makes each
+       instance again from its stored argument, before its own first derivation,
+       with the option `resume`, so that a call of `instantiate` in a later run
+       finds it. The artifacts by identity are those of the program the serving
+       runtime compiled. What makes it larger than a table: the counts that name
+       a made instance are per root (P132), the instance of a key that left a
+       collection is dropped, and a child made in an event's transaction waits
+       for the derivation behind it (`#awaitingFirst`), which a resume between
+       the two has to find from the storage.
+     - _An event a handler sends is not durable._ `CompiledPiece` takes what a
+       handler sent (`Instance.takeQueued`) and queues it with the scheduler of
+       the process. A serving loop that stops between the handler's commit and
+       the handling of the event it sent loses the event, and the basis does not
+       see it: the sender's transaction wrote the counts and its sources, the
+       derivation behind it recorded them, and the piece is found current. **A
+       soundness finding, not closed.** _Plan:_ send through the stream's cell
+       in the handler's transaction (`Cell.send` on the entity of the stream),
+       as a handler of today's runtime does, so that the event is appended with
+       the transaction and the serving loop drains it as it drains a client's.
+       Not done because the identity of such an event, the principal it is
+       handled under and what a rejected wave does with it are the serving
+       loop's rules for a send inside a served handler (`actingForEmission` of
+       `executor/wave.ts`), which were not read through, and because no test of
+       the runner path covers a send from a handler. _Until then:_ a piece whose
+       handlers send is not safe to stop between waves.
+822. **Step 5: the corpus under the serving loop and after a resume.**
+     `compare/runner-corpus.ts`, three runs over the 373 modules the crate
+     emits, of which 239 are run. A module passes where the piece starts, every
+     event is handled, no commit is refused and the piece holds the values of
+     the executor in memory.
+     - _On the runner path:_ 183 pass, as in the rounds before. The comparison
+       with the members of each record ordered counts 210 modules equal where it
+       counted 209.
+     - _Under the serving loop_ (`--serving`): 183 pass. The client writes the
+       main file of each module as its source, and the serving runtime evaluates
+       the value code in a compartment.
+     - _After a resume_ (`--resume`): 180 pass, against 172 in the first round.
+       131 modules were resumed after half of their events, and the basis of all
+       of them matched the storage: all 131 were found current with no
+       evaluation. The wake that followed wrote no document for 92 of them. The
+       comparison of the basis read 3 to 18 documents for 123 of them, 36 to 39
+       for four, and 134, 176, 322 and 484 for the four largest.
+       `apps/redactor/vault.tsx`, whose commits are refused on the runner path,
+       has none refused in this run. The modules that do not pass are those of
+       note 816: the two that render a record as text, the one that counts its
+       evaluations, and the one with an instance a handler made.
+823. **Findings on structure, scale and soundness.**
+     - _Soundness, not closed: the order of the members of a record differs
+       between the process that wrote it and every process that reads it from
+       the storage, and value code observes it_ (note 816). A piece that the
+       basis finds current can hold a result that a fresh derivation does not
+       give.
+     - _Soundness, not closed: an event a handler sends is kept in the process
+       alone, and the basis does not know of it_ (note 821).
+     - _Soundness, not closed: an instance a handler made does not run after a
+       resume_ (note 821).
+     - _Soundness, closed: a host of a call held the executor in a public
+       member, and value code could replace a method of the host of every piece_
+       (note 812, P112).
+     - _Soundness, closed: a resumed runtime did not enroll the documents of the
+       piece, and read as absent a document the result links to by no link_
+       (note 815).
+     - _Soundness, an assumption the basis rests on:_ a transaction that read a
+       document whole is refused where the document changed before its commit,
+       for a commit of a client and for a contribution to a wave. The list
+       `recent` of P115 is sound only with it. The case of
+       `refused-commit.test.ts` in which a handler's commit meets a write of
+       another session shows it for a commit of a client; nothing in this round
+       tests it for a wave.
+     - _Soundness, an assumption:_ one runtime runs a piece at a time. Two
+       runtimes that both run it would each write the basis from its own view.
+     - _Structure, not closed: the unit of the basis is the piece._ Every piece
+       pays one whole derivation at its first event after a resume and when an
+       input changed without it (note 817): 3.5 s at 10,000 rows.
+     - _Scale, not closed: a resume reads one document for each source_, 1.7 s
+       at 10,000 items, sent as one sync per document. The memory server holds
+       the head of each without its value (`scheduler_basis` and the head
+       table).
+     - _Scale, closed for the numbers: the basis was one document with an entry
+       for each source_, and an event paid for its size (note 813, P120). Not
+       closed: the list of the documents the piece made is still in the one
+       document, and follows the rows where each row has a stream or a document
+       of its own; and after a refused commit the piece writes every part again.
+     - _Scale, part removed: an append follows the list outside the piece_ (note
+       819).
+     - _Structure, not closed: the load on a serving runtime is one transaction
+       of one wave_ (note 820).
+     - _Structure: the wake of a piece that the basis found current wrote
+       documents for 20 of 131 modules of the corpus_ (note 816).
+824. **Provisional decisions of the round, and what was not done.** P110: a
+     client writes the program of a pattern, in an entity named by its text, and
+     the document named from the result document names that entity (note 812).
+     P111: the serving runtime writes why it started no piece into a document
+     named from the result document, in a transaction stamped as a derivation
+     with no acting principal (note 812). P112: a host keeps the instance in a
+     private field, and the compartment evaluator freezes every class of the
+     executor whose instances value code is handed, makes or catches (note 812).
+     P113: the sources of a piece are the documents its derivation reads and
+     does not derive, as the adapter observes them (note 813). P114: the basis
+     records, for a source, the sequence number of the replica's confirmed view
+     at a derivation with no write of the piece to it unconfirmed (note 813).
+     P115: a source the piece wrote and the replica has not confirmed is listed
+     as recent, read by the transaction that writes the basis, and unchanged
+     while its head is not behind the head of the basis (note 813). P116: a
+     derivation writes the basis where its transaction has other writes or a
+     transaction of the piece wrote a source since, and a change by another
+     writer that the derivation wrote nothing for writes nothing (note 813).
+     P117: a piece whose basis matches the storage runs nothing until an event
+     or a change of a source wakes it, and the loader of a serving runtime is
+     told whether an event waits (note 814). P118: the load of a piece on a
+     serving runtime brings its empty result document without what it links to
+     (note 819). P119: a resumed runtime enrolls a document of the piece as a
+     store the instance owns with its first write of it, and brings by name the
+     documents the basis lists as made by the piece (note 815). P120: the
+     numbers of the sources are spread over 256 documents by a hash of the
+     identifier of the source (note 813). Not done: the basis per cone instance
+     and the wake that evaluates the stale units alone (note 817); the bounded
+     load under the serving loop (note 820); the instances a handler made at a
+     resume and the events a handler sends as durable entries (note 821); the
+     freeze of module data and the hardening of functions in the emitter (note
+     812); the compiled pattern as a document of the space; the heads of the
+     sources read from the memory server's tables; Topics under the serving
+     loop; a wave-level test of the assumption of P115.
+
+### CFC questions deferred, milestone 6, second round
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. The document of the source of a pattern and the document that names it for a
+   result document are written by a client (P110), and the serving runtime
+   compiles what it finds. Who may write either, whether a change of the pointer
+   of a running piece is a pattern update, and which integrity the values
+   derived by code compiled from such a source may claim.
+2. The reason of a refusal (P111) holds the diagnostics of the compiler, which
+   quote the source. It is written with no record and no acting principal, and
+   read by whoever reads the document. Which label it has, and whether it may
+   hold text of the source.
+3. The document of the basis (P113 to P116) holds the identifiers of the sources
+   of a piece, their sequence numbers and the identifiers of the documents the
+   piece made, written with no record of a plan, so under the join of the
+   derivation's transaction. `plan-and-label-templates.md` §2.6 gives a basis
+   row a label of its own. Whether the existence and the number of the sources
+   of a piece, and the fact that one of them changed, may be read by whoever
+   reads the piece.
+4. The transaction that writes the basis reads each recent source whole (P115),
+   a read the derivation did not make. Whether that read joins the labels of
+   what the transaction writes with no record.
+5. A piece whose basis matches the storage is not evaluated at a resume (P117).
+   A source whose label changed with its value unchanged has another head, so
+   the piece is found stale and derived again, which forms no label again where
+   the value did not change (CFC question 1 of the first round). Whether a
+   resume from the basis has to form the labels of the stored result again when
+   a label of a source changed.
+6. A resumed runtime enrolls a document as a store the instance owns because the
+   storage holds it under an identifier the executor forms (P119), which lets a
+   clause that does not fit the store be declared onto it. Whether the name
+   alone is proof that the piece made the document (CFC question 4 of the first
+   round asks the same of the `result` link).
+7. The classes frozen for value code (P112) are frozen for the whole process
+   when the first compartment evaluator is made. Whether anything of the runtime
+   relies on a member of them staying writable was not looked for beyond the
+   tests.
