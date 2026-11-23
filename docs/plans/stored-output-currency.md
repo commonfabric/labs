@@ -85,11 +85,30 @@ The write rows are what let a mark travel through a document no session
 demands: they say which pieces a stale piece makes stale, and which absent
 document a piece would write.
 
-A record replaces the slices it names and the piece's write rows, and leaves
-every other slice of the piece as it is. A serving runtime holds the runs of
-the viewers demanding the piece now, so a record taken while one viewer is
-present names the `space` slice and that viewer's, and another viewer's
-slices keep what their last visit recorded.
+A record names the slices a live computation of the piece ran at when it was
+taken. It replaces those slices and the piece's write rows, and leaves every
+other viewer's slice of the piece as it is. A serving runtime holds the runs
+of the viewers demanding the piece now, so a record taken while one viewer is
+present names that viewer's slice, and the `space` slice where a computation
+every viewer shares is live, and another viewer's slices keep what their last
+visit recorded.
+
+A record that names no `space` slice is one taken while no live computation
+ran at the space's key. A runtime takes such a record of a piece it holds and
+does not run: a piece an enclosing piece's start instantiated, whose own root
+the loop left unstarted because the store can serve it, or one no session
+demands. The record has nothing to put in the slice's place, so:
+
+- a `space` slice that is clean and of the recording epoch is left as it is,
+  where the record is vouched for. Its rows are the ones a clean run left,
+  and a change to an instance it read or vouches for marks it from then on
+  as it marks the slice of a viewer who is away, so keeping it makes nothing
+  servable that the rows do not prove;
+- any other `space` slice is replaced by one that read nothing and vouches
+  for nothing, and a piece with no record is given such a slice. A slice
+  that is marked or of another epoch passes no judgment, and left in place
+  it would stay so, with its piece started on each demand, for as long as no
+  session demands what its computations wrote.
 
 ### When a record is taken
 
@@ -505,7 +524,9 @@ wrong.
   served before the index was on starts on its first demand.
 - **A slice is marked whole.** A computation that is not live when a record
   is taken contributes no reads and no vouch, so an undemanded part of a
-  piece does not keep it marked. A computation that was live then, and that
+  piece does not keep it marked. Where that leaves a live computation at the
+  slice's key, the record drops what the other one vouched for, and a later
+  demand for it starts the piece. A computation that was live then, and that
   no session demands since, still has its reads in its slice: a change to
   one of them marks the slice, whose viewers start the piece once on their
   next cold demand, and the record that start leaves no longer holds them.
@@ -665,7 +686,10 @@ of which exist:
 19. A change to one viewer's instance marks the slices that read it and no
     other viewer's, and a change to a shared instance marks every slice that
     read it.
-20. A record leaves a slice it does not name with its rows and its mark.
+20. A record leaves a viewer's slice it does not name with its rows and its
+    mark. One that names no `space` slice leaves a clean `space` slice of its
+    epoch with its rows, and replaces a marked one, or one of another epoch,
+    with a slice that read nothing.
 21. A root is judged servable for a viewer whose slices are clean while
     another viewer's slice is marked, and refused for that other viewer.
 22. A piece recorded for one viewer, then started and recorded for a second,
@@ -683,6 +707,9 @@ of which exist:
     piece is left unstarted within the interval and started once it has
     passed, for a session that runs nothing itself
     (`space-server-currency-wish.test.ts`).
+27. A snapshot names the slices a live computation ran at, and none for a
+    piece whose computations are registered and not live
+    (`runtime/runner/test/scheduler/piece-currency.test.ts`).
 
 ## Related
 

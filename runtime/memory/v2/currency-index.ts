@@ -12,8 +12,8 @@
  * a marked slice marks each slice of another piece that reads an instance it
  * writes, so a mark reaches a piece through documents no session demands.
  * Storing a new record of a slice is the only thing that clears its mark,
- * and a record replaces the slices it names and leaves the others as they
- * are.
+ * and a record replaces the slices it names and leaves a viewer's others as
+ * they are.
  *
  * A slice can read an instance of another space's store. That store is the
  * instance's source, and keeps the list of the spaces that read it. The
@@ -197,9 +197,12 @@ export type CurrencyRecord = {
   followsOrigin?: boolean;
 
   /**
-   * The slices the loop ran. A piece with no `space` slice yet is given one
-   * that read nothing where the record names none. A slice the piece holds
-   * and the record does not name is left as it is.
+   * The slices a live computation of the piece ran at when the record was
+   * taken. A viewer's slice the piece holds and the record does not name is
+   * left as it is. A record that names no `space` slice leaves the one the
+   * piece holds as it is where that slice is clean and of the batch's epoch
+   * and the record is vouched for, and has one that read nothing stored
+   * otherwise.
    */
   slices: readonly CurrencySliceRecord[];
 };
@@ -1348,8 +1351,11 @@ export const advanceCurrencyCursor = (
 /**
  * Stores `batch`, replacing the rows of each slice it names as a set, and
  * each piece's write rows, after bringing the marks up to the store's head.
- * A slice a piece holds and its record does not name keeps its rows and its
- * mark.
+ * A viewer's slice a piece holds and its record does not name keeps its rows
+ * and its mark. So does a `space` slice that is clean and of the batch's
+ * epoch, under a record that is vouched for. Any other `space` slice a
+ * record does not name is replaced by one that read nothing, as is the
+ * missing one of a piece with no record.
  *
  * A row takes the seq its instance's head stands at when every revision of
  * the instance above `batch.asOf` is one `batch.seen` names. Otherwise a
@@ -1568,15 +1574,40 @@ export const storeCurrencyRecords = (
   };
 
   engine.database.transaction(() => {
+    result.marked = advance(context);
+
+    /**
+     * Whether a record of `record`'s piece that names no `space` slice
+     * leaves the one the piece holds as it is. No live computation of the
+     * piece ran at the space's key when such a record was taken, so it has
+     * nothing to put in the slice's place.
+     *
+     * A slice that is clean and of the batch's epoch is kept. Keeping it
+     * makes nothing servable that its rows do not prove: they are the rows a
+     * clean run left, the advance above has just brought the marks up to the
+     * store's head, and every later change to an instance the slice read or
+     * vouches for marks it as it marks the slice of a viewer who is away.
+     *
+     * Any other slice is replaced by one that read nothing. It passes no
+     * judgment as it stands, and it would stay so for as long as no session
+     * demands what its computations wrote, with its piece started on every
+     * demand for the rest of it.
+     */
+    const keepsSpaceSlice = (record: CurrencyRecord): boolean => {
+      const held = rowOf(context, { piece: record.piece, slice: SPACE_SLICE });
+      return record.vouched && held !== undefined && held.mark === 0 &&
+        held.epoch === batch.epoch;
+    };
+
     /**
      * The slices each record stores: the ones it names, and a `space` slice
-     * that read nothing for a piece that has none yet.
+     * that read nothing for a record that names none, unless the piece
+     * holds one the record leaves as it is.
      */
     const stored = batch.records.map((record) => ({
       record,
       slices: record.slices.some((slice) => slice.key === SPACE_SLICE) ||
-          rowOf(context, { piece: record.piece, slice: SPACE_SLICE }) !==
-            undefined
+          keepsSpaceSlice(record)
         ? record.slices
         : [
           { key: SPACE_SLICE, vouched: true, reads: [], vouches: [] },
@@ -1586,7 +1617,6 @@ export const storeCurrencyRecords = (
     const wasClean = stored.flatMap(({ record, slices }) =>
       slices.map((slice) => ({ piece: record.piece, slice: slice.key }))
     ).filter((ref) => rowOf(context, ref)?.was_clean === 1);
-    result.marked = advance(context);
     result.falseClean = [
       ...new Set(
         wasClean.filter(wroteAgainUnprompted).map((ref) => ref.piece),
