@@ -20,6 +20,7 @@ import {
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
+import type { NormalizedFullLink } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
@@ -158,26 +159,50 @@ function fixture() {
         value: options.recordedValue ?? value,
       }, runtimeWritePolicyAuthorization);
     }
-    if (action !== undefined) {
-      tx.recordCfcWritePolicyInput({
-        kind: "trusted-event",
-        target,
-        eventId: "test-event",
-        provenance: {
-          origin: "dom",
-          trusted: true,
-          ui: {
-            pattern: "ReviewedSurface",
-            eventIntegrity: ["ReviewedSurface"],
-            uiContractDataset: { uiAction: action },
-          },
+    if (action !== undefined) recordAction(tx, action, target);
+  };
+
+  /**
+   * Records the trusted event of a reviewed `action` on `target`, the
+   * protected cell under `SCHEMA` unless given.
+   */
+  const recordAction = (
+    tx: IExtendedStorageTransaction,
+    action: string,
+    target: NormalizedFullLink = runtime.getCell(
+      signer.did(),
+      "protected-value",
+      SCHEMA,
+      tx,
+    ).getAsNormalizedFullLink(),
+  ) => {
+    tx.recordCfcWritePolicyInput({
+      kind: "trusted-event",
+      target,
+      eventId: "test-event",
+      provenance: {
+        origin: "dom",
+        trusted: true,
+        ui: {
+          pattern: "ReviewedSurface",
+          eventIntegrity: ["ReviewedSurface"],
+          uiContractDataset: { uiAction: action },
         },
-      });
-    }
+      },
+    });
   };
 
   return {
     runtime,
+    recordAction,
+
+    /** Stages the write into a fresh transaction, and returns it unprepared. */
+    staged(writer: string, action?: string, options: WriteOptions = {}) {
+      const tx = runtime.edit();
+      stage(tx, writer, action, options);
+      return tx;
+    },
+
     async write(writer: string, action?: string, options: WriteOptions = {}) {
       const tx = runtime.edit();
       stage(tx, writer, action, options);
@@ -397,6 +422,18 @@ describe("cfc-write-policy-any-of", () => {
         expect(await f.write("send", "Send")).toBeUndefined();
         expect(await f.write("edit", "Edit")).toBeUndefined();
         expect(await f.write("send", "Send")).toBeUndefined();
+      });
+    });
+
+    it("admits a writer whose reviewed action is recorded after a preparation that refused it", async () => {
+      await withFixture(async (f) => {
+        const tx = f.staged("send");
+        expect(tx.prepareCfc()).toBe("");
+
+        f.recordAction(tx, "Send");
+
+        expect(tx.prepareCfc()).not.toBe("");
+        expect((await tx.commit().settled).error).toBeUndefined();
       });
     });
 
