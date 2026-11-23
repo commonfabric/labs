@@ -328,6 +328,69 @@ describe("the rows of a `map` over an array declared as references", () => {
     }
   });
 
+  describe("a write by another writer into what the piece stored", () => {
+    /** What the executor holds of the result, without the schemas of links. */
+    const held = (piece: CompiledPiece) =>
+      withoutSchemas(piece.instance.store.docs.get(piece.instance.id)?.value);
+
+    /** The label each row the executor holds has. */
+    const labels = (piece: CompiledPiece) =>
+      (held(piece) as { rows: { label: string }[] }).rows.map(({ label }) =>
+        label
+      );
+
+    it("is applied to the row the executor holds, for a write into the document of a row", async () => {
+      const { piece, result } = await started("Cells");
+      const row = parseLink(storedRows(result)[1] as never).id!;
+
+      await commit((tx) =>
+        tx.writeValueOrThrow(
+          { space, id: row, path: ["label"], scope: "space" },
+          "overwritten",
+        )
+      );
+
+      expect(piece.refusals).toEqual([]);
+      expect(labels(piece)).toEqual(["one!", "overwritten"]);
+      expect(withoutSchemas(piece.transactions.stored().get(piece.instance.id)))
+        .toEqual(held(piece));
+    });
+
+    it("is reported and not applied, for a write of the array of links", async () => {
+      const { piece, result } = await started("Cells");
+      const [, second] = storedRows(result);
+
+      await commit((tx) =>
+        tx.writeValueOrThrow(
+          { ...result.getAsNormalizedFullLink(), path: ["rows"] },
+          [second] as never,
+        )
+      );
+
+      expect(piece.refusals.length).toBe(1);
+      expect(piece.refusals[0]).toContain("array of the row documents");
+      expect(labels(piece)).toEqual(["one!", "two!"]);
+    });
+
+    it("gives the join of the rows as the label of a read of the array", async () => {
+      const { piece, result } = await started("Cells");
+      const [first] = storedRows(result).map((row) =>
+        parseLink(row as never).id!
+      );
+      const { transactions, instance } = piece;
+
+      const array = transactions.labelOf(instance.id, ["rows"], "value");
+      const row = transactions.labelOf(instance.id, ["rows", "0"], "value");
+
+      expect(array).toBeDefined();
+      expect(row).toBeDefined();
+      // The first row holds the clause of its member alone, and the array
+      // the clauses of both.
+      expect(array).not.toBe(row);
+      expect(labelsOf(first)).toContain("clause-one");
+    });
+  });
+
   describe("a change of the members of the array", () => {
     /** The titles of `count` items. */
     const titles = (count: number) =>

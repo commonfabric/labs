@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handle-reads.tsx",
-              "source": "const { \"lift\": lift, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst rowsOf = lift(\n  (\n    { sources },\n  ) => {\n    const made = [];\n    for (const source of Array.from(sources)) {\n      const title = source.get()?.title;\n      if (typeof title === \"string\") {\n        made.push(\n          Writable.for(source).set({ title: title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  },\n);\nconst titlesOf = lift(\n  ({ rows }) => {\n    const count = rows.get()?.length ?? 0;\n    const titles = [];\n    for (let position = 0; position < count; position++) {\n      titles.push(rows.key(position).key(\"title\").get());\n    }\n    return titles.join(\",\");\n  },\n);\nconst Derived = pattern(\"sha256:ed63666ae855ccb0250af4bd80793b6af62c3bd2e4dbe4d96460db1c8afbd7fb\");\nconst Viewed = pattern(\"sha256:dd339f0477028f153b6fdc8c278ca761de1bc9d7b6d5841ae5f82aeefb7eb67f\");\nObject.defineProperty($exports, \"Derived\", { enumerable: true, get: () => Derived });\nObject.defineProperty($exports, \"Viewed\", { enumerable: true, get: () => Viewed });\n$rt.body(0, ($a) => ((\n    { sources },\n  ) => {\n    const made = [];\n    for (const source of Array.from(sources)) {\n      const title = source.get()?.title;\n      if (typeof title === \"string\") {\n        made.push(\n          Writable.for(source).set({ title: title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  })($a));\n$rt.body(1, ($a) => (({ rows }) => {\n    const count = rows.get()?.length ?? 0;\n    const titles = [];\n    for (let position = 0; position < count; position++) {\n      titles.push(rows.key(position).key(\"title\").get());\n    }\n    return titles.join(\",\");\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ sources: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.at($h.slot(0), [\"length\"])));\n$rt.value(2, ($h) => ($h.invoke(1, ({ rows: $h.output(0) }))));\nreturn $rt.thunk(($h) => (({ count: $h.output(1), rows: $h.output(0), titles: $h.output(2) })));\n});"
+              "source": "const { \"lift\": lift, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst rowsOf = lift(\n  (\n    { sources },\n  ) => {\n    const made = [];\n    for (const source of Array.from(sources)) {\n      const title = source.get()?.title;\n      if (typeof title === \"string\") {\n        made.push(\n          Writable.for(source).set({ title: title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  },\n);\nconst titlesOf = lift(\n  ({ rows }) => {\n    const count = rows.get()?.length ?? 0;\n    const titles = [];\n    for (let position = 0; position < count; position++) {\n      titles.push(rows.key(position).key(\"title\").get());\n    }\n    return titles.join(\",\");\n  },\n);\nconst Derived = pattern(\"sha256:e8d0b96ec4872e6b09fb5644fcb4cd20670bd96893e57dd780ce58b18ebf3d88\");\nconst Counted = pattern(\"sha256:76aa734aadd0d37bcdb9397c9b1caea3d46ef51c5b4c483953476e6cf6b11c42\");\nconst Viewed = pattern(\"sha256:9dcf22c49000b3695bed189fb5604fdf9bd52e9a3a2b1eb8c8eb37a45b7890ee\");\nObject.defineProperty($exports, \"Derived\", { enumerable: true, get: () => Derived });\nObject.defineProperty($exports, \"Counted\", { enumerable: true, get: () => Counted });\nObject.defineProperty($exports, \"Viewed\", { enumerable: true, get: () => Viewed });\n$rt.body(0, ($a) => ((\n    { sources },\n  ) => {\n    const made = [];\n    for (const source of Array.from(sources)) {\n      const title = source.get()?.title;\n      if (typeof title === \"string\") {\n        made.push(\n          Writable.for(source).set({ title: title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  })($a));\n$rt.body(1, ($a) => (({ rows }) => {\n    const count = rows.get()?.length ?? 0;\n    const titles = [];\n    for (let position = 0; position < count; position++) {\n      titles.push(rows.key(position).key(\"title\").get());\n    }\n    return titles.join(\",\");\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ sources: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.at($h.slot(0), [\"length\"])));\n$rt.value(2, ($h) => ($h.invoke(1, ({ rows: $h.output(0) }))));\nreturn $rt.thunk(($h) => (({ count: $h.output(1), rows: $h.output(0), titles: $h.output(2) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -287,7 +287,7 @@
             }
           ],
           "patterns": [
-            "sha256:ed63666ae855ccb0250af4bd80793b6af62c3bd2e4dbe4d96460db1c8afbd7fb"
+            "sha256:e8d0b96ec4872e6b09fb5644fcb4cd20670bd96893e57dd780ce58b18ebf3d88"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -500,7 +500,298 @@
             {
               "module": 0,
               "path": "compare/fixtures/handle-reads.tsx",
-              "source": "const { \"lift\": lift, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst rowsOf = lift(\n  (\n    { sources },\n  ) => {\n    const made = [];\n    for (const source of Array.from(sources)) {\n      const title = source.get()?.title;\n      if (typeof title === \"string\") {\n        made.push(\n          Writable.for(source).set({ title: title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  },\n);\nconst titlesOf = lift(\n  ({ rows }) => {\n    const count = rows.get()?.length ?? 0;\n    const titles = [];\n    for (let position = 0; position < count; position++) {\n      titles.push(rows.key(position).key(\"title\").get());\n    }\n    return titles.join(\",\");\n  },\n);\nconst Derived = pattern(\"sha256:ed63666ae855ccb0250af4bd80793b6af62c3bd2e4dbe4d96460db1c8afbd7fb\");\nconst Viewed = pattern(\"sha256:dd339f0477028f153b6fdc8c278ca761de1bc9d7b6d5841ae5f82aeefb7eb67f\");\nObject.defineProperty($exports, \"Derived\", { enumerable: true, get: () => Derived });\nObject.defineProperty($exports, \"Viewed\", { enumerable: true, get: () => Viewed });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", {  }, [$rt.h(\"b\", {  }, [($h.v($h.slot(1)) + (\"!\"))])])));\n}\n$rt.value(3, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"h1\", {  }, [\"Items\"]), $rt.h(\"ul\", {  }, [$h.output(0)])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3) })));\n});"
+              "source": "const { \"lift\": lift, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst rowsOf = lift(\n  (\n    { sources },\n  ) => {\n    const made = [];\n    for (const source of Array.from(sources)) {\n      const title = source.get()?.title;\n      if (typeof title === \"string\") {\n        made.push(\n          Writable.for(source).set({ title: title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  },\n);\nconst titlesOf = lift(\n  ({ rows }) => {\n    const count = rows.get()?.length ?? 0;\n    const titles = [];\n    for (let position = 0; position < count; position++) {\n      titles.push(rows.key(position).key(\"title\").get());\n    }\n    return titles.join(\",\");\n  },\n);\nconst Derived = pattern(\"sha256:e8d0b96ec4872e6b09fb5644fcb4cd20670bd96893e57dd780ce58b18ebf3d88\");\nconst Counted = pattern(\"sha256:76aa734aadd0d37bcdb9397c9b1caea3d46ef51c5b4c483953476e6cf6b11c42\");\nconst Viewed = pattern(\"sha256:9dcf22c49000b3695bed189fb5604fdf9bd52e9a3a2b1eb8c8eb37a45b7890ee\");\nObject.defineProperty($exports, \"Derived\", { enumerable: true, get: () => Derived });\nObject.defineProperty($exports, \"Counted\", { enumerable: true, get: () => Counted });\nObject.defineProperty($exports, \"Viewed\", { enumerable: true, get: () => Viewed });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.at($h.slot(0), [\"length\"])));\n{\n$rt.element(0, ($h) => (({ title: ($h.v($h.slot(1)) + (\"!\")) })));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(0), rows: $h.output(1) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "output": 1
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 72,
+        "name": "Counted",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": "map",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/handle-reads.tsx",
+                "start": 1996
+              },
+              "bodies": [],
+              "entry": "length",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/handle-reads.tsx",
+                "start": 2034
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "title"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:76aa734aadd0d37bcdb9397c9b1caea3d46ef51c5b4c483953476e6cf6b11c42"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "title"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "items": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "note": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "note"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "rows": {
+                  "items": {
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "count",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "properties": {
+                  "note": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "note"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [
+            0
+          ],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/handle-reads.tsx",
+              "source": "const { \"lift\": lift, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst rowsOf = lift(\n  (\n    { sources },\n  ) => {\n    const made = [];\n    for (const source of Array.from(sources)) {\n      const title = source.get()?.title;\n      if (typeof title === \"string\") {\n        made.push(\n          Writable.for(source).set({ title: title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  },\n);\nconst titlesOf = lift(\n  ({ rows }) => {\n    const count = rows.get()?.length ?? 0;\n    const titles = [];\n    for (let position = 0; position < count; position++) {\n      titles.push(rows.key(position).key(\"title\").get());\n    }\n    return titles.join(\",\");\n  },\n);\nconst Derived = pattern(\"sha256:e8d0b96ec4872e6b09fb5644fcb4cd20670bd96893e57dd780ce58b18ebf3d88\");\nconst Counted = pattern(\"sha256:76aa734aadd0d37bcdb9397c9b1caea3d46ef51c5b4c483953476e6cf6b11c42\");\nconst Viewed = pattern(\"sha256:9dcf22c49000b3695bed189fb5604fdf9bd52e9a3a2b1eb8c8eb37a45b7890ee\");\nObject.defineProperty($exports, \"Derived\", { enumerable: true, get: () => Derived });\nObject.defineProperty($exports, \"Counted\", { enumerable: true, get: () => Counted });\nObject.defineProperty($exports, \"Viewed\", { enumerable: true, get: () => Viewed });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", {  }, [$rt.h(\"b\", {  }, [($h.v($h.slot(1)) + (\"!\"))])])));\n}\n$rt.value(3, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"h1\", {  }, [\"Items\"]), $rt.h(\"ul\", {  }, [$h.output(0)])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -528,7 +819,7 @@
           ],
           "valuesWithoutOutput": []
         },
-        "line": 73,
+        "line": 83,
         "name": "Viewed",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -554,7 +845,7 @@
             {
               "at": {
                 "file": "compare/fixtures/handle-reads.tsx",
-                "start": 2097
+                "start": 2448
               },
               "bodies": [],
               "entry": "map",
@@ -573,7 +864,7 @@
             {
               "at": {
                 "file": "compare/fixtures/handle-reads.tsx",
-                "start": 2040
+                "start": 2391
               },
               "bodies": [],
               "entry": "$UI",
@@ -679,7 +970,7 @@
             }
           ],
           "patterns": [
-            "sha256:dd339f0477028f153b6fdc8c278ca761de1bc9d7b6d5841ae5f82aeefb7eb67f"
+            "sha256:9dcf22c49000b3695bed189fb5604fdf9bd52e9a3a2b1eb8c8eb37a45b7890ee"
           ],
           "picks": [],
           "selectors": [],

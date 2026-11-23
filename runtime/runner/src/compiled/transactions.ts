@@ -48,6 +48,7 @@ import {
   appliesAtItsPathOnly,
   consumedEntriesForRead,
   isRuntimeMintedTemplate,
+  joinLabels,
   labelForConsumedEntries,
 } from "../cfc/consumed-label.ts";
 import { ConsumedLabelIndex } from "../cfc/consumed-label-index.ts";
@@ -63,6 +64,7 @@ import { runtimeOwnedStoreOwnerKey } from "../cfc/runtime-owned-stores.ts";
 import {
   type CfcAddress,
   type CfcMetadata,
+  type IFCLabel,
   type ObservedPosition as RuntimeObserved,
   type PlanElements,
   type PlanWrite as RuntimePlanWrite,
@@ -496,9 +498,13 @@ export class RuntimeTransactions implements TransactionHooks {
               this.#touched.add(doc);
               if (!own) labelsByOther = true;
             }
+            // A document of a row is one the executor holds as the row, at
+            // its position in the array.
+            const row = this.#rowDocuments.get(doc);
             if (
               own || this.#onChanges === undefined ||
-              address.scope !== "space" || !this.#documents.has(doc) ||
+              address.scope !== "space" ||
+              (!this.#documents.has(doc) && row === undefined) ||
               (address.path.length > 0 && address.path[0] !== "value")
             ) continue;
             // A change names its path below the member `value` of what the
@@ -525,14 +531,38 @@ export class RuntimeTransactions implements TransactionHooks {
             seen.add(text);
             const now = valueAt(held, at);
             const then = valueAt(was, at);
+            // Where the executor holds the change: for a row's document,
+            // below the position of the row, and nowhere for a row that
+            // left its array.
+            const place = row === undefined
+              ? { doc, path: at }
+              : this.#addressOfStored(doc, at);
+            if (row !== undefined && !row.array.keys.includes(row.key)) {
+              continue;
+            }
+            // A change at or above an array of row documents changed which
+            // links the array holds. The array is derived, and the
+            // executor holds each row in it by its key: it does not take
+            // the members of another writer, and the piece is told, as of
+            // a commit that was refused.
+            if (
+              row === undefined &&
+              (this.#rowArrays.get(doc) ?? []).some((array) =>
+                isPrefix(at, array.path)
+              )
+            ) {
+              this.#onRefused?.(
+                "Another writer wrote the array of the row documents of the piece, or above it.",
+              );
+              continue;
+            }
             if (!Array.isArray(now) || !Array.isArray(then)) {
-              byOther.push({ doc, path: at, value: this.#decode(now) });
+              byOther.push({ ...place, value: this.#decode(now) });
               continue;
             }
             const splice = spliceBetween(then, now);
             byOther.push({
-              doc,
-              path: at,
+              ...place,
               splice: {
                 start: splice.start,
                 removed: splice.removed,
@@ -713,6 +743,7 @@ export class RuntimeTransactions implements TransactionHooks {
     } finally {
       tx.abort();
       this.#touched.clear();
+      this.#labelsOverRows.clear();
     }
     if (changes.length > 0) {
       this.#labelsChanged?.(this.#toExecutor(changes), false, stored);
@@ -785,6 +816,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#readAfterWrite.clear();
     this.#written.clear();
     this.#metadata.clear();
+    this.#labelsOverRows.clear();
     this.#resetRecorded();
     this.#stagedState = 0;
     this.#created = [];
@@ -912,16 +944,60 @@ export class RuntimeTransactions implements TransactionHooks {
         )
       )
     ) return undefined;
-    // The label of a read of the value at or above an array whose rows are
-    // documents of their own is over every row: no one identifier is kept.
-    if (
-      observes === "value" &&
-      (this.#rowArrays.get(doc) ?? []).some((array) =>
+    // A read of the value at or above an array whose rows are documents of
+    // their own reads every row: its label is the join of what the read
+    // consumes of the document itself and of each row's document.
+    const arrays = observes !== "value"
+      ? []
+      : (this.#rowArrays.get(doc) ?? []).filter((array) =>
         isPrefix(path, array.path)
-      )
-    ) return undefined;
+      );
+    if (arrays.length > 0) {
+      const text = JSON.stringify([doc, path]);
+      let over = this.#labelsOverRows.get(text);
+      if (over === undefined) {
+        const parts = [
+          this.#labelAt(this.#metadataOf(doc), path, "value"),
+        ];
+        for (const array of arrays) {
+          for (const key of array.keys) {
+            parts.push(
+              this.#labelAt(
+                this.#metadataOf(this.#rowDocument(array, key)),
+                [],
+                "value",
+              ),
+            );
+          }
+        }
+        const joined = joinLabels(parts);
+        over = this.#runtime.compiledPlans.labels.intern({
+          confidentiality: [...joined.confidentiality ?? []],
+          integrity: [...joined.integrity ?? []],
+        }).id;
+        this.#labelsOverRows.set(text, over);
+      }
+      return over;
+    }
     const executorDoc = doc;
     ({ doc, path } = this.#placeOf(executorDoc, path));
+    return this.#labelIn(this.#metadataOf(doc), path, observes);
+  }
+
+  /**
+   * The identifier `labelOf` found for a read of the value at or above an
+   * array of row documents, by the text of the position, in the transaction
+   * in progress. A write at or below the position gives it no identifier
+   * from then on.
+   */
+  readonly #labelsOverRows = new Map<string, string>();
+
+  /**
+   * The stored labels of a document the storage holds, read once for the
+   * transaction in progress. The entries of a document read here are the
+   * ones a later change of its labels is compared with.
+   */
+  #metadataOf(doc: string): CfcMetadata | undefined {
     if (!this.#metadata.has(doc)) {
       const tx = this.#tx ?? this.#runtime.edit();
       try {
@@ -935,7 +1011,37 @@ export class RuntimeTransactions implements TransactionHooks {
         if (tx !== this.#tx) tx.abort();
       }
     }
-    return this.#labelIn(this.#metadata.get(doc), path, observes);
+    return this.#metadata.get(doc);
+  }
+
+  /**
+   * The label that a read of the class `observes` at `path` consumes of
+   * the stored labels `metadata` of a document.
+   */
+  #labelAt(
+    metadata: CfcMetadata | undefined,
+    path: readonly string[],
+    observes: string,
+  ): IFCLabel | undefined {
+    if (metadata === undefined) return undefined;
+    // The class the runtime observes the position in (`observesOf`), read
+    // as its observation of a label alone is: below the position too for a
+    // read of the value, and at the position for the other classes. The
+    // entries at, above and below the path are found through the index of
+    // the document's entries, which is built once for a list of entries: a
+    // document that holds the rows of a whole-list derivation has an entry
+    // for each row.
+    const consumes = observesOf(observes);
+    return labelForConsumedEntries(
+      consumedEntriesForRead(
+        metadata,
+        path,
+        { nonRecursive: consumes !== "value", consumes },
+        new ConsumedLabelIndex(metadata.labelMap.entries),
+      ),
+      path,
+      consumes !== "value",
+    );
   }
 
   /**
@@ -949,9 +1055,6 @@ export class RuntimeTransactions implements TransactionHooks {
   ): string {
     const table = this.#runtime.compiledPlans.labels;
     if (metadata === undefined) return table.empty.id;
-    // The class the runtime observes the position in (`observesOf`), read
-    // as its observation of a label alone is: below the position too for a
-    // read of the value, and at the position for the other classes.
     const consumes = observesOf(observes);
     // Where every entry of the document is at its root, as in a document
     // written under one schema with one clause, a read of one class
@@ -966,20 +1069,7 @@ export class RuntimeTransactions implements TransactionHooks {
     const kind = `${consumes}${path.length === 0 ? " at the root" : ""}`;
     const held = known?.get(kind);
     if (held !== undefined) return held;
-    // The entries at, above and below the path are found through the index
-    // of the document's entries, which is built once for a list of entries:
-    // a document that holds the rows of a whole-list derivation has an
-    // entry for each row.
-    const label = labelForConsumedEntries(
-      consumedEntriesForRead(
-        metadata,
-        path,
-        { nonRecursive: consumes !== "value", consumes },
-        new ConsumedLabelIndex(metadata.labelMap.entries),
-      ),
-      path,
-      consumes !== "value",
-    );
+    const label = this.#labelAt(metadata, path, observes);
     const { id } = table.intern({
       confidentiality: [...label?.confidentiality ?? []],
       integrity: [...label?.integrity ?? []],

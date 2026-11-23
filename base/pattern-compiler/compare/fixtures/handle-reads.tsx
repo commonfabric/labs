@@ -67,6 +67,16 @@ export const Derived = pattern<
   };
 });
 
+// A `map` over an array of references beside the number of its members: a
+// result that holds a plain value as well as the array of rows.
+export const Counted = pattern<
+  { items: Writable<Item[]> },
+  { count: number; rows: Row[] }
+>(({ items }) => ({
+  count: items.get().length,
+  rows: items.map((item) => ({ title: item.title + "!" })),
+}));
+
 // A `map` over an array of references whose rows are view nodes, among the
 // children of a view node: the array of rows stands below a member of an
 // array. A row holds a text computed from the title of its member.
