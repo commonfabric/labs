@@ -92,6 +92,14 @@
  * its label in place. The file grows with the square of the board where
  * each topic has a clause of its own, so it is for boards of a few topics.
  *
+ * With `SCALE_CONSUMED` set to the path of a file, the arm `runner` appends
+ * to that file, after each step, one line of JSON for each path of the
+ * result document with the clauses a read of the value there consumes in
+ * the runtime's own resolution. Two runs of one board and size, one with
+ * `SCALE_ROWS=in-place`, are compared line by line: a clause that only the
+ * rows in place give is an under-label of the rows as documents. The run
+ * is a check of correctness and its times are no measurement.
+ *
  * With `SCALE_WRITE_ALONE` set, the arms of the runtime's own calls
  * (`runner`, `today`, `today-labeled`) time, before each edit, a write of
  * a field of the same topic that the board does not read (`write alone`):
@@ -122,6 +130,7 @@ import {
   labelForConsumedEntries,
 } from "../../../../runtime/runner/src/cfc/consumed-label.ts";
 import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
+import { deriveFlowJoin } from "../../../../runtime/runner/src/cfc/prepare.ts";
 import { diffAndUpdate } from "../../../../runtime/runner/src/data-updating.ts";
 import { resolveLocalProgram } from "../../../../runtime/runner/src/harness/local-program.deno.ts";
 import {
@@ -1457,6 +1466,74 @@ const runToday = async (
         prepareMs: round(preparations.ms),
         ...(labeled ? { labelEntries: labelEntries() } : {}),
       });
+      consumedAfter(step);
+    };
+    // With `SCALE_CONSUMED` naming a file, on the arm `runner`: after each
+    // step, one line of JSON for each path of the result document, down to
+    // each leaf and each link, with the clauses of the inputs that a read
+    // of the value at that path consumes. The read is made through a cell
+    // in a transaction of its own, every link followed, and the clauses are
+    // those of the join the runtime derives from what the transaction read.
+    const consumedAfter = (step: string) => {
+      const file = Deno.env.get("SCALE_CONSUMED");
+      if (piece === undefined || file === undefined) return;
+      const paths: string[][] = [];
+      const walk = (value: unknown, path: string[]) => {
+        paths.push(path);
+        if (isLink(value) || typeof value !== "object" || value === null) {
+          return;
+        }
+        for (const [name, member] of Object.entries(value)) {
+          walk(member, [...path, name]);
+        }
+      };
+      walk(piece.instance.store.docs.get(piece.instance.id)?.value, []);
+      const lines = paths.map((path) => {
+        const tx = runtime.edit();
+        try {
+          // deno-lint-ignore no-explicit-any
+          let cell: any = result.withTx(tx);
+          for (const segment of path) cell = cell.key(segment);
+          JSON.stringify(cell.get());
+          const text = JSON.stringify(deriveFlowJoin(tx).confidentiality);
+          return JSON.stringify({
+            step,
+            path: path.join("/"),
+            clauses: [...new Set(text.match(/input:[A-Za-z0-9-]+/g) ?? [])]
+              .sort(),
+          });
+        } finally {
+          tx.abort();
+        }
+      });
+      // The label entries the result document stores at its root and one
+      // or two segments below it, which a read of any path below consumes
+      // where no entry nearer to the path replaces them.
+      const reader = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(
+          reader,
+          { ...result.getAsNormalizedFullLink(), path: [] },
+        );
+        for (const entry of metadata?.labelMap.entries ?? []) {
+          if (entry.path.length > 2) continue;
+          lines.push(JSON.stringify({
+            step,
+            entry: entry.path.join("/"),
+            origin: entry.origin,
+            observes: entry.observes,
+            clauses: [
+              ...new Set(
+                JSON.stringify(entry.label).match(/input:[A-Za-z0-9-]+/g) ??
+                  [],
+              ),
+            ].sort(),
+          }));
+        }
+      } finally {
+        reader.abort();
+      }
+      Deno.writeTextFileSync(file, `${lines.join("\n")}\n`, { append: true });
     };
     const commit = async (write: (tx: ReturnType<Runtime["edit"]>) => void) => {
       const tx = runtime.edit();
