@@ -111,3 +111,26 @@ fn the_spread_of_a_map_is_an_array_of_its_entries() {
         ["[string, number][]", "[string, number][]", "string"]
     );
 }
+
+/// `readSharedSpaceCatalog` of
+/// `patterns/system/shared-space/shared-space-catalog.ts`, with the stored
+/// value declared `Record<string, unknown>`: a type predicate narrows a
+/// value to the asserted type where that type is assignable to the value's.
+#[test]
+fn a_type_predicate_narrows_a_record_to_an_assignable_asserted_type() {
+    assert_eq!(
+        types(
+            "interface Catalog { entries: { [key: string]: string } }\n\
+             function isCatalog(value: unknown): value is Catalog { return value !== null; }\n\
+             export function read(value: Record<string, unknown>, other: string | Record<string, unknown>) {\n\
+               if (!isCatalog(value)) { throw new Error(\"malformed\"); }\n\
+               if (isCatalog(other)) { /*?*/other; }\n\
+               return /*?*/value;\n\
+             }\n"
+        ),
+        [
+            "{ entries: { [key: string]: string } }",
+            "{ entries: { [key: string]: string } }"
+        ]
+    );
+}

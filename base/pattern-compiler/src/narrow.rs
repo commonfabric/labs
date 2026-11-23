@@ -1022,6 +1022,25 @@ impl<'a> Resolver<'_, 'a> {
                 if self.shape(ty) == Shape::Unknown {
                     return if sense { asserted } else { ty };
                 }
+                // Where the predicate holds and no member of the type is
+                // the asserted type, the value has the asserted type where
+                // that is assignable to a member: a record of `unknown`
+                // narrows to the record type the predicate names.
+                if sense {
+                    let members = match self.shape(ty) {
+                        Shape::Union(members) => members,
+                        _ => vec![ty],
+                    };
+                    let none_fits = members
+                        .iter()
+                        .all(|member| self.assignable(*member, asserted) == Some(false));
+                    let narrower = members
+                        .iter()
+                        .any(|member| self.assignable(asserted, *member) == Some(true));
+                    if none_fits && narrower {
+                        return asserted;
+                    }
+                }
                 self.filter(ty, |member, _| {
                     self.assignable(member, asserted)
                         .is_none_or(|fits| fits == sense)
