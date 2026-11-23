@@ -1311,3 +1311,30 @@ export const Bound = pattern<
     assert_eq!(code["values"][0]["function"], json!(true), "{code}");
     assert!(source(&code).contains("$rt.value(0, "), "{}", source(&code));
 }
+
+/// A built-in that reads what its operand names, its label or the access
+/// list of its space, is given the operand as the reference it is: the
+/// runtime's function takes a cell, and a copy of the value names nothing.
+/// The operands behind the first are values.
+#[test]
+fn a_context_read_is_given_its_first_operand_as_a_reference() {
+    let (_, code) = emitted(
+        r#"import { type Cell, computed, pattern, principalOf, spaceAccess } from "commonfabric";
+export const Asked = pattern<
+  { notes: Cell<string[]> },
+  { level: string; author: string }
+>(({ notes }) => ({
+  level: computed(() => spaceAccess(notes) ?? "unknown"),
+  author: computed(() => principalOf(notes, "authored-by") ?? ""),
+}));
+"#,
+        "Asked",
+    );
+    let text = source(&code);
+    assert!(text.contains("spaceAccess($h.slot("), "{text}");
+    assert!(
+        text.contains("principalOf($h.slot(") && text.contains("\"authored-by\""),
+        "{text}"
+    );
+    assert!(!text.contains("spaceAccess($h.v("), "{text}");
+}

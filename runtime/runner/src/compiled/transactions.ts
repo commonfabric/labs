@@ -3334,6 +3334,15 @@ export class RuntimeTransactions implements TransactionHooks {
     return doc;
   }
 
+  /**
+   * The runtime's address of a position of a document of the executor: the
+   * entity and the space of the document, and the path as the storage
+   * holds it.
+   */
+  linkOf(doc: string, path: readonly string[]): NormalizedFullLink {
+    return this.#address(doc, path);
+  }
+
   /** Helper for the hooks, which gives the transaction in progress. */
   #open(): IExtendedStorageTransaction {
     if (this.#tx === undefined) {

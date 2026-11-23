@@ -912,6 +912,12 @@ type Entry = {
   /** The value of a materializer that has not been evaluated yet. */
   pending?: boolean;
   /**
+   * Something the evaluation used that the store does not hold is now
+   * another (`Instance.markStale`): the entry is not current, whatever its
+   * reads and its dependencies compare to.
+   */
+  stale?: boolean;
+  /**
    * Where the cone instance failed: `value` is then the error state
    * (PL §5.2).
    */
@@ -3830,8 +3836,12 @@ export class Instance {
        * acting principal or the access list of a space. A name the
        * executor has is not replaced. Each member is frozen in place as
        * module data is, so that no body changes what the next one reads.
+       * A function is called with the instance whose modules import them,
+       * once for each module, and gives the record.
        */
-      builtins?: Record<string, unknown>;
+      builtins?:
+        | Record<string, unknown>
+        | ((instance: Instance) => Record<string, unknown>);
       /**
        * What the value code reads under each name here in place of the
        * realm's global of that name, as `Date` and `crypto`: a caller
@@ -7127,6 +7137,7 @@ export class Instance {
   }
 
   #current(entry: Entry, context: Context): boolean {
+    if (entry.stale) return false;
     for (const [collection, index] of entry.indexes) {
       if (context.get(collection)?.index !== index) return false;
     }
@@ -9668,6 +9679,32 @@ export class Instance {
   /** The cause of the run of a body under way (`during()`). */
   get runningCause(): FabricValue | undefined {
     return this.#running?.cause;
+  }
+
+  /**
+   * The memo entry whose evaluation is under way, with its instance, and
+   * nothing while a handler body runs or nothing is evaluated: for a
+   * built-in that an adapter answers from outside the store, which keeps
+   * who used an answer.
+   */
+  evaluationInProgress(): { instance: Instance; key: string } | undefined {
+    const { root } = this;
+    const top = root.#evaluating[root.#evaluating.length - 1];
+    return top === undefined || top.key === HANDLER ? undefined : top;
+  }
+
+  /**
+   * Marks the memo entry `key` of this instance as a change of something
+   * it read marks it: something it used that the store does not hold is
+   * now another, as the answer of a built-in an adapter gave
+   * (`evaluationInProgress()`). The entry is evaluated when it is next
+   * demanded, and what used it is marked with it.
+   */
+  markStale(key: string): void {
+    const entry = this.#memo.get(key);
+    if (entry !== undefined) entry.stale = true;
+    const slot = this.#slots.get(key);
+    if (slot !== undefined) this.#mark(slot);
   }
 
   during<T>(cause: FabricValue, run: () => T, keyed?: KeyedRun): T {
@@ -14268,11 +14305,13 @@ const commonfabric = (instance: Instance): unknown => {
   // class given here holds no property a body can set and a record given
   // here keeps its members. The names are read from a frozen copy, and
   // the import has no member to set, since `known` takes none.
+  const handed = instance.root.options.builtins ?? {};
   const given: Record<string, unknown> = Object.freeze(
     Object.fromEntries(
-      Object.entries(instance.root.options.builtins ?? {}).map((
-        [name, member],
-      ) => [name, freezeModuleData(member)]),
+      Object.entries(typeof handed === "function" ? handed(instance) : handed)
+        .map((
+          [name, member],
+        ) => [name, freezeModuleData(member)]),
     ),
   );
   return new Proxy(known, {

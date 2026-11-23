@@ -1674,6 +1674,25 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 let right = self.render(arguments[1], Want::Pass);
                 Some(format!("$h.equals({left}, {right})"))
             }
+            // A built-in that reads what its first operand names, its
+            // label or the access list of its space (PL §3.16): the
+            // operand is passed as the reference it is, since the
+            // runtime's function takes a cell, and the operands behind it
+            // are values.
+            Some(
+                name @ ("principalOf" | "principalsOf" | "writtenPrincipalOf" | "profileOwnerOf"
+                | "resultOwnerOf" | "linksOf" | "spaceAccess" | "spaceAccessOf"
+                | "spaceMembers" | "spaceDeleted" | "spaceOfLink"),
+            ) if !arguments.is_empty() => {
+                let mut operands = vec![self.render(arguments[0], Want::Pass)];
+                for argument in &arguments[1..] {
+                    operands.push(self.render(argument, Want::Use));
+                }
+                Some(Self::wanted(
+                    want,
+                    format!("{name}({})", operands.join(", ")),
+                ))
+            }
             Some("unless") if arguments.len() == 2 => {
                 let test = self.render(arguments[0], Want::Use);
                 let value = self.render(arguments[1], Want::Pass);

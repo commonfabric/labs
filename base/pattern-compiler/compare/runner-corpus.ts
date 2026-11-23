@@ -46,9 +46,11 @@
  * option `wishes`, as the rounds before round thirteen ran it, and a module
  * whose `wish` the table does not simulate is left out. A module with a
  * `wish` is left out under `--serving`, where no client of the harness
- * seeds the home, and under `--resume` with the table. A module that
- * requests an effect is left out: nothing answers a request of a compiled
- * piece on the runner path.
+ * seeds the home, and under `--resume` with the table. The built-ins the
+ * runtime answers (`runtimeBuiltins`) are the runtime's own, for the one
+ * user of the run, in a space with no access list. A module that requests
+ * an effect is left out: nothing answers a request of a compiled piece on
+ * the runner path.
  */
 import { Identity } from "@commonfabric/identity";
 
@@ -292,8 +294,9 @@ export const runOne = async (
       ? homeStubs(home)
       : undefined;
     // The runtime of the run has no serving loop, which is what names the
-    // principal a run acts for.
-    const actsFor = wishes && !wishTable ? { actsFor: space } : {};
+    // principal a run acts for: the runtime's `wish` and its built-ins
+    // read it.
+    const actsFor = wishTable ? {} : { actsFor: space };
     const tx = runtime.edit();
     try {
       piece = startCompiledPiece(

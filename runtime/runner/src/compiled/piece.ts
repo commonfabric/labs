@@ -45,8 +45,11 @@ import {
 } from "../../../../base/pattern-compiler/exec/store.ts";
 import { makeFrame, runInFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";
-import { type Cell, convertCellsToLinks } from "../cell.ts";
+import { type Cell, convertCellsToLinks, type MemorySpace } from "../cell.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
+import { stampWaveRunContext, waveRunContextOf } from "../executor/wave.ts";
+import { deriveEventKey } from "../scheduler/event-identity.ts";
 import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
@@ -65,6 +68,7 @@ import {
   RuntimeTransactions,
   type StreamOfExecutor,
 } from "./transactions.ts";
+import { RuntimeAnswers, runtimeBuiltins } from "./builtins.ts";
 import { compartmentEvaluator } from "./value-code.ts";
 import { RuntimeWishes } from "./wish.ts";
 
@@ -142,8 +146,9 @@ export type CompiledPieceOptions = {
   actsFor?: DID;
   /**
    * What the value code imports from `commonfabric` under each name here,
-   * for a built-in the executor does not have: a harness's stand-in for
-   * what the runtime answers, such as the acting principal.
+   * for a built-in the executor does not have, in the place of what the
+   * runtime answers under that name (`runtimeBuiltins`): a harness's
+   * stand-in, such as a constant for the acting principal.
    */
   builtins?: Record<string, unknown>;
 };
@@ -173,6 +178,13 @@ export class CompiledPiece {
   /** The store that keeps the executor's documents in the runtime. */
   readonly transactions: RuntimeTransactions;
   readonly #runtime: Runtime;
+  /** The space of the result document. */
+  readonly #space: MemorySpace;
+  /**
+   * The principal the runs of the piece act for where nothing stamped
+   * their transaction (`CompiledPieceOptions.actsFor`).
+   */
+  readonly #actsFor: DID | undefined;
   /** The identifier of the result document. */
   readonly #result: string;
   /** The record of what the stored result was derived from. */
@@ -195,6 +207,13 @@ export class CompiledPiece {
   };
   /** The instance exists: a change by another writer can be applied. */
   #started = false;
+  /**
+   * How many events the piece handled and changes of other writers it
+   * took: what a derivation could find different from the one before.
+   */
+  #changes = 0;
+  /** The reason of the last commit refused, and `#changes` then. */
+  #refusedLast: { reason: string; changes: number } | undefined;
   #stopped = false;
 
   /** Use `startCompiledPiece()`. */
@@ -212,6 +231,8 @@ export class CompiledPiece {
       throw new Error("The result cell of a compiled piece is a whole entity.");
     }
     const { space } = result;
+    this.#space = space;
+    this.#actsFor = options.actsFor;
     this.#result = result.id;
     const rowDocuments = options.rows === "in-place"
       ? undefined
@@ -282,6 +303,7 @@ export class CompiledPiece {
     this.#derive = (given) => {
       this.#counts.derivations += 1;
       const began = performance.now();
+      this.#stamp(given, "derivation");
       // The first derivation of the instances a handler made is a
       // transaction of its own, which the scheduler commits before the
       // derivation of what reads them runs: that one then finds the labels
@@ -289,12 +311,13 @@ export class CompiledPiece {
       // value and whose labels stayed.
       let first = false;
       try {
-        transactions.within(given, () => {
-          first = this.instance.settleMade();
-          if (first) return;
-          this.instance.settle();
-          this.instance.relabel();
-        });
+        this.#deriving(given, () =>
+          transactions.within(given, () => {
+            first = this.instance.settleMade();
+            if (first) return;
+            this.instance.settle();
+            this.instance.relabel();
+          }));
       } finally {
         this.#counts.ownMs += performance.now() - began;
       }
@@ -336,40 +359,61 @@ export class CompiledPiece {
         argument: transactions.heldArgument(argumentOf(id)),
       };
     });
-    this.instance = transactions.within(tx, () =>
-      new Instance(
-        artifact,
-        resumed || options.storedArgument === true
-          ? transactions.heldArgument(argumentOf(result.id))
-          : transactions.decode(convertCellsToLinks(argument as never)),
-        {
-          resume: resumed,
-          ...(minted === undefined ? {} : { minted }),
-          ...(made.length === 0 ? {} : { made }),
-          space,
-          id: result.id,
-          secret: options.secret ?? space,
-          artifacts: options.artifacts,
-          now: options.now,
-          measure: "patches",
-          parts: false,
-          events: "queue",
-          transactions,
-          evaluate: options.evaluate ?? compartmentEvaluator(),
-          wishes: options.wishes ?? ((_operands, of) => {
-            if (of === undefined) return undefined;
-            wishes!.answer(of.state);
-            // The action of the runtime's `wish` writes the outcome.
-            return { outcome: {} };
-          }),
-          ...(options.builtins === undefined
-            ? {}
-            : { builtins: options.builtins }),
-          ...(rowDocuments === undefined ? {} : { rowDocuments }),
-          ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
-          load: (id) => transactions.load(id),
-        },
-      ), { loadRows: resumed ? Infinity : options.loadRows ?? 250 });
+    // The built-ins the runtime answers, and what a derivation used of
+    // their answers.
+    const builtinsContext = {
+      runtime,
+      space,
+      linkOf: (doc: string, path: readonly string[]) =>
+        transactions.linkOf(doc, path),
+      documentOf: (link: NormalizedFullLink) =>
+        transactions.documentOf(link.id),
+      invalidate: () => this.#invalidate(),
+      stamp: (given: IExtendedStorageTransaction, what: string) =>
+        this.#stamp(given, what),
+    };
+    const answers = new RuntimeAnswers(builtinsContext);
+    this.#cancels.push(() => answers.stop());
+    const builtins = (of: Instance) => ({
+      ...runtimeBuiltins(builtinsContext, answers, of),
+      ...options.builtins,
+    });
+    this.instance = this.#deriving(
+      tx,
+      () =>
+        transactions.within(tx, () =>
+          new Instance(
+            artifact,
+            resumed || options.storedArgument === true
+              ? transactions.heldArgument(argumentOf(result.id))
+              : transactions.decode(convertCellsToLinks(argument as never)),
+            {
+              resume: resumed,
+              ...(minted === undefined ? {} : { minted }),
+              ...(made.length === 0 ? {} : { made }),
+              space,
+              id: result.id,
+              secret: options.secret ?? space,
+              artifacts: options.artifacts,
+              now: options.now,
+              measure: "patches",
+              parts: false,
+              events: "queue",
+              transactions,
+              evaluate: options.evaluate ?? compartmentEvaluator(),
+              wishes: options.wishes ?? ((_operands, of) => {
+                if (of === undefined) return undefined;
+                wishes!.answer(of.state);
+                // The action of the runtime's `wish` writes the outcome.
+                return { outcome: {} };
+              }),
+              builtins,
+              ...(rowDocuments === undefined ? {} : { rowDocuments }),
+              ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
+              load: (id) => transactions.load(id),
+            },
+          ), { loadRows: resumed ? Infinity : options.loadRows ?? 250 }),
+    );
     transactions.resumed();
     // A place the resumed executor found no document of is a source: the
     // next resume then brings it before it starts the executor.
@@ -459,6 +503,54 @@ export class CompiledPiece {
     this.#basis.wrote(tx, [this.transactions.mintedDocument], []);
   }
 
+  /**
+   * Runs `run`, which derives through `tx`, under a frame of the kind
+   * `lift` that holds the runtime and the transaction: the frame the
+   * runtime's built-ins read in a reactive computation.
+   */
+  #deriving<T>(tx: IExtendedStorageTransaction, run: () => T): T {
+    return runInFrame(
+      makeFrame({
+        runtime: this.#runtime,
+        tx,
+        space: this.#space,
+        frameKind: "lift",
+      }),
+      run,
+    );
+  }
+
+  /**
+   * Names the principal the run on `tx` acts for where the runtime is in
+   * the serving posture and no serving loop stamped the transaction
+   * (`CompiledPieceOptions.actsFor`): the runtime's built-ins and the
+   * preparation of a commit read the principal of a run from its stamp.
+   * `what` is `handler` for the run of a handler, which acts as the
+   * principal, and anything else for a derivation, whose reads of a scoped
+   * document are those of the principal.
+   */
+  #stamp(tx: IExtendedStorageTransaction, what: string): void {
+    const actsFor = this.#actsFor;
+    if (
+      actsFor === undefined || !this.#runtime.servingPosture ||
+      waveRunContextOf(tx) !== undefined
+    ) return;
+    stampWaveRunContext(
+      tx,
+      what === "handler"
+        ? {
+          actionId: `compiled-piece:${what}:${this.#result}`,
+          kind: "event-handler",
+          acting: { user: actsFor },
+        }
+        : {
+          actionId: `compiled-piece:${what}:${this.#result}`,
+          kind: "derivation",
+          scopeKeyIdentity: { principal: actsFor },
+        },
+    );
+  }
+
   /** Has the scheduler run the derivation action. */
   #invalidate(): void {
     if (this.#started && !this.#stopped) {
@@ -475,11 +567,13 @@ export class CompiledPiece {
     const { space } = transactions;
     const handler: EventHandler = (tx, event) => {
       this.#counts.events += 1;
+      this.#changes += 1;
       const began = performance.now();
       let outcome: ReturnType<Instance["handleEvent"]>;
       // The events the handler sent to streams of the piece, each with the
       // entity of the marker of its stream.
       const queued: { entity: URI; event: unknown }[] = [];
+      this.#stamp(tx, "handler");
       // What the handler stages is recorded under its identity, which a
       // writer claim of a written position is checked against.
       const writer = transactions.handlerOf(stream);
@@ -487,11 +581,23 @@ export class CompiledPiece {
       if (writer !== undefined) setCfcImplementationIdentity(tx, writer);
       try {
         // The frame of a handler, under which the gated `Date` and `Math`
-        // of the value code give the time of the event and a random draw.
+        // of the value code give the time of the event and a random draw,
+        // and the runtime's built-ins the transaction of the run and the
+        // key of the event, which is derived as the runner derives it for
+        // a handler of today's path.
         outcome = runInFrame(
           makeFrame({
             inHandler: true,
+            frameKind: "handler",
+            runtime: this.#runtime,
+            tx,
+            space,
             eventTime: tx.dispatchedEventTime ?? Date.now(),
+            eventKey: deriveEventKey(
+              tx.dispatchedEventId ?? crypto.randomUUID(),
+              this.#runtime.actingPrincipalFor(tx),
+              { space, id: entity, path: [], scope: "space" },
+            ),
           }),
           () =>
             transactions.within(tx, () => {
@@ -558,6 +664,14 @@ export class CompiledPiece {
     this.#refusals.push(reason);
     if (!this.#started || this.#stopped) return;
     for (const { doc, value } of restored) this.instance.restore(doc, value);
+    // A derivation from the same documents writes the same and is refused
+    // the same way. Where the storage refused a commit for the reason it
+    // gave for the one before, and the piece handled no event and took no
+    // change of another writer between the two, the derivation is not run
+    // again until one of those happens.
+    const last = this.#refusedLast;
+    this.#refusedLast = { reason, changes: this.#changes };
+    if (last?.reason === reason && last.changes === this.#changes) return;
     this.#invalidate();
   }
 
@@ -567,6 +681,7 @@ export class CompiledPiece {
    */
   #changedByOthers(changes: ChangeByOther[]): void {
     if (!this.#started || this.#stopped) return;
+    this.#changes += 1;
     for (const { doc, path, value, splice } of changes) {
       this.#counts.changesByOthers += 1;
       const ref = new Ref(doc, path);
