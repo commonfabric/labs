@@ -5166,6 +5166,49 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #keptEnrolled = new Set<string>();
 
   /**
+   * The links to the rows of the array at `path` of the result document, in
+   * order, where the storage holds them in the documents of a list
+   * (`LinkList`) and `held`, what the result document holds at `path`, is
+   * the link to the list document of the path; `held` itself otherwise. The
+   * list document holds either the links to the rows or the links to its
+   * chunks, each an array of links to rows, and its first member says
+   * which: a row is a record or a view node.
+   */
+  #linksThroughList(
+    tx: IExtendedStorageTransaction,
+    path: readonly string[],
+    held: unknown,
+  ): unknown {
+    if (
+      !this.#lists || this.#owner === undefined || !isPrimitiveCellLink(held)
+    ) return held;
+    const doc = identifierOf({ list: [this.#owner, ...path] });
+    if (parseLink(held).id !== this.entityOf(doc)) return held;
+    const members = tx.readValueOrThrow(this.#address(doc, []));
+    if (!Array.isArray(members)) return held;
+    const chunkOf = (member: unknown): string | undefined => {
+      const entity = isPrimitiveCellLink(member)
+        ? parseLink(member).id
+        : undefined;
+      return entity?.startsWith("of:") ? entity.slice("of:".length) : entity;
+    };
+    const first = members.length === 0 ? undefined : chunkOf(members[0]);
+    if (
+      first === undefined ||
+      !Array.isArray(tx.readValueOrThrow(this.#address(first, [])))
+    ) return members;
+    const links: unknown[] = [];
+    for (const member of members) {
+      const chunk = chunkOf(member);
+      const below = chunk === undefined
+        ? undefined
+        : tx.readValueOrThrow(this.#address(chunk, []));
+      if (Array.isArray(below)) links.push(...below);
+    }
+    return links;
+  }
+
+  /**
    * What the replica holds of the result document of the instance, for an
    * executor that leaves rows as stored: the value as the executor holds
    * one, with no member at each path of `rows`, and for each of those
@@ -5188,12 +5231,21 @@ export class RuntimeTransactions implements TransactionHooks {
   } | undefined {
     if (this.#owner === undefined) return undefined;
     const read = this.#runtime.edit();
-    let stored: FabricValue | undefined;
     try {
-      stored = read.readValueOrThrow(this.#address(this.#owner, []));
+      return this.#heldResultIn(read, rows, arrays);
     } finally {
       read.abort();
     }
+  }
+
+  /** Helper for `heldResult`, which reads through `read`. */
+  #heldResultIn(
+    read: IExtendedStorageTransaction,
+    rows: readonly (readonly string[])[],
+    arrays: boolean,
+  ): ReturnType<RuntimeTransactions["heldResult"]> {
+    const owner = this.#owner!;
+    const stored = read.readValueOrThrow(this.#address(owner, []));
     if (!isWalkableObjectNotArray(stored)) return undefined;
     // The entity each position of an array links to, where every position
     // links to a whole document of the space of the instance.
@@ -5211,7 +5263,9 @@ export class RuntimeTransactions implements TransactionHooks {
       }
       return ids;
     };
-    const entities = rows.map((path) => entitiesOf(valueAt(stored, path)));
+    const entities = rows.map((path) =>
+      entitiesOf(this.#linksThroughList(read, path, valueAt(stored, path)))
+    );
     const found: StoredArray[] = [];
     // The value without the members at the paths of `rows` and, with
     // `arrays`, without the arrays of links to whole documents: none of
@@ -5225,8 +5279,25 @@ export class RuntimeTransactions implements TransactionHooks {
           return this.#decode(value);
         }
       }
+      // The links of an array whose list is a document of its own.
+      const through = arrays ? this.#linksThroughList(read, at, value) : value;
+      if (through !== value) {
+        const ids = entitiesOf(through);
+        if (ids !== undefined && ids.length > 0) {
+          found.push({ path: at, entities: ids });
+          return undefined;
+        }
+      }
       if (Array.isArray(value)) {
-        const ids = value.length === 0 ? undefined : entitiesOf(value);
+        // An array that holds the link to the list document of one of its
+        // members holds that list, and no rows.
+        const ids = value.length === 0 ||
+            value.some((member, index) =>
+              this.#linksThroughList(read, [...at, `${index}`], member) !==
+                member
+            )
+          ? undefined
+          : entitiesOf(value);
         if (ids !== undefined) {
           found.push({ path: at, entities: ids });
           return undefined;
@@ -5248,9 +5319,9 @@ export class RuntimeTransactions implements TransactionHooks {
       }
       return members;
     };
-    this.#documents.add(this.#owner);
-    this.#heldBefore.add(this.#owner);
-    this.#heldWhole.add(this.#owner);
+    this.#documents.add(owner);
+    this.#heldBefore.add(owner);
+    this.#heldWhole.add(owner);
     const value = without(stored, []);
     return { value, rows: entities, ...(arrays ? { found } : {}) };
   }
@@ -5286,6 +5357,65 @@ export class RuntimeTransactions implements TransactionHooks {
     array.keys = [...keys];
     array.positions = undefined;
     this.#keptArrays.add(array);
+    if (this.#lists) this.#adoptList(array);
+  }
+
+  /**
+   * Gives an array whose rows the executor holds as stored (`rowsHeld`) the
+   * layout of its list as the storage holds it, so that a later change of
+   * the rows writes the chunks it changes and the list document only where
+   * the layout changed (`#relayList`), as for a list this runtime wrote.
+   */
+  #adoptList(array: RowArray): void {
+    array.list ??= {
+      doc: identifierOf({ list: [array.doc, ...array.path] }),
+      linked: false,
+      chunks: undefined,
+      dirty: new Set(),
+      dropped: [],
+      top: true,
+      ids: new Set(),
+      next: 0,
+      adopted: false,
+    };
+    const { list } = array;
+    this.#listDocuments.set(list.doc, array);
+    this.entityOf(list.doc);
+    list.adopted = true;
+    list.dirty.clear();
+    list.chunks = undefined;
+    const read = this.#runtime.edit();
+    try {
+      const held = read.readValueOrThrow(
+        this.#ownAddress(array.doc, array.path),
+      );
+      list.linked = isPrimitiveCellLink(held) &&
+        parseLink(held).id === this.entityOf(list.doc);
+      list.top = !list.linked;
+      if (!list.linked) return;
+      const members = read.readValueOrThrow(this.#address(list.doc, []));
+      // The list document holds the links to the rows, or to its chunks;
+      // the first member says which (`#linksThroughList`).
+      const through = this.#linksThroughList(read, array.path, held);
+      if (!Array.isArray(members) || through === members) return;
+      const chunks: ListChunk[] = [];
+      for (const member of members) {
+        const entity = isPrimitiveCellLink(member)
+          ? parseLink(member).id
+          : undefined;
+        const doc = entity?.startsWith("of:")
+          ? entity.slice("of:".length)
+          : entity;
+        if (doc === undefined) continue;
+        const below = read.readValueOrThrow(this.#address(doc, []));
+        chunks.push({ doc, length: Array.isArray(below) ? below.length : 0 });
+        list.ids.add(doc);
+        this.#listDocuments.set(doc, array);
+      }
+      list.chunks = chunks;
+    } finally {
+      read.abort();
+    }
   }
 
   /**

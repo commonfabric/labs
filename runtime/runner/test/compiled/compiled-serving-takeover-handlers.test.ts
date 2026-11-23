@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { Cell } from "../../src/cell.ts";
 import { setUpCompiledPiece } from "../../src/compiled/setup.ts";
+import { rowCell, rowsRead } from "./storage.ts";
 import { programOf, servingTakeover } from "./takeover-harness.ts";
 
 type Item = { id: string; title: string; done: boolean };
@@ -34,7 +35,7 @@ describe("an event to the stream of a row after another serving loop took a comp
       runtime,
       cell,
       (value) =>
-        JSON.stringify(value?.rows?.map((row) => row?.label)) ===
+        JSON.stringify(rowsRead<Row>(value?.rows).map((row) => row?.label)) ===
           JSON.stringify(expected) &&
         (events === undefined || value?.events === events),
       `a client reads ${expected.length} rows`,
@@ -99,7 +100,9 @@ describe("an event to the stream of a row after another serving loop took a comp
   ) =>
     takeover.send(
       runtime,
-      cell.key("rows").key(at).key(name as never) as unknown as Cell<unknown>,
+      rowCell<Row>(cell.key("rows") as unknown as Cell<unknown>, at).key(
+        name as never,
+      ) as unknown as Cell<unknown>,
       event,
     );
 

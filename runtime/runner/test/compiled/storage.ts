@@ -112,3 +112,36 @@ export const storedList = (
     tx.abort();
   }
 };
+
+/**
+ * The rows of a list as a client of the runtime reads them, `read`: a list
+ * of more rows than one list document holds is read as an array of its
+ * chunks, so the members of each member that is an array stand in its
+ * place, one level deep (note 925 of `base/pattern-compiler/SPEC-NOTES.md`).
+ * A row is a record or a view node, never an array.
+ */
+export const rowsRead = <T>(read: readonly unknown[] | undefined): T[] =>
+  (read ?? []).flatMap((member) =>
+    Array.isArray(member) ? member : [member]
+  ) as T[];
+
+/**
+ * The cell of the row at `at` of the list that `list` reads, through the
+ * chunk that holds it where the list is read as an array of chunks
+ * (`rowsRead`).
+ */
+export const rowCell = <T>(list: Cell<unknown>, at: number): Cell<T> => {
+  const read = list.get() as unknown[] | undefined;
+  // deno-lint-ignore no-explicit-any
+  const cell = list as Cell<any>;
+  if (!Array.isArray(read) || !read.every((member) => Array.isArray(member))) {
+    return cell.key(at);
+  }
+  let offset = at;
+  for (const [index, chunk] of read.entries()) {
+    const { length } = chunk as unknown[];
+    if (offset < length) return cell.key(index).key(offset);
+    offset -= length;
+  }
+  return cell.key(at);
+};
