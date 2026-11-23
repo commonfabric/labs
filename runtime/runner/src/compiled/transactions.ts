@@ -5203,7 +5203,8 @@ export class RuntimeTransactions implements TransactionHooks {
       const below = chunk === undefined
         ? undefined
         : tx.readValueOrThrow(this.#address(chunk, []));
-      if (Array.isArray(below)) links.push(...below);
+      if (!Array.isArray(below)) continue;
+      for (const link of below) links.push(link);
     }
     return links;
   }
