@@ -22,8 +22,8 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-prototype` | `compiled-pattern-prototype` | The crate, the plan emitter and a first executor | #9942 |
 | `claude/compiled-pattern-topics` | `compiled-pattern-topics-merge` | The crate on the corpus of `main`, Topics on the executor | #10016 |
 | `claude/compiled-pattern-runner-m3` | `compiled-pattern-m3` | The trunk of the build: milestones 3 to 6 merged, the store with frozen values, a resume by units | #10140 |
-| `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in chunked documents, the cost of a FabriChat send | none |
-| `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes | none |
+| `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
+| `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes; the trunk at `a467194a96` and the carry branch are merged into it | none |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
 | `claude/compiled-pattern-topics-runs` | `compiled-pattern-topics-runs` | The measured Topics boards; the serving branch is merged into it for measurements (local) | none |
@@ -41,44 +41,49 @@ it, or from each other, at different commits and each changed
 `runtime/runner/src/compiled/piece.ts`, `transactions.ts` and `resume.ts`:
 
 1. `claude/compiled-pattern-sandbox-m5` (cut from the trunk at `5f45021c1d`).
-   A merge of the trunk at `a467194a96` and of the carry branch into it was
-   started on 2026-11-23 by the agent that built scopes; the trunk has since
-   moved to `7b2a492b82`, which is merged after it. The trial merge
-   conflicts in six files:
-   `SPEC-NOTES.md`, `compare/runner-corpus.ts` (5 places), `exec/executor.ts`
-   (1), `compiled/piece.ts` (6), `compiled/transactions.ts` (2) and
-   `runtime/runner/test/clock-preload.ts` (1). Both sides changed how a
-   resume starts the executor: the trunk leaves rows as stored and wakes by
-   units; this branch never resumes a piece that has state of a scope
-   without its executor (P354).
+   The trunk at `a467194a96` and the carry branch are merged into it (head
+   `ad153f2c34`, note 892). The trunk has since moved to `7b2a492b82`, which
+   is not merged. The merge settled how a resume treats a piece with scoped
+   documents: a piece that has named a document of a scope resumes whole,
+   with no row left as stored, its basis names a source with no number
+   (P354), and it writes no list of readers. A piece with no scoped document
+   is woken by units as on the trunk. A piece with a `wish` has scoped
+   state, so under the serving loop with resume 71 corpus pieces are found
+   current where the trunk finds 80, and `apps/redactor/vault.tsx` does not
+   resume there: its whole resume is refused for writer fit.
 2. `claude/compiled-pattern-write-integrity` (cut at `5f45021c1d`). It
    cherry-picked three commits of the sandbox branch (`d391e27356`,
    `f84027cabb`, `e6f2b7b96e`), so it merges with that branch first.
 3. `claude/compiled-pattern-serving-m6` (cut at `820fa700ee`, before the
    store round). The store round rewrote `exec/store.ts`; this branch added
    list documents in the adapter and changed `Handle.key`.
-4. `claude/compiled-pattern-carry` (cut at `aabee19586`). Small and local.
+4. `claude/compiled-pattern-carry` (cut at `aabee19586`). Merged into the
+   sandbox branch; nothing of it is left to merge.
 
-Merge in this order, one merge at a time into the trunk, each by an agent
-that is given both sides' notes and tests as the bar: carry, then sandbox,
-then write integrity, then serving. For each merge: resolve the textual
+Merge in this order, one merge at a time, each by an agent that is given
+both sides' notes and tests as the bar: the trunk head `7b2a492b82` into the
+sandbox branch, then write integrity, then serving; the result becomes the
+trunk. For each merge: resolve the textual
 conflicts, then check the places where both sides changed the same
 machinery without a textual conflict, regenerate the emitted fixtures
 (`cargo build --release` in `base/pattern-compiler`, then the script the
 sandbox notes name, which runs `pattern-compiler emit --unchecked` for each
 `compare/fixtures/*.emit.json`), run the gates below, rerun one figure of
-each side, and run `compare/runner-corpus.ts` in its four modes. Two earlier
-merges each produced a defect neither parent had (two time values compared
-as equal; a handler-sent event that was either not durable or threw), so a
-merge is not finished when the conflicts are gone.
+each side, and run `compare/runner-corpus.ts` in its four modes. Three
+merges each produced defects neither parent had (two time values compared
+as equal; a handler-sent event that was either not durable or threw; in the
+merge of the trunk into the sandbox branch, every row evaluated at a wake
+and a restore that dropped another principal's memo entry), so a merge is
+not finished when the conflicts are gone.
 
 Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
 and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integrity, P410 and
-P411 specification review; P420 to P425 resume by units, fourth round. Note
+P411 specification review; P420 to P425 resume by units, fourth round; P390
+to P394 serving, round fifteen. Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
-trunk, 940 to 944 carry, 742 to 752 and 880 to 891 sandbox, 760 to 772
-and 900 to 914 write integrity, 851 to 866 serving. The plan documents hold decisions up to
+trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
+and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving. The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
@@ -130,29 +135,57 @@ that a process is known not to run out there. This is the line of work with
 the largest gap to the owner's rule.
 
 **A step that changes a list as long as the collection** (serving branch;
-notes 851 to 866). Row links can be stored in chunked list documents
-(`CompiledPieceOptions.lists: "documents"`, off by default). Open: 33 test
-cases read the links in the result document directly and fail with the
-option on; a client's `map` over a chunked list gives one result per chunk;
-the record of bucket links is one document (note 855); a handler's commit
-rewrites the pattern's input array and record whole.
+notes 851 to 866 and 925 to 930). Row links are stored in list documents by
+default (P392); a list of at most 128 rows is one document and reads as an
+array (P393, option `listWhole`). Under the serving loop at 2,000 topics an
+edit of the mentions takes 121 to 134 ms against 347 to 405 ms with the
+links in place, and a create 205 to 236 ms against 560 to 737 ms. Open:
+above 128 rows a runtime client reads an array of chunks, and no flattening
+is built in the runtime; a reader of one row of a chunked list pays about
+35 ms more for the edit of a middle title, not profiled; the record of
+bucket links stays one document (P394; 349 KB changed by an edit of the
+`shortName` at 2,000 topics). A handler's write of an input it changes at
+one position is already positional (test `handler-positions.test.ts`).
 
-**A FabriChat send** (serving branch; notes 732 to 741, 860 to 862). A send
-gives 99 records at every room size and still takes about 1 ms per message
-held. Open: a `map` over the result of a body is formed whole,
-`Instance.#unchangedOutput` gives a record per unchanged place, each stored
-link carries the message schema, and the room's `facts` walks every message;
-the plan needs a window construct (`collection.last(n)`, note 862),
-`elementById` and `resolveAsCell` in the reactive tier, and the keys of a
-`groupBy` in creation order.
+**A piece set up under the serving loop that is never run** (serving
+branch; note 931). In 4 of about 66 runs of the Topics `serving` arm the
+serving runtime was quiescent, the setup had committed, the result document
+held nothing at `mentionable`, and no failure was reported. The cause is not
+found. `SCALE_LAYOUT` on the Topics harness prints the layout and the count
+of pieces the serving runtime runs. This is the first thing to diagnose on
+that branch.
+
+**A FabriChat send** (serving branch; notes 732 to 741, 860 to 862, 920 to
+932). The owner's rule that a send does not grow with the room is not met:
+at the head `c0e0a41014` a send on the runner path takes 66 to 72 ms at 10
+messages, 197 to 207 at 100 and 829 to 892 at 1,000, about 0.75 ms and
+1.3 KB per message held. Built in round fifteen: the record of a place a
+comparison left as it was is not given again (P390, `exec/inputs-digest.ts`;
+88 to 90 records per send); the window construct `xs.last(n)` and
+`xs.first(n)` (P391), which an append moves by one splice over an array of
+references and over the result of a `filter` or `sortBy` over one, and which
+is formed whole over the result of a `map`; the main conversation of the
+room's copy as a `filter` of the stored messages, a `map` over its result
+and a window. Open, with the plan in note 923: `places`, `authors`,
+`entries`, `threads` and the counts are still one body, so `facts` reads 5
+positions per message held; `Instance.#noteRecord` registers each record at
+every position its inputs reach (331 of 830 ms in one profile at 1,000);
+`rowFactsForSession` reads every row of the rights; `Store.#deep`; the
+`filter` branch of `Instance.#reassemble` forms its rows from every element;
+a `map` over the result of a body kept by key and the schema of a link
+stored once (note 861); `elementById` and `resolveAsCell` in the reactive
+tier; the keys of a `groupBy` in creation order. A soundness defect seen on
+the fixture `unchanged-place.tsx` is open: a cone that is evaluated again,
+binds a slot to another position and returns an equal value gives no record,
+so the place keeps the label formed from the earlier position.
 
 **More than one user on a piece** (sandbox branch; notes 880 to 891).
 Documents of the scopes `user` and `session` are held once per principal.
 Open: the runs of one pass for several principals do not see each other's
 writes, so an entry of a scope that reads a row document written in the same
 pass is refused and runs again (plan: two scheduler actions, one for the
-space and one for the scopes); a piece with a `wish` or scoped state never
-resumes without its executor (P354; needs a basis per scope key); the
+space and one for the scopes); a piece with a `wish` or scoped state resumes whole and is
+never found current (P354, note 892; needs a basis per scope key); the
 assembly of a scoped collection is formed again per principal; memory
 follows the principals ever seen; a `wish` for a seeded profile does not
 resolve under the serving loop (not diagnosed); FabriChat with two users was
