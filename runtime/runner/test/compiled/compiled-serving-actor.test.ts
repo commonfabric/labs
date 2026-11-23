@@ -22,7 +22,7 @@ const fixture = (name: string, extension: string): URL =>
     import.meta.url,
   );
 
-const FIXTURES = ["runtime-builtins", "authored"];
+const FIXTURES = ["runtime-builtins", "authored-by-writer"];
 const ARTIFACTS = new Map<string, Artifact>();
 const PROGRAMS = new Map<string, PatternProgram>();
 for (const name of FIXTURES) {
@@ -134,11 +134,12 @@ describe("an event a client sends to a compiled piece under the serving loop", (
     expect(serving.pieces()[0].refusals).toEqual([]);
   });
 
-  // The elements of the list of `fixtures/authored.tsx` are declared as
-  // authored by the current user.
+  // The elements of the list of `fixtures/authored-by-writer.tsx` are
+  // declared as authored by the current user and written by the handler
+  // `write` alone.
   it("commits a handler whose write is declared as authored by the current user", async () => {
     type Held = { notes: { text: string }[] };
-    const read = await setUp<Held>("authored", {}, "write");
+    const read = await setUp<Held>("authored-by-writer", {}, "write");
 
     (read.key("write" as never) as unknown as Cell<{ text: string }>).send({
       text: "hello",

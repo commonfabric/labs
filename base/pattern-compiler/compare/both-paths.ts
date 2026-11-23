@@ -231,6 +231,8 @@ export const policiesOf = (
   const defs = isObjectNotArray(root) && isObjectNotArray(root.$defs)
     ? root.$defs
     : {};
+  // A node that holds a `$ref` beside other members is the definition
+  // with those members in the place of its own.
   const resolved = (node: unknown): unknown => {
     for (let hops = 0; hops < 16; hops++) {
       if (!isObjectNotArray(node) || typeof node.$ref !== "string") break;
@@ -238,7 +240,11 @@ export const policiesOf = (
         ? node.$ref.slice("#/$defs/".length)
         : undefined;
       if (name === undefined || !Object.hasOwn(defs, name)) return node;
-      node = defs[name];
+      const { $ref: _, ...beside } = node;
+      const definition = defs[name];
+      node = isObjectNotArray(definition)
+        ? { ...definition, ...beside }
+        : definition;
     }
     return node;
   };

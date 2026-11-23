@@ -134,6 +134,20 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "fixtures/authored-by-writer",
+    pieces: [{
+      name: "notes",
+      module: "base/pattern-compiler/compare/fixtures/authored-by-writer.tsx",
+      as: "alice",
+    }],
+    steps: [
+      { stream: "write", event: { text: "first" }, as: "alice" },
+      { stream: "write", event: { text: "second" }, as: "bob" },
+      { stream: "forge", event: { text: "forged" }, as: "bob" },
+      { stream: "write", event: { text: "third" } },
+    ],
+  },
+  {
     // The start alone, by no one: a first value whose type adds integrity
     // of the current principal.
     name: "fixtures/principal-integrity started by no one",

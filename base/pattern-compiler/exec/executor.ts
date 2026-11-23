@@ -1184,6 +1184,21 @@ type Writing = {
     /** The first position a splice of these writes started at. */
     start?: number;
   };
+  /** See `DeclaredWrite`. */
+  declared?: DeclaredWrite;
+};
+
+/**
+ * What a handler declares for a write it makes through a handle: the
+ * stored position the handle names, with every link on the way to it
+ * resolved, and the schema of the handle's declared type. A write policy
+ * the handler's own state type declares is in that schema and in no other
+ * the write is made under.
+ */
+export type DeclaredWrite = {
+  doc: string;
+  path: readonly string[];
+  schema: Schema;
 };
 
 /** A position of a document, as text. */
@@ -1586,7 +1601,12 @@ export class Handle {
       : Array.isArray(declared)
       ? copyOfData(declared)
       : [];
-    const recorded = this.#instance.written(this.key("*"), decided);
+    const recorded = this.#instance.written(
+      this.key("*"),
+      decided,
+      true,
+      this,
+    );
     try {
       // A record that is pushed gets a document of its own, as a record
       // in a list that is set does (`Instance.anchored`).
@@ -2969,7 +2989,10 @@ export type TransactionHooks = {
    * their inputs in, one for the transaction, which gains entries as
    * records are given. `made` is the splice of every change that is one,
    * whatever its records are of: whoever stores the rows of an array apart
-   * from the array needs it for each.
+   * from the array needs it for each. `declared` is what the handler that
+   * made the write declares for the handle it wrote through
+   * (`DeclaredWrite`): whoever holds a write to the write policies of a
+   * schema holds it to those of that one too.
    */
   change(
     doc: string,
@@ -2980,6 +3003,7 @@ export type TransactionHooks = {
     splice?: { start: number; removed: number; inserted: number },
     inputs?: InputsTable,
     made?: { start: number; removed: number; inserted: number },
+    declared?: DeclaredWrite,
   ): void;
 
   /**
@@ -3608,6 +3632,7 @@ export class Instance {
           : undefined,
         this.#inputsTable,
         change.splice,
+        this.#writing?.declared,
       );
     }
     if (open !== undefined) {
@@ -13363,6 +13388,20 @@ export class Instance {
   }
 
   /**
+   * What the handler being run declares for a write through `through`
+   * (`DeclaredWrite`), as the member of a `Writing`, or nothing where the
+   * handle has no declared type or names no stored position.
+   */
+  #declaredWrite(through: Handle): { declared?: DeclaredWrite } {
+    const { target, declared } = partsOf(through);
+    if (!(target instanceof Ref) || typeof declared !== "object") return {};
+    const located = this.store.locate(target, true);
+    if (located.missing) return {};
+    const { doc, path } = located.ref;
+    return { declared: { doc, path, schema: declared } };
+  }
+
+  /**
    * Counts a write of the handler being run against its record, and
    * makes the write edge that covers it, of the handler or of the body of
    * a cone being run, the record of the writes until the returned
@@ -13373,6 +13412,11 @@ export class Instance {
     decided?: Observed[],
     /** Whether a write is made, which is counted. */
     counted = true,
+    /**
+     * The handle whose declared type the write is made under, where that
+     * is another than `handle`: the list, for a write of its members.
+     */
+    through: Handle = handle,
   ): () => void {
     const invoking = this.#invoking.at(-1);
     const index = this.#handling ?? invoking?.body;
@@ -13417,6 +13461,7 @@ export class Instance {
           ? [{ record: { body: index, envelope }, template: undefined }]
           : [],
         members: { decided: decided ?? [] },
+        ...(this.#handling === undefined ? {} : this.#declaredWrite(through)),
       },
     );
   }

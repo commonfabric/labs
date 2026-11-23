@@ -15,27 +15,13 @@ import { SCENARIOS } from "../both-paths-scenarios.ts";
  * `<at> <what>` of each. A scenario that is not named has none.
  */
 const OPEN: Record<string, string[]> = {
-  "cfc-trusted-write/main": [
-    "step 1 message",
-    "step 2 message",
-    "step 3 message",
-    "step 4 committed",
-    "step 4 message",
-  ],
-  "cfc-trusted-write/frozen": [
-    "step 1 message",
-    "step 2 message",
-    "step 3 message",
-  ],
-  "fixtures/write-policy-unnamed": ["step 2 message"],
-  "fixtures/write-policy": ["step 1 message"],
+  "cfc-trusted-write/main": ["step 4 committed", "step 4 message"],
 };
 
 /** The scenarios whose differences are not yet listed one by one. */
 const NOT_YET = new Set([
   "writer-policy/main",
   "fixtures/principal-integrity",
-  "fixtures/authored",
   "fixtures/principal-integrity started by no one",
   "fixtures/principal-derived",
 ]);

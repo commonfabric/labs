@@ -100,6 +100,7 @@ import type {
 } from "../storage/interface.ts";
 import type {
   Artifact,
+  DeclaredWrite,
   LabelChange,
   Transaction,
   TransactionHooks,
@@ -1843,6 +1844,7 @@ export class RuntimeTransactions implements TransactionHooks {
     splice?: { start: number; removed: number; inserted: number },
     inputs?: InputsTable,
     made?: { start: number; removed: number; inserted: number },
+    declared?: DeclaredWrite,
   ): void {
     const tx = this.#open();
     this.#store = store;
@@ -2122,6 +2124,22 @@ export class RuntimeTransactions implements TransactionHooks {
     // A schema of a plan is a JSON schema with the members the executor
     // reads typed (`Schema` of `exec/store.ts`).
     this.#recordSchema(tx, doc, path, schema, store);
+    // A handler's write also answers to the write policies its own state
+    // type declares for the handle, as a write through a cell of today's
+    // path answers to the schema of the cell: the policy is recorded at the
+    // position the handle names.
+    const own = declared === undefined || declared.schema === schema
+      ? undefined
+      : writePoliciesOf(declared.schema);
+    if (own !== undefined) {
+      this.#recordSchema(
+        tx,
+        declared!.doc,
+        declared!.path,
+        own.schema as Schema,
+        store,
+      );
+    }
     if (doc === this.#owner) this.#recordResultPolicy(tx, path, store);
     if (this.#compiledPattern === undefined) return;
     // A write of the value the storage holds is no write of the
