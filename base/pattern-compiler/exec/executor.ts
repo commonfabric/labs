@@ -1244,6 +1244,32 @@ export class Host {
     return value;
   }
 
+  /**
+   * The operand that `??`, `||` or `&&` selects (PL §3.5). The left
+   * operand is tested by the value it resolves to. Where it is selected,
+   * a record, an array and a handle are passed on as the operand that was
+   * given, so a reference stays the same reference, and a scalar is
+   * passed on as its value. The right operand is evaluated where it is
+   * selected.
+   */
+  selected(
+    operator: "??" | "||" | "&&",
+    left: unknown,
+    right: () => unknown,
+  ): unknown {
+    const value = this.v(left);
+    const takesRight = operator === "??"
+      ? value === undefined || value === null
+      : operator === "||"
+      ? !value
+      : Boolean(value);
+    if (takesRight) return right();
+    return left instanceof Handle ||
+        (typeof value === "object" && value !== null)
+      ? left
+      : value;
+  }
+
   /** A path below a value: a reference stays one, and nothing gives none. */
   at(value: unknown, path: readonly unknown[]): unknown {
     let found = value;

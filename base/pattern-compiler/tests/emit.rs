@@ -1036,6 +1036,39 @@ export const P = pattern<{
     );
 }
 
+/// PL §3.5: the result of `??`, `||` and `&&` is the selected operand
+/// itself, so each operand is handed to `$h.selected` as the reference it
+/// is, and the right one in a function that runs where it is selected.
+#[test]
+fn a_logical_operator_passes_both_operands_on_by_reference() {
+    let (plan, code) = emitted(
+        r#"import { pattern } from "commonfabric";
+interface Profile { name: string }
+export const P = pattern<{ primary?: Profile; backup: Profile; enabled: boolean }>(
+  ({ primary, backup, enabled }) => {
+    return {
+      coalesced: primary ?? backup,
+      either: primary || backup,
+      both: enabled && backup,
+    };
+  },
+);
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let primary = slot(&plan, "argument", &["primary"], "identity");
+    let backup = slot(&plan, "argument", &["backup"], "identity");
+    for operator in ["??", "||"] {
+        let call =
+            format!("$h.selected(\"{operator}\", $h.slot({primary}), () => $h.slot({backup}))");
+        assert!(text.contains(&call), "{text}");
+    }
+    assert!(text.contains("$h.selected(\"&&\", $h.slot("), "{text}");
+    // No operand is read by value where the operator is written.
+    assert!(!text.contains("$h.v("), "{text}");
+}
+
 #[test]
 fn a_debug_renderer_is_given_each_operand_as_its_value() {
     let (_, code) = emitted(

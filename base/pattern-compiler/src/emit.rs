@@ -1391,15 +1391,21 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     format!("({test} ? {consequent} : {alternate})"),
                 ))
             }
+            // `$h.selected` tests the left operand by the value it
+            // resolves to and passes on the operand it selects, the left
+            // one as the reference it is (PL §3.5).
             Expression::LogicalExpression(logical) => {
-                let left = self.render(&logical.left, Want::Use);
+                let left = self.render(&logical.left, Want::Pass);
                 let right = self.render(&logical.right, Want::Pass);
                 let operator = match logical.operator {
                     LogicalOperator::And => "&&",
                     LogicalOperator::Or => "||",
                     LogicalOperator::Coalesce => "??",
                 };
-                Some(Self::wanted(want, format!("({left} {operator} {right})")))
+                Some(Self::wanted(
+                    want,
+                    format!("$h.selected(\"{operator}\", {left}, () => {right})"),
+                ))
             }
             Expression::StaticMemberExpression(member) => self.member(
                 &member.object,

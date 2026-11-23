@@ -177,6 +177,14 @@ sandboxed body becomes `$h.invoke(body, computed)`, a type annotation is
 removed, and a JSX element becomes a call that builds a view node. `$h` is the
 host object of `execution-and-storage.md` §2.2.
 
+A `??`, `||` or `&&` of the reactive tier becomes
+`$h.selected(operator, left, () => right)`, with each operand as the reference
+it is. The executor tests the left operand by the value it resolves to and
+passes on the operand that is selected (PL §3.5): the right one as it is, and
+the left one as the reference where it resolves to a record or an array or is a
+handle, so an output that the operator computes stores the link, and as its
+value where it resolves to a scalar (`compare/fixtures/selected-operand.tsx`).
+
 The artifact's `code` has these members.
 
 | Member                | Holds                                                                                                                             |

@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/wishes.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"wish\": wish } = $rt.external(\"commonfabric\");\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/wishes.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ query: (\"#profile\") })]));\n$rt.request(1, ($h) => ([({ query: (\"#now\") })]));\n$rt.request(2, ($h) => ([({ query: (\"#now/1\") })]));\n$rt.value(2, ($h) => ((`hello ${$h.v(($h.v($h.slot(2)) ?? (\"nobody\")))}`)));\nreturn $rt.thunk(($h) => (({ note: $h.slot(3), greeting: $h.output(0), profile: $h.slot(5), problem: $h.slot(4), started: $h.slot(6), time: $h.slot(7) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"wish\": wish } = $rt.external(\"commonfabric\");\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/wishes.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ query: (\"#profile\") })]));\n$rt.request(1, ($h) => ([({ query: (\"#now\") })]));\n$rt.request(2, ($h) => ([({ query: (\"#now/1\") })]));\n$rt.value(2, ($h) => ((`hello ${$h.v($h.selected(\"??\", $h.slot(2), () => (\"nobody\")))}`)));\nreturn $rt.thunk(($h) => (({ note: $h.slot(3), greeting: $h.output(0), profile: $h.slot(5), problem: $h.slot(4), started: $h.slot(6), time: $h.slot(7) })));\n});"
             }
           ],
           "outputsBelow": [],
