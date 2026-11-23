@@ -675,6 +675,40 @@ const splits = (form: unknown): boolean =>
 /** Stands, in a stored form, for rows that are stored already. */
 const KEPT = Symbol("kept");
 
+/** Whether a stored form has `KEPT` at or below it. */
+const holdsKept = (form: unknown): boolean =>
+  form === KEPT ||
+  (Array.isArray(form)
+    ? form.some(holdsKept)
+    : isRecord(form) && Object.values(form).some(holdsKept));
+
+/**
+ * Whether two arrays of one length, longer than one member, hold another
+ * value at every position, as a window of the newest members of a list
+ * does when a member enters the list: such an array is written whole, as
+ * one of another length is, and not member by member, which is a write
+ * and a record for each differing member of each position. The form holds
+ * no `KEPT`, so what is written is the form. The first and the last
+ * position are compared before the others, so that an array that kept its
+ * first member, as nearly every one that is compared has, costs the text
+ * of that one member.
+ */
+const differsThroughout = (
+  form: readonly unknown[],
+  held: readonly unknown[],
+): boolean => {
+  const differs = (index: number) =>
+    !holdsKept(form[index]) &&
+    canonical(form[index]) !== canonical(held[index]);
+  if (form.length < 2 || !differs(0) || !differs(form.length - 1)) {
+    return false;
+  }
+  for (let index = 1; index < form.length - 1; index++) {
+    if (!differs(index)) return false;
+  }
+  return true;
+};
+
 /** A memo entry, brought up to date for the element keys of a context. */
 type Lazy = (context: Context) => Entry;
 
@@ -6103,7 +6137,7 @@ export class Instance {
       if (
         Array.isArray(form) && Array.isArray(held) &&
         form.length === held.length && form.length > 0 &&
-        !shiftedScalars(form, held)
+        !shiftedScalars(form, held) && !differsThroughout(form, held)
       ) {
         form.forEach((member, index) =>
           put([...at, `${index}`], member, held[index])
@@ -6137,7 +6171,7 @@ export class Instance {
         }
       }
       const now = filled(form, held);
-      if (held === now || JSON.stringify(held) === JSON.stringify(now)) {
+      if (held === now || canonical(held) === canonical(now)) {
         // A reference that stays names the cell it named.
         if (!isLink(now) && !isStream(now)) this.#unchangedOutput(at);
         return;

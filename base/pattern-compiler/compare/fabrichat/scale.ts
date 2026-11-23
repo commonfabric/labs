@@ -190,6 +190,8 @@ type Started = {
    * derivation. Absent for the executor in memory.
    */
   adapter?: () => Record<string, number>;
+  /** The counts of `SCALE_TRACE` since the last call. */
+  trace?: () => Record<string, number>;
   /** Sends an event to the stream of a binding and waits for the piece. */
   send: (binding: number, event: unknown) => Promise<boolean>;
   stop: () => Promise<void>;
@@ -282,8 +284,46 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
   if (error !== undefined) {
     throw new Error(`the first commit was refused: ${error.message}`);
   }
+  // With `SCALE_TRACE` set: each position read, each write staged and each
+  // write record given is counted by its document and the shape of its
+  // path, and `trace` returns the counts since it was last called.
+  let traced = new Map<string, number>();
+  if (Deno.env.get("SCALE_TRACE") !== undefined) {
+    const transactions = piece.transactions;
+    const shape = (kind: string, _doc: string, path: readonly string[]) => {
+      const key = `${kind} /${
+        path.map((step) => /^\d+$/.test(step) ? "#" : step).join("/")
+      }`;
+      traced.set(key, (traced.get(key) ?? 0) + 1);
+    };
+    const { read, change } = transactions;
+    transactions.read = (doc, path) => {
+      shape("read", doc, path);
+      return read.call(transactions, doc, path);
+    };
+    transactions.change = (doc, path, ...rest) => {
+      shape("write", doc, path);
+      return change.call(transactions, doc, path, ...rest);
+    };
+    transactions.onRecorded((writes) => {
+      for (const { record, target, unchanged } of writes) {
+        shape(
+          `record ${JSON.stringify(record)}${unchanged ? " unchanged" : ""}`,
+          target.id,
+          target.path,
+        );
+      }
+    });
+  }
   return {
     instance: piece.instance,
+    trace: () => {
+      const counts = Object.fromEntries(
+        [...traced].sort(([, a], [, b]) => b - a),
+      );
+      traced = new Map();
+      return counts;
+    },
     send: async (binding: number, event: unknown) => {
       const stream = piece.instance.streams().find((held) =>
         held.binding === binding && held.instance === undefined
@@ -309,13 +349,19 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         after.eventsRefused === before.eventsRefused;
     },
     adapter: () => {
-      const { reads, writes, recordsGiven, committed } =
+      const { reads, writes, recordsGiven, committed, byCause } =
         piece.transactions.counts;
       return {
         reads,
         writes,
         recordsGiven,
         commits: committed,
+        ...Object.fromEntries(
+          ["handler", "derivation", "send"].map((
+            cause,
+          ) => [`${cause}Commits`, byCause[cause] ?? 0]),
+        ),
+        derivations: piece.counts.derivations,
         ownMs: piece.counts.ownMs,
       };
     },
@@ -434,8 +480,12 @@ for (
     for (let index = 0; index < 3; index++) {
       const before = { ...instance.counts };
       const adapter = started.adapter?.();
+      started.trace?.();
       began = performance.now();
       const committed = await send(binding, { body: `timed ${index}` });
+      if (Deno.env.get("SCALE_TRACE") !== undefined && index === 2) {
+        print({ ...base, step: "trace", ...started.trace?.() });
+      }
       print({
         ...base,
         step: "send",
@@ -446,6 +496,16 @@ for (
       });
     }
     await stopProfile();
+    if (Deno.env.get("SCALE_DUMP") !== undefined) {
+      await Deno.writeTextFile(
+        Deno.env.get("SCALE_DUMP")!,
+        JSON.stringify(
+          [...instance.store.docs].map(([id, { value }]) => [id, value]),
+          (_, member) => typeof member === "bigint" ? `${member}n` : member,
+          1,
+        ),
+      );
+    }
     began = performance.now();
     const { messages } = instance.result() as {
       messages: { count: number; latest: { messages: { body: string }[] } };
