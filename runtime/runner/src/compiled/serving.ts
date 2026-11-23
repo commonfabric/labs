@@ -98,10 +98,14 @@ export type ServeCompiledPiecesOptions = {
   /**
    * What each piece is started with beside the compiled pattern: the
    * artifacts of the patterns its function bodies instantiate beside those
-   * of its program, what its clock holds, and what evaluates its value
-   * code where that is not a compartment of the piece's own.
+   * of its program, what its clock holds, what evaluates its value code
+   * where that is not a compartment of the piece's own, and the principal
+   * its runs act for where no serving loop stamps them.
    */
-  piece?: Pick<CompiledPieceOptions, "artifacts" | "now" | "evaluate">;
+  piece?: Pick<
+    CompiledPieceOptions,
+    "artifacts" | "now" | "evaluate" | "actsFor"
+  >;
   /** Called with each piece the runtime started, when its executor runs. */
   started?: (piece: CompiledPiece) => void;
   /**

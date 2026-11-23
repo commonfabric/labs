@@ -1,0 +1,208 @@
+/**
+ * Answers the `wish` operations of a compiled piece with the runtime's own
+ * `wish` (`../builtins/wish.ts`), behind the experimental option
+ * `compiledPatterns`.
+ *
+ * The request of a `wish` is what the executor stores at `request` of the
+ * operation's state document: the operands of the call, a reference in
+ * them as a link. For each state document the piece registers one action
+ * of the scheduler, which is the action the runtime's `wish` returns for a
+ * node whose inputs are that position. The action resolves the target as
+ * it does for any pattern: it reads the root of the space, the home of the
+ * principal the run acts for and the profile spaces through the cells of
+ * the runtime, in the transaction the scheduler gives it, and the
+ * scheduler runs it again when one of those reads changes.
+ *
+ * The answer is what the action sends: the cell of the state of the wish,
+ * or the cell of a sidecar or of a shared search. It is written at
+ * `outcome` of the operation's state document in the transaction of the
+ * action. The piece holds that document, so the write reaches the executor
+ * as a change by another writer, which marks what read the outcome, and a
+ * resume finds the outcome stored where it finds the request.
+ *
+ * - Where the cell sent is of the scope `space`, the outcome is a link to
+ *   it, which the executor follows.
+ * - Where it is of the scope `user` or `session`, the outcome is the value
+ *   the cell holds in that transaction, each link in it written with its
+ *   document and its space. The executor names a document by its entity,
+ *   with no scope, and holds one outcome for every principal: see the
+ *   notes of round thirteen in `base/pattern-compiler/SPEC-NOTES.md`.
+ */
+import { isWalkableObjectNotArray } from "@commonfabric/data-model";
+import type { FabricValue } from "@commonfabric/data-model";
+import type { DID } from "@commonfabric/identity";
+
+import { wish } from "../builtins/wish.ts";
+import type { Cancel } from "../cancel.ts";
+import { type Cell, isCell } from "../cell.ts";
+import { stampWaveRunContext, waveRunContextOf } from "../executor/wave.ts";
+import { isPrimitiveCellLink, type NormalizedFullLink } from "../link-types.ts";
+import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
+import type { Runtime } from "../runtime.ts";
+import type { Action } from "../scheduler/types.ts";
+import type { URI } from "../sigil-types.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+
+/** What `RuntimeWishes` takes. */
+export type RuntimeWishesOptions = {
+  /** The cell of the result document of the piece, bound to no transaction. */
+  resultCell: Cell<unknown>;
+  /** The entity that holds a document of the executor. */
+  entityOf: (doc: string) => URI;
+  /**
+   * The principal a run of a `wish` acts for where the runtime is in the
+   * serving posture and nothing stamped the run
+   * (`CompiledPieceOptions.actsFor`).
+   */
+  actsFor?: DID;
+};
+
+/** The runtime's `wish`, registered for the `wish` operations of a piece. */
+export class RuntimeWishes {
+  readonly #runtime: Runtime;
+  readonly #options: RuntimeWishesOptions;
+  /** What stops the action of each state document registered. */
+  readonly #registered = new Map<string, Cancel[]>();
+
+  constructor(runtime: Runtime, options: RuntimeWishesOptions) {
+    this.#runtime = runtime;
+    this.#options = options;
+  }
+
+  /**
+   * Has the runtime's `wish` answer the request that the state document
+   * `state` holds, now and whenever the request or what the resolution
+   * read changes. The first call for a state document registers the
+   * action, and a later one does nothing.
+   */
+  answer(state: string): void {
+    if (this.#registered.has(state)) return;
+    const runtime = this.#runtime;
+    const { resultCell, entityOf } = this.#options;
+    const { space, id: result } = resultCell.getAsNormalizedFullLink();
+    const document: NormalizedFullLink = {
+      space,
+      id: entityOf(state),
+      path: [],
+      scope: "space",
+    };
+    const request = { ...document, path: ["request"] };
+    const cancels: Cancel[] = [];
+    this.#registered.set(state, cancels);
+    const built = wish(
+      runtime.getCellFromLink(request) as never,
+      (tx, sent) => this.#store(tx, document, sent),
+      (cancel) => cancels.push(cancel),
+      // What the stores of the wish are named from: the state document,
+      // which is named from the instance, the operation and the keys of
+      // the elements it is in.
+      { compiledWish: state } as never,
+      resultCell,
+      runtime,
+    );
+    const resolve = typeof built === "function" ? built : built.action;
+    const action: Action = (tx) => {
+      this.#stamp(tx, state);
+      // The derivation that first evaluates the operation writes the
+      // request, and its transaction may commit after this action first
+      // runs. The read is one the action depends on, so it runs again when
+      // the request is there.
+      if (tx.readValueOrThrow(request) === undefined) return;
+      return resolve(tx);
+    };
+    cancels.push(
+      runtime.scheduler.subscribe(action, {
+        isEffect: true,
+        // The piece the run is of, so that a serving loop runs the action
+        // for each principal that demands the piece.
+        observationIdentity: {
+          space,
+          pieceId: `space:${result}`,
+          pieceRootId: result,
+        },
+      }),
+    );
+    if (typeof built !== "function") built.onActionRegistered?.(action);
+  }
+
+  /** Stops every action registered. */
+  stop(): void {
+    for (const cancels of this.#registered.values()) {
+      for (const cancel of cancels.splice(0)) cancel();
+    }
+    this.#registered.clear();
+  }
+
+  /**
+   * Names the principal the run acts for where the runtime is in the
+   * serving posture and no serving loop stamped the transaction: the
+   * runtime's `wish` resolves the home of the principal of the run, and
+   * refuses a run with none.
+   */
+  #stamp(tx: IExtendedStorageTransaction, state: string): void {
+    const { actsFor } = this.#options;
+    if (
+      actsFor === undefined || !this.#runtime.servingPosture ||
+      waveRunContextOf(tx) !== undefined
+    ) return;
+    stampWaveRunContext(tx, {
+      actionId: `compiled-piece:wish:${state}`,
+      kind: "derivation",
+      scopeKeyIdentity: { principal: actsFor },
+    });
+  }
+
+  /** Writes what the runtime's `wish` sent as the outcome of the operation. */
+  #store(
+    tx: IExtendedStorageTransaction,
+    document: NormalizedFullLink,
+    sent: unknown,
+  ): void {
+    const { resultCell } = this.#options;
+    const link = isCell(sent)
+      ? sent.getAsNormalizedFullLink()
+      : parseLink(sent, resultCell) as NormalizedFullLink;
+    const at = {
+      space: link.space ?? document.space,
+      id: link.id,
+      path: [...link.path],
+      scope: link.scope ?? "space",
+    } as NormalizedFullLink;
+    tx.writeValueOrThrow(
+      { ...document, path: ["outcome"] },
+      at.scope === "space"
+        ? createSigilLinkFromParsedLink(at) as FabricValue
+        : this.#absolute(tx, at, tx.readValueOrThrow(at)),
+    );
+  }
+
+  /**
+   * A stored value read at `base`, with each link in it written with the
+   * document and the space it leads to, and with no schema: the value is
+   * stored in another document than the one it was read from.
+   */
+  #absolute(
+    tx: IExtendedStorageTransaction,
+    base: NormalizedFullLink,
+    value: FabricValue | undefined,
+  ): FabricValue | undefined {
+    if (isPrimitiveCellLink(value)) {
+      const { schema: _schema, ...link } = parseLink(value, base);
+      return createSigilLinkFromParsedLink(link) as FabricValue;
+    }
+    if (Array.isArray(value)) {
+      return value.map((member) =>
+        this.#absolute(tx, base, member as FabricValue)
+      ) as FabricValue;
+    }
+    if (isWalkableObjectNotArray(value)) {
+      return Object.fromEntries(
+        Object.entries(value).map(([name, member]) => [
+          name,
+          this.#absolute(tx, base, member as FabricValue),
+        ]),
+      ) as FabricValue;
+    }
+    return value;
+  }
+}

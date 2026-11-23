@@ -3241,7 +3241,9 @@ export class RuntimeTransactions implements TransactionHooks {
    * entity named here loaded until `close()`.
    */
   entityOf(doc: string): URI {
-    const entity: URI = doc.startsWith("of:") ? doc as URI : `of:${doc}`;
+    const entity: URI = doc.startsWith("of:") || doc.startsWith("data:")
+      ? doc as URI
+      : `of:${doc}`;
     this.#byEntity.set(entity, doc);
     return entity;
   }
@@ -3523,7 +3525,8 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#streams.has(id)) return undefined;
     // The executor makes the result document of a resumed instance empty.
     if (this.#resume && id === this.#owner) return undefined;
-    if (!id.startsWith("of:")) {
+    // An entity named `data:` holds the value its name encodes.
+    if (!id.startsWith("of:") && !id.startsWith("data:")) {
       return this.#resume ? this.#held(id) : undefined;
     }
     const address = this.#address(id, []);

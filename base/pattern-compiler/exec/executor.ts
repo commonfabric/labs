@@ -3800,10 +3800,17 @@ export class Instance {
        * its own, and the result of the `wish` is a reference to it.
        * `outcome` is what the state document holds as the outcome, member
        * by member, for a target that is a document of `documents`: a
-       * link in it is stored as the reference it is.
+       * link in it is stored as the reference it is. An `outcome` with no
+       * member writes nothing: the outcome is then what another writer
+       * stores in the state document.
        */
       wishes?: (
         operands: Record<string, unknown>,
+        /**
+         * `state`: the identifier of the state document of the `wish`,
+         * which the executor gives with every call.
+         */
+        of?: { state: string },
       ) => {
         result?: unknown;
         error?: unknown;
@@ -5106,6 +5113,7 @@ export class Instance {
     }
     const answer = this.root.options.wishes?.(
       isRecord(operands) ? operands : { query: operands },
+      { state: state.doc },
     );
     // The outcome is a write the plan has a record for: the operation, with
     // the slots its operands reach and the positions its resolution read
