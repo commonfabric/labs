@@ -2,7 +2,10 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
-import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.ts";
+import {
+  type Artifact,
+  Handle,
+} from "../../../../base/pattern-compiler/exec/executor.ts";
 import type { MemorySpace } from "../../src/cell.ts";
 import {
   type CompiledPiece,
@@ -168,6 +171,31 @@ describe("the value code of a compiled piece", () => {
     );
 
     expect(() => start(artifact)).toThrow(TypeError);
+  });
+
+  it("gives a handler body no member of a handle that holds the executor", async () => {
+    const artifact = await artifactWith((source) =>
+      source.replaceAll(
+        SETS_LAST,
+        "last.set([typeof last.instance, typeof last.host].join());",
+      )
+    );
+
+    expect(await lastAfterAnEvent(artifact)).toBe("undefined,undefined");
+  });
+
+  it("commits nothing of a handler body that replaces a method of every handle", async () => {
+    const artifact = await artifactWith((source) =>
+      source.replaceAll(
+        SETS_LAST,
+        'last.set("before"); Object.getPrototypeOf(last).get = () => "replaced";',
+      )
+    );
+
+    // The cell of `last` has no document: the write before the assignment
+    // that threw was not committed.
+    expect(await lastAfterAnEvent(artifact)).toBeUndefined();
+    expect(Object.isFrozen(Handle.prototype)).toBe(true);
   });
 
   it("gives a handler body the time of its event, to the second", async () => {

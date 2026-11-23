@@ -4,7 +4,11 @@
  * from the write that causes it until the runtime is settled (milestone 3
  * of `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [--inputs-first] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [--inputs-first] [--evaluate=function] [lengths]`
+ *
+ * With `--evaluate=function` the value code of the compiled piece is
+ * evaluated in the realm of the harness and not in a compartment, which is
+ * what the figures with the flag and without it differ by.
  *
  * With `--inputs-first` the inputs are written in a transaction of their
  * own (`inputs`), which is committed before the piece is started (`load`).
@@ -60,7 +64,11 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "../../../runtime/runner/src/storage/cache.deno.ts";
-import type { Artifact } from "../exec/executor.ts";
+import {
+  type Artifact,
+  evaluateWithFunction,
+  type ModuleEvaluator,
+} from "../exec/executor.ts";
 import { inputClause } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 
@@ -367,6 +375,8 @@ const growthArm = async (
   slots: number | undefined,
   /** Whether the inputs are committed before the piece is started. */
   inputsFirst: boolean,
+  /** What evaluates the value code, where it is not a compartment. */
+  evaluate?: ModuleEvaluator,
 ) => {
   const audience = await scenarioAudience();
   const ifc = { confidentiality: [inputClause("items", audience)] };
@@ -435,7 +445,7 @@ const growthArm = async (
           artifact,
           { items },
           result.withTx(tx),
-          { rows },
+          { rows, ...(evaluate === undefined ? {} : { evaluate }) },
         );
         return { result, piece };
       }
@@ -569,6 +579,7 @@ if (import.meta.main) {
             flag("rows") === "in-place" ? "in-place" : "documents",
             flag("slots") === undefined ? undefined : Number(flag("slots")),
             flags.includes("--inputs-first"),
+            flag("evaluate") === "function" ? evaluateWithFunction : undefined,
           )),
         });
         await stopLoadProfile?.();

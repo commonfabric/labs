@@ -8,11 +8,21 @@
  * names of the text are the parameters and the globals of the compartment
  * and nothing else, and the intrinsics the code reaches are frozen.
  *
- * The compartment confines names. It does not confine what the executor
- * hands the code: `$rt`, the host of a call and each handle are objects of
- * the executor, and the code reads whatever member they have.
+ * The compartment confines names. What the executor hands the code is an
+ * object of the executor: `$rt`, the host of a call (`$h`), and the handles
+ * and references a function body is given. A handle keeps the instance in
+ * private fields, and the classes of what a body is given are frozen here.
+ * `$rt` and `$h` are confined by the crate's check alone, which refuses a
+ * source that names them.
  */
-import type { ModuleEvaluator } from "../../../../base/pattern-compiler/exec/executor.ts";
+import {
+  Handle,
+  type ModuleEvaluator,
+} from "../../../../base/pattern-compiler/exec/executor.ts";
+import {
+  Ref,
+  StreamRef,
+} from "../../../../base/pattern-compiler/exec/store.ts";
 import { createModuleCompartmentGlobals } from "../sandbox/compartment-globals.ts";
 import {
   createLockedCompartment,
@@ -31,6 +41,18 @@ const valueCodeGlobals = (): Record<string, unknown> => {
   return globals;
 };
 
+/**
+ * Freezes the classes whose instances a function body is given: a handle,
+ * and through the member `target` of a handle a reference. A body then
+ * replaces no method that the executor or another piece calls.
+ */
+const freezeHandedClasses = (): void => {
+  for (const handed of [Handle, Ref, StreamRef]) {
+    Object.freeze(handed.prototype);
+    Object.freeze(handed);
+  }
+};
+
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
 /**
@@ -42,6 +64,7 @@ const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 export const compartmentEvaluator = (): ModuleEvaluator => {
   // The gated `Date` is made from the `Date` a locked-down realm has.
   ensureSESLockdown();
+  freezeHandedClasses();
   const compartment = createLockedCompartment(valueCodeGlobals());
   return ({ path, source }, parameters) => {
     for (const name of parameters) {
