@@ -52,11 +52,16 @@ describe("a write policy of a compiled piece", () => {
     await runtime.dispose();
   });
 
-  /** Starts a piece of `artifact` at the cell named `name` and commits it. */
+  /**
+   * Starts a piece of `artifact` at the cell named `name` and commits it.
+   * The test is host code that vouches for the artifact, the one the crate
+   * emitted for the fixture, unless `attested` is `false`.
+   */
   const start = async (
     name: string,
     artifact: Artifact,
     argument: unknown,
+    attested = true,
   ): Promise<
     { piece: CompiledPiece; result: Cell<Record<string, unknown>> }
   > => {
@@ -68,6 +73,7 @@ describe("a write policy of a compiled piece", () => {
       artifact,
       argument,
       result.withTx(tx),
+      attested ? { attested: true } : {},
     );
     pieces.push(piece);
     runtime.prepareTxForCommit(tx);
@@ -100,6 +106,28 @@ describe("a write policy of a compiled piece", () => {
     expect(piece.refusals).toEqual([]);
     expect(piece.counts.eventsRefused).toBe(0);
     expect(piece.instance.result()).toMatchObject({ note: "written" });
+  });
+
+  it("refuses the write of the handler it names where the caller that handed the artifact did not vouch for it", async () => {
+    // Nothing checks `Body.code` of a handed artifact against a source, so
+    // a handler of one is a writer with no identity.
+    const { piece, result } = await start(
+      "notes",
+      await artifactOf("write-policy.emit.json"),
+      {},
+      false,
+    );
+
+    result.key("record").send({ text: "written" } as never);
+    await runtime.scheduler.idleWithPendingCommits();
+
+    expect(piece.refusals.length).toBeGreaterThan(0);
+    for (const refusal of piece.refusals) {
+      expect(refusal).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /",
+      );
+    }
+    expect(piece.instance.result()).toMatchObject({ note: "" });
   });
 
   it("refuses the write of a handler no policy names as a writer with no identity, as today's path does", async () => {

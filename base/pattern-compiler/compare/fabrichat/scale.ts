@@ -37,10 +37,11 @@
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
  * With them kept, a send of the room is sent as a gesture on the send
- * surface, which the scheduler delivers as input of a renderer: after ten
- * of them in a row it delivers one for each second
- * (`runtime/runner/src/scheduler/wake-shaping.ts`), so the time of a send
- * behind the tenth is that of the wait and not of the piece.
+ * surface. The scheduler delivers a gesture as input of a renderer, one
+ * for each second after ten in a row
+ * (`runtime/runner/src/scheduler/wake-shaping.ts`); the harness queues it
+ * as an event that is not held back, so the time of a send is that of the
+ * piece and of the commit.
  *
  * On the arm `runner`, a `wish` is answered by the runtime's own `wish`
  * against the home `seedHome()` of `../wish-home.ts` writes, and the
@@ -298,6 +299,9 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
   let piece: CompiledPiece;
   try {
     piece = startCompiledPiece(runtime, tx, artifact, {}, result.withTx(tx), {
+      // The harness is host code and vouches for the artifacts the crate
+      // emitted: their handlers then have the identity a claim names.
+      attested: true,
       artifacts: (id) =>
         artifacts.find(({ plan }) =>
           (plan as { patterns?: string[] }).patterns?.[0] === id
@@ -393,9 +397,17 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
           provenance: reviewedActionProvenance("dom", trusted),
         };
       if (sent !== encoded) markRendererTrustedEvent(sent);
+      // A gesture is queued as an event the scheduler does not hold back:
+      // it delivers the eleventh gesture in a row and each one behind it
+      // once a second (`scheduler/wake-shaping.ts`), and the time of a send
+      // would be that of the wait. The last argument is the one the
+      // scheduler's own requeue of an event passes, which is not shaped.
       runtime.scheduler.queueEvent(
         { space, id: entity, path: [], scope: "space" },
         sent,
+        true,
+        undefined,
+        sent !== encoded,
       );
       await runtime.scheduler.idleWithPendingCommits();
       const after = piece.counts;

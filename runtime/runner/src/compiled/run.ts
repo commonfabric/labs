@@ -170,6 +170,9 @@ export const runCompiledPatterns = (
           resultCell.withTx(within),
           {
             ...options.piece,
+            // The artifacts are what the compiler of the runtime gave
+            // for the program.
+            attested: true,
             artifacts: (identity) =>
               known.compiled.artifacts(identity) ??
                 options.piece?.artifacts?.(identity),

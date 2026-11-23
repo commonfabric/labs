@@ -2,7 +2,10 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 
-import { appendedBehind } from "../../src/compiled/appended.ts";
+import {
+  appendedBehind,
+  appendedBySplice,
+} from "../../src/compiled/appended.ts";
 
 const encode = (member: unknown) => member as FabricValue;
 
@@ -37,5 +40,24 @@ describe("appendedBehind()", () => {
       appendedBehind(["A"], ["a", "b"], (member) => `${member}`.toUpperCase()),
     )
       .toEqual({ start: 1, removed: 0, inserted: 1 });
+  });
+});
+
+describe("appendedBySplice()", () => {
+  it("returns the splice of the executor that added members behind the last one", () => {
+    const made = { start: 2, removed: 0, inserted: 1 };
+
+    expect(appendedBySplice(made, 3)).toBe(made);
+  });
+
+  it("returns `undefined` for a splice that removed a member, or added one before the last", () => {
+    expect(appendedBySplice({ start: 2, removed: 1, inserted: 1 }, 3))
+      .toBeUndefined();
+    expect(appendedBySplice({ start: 0, removed: 0, inserted: 1 }, 3))
+      .toBeUndefined();
+  });
+
+  it("returns `undefined` where the executor made no splice", () => {
+    expect(appendedBySplice(undefined, 3)).toBeUndefined();
   });
 });

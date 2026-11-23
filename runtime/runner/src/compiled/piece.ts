@@ -149,6 +149,18 @@ export type CompiledPieceOptions = {
    */
   actsFor?: DID;
   /**
+   * Whether the artifact, and each artifact `artifacts` gives, is one the
+   * runtime's own compiler gave for a source (`runCompiledPatterns` and
+   * `serveCompiledPieces` set this), or one the caller vouches for: the
+   * caller is host code and says that `Body.code` of each handler names
+   * the module and the binding the handler is declared at. A harness that
+   * hands an artifact the crate emitted for a fixture sets it. Without it
+   * a handler of the piece has no identity a writer claim is checked by,
+   * so its write of a position that names a writer is refused: nothing
+   * checks `Body.code` of a handed artifact against a source.
+   */
+  attested?: boolean;
+  /**
    * What the value code imports from `commonfabric` under each name here,
    * for a built-in the executor does not have, in the place of what the
    * runtime answers under that name (`runtimeBuiltins`): a harness's
@@ -248,6 +260,7 @@ export class CompiledPiece {
       owner: result.id,
       artifact,
       resume: options.resume,
+      attested: options.attested,
       countRecordBytes: options.countRecordBytes,
       ...(rowDocuments === undefined ? {} : { rowDocuments }),
       ...(bucketDocuments === undefined ? {} : { bucketDocuments }),

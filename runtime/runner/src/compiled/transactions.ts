@@ -85,8 +85,8 @@ import type { Runtime } from "../runtime.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
 import { markReadAsAttemptedWrite } from "../storage/reactivity-log.ts";
 import { handlerIdentityOf } from "./handler-identity.ts";
-import { appendedBehind } from "./appended.ts";
-import { DeclaredPolicies } from "./declared-policy.ts";
+import { appendedBehind, appendedBySplice } from "./appended.ts";
+import { declaredBy, DeclaredPolicies } from "./declared-policy.ts";
 import { isStateCellSeed, recordStateCellSeed } from "./initialization.ts";
 import {
   declaresMemberPolicy,
@@ -641,6 +641,13 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       countRecordBytes?: boolean;
       /**
+       * Whether `artifact`, and each artifact the executor instantiates,
+       * is one the runtime's compiler gave for a source, or one host code
+       * vouches for (`CompiledPieceOptions.attested`). The handlers of any
+       * other artifact have no identity a writer claim is checked by.
+       */
+      attested?: boolean;
+      /**
        * The collections of the plan of `artifact` whose rows are stored as
        * documents of their own, each named by the array and the key of the
        * row, with a link to it at the row's position
@@ -736,6 +743,7 @@ export class RuntimeTransactions implements TransactionHooks {
       ? undefined
       : this.#register(options.artifact);
     this.#artifact = options.artifact;
+    this.#attested = options.attested === true;
     if (options.artifact !== undefined && options.owner !== undefined) {
       this.#declared.declare(options.owner, options.artifact, false);
     }
@@ -923,6 +931,9 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#attributedIn = tx;
   }
 
+  /** See the option `attested` of the constructor. */
+  readonly #attested: boolean;
+
   /** Registers a compiled pattern with the runtime, once. */
   #register(artifact: Artifact): string {
     let identity = this.#registered.get(artifact);
@@ -988,15 +999,20 @@ export class RuntimeTransactions implements TransactionHooks {
   /**
    * The identity a transaction that runs the handler of `stream` is stamped
    * with (`handlerIdentityOf`), or `undefined` where the adapter was given
-   * no artifact or the experimental option `compiledPatterns` is off.
+   * no artifact, the artifact is not attested, or the experimental option
+   * `compiledPatterns` is off.
    */
   handlerOf(stream: StreamOfExecutor): ImplementationIdentity | undefined {
     const artifact =
       (stream.instance === undefined
         ? undefined
         : this.#artifactOf.get(stream.instance)) ?? this.#artifact;
+    // `Body.code` of an artifact nothing vouches for is a statement of
+    // whoever wrote the artifact about a handler, which nothing checked
+    // against a source: its handlers are writers with no identity.
     if (
-      artifact === undefined || !this.#runtime.experimental.compiledPatterns
+      artifact === undefined || !this.#attested ||
+      !this.#runtime.experimental.compiledPatterns
     ) return undefined;
     // A runtime that stores no labels from templates registers the pattern
     // here: a writer claim is checked in every runtime that commits.
@@ -2071,10 +2087,23 @@ export class RuntimeTransactions implements TransactionHooks {
       // positions: the storage is given those and the number of members, as
       // for a splice, so that a claim the schema declares for a member is
       // decided for the members the handler added and for no other. It is
-      // done where the schema of the write declares a policy for a member.
+      // done where the schema of the write, or the type the handler declares
+      // for the handle, declares a policy for a member. Where the executor
+      // spliced the stored array, as it does for a push, its splice says
+      // which members were added, and no member is compared.
       if (
         splice === undefined && this.#cause === "event" &&
-        declaresMemberPolicy(schema)
+        (declaresMemberPolicy(schema) ||
+          declaresMemberPolicy(declared?.schema))
+      ) {
+        const now = store.peek(doc, path);
+        splice = appendedBySplice(made, Array.isArray(now) ? now.length : -1);
+      }
+      if (
+        splice === undefined && made === undefined &&
+        this.#cause === "event" &&
+        (declaresMemberPolicy(schema) ||
+          declaresMemberPolicy(declared?.schema))
       ) {
         const stored = tx.readValueOrThrow(at(path), {
           meta: ignoreReadForScheduling,
@@ -2171,7 +2200,7 @@ export class RuntimeTransactions implements TransactionHooks {
     // position the handle names.
     const own = declared === undefined || declared.schema === schema
       ? undefined
-      : writePoliciesOf(declared.schema);
+      : declaredBy(declared.schema);
     if (own !== undefined) {
       this.#recordSchema(
         tx,
@@ -2921,7 +2950,7 @@ export class RuntimeTransactions implements TransactionHooks {
       });
       const own = declared === undefined || declared.schema === schema
         ? undefined
-        : writePoliciesOf(declared.schema);
+        : declaredBy(declared.schema);
       if (own !== undefined) {
         this.#recordSchema(
           tx,

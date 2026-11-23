@@ -1,6 +1,7 @@
 /**
  * Whether an array a handler put in the place of a stored array is the
- * stored one with members added behind its last.
+ * stored one with members added behind its last, and whether a splice the
+ * executor made of a stored array added members behind its last.
  */
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 
@@ -32,3 +33,19 @@ export const appendedBehind = (
     inserted: next.length - stored.length,
   };
 };
+
+/**
+ * Returns `made`, the splice the executor made of a stored array that now
+ * has `length` members, where it added members behind the last one and
+ * removed none, and `undefined` for any other splice and for none. The
+ * executor splices a stored array where a handler pushes to it, so no
+ * member is compared.
+ */
+export const appendedBySplice = (
+  made: { start: number; removed: number; inserted: number } | undefined,
+  length: number,
+): { start: number; removed: number; inserted: number } | undefined =>
+  made !== undefined && made.removed === 0 && made.inserted > 0 &&
+    made.start + made.inserted === length
+    ? made
+    : undefined;

@@ -99,7 +99,11 @@ describe("the actor of an event of a compiled piece, in a runtime in the serving
       await artifactOf(name),
       {},
       result.withTx(tx),
-      actsFor === undefined ? {} : { actsFor: actsFor.did() },
+      // The test vouches for the artifact the crate emitted for the fixture.
+      {
+        attested: true,
+        ...(actsFor === undefined ? {} : { actsFor: actsFor.did() }),
+      },
     );
     pieces.push(piece);
     runtime.prepareTxForCommit(tx);

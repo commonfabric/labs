@@ -296,7 +296,12 @@ export const runOne = async (
     // The runtime of the run has no serving loop, which is what names the
     // principal a run acts for: the runtime's `wish` and its built-ins
     // read it.
-    const actsFor = wishTable ? {} : { actsFor: space };
+    // The harness is host code and vouches for the artifacts the crate
+    // emitted (`CompiledPieceOptions.attested`).
+    const actsFor = {
+      attested: true,
+      ...(wishTable ? {} : { actsFor: space }),
+    };
     const tx = runtime.edit();
     try {
       piece = startCompiledPiece(

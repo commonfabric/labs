@@ -63,7 +63,7 @@ const withPoliciesAlone = (node: unknown): unknown => {
  * The write policies that `schema` declares, with the schema whole but for
  * its other labels, or `undefined` where it declares none.
  */
-const declaredBy = (schema: unknown): ResultPolicy | undefined => {
+export const declaredBy = (schema: unknown): ResultPolicy | undefined => {
   const policy = writePoliciesOf(schema);
   return policy === undefined ? undefined : {
     schema: withPoliciesAlone(schema) as JSONSchema,

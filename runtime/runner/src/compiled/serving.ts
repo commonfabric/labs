@@ -263,6 +263,9 @@ const start = async (
   const ofProgram = compiled.artifacts;
   const pieceOptions = {
     ...options,
+    // The artifacts are what the compiler of the runtime gave for the
+    // stored source.
+    attested: true,
     artifacts: (identity: string) =>
       ofProgram(identity) ?? options.artifacts?.(identity),
   };
