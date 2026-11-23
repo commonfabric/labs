@@ -16,7 +16,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/keyed-join.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\n\nconst Joined = pattern(\"sha256:ab73cb5c350eb90662efad262528ce6f28e0818a29ef28aa815b9722f31fec77\");\nObject.defineProperty($exports, \"Joined\", { enumerable: true, get: () => Joined });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\n{\n$rt.value(1, ($h) => ($h.lookup($h.output(0), $h.v($h.slot(4)))));\n{\n$rt.element(2, ($h) => ($h.slot(5)));\n}\n$rt.element(1, ($h) => (({ name: $h.slot(6), titles: $h.output(2) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(5) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\n\nconst Joined = pattern(\"sha256:8180e71ccb8c52336f20ac3d26f817405f3a73bc58b9f120527d1632bc4a5085\");\nObject.defineProperty($exports, \"Joined\", { enumerable: true, get: () => Joined });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\n{\n$rt.value(1, ($h) => ($h.lookup($h.output(0), $h.v($h.slot(4)))));\n{\n$rt.element(2, ($h) => ($h.slot(5)));\n}\n$rt.element(1, ($h) => (({ name: $h.slot(6), titles: $h.output(2) })));\n}\n$rt.value(4, ($h) => ($h.at($h.slot(3), [\"length\"])));\nreturn $rt.thunk(($h) => (({ count: $h.output(9), rows: $h.output(5) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -44,11 +44,16 @@
               "collection": 1,
               "cone": 2,
               "output": 5
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 9
             }
           ],
           "valuesWithoutOutput": []
         },
-        "line": 21,
+        "line": 22,
         "name": "Joined",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -102,7 +107,7 @@
             {
               "at": {
                 "file": "compare/fixtures/keyed-join.tsx",
-                "start": 554
+                "start": 684
               },
               "bodies": [],
               "entry": "byTag",
@@ -122,7 +127,7 @@
             {
               "at": {
                 "file": "compare/fixtures/keyed-join.tsx",
-                "start": 670
+                "start": 800
               },
               "bodies": [],
               "entry": "map",
@@ -144,7 +149,7 @@
             {
               "at": {
                 "file": "compare/fixtures/keyed-join.tsx",
-                "start": 599
+                "start": 729
               },
               "bodies": [],
               "entry": "rows",
@@ -159,6 +164,21 @@
                   "element": 1
                 }
               ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/keyed-join.tsx",
+                "start": 848
+              },
+              "bodies": [],
+              "entry": "length",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [],
               "writes": []
             }
           ],
@@ -309,10 +329,22 @@
                 "op": "output",
                 "output": 2
               }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
             }
           ],
           "patterns": [
-            "sha256:ab73cb5c350eb90662efad262528ce6f28e0818a29ef28aa815b9722f31fec77"
+            "sha256:8180e71ccb8c52336f20ac3d26f817405f3a73bc58b9f120527d1632bc4a5085"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -459,6 +491,9 @@
             "id": "unhashed:schema/1",
             "schema": {
               "properties": {
+                "count": {
+                  "type": "number"
+                },
                 "rows": {
                   "items": {
                     "properties": {
@@ -482,6 +517,7 @@
                 }
               },
               "required": [
+                "count",
                 "rows"
               ],
               "type": "object"
