@@ -184,12 +184,11 @@ export class PendingParses {
     if (known?.kind === kind && known.text === text) {
       const result = known.result;
       if (result === undefined) return null;
-      if (!known.failed) {
-        this.#parses.delete(key);
-        known.result = undefined;
-      }
+      if (!known.failed) this.#release(key, known);
       return result;
     }
+    // A parse asked for with other text, as after a save, is of no further use.
+    if (known) this.#release(key, known);
     if (this.#taken || known) return parse(kind, language, text, fileName);
     if (text.length <= this.#budget) {
       this.#budget -= text.length;
@@ -202,21 +201,33 @@ export class PendingParses {
       fileName,
       result: undefined,
       failed: false,
+      released: false,
     });
     return null;
   }
 
-  /** Helper for {@link take}'s jobs, which keeps `result` for `pending`, and
-   * whether it stands in for a parse that `failed`. */
+  /** Helper for {@link take}'s jobs, which keeps `result` for `pending`,
+   * unless it was released, and whether it stands in for a parse that
+   * `failed`. */
   #settle(pending: Parse, result: ParseResult, failed: boolean): void {
     if (result.kind !== pending.kind) {
       throw new Error(
         `A ${pending.kind} parse cannot finish with ${result.kind}.`,
       );
     }
-    pending.result = result;
-    pending.failed = failed;
+    if (!pending.released) {
+      pending.result = result;
+      pending.failed = failed;
+    }
     this.#finished++;
+  }
+
+  /** Helper for {@link #parse}, which forgets `pending`, named `key`. The jobs
+   * {@link take} handed over still refer to it, so its result is dropped too. */
+  #release(key: string, pending: Parse): void {
+    this.#parses.delete(key);
+    pending.released = true;
+    pending.result = undefined;
   }
 }
 
@@ -231,6 +242,10 @@ interface Parse {
   /** Whether `result` is the plain text a failed parse leaves, which every
    * build that asks is given, so that the parse is not tried again. */
   failed: boolean;
+
+  /** Whether the parse was forgotten, after a build took its result or asked
+   * for it with other text, so that no result is kept for it. */
+  released: boolean;
 }
 
 /**

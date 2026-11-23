@@ -158,6 +158,23 @@ describe("backgroundparse", () => {
           expect(second).toEqual(first);
         });
 
+        it("forgets a pending parse once its key is asked for with other text", () => {
+          const pending = new PendingParses(0);
+          pending.document("a", typescript, SOURCE, "a.ts");
+          const [taken] = pending.take();
+          pending.document("a", typescript, EDITED, "a.ts");
+          const result = parse("document", typescript, SOURCE, "a.ts");
+          taken.finish(result);
+
+          const document = pending.document("a", typescript, SOURCE, "a.ts");
+
+          expect(document).not.toBe(
+            result.kind === "document" && result.document,
+          );
+          expect(document).toEqual(typescript.parseDocument(SOURCE));
+          expect(pending.finished).toBe(1);
+        });
+
         it("parses at once a pending parse's key asked for with other text", () => {
           const pending = new PendingParses(0);
           pending.document("a", typescript, SOURCE, "a.ts");
