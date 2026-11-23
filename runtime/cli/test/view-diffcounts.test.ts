@@ -1124,8 +1124,13 @@ describe("diffcounts", () => {
             before: ["// a", "fn run() {} // b", "/* c /* d */ e */"],
             after: ["// f", "fn run() {} // g", "/* h /* d */ i */"],
           },
+          {
+            path: ".gitignore",
+            before: ["# Build output", "dist/"],
+            after: ["# Build output", "# from the bundler", "dist/"],
+          },
         ),
-      ).toEqual([true, true, true, true, true, true, true, true]);
+      ).toEqual([true, true, true, true, true, true, true, true, true]);
     });
 
     it("returns false for Rust doc comments, which are attributes, and true for a TypeScript doc comment", async () => {
@@ -1218,8 +1223,10 @@ describe("diffcounts", () => {
             before: ["if ready:", "    go()"],
             after: ["if ready:", "go()"],
           },
+          // Git reads a `#` after leading white space as part of a pattern.
+          { path: ".gitignore", before: ["dist/"], after: ["dist/", " #x"] },
         ),
-      ).toEqual(Array(14).fill(false));
+      ).toEqual(Array(15).fill(false));
     });
 
     it("returns false when whitespace changes inside a multiline literal", async () => {
@@ -1393,6 +1400,7 @@ describe("diffcounts", () => {
         newLines: contextLines("a.ts", ["// b", ""]),
       };
 
+      expect(commentOnlyFiles("not a diff", [sides])).toEqual([]);
       expect(commentOnlyFiles(renamed, [sides])).toEqual([false]);
       expect(commentOnlyFiles(plain(index), [])).toEqual([false]);
       expect(commentOnlyFiles(plain(index), [{ languages: sides.languages }]))

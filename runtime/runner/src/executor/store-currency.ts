@@ -116,8 +116,14 @@ export class StoreCurrency {
    */
   readonly #retakenForBlock = new Set<string>();
 
-  /** The demand keys left unloaded, each with the piece it is the root of. */
-  readonly #served = new Map<string, string>();
+  /**
+   * The demand keys left unloaded, each with the piece it is the root of and
+   * the pieces it rests on that record a source origin.
+   */
+  readonly #served = new Map<
+    string,
+    { piece: string; origins: readonly string[] }
+  >();
 
   /**
    * The demand keys left unloaded because what the store holds of them is
@@ -458,15 +464,18 @@ export class StoreCurrency {
           space: this.#space,
           id: piece,
           path: [],
-          scope: "space",
+          scope: taken.rootScope,
         }),
       );
       // What keeps the whole piece from being vouched for.
       const reasons: string[] = [...taken.unvouched];
-      // A start is where a piece's source origin is followed, so a piece
-      // that records one is never left unstarted.
       if (facts === undefined) reasons.push("no-pattern");
-      else if (facts.followsOrigin) reasons.push("source-origin");
+      // An origin is followed through the piece's one result document, so
+      // a piece that holds an instance of it for each viewer, one of which
+      // records an origin, is started rather than followed.
+      else if (taken.rootScope !== "space" && facts.followsOrigin) {
+        reasons.push("scoped-origin");
+      }
       // A reason is counted once for a piece, whether it holds for the
       // piece or for some of its slices.
       const counted = new Set([
@@ -483,12 +492,18 @@ export class StoreCurrency {
         vouched: reasons.length === 0,
         writes: taken.writes,
         owned: facts?.owned ?? [],
+        // The loop follows a recorded origin before it leaves a root that
+        // rests on the piece unstarted (serving-loop.md §3e).
+        ...(facts?.followsOrigin === true && taken.rootScope === "space" &&
+          { followsOrigin: true }),
         slices: taken.slices.map((slice) => ({
           key: slice.key,
           vouched: slice.unvouched.length === 0,
           reads: slice.reads,
           vouches: slice.vouches,
           ...(slice.decides.length > 0 && { decides: slice.decides }),
+          ...(slice.superseded.length > 0 &&
+            { superseded: slice.superseded }),
           ...(slice.expiresAt !== undefined && { expiresAt: slice.expiresAt }),
         })),
       });
@@ -623,7 +638,9 @@ export class StoreCurrency {
    * upstream are asked about with them, and alone where no root is.
    *
    * @returns The keys the store can serve, which the caller leaves unloaded
-   * under `skip` and loads anyway under `record`; the keys held because what
+   * under `skip` and loads anyway under `record`, with the pieces each rests
+   * on that record a source origin (`origins`), which the caller follows
+   * first; the keys held because what
    * the store holds of them is stale only upstream, which the caller leaves
    * unloaded while the pieces upstream are started (`upstreamReads`); and
    * the keys a judgment had left unloaded that an input has since marked,
@@ -635,7 +652,14 @@ export class StoreCurrency {
     rootKeys: ReadonlyMap<string, { id: string; scope: string }>,
     eligible: (key: string, root: { id: string; scope: string }) => boolean,
     demandChanged: boolean,
-  ): Promise<{ servable: string[]; held: string[]; rearm: CurrencyRearm[] }> {
+  ): Promise<
+    {
+      servable: string[];
+      origins: ReadonlyMap<string, readonly string[]>;
+      held: string[];
+      rearm: CurrencyRearm[];
+    }
+  > {
     const eligibleRoots = new Map<string, string>();
     for (const [key, root] of rootKeys) {
       // A root narrower than the space is judged only where it is a
@@ -655,7 +679,8 @@ export class StoreCurrency {
     // way, as an event's auto-start does, and is loaded like any other.
     const candidates = new Map<string, string>();
     for (const [key, root] of eligibleRoots) {
-      const piece = this.#served.get(key) ?? this.#held.get(key)?.piece;
+      const piece = this.#served.get(key)?.piece ??
+        this.#held.get(key)?.piece;
       if (
         piece !== undefined && runtime.scheduler.hasNodesUnderDemandRoot(piece)
       ) {
@@ -665,11 +690,17 @@ export class StoreCurrency {
         candidates.set(key, root);
       }
     }
-    const unloaded = () => ({
-      servable: [...candidates.keys()].filter((key) => this.#served.has(key)),
-      held: [...candidates.keys()].filter((key) => this.#held.has(key)),
-      rearm: [],
-    });
+    const unloaded = () => {
+      const servable = [...candidates.keys()].filter((key) =>
+        this.#served.has(key)
+      );
+      return {
+        servable,
+        origins: this.#originsOf(servable),
+        held: [...candidates.keys()].filter((key) => this.#held.has(key)),
+        rearm: [],
+      };
+    };
     // The pieces that run here whose slices the judgment is asked about:
     // those the index holds stale for an input upstream of them.
     const asked = new Set(this.#staleRunning);
@@ -713,6 +744,9 @@ export class StoreCurrency {
     const pieces = new Map(
       judged.servable.map(({ root, piece }) => [root, piece]),
     );
+    const origins = new Map(
+      judged.servable.map(({ root, origins }) => [root, origins]),
+    );
     const holding = new Map(
       judged.held.map(({ root, piece, readers }) => [root, { piece, readers }]),
     );
@@ -730,9 +764,11 @@ export class StoreCurrency {
         this.#held.delete(key);
         servable.push(key);
         this.#stats.currency.servable += 1;
-        if (this.#mode === "skip" && !this.#served.has(key)) {
-          this.#served.set(key, piece);
-          this.#stats.currency.servedFromStore += 1;
+        if (this.#mode === "skip") {
+          if (!this.#served.has(key)) {
+            this.#stats.currency.servedFromStore += 1;
+          }
+          this.#served.set(key, { piece, origins: origins.get(root) ?? [] });
         }
         continue;
       }
@@ -764,10 +800,32 @@ export class StoreCurrency {
       if (left === undefined) continue;
       this.#served.delete(key);
       this.#stats.currency.rearmed += 1;
-      const seq = markingSeq(judged.marked, left);
+      const seq = markingSeq(judged.marked, left.piece);
       if (seq !== undefined) rearm.push({ key, seq });
     }
-    return { servable, held, rearm };
+    return { servable, origins: this.#originsOf(servable), held, rearm };
+  }
+
+  /**
+   * Helper for `judge()`, which returns, for each of `keys` left unloaded
+   * that rests on a piece recording a source origin, those pieces.
+   */
+  #originsOf(keys: readonly string[]): Map<string, readonly string[]> {
+    const origins = new Map<string, readonly string[]>();
+    for (const key of keys) {
+      const pieces = this.#served.get(key)?.origins ?? [];
+      if (pieces.length > 0) origins.set(key, pieces);
+    }
+    return origins;
+  }
+
+  /**
+   * Takes the demand key `key` out of the keys left unloaded, for a caller
+   * that loads it after all: the origin of a piece it rests on moved, and a
+   * start is what runs the piece on the source it adopted.
+   */
+  load(key: string): void {
+    this.#served.delete(key);
   }
 
   /**
@@ -908,7 +966,7 @@ export class StoreCurrency {
    */
   #rearmsFor(marked: readonly CurrencyMarked[]): CurrencyRearm[] {
     const rearm: CurrencyRearm[] = [];
-    for (const [key, piece] of this.#served) {
+    for (const [key, { piece }] of this.#served) {
       const seq = markingSeq(marked, piece);
       if (seq === undefined) continue;
       this.#served.delete(key);

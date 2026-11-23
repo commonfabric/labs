@@ -8,6 +8,7 @@
 
 import { valueEqual } from "@commonfabric/data-model";
 import { aclDocId } from "../acl.ts";
+import { SPACE_INVITES_REVISION_DOC_ID } from "../space-invites.ts";
 import {
   isRespelled,
   respellBareDidEnvelope,
@@ -270,10 +271,13 @@ const divergedInstances = (
  * records a serving loop keeps of its own progress through the branch's
  * commits: the event logs, the watermark, and the effect and attention
  * indexes. Those describe what has happened on the branch, which a restore
- * adds to and does not undo.
+ * adds to and does not undo. It leaves alone the invitation service's revision
+ * document too, which follows the service's private ledger, and a restore does
+ * not touch that ledger.
  */
 const isRestored = (id: EntityId, space: string): boolean =>
   id !== aclDocId(space) &&
+  id !== SPACE_INVITES_REVISION_DOC_ID &&
   !id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
   id !== SERVER_EXECUTION_WATERMARK_DOC_ID &&
   id !== SERVER_EXECUTION_ATTENTION_DOC_ID &&
@@ -285,8 +289,8 @@ const isRestored = (id: EntityId, space: string): boolean =>
  * `source` holds and deletes each one `source` lacks. The commit records
  * where it restored from, so the history of `target` keeps every state it
  * went through, the one the restore replaced included. Session-scoped
- * documents stay as they are, as do the space's access list and its serving
- * loop's records. Returns
+ * documents stay as they are, as do the space's access list, the invitation
+ * service's revision document, and its serving loop's records. Returns
  * `undefined`, writing nothing, when the two hold the same documents.
  *
  * A collaborative field of a document the commit sets ends there, and its

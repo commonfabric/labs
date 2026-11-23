@@ -194,12 +194,16 @@ import {
 import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
 import {
-  executeInvite,
+  applyInvite,
   type InviteRequest,
   type InviteResult,
   parseInviteOperation,
 } from "./invites.ts";
-import { type RedeemReceipt, SpaceInviteError } from "../space-invites.ts";
+import {
+  type RedeemReceipt,
+  SPACE_INVITES_REVISION_DOC_ID,
+  SpaceInviteError,
+} from "../space-invites.ts";
 import {
   isGenesisRoot,
   readGenesisRoot,
@@ -5948,7 +5952,11 @@ export class Server {
     }
   }
 
-  /** Executes an authenticated invitation operation with ordinary ACL publication. */
+  /**
+   * Executes an authenticated invitation operation, and publishes what it
+   * committed as any commit is published: a redemption's ACL grant, and the
+   * move of the ledger's revision document (`SPACE_INVITES_REVISION_DOC_ID`).
+   */
   async invite(request: InviteRequest): Promise<InviteResult["result"]> {
     return await this.#withSpacePublicationLock(request.space, async () => {
       if (!(await this.#spaceStoreExists(request.space))) {
@@ -5959,10 +5967,11 @@ export class Server {
         );
       }
       const engine = await this.#openEngine(request.space);
-      const { result, commit } = executeInvite(engine, {
+      const outcome = applyInvite(engine, {
         ...request,
         implicitOwner: this.#isServicePrincipal(request.principal),
       });
+      const { commit, revision } = outcome;
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
         this.#accessListChanged(engine, request.space);
@@ -5977,7 +5986,22 @@ export class Server {
           writes: [{ id: aclDocId(request.space), scopeKey: "space" }],
         });
       }
-      return result;
+      // Published before a refusal is thrown, since a refused preview or
+      // redemption can have retired an invitation.
+      if (revision !== undefined) {
+        this.markSpaceDirty(request.space, [
+          toDirtyKey(SPACE_INVITES_REVISION_DOC_ID),
+        ]);
+        this.#notifyCommitAdmitted({
+          space: request.space,
+          seq: revision.seq,
+          class: "system",
+          sessionId: "invite-service",
+          writes: [{ id: SPACE_INVITES_REVISION_DOC_ID, scopeKey: "space" }],
+        });
+      }
+      if ("failure" in outcome) throw new SpaceInviteError(outcome.failure);
+      return outcome.result;
     });
   }
 
@@ -6028,6 +6052,15 @@ export class Server {
       ) {
         throw new Engine.ProtocolError(
           "direct writes may not delete a space",
+        );
+      }
+      // The invitation service moves its revision document in the
+      // transaction that changes its ledger, and a direct write would say the
+      // ledger moved when it had not, which the store refuses of any commit
+      // but a system one (`refuseInviteRevisionWritesOutsideTheService`).
+      if (id === SPACE_INVITES_REVISION_DOC_ID) {
+        throw new Engine.ProtocolError(
+          "direct writes may not move the invitation service's revision document",
         );
       }
       if (this.#aclMode() !== "off") {
@@ -13384,7 +13417,12 @@ export class Server {
       running?: readonly string[];
     },
   ): Promise<{
-    servable: Array<{ root: string; piece: string }>;
+    /**
+     * The roots the store can serve, each with its piece and the pieces it
+     * rests on that record a source origin, which the loop follows before
+     * it leaves the root unstarted.
+     */
+    servable: Array<{ root: string; piece: string; origins: string[] }>;
     held: Array<{ root: string; piece: string; readers: string[] }>;
     upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
@@ -13499,11 +13537,16 @@ export class Server {
     const reasons = new Map(
       judgment.refused.map(({ root, reason }) => [root, reason]),
     );
-    const servable: Array<{ root: string; piece: string }> = [];
+    const origins = new Map(
+      judgment.origins.map(({ root, pieces }) => [root, pieces]),
+    );
+    const servable: Array<
+      { root: string; piece: string; origins: string[] }
+    > = [];
     const held: Array<{ root: string; piece: string; readers: string[] }> = [];
     for (const [root, piece] of pieces) {
       if (passing.has(piece)) {
-        servable.push({ root, piece });
+        servable.push({ root, piece, origins: origins.get(piece) ?? [] });
         continue;
       }
       const readers = holding.get(piece);

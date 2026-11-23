@@ -3623,7 +3623,10 @@ function followPointerOnce(
     context.referenceOnly
       ? {
         ...READ_NON_RECURSIVE,
-        meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
+        meta: Object.freeze({
+          ...READ_NON_RECURSIVE.meta,
+          ...linkResolutionProbe,
+        }),
       }
       : READ_NON_RECURSIVE,
   );
