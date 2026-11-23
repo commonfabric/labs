@@ -23325,3 +23325,228 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    serving branch does, so the layout a wake adopts is read under no label. A
    reader of the layout learns the order of the rows and the number of chunks,
    which follow from the stored result.
+
+## Round seventeen, continued: the start the memory server refuses, lists in chunks, and a scoped output of a `map`
+
+The coordinator's continuation of 2026-11-23 on the branch
+`merge-attempt/serving-m6`, from `1d609076c0`. The logs are in the folders
+`r17-merge/t2/` and `r17-merge/t3/` of the session. Provisional decisions from
+P440.
+
+983. **Why the start over 201 distinctly labelled items stands for 1.44 million
+     slots: a representation defect of `main`, and its fix exists behind
+     `cfcContentAddressedLabels`.**
+     - _The path._ `RuntimeTransactions.writeOwn` writes each part of the lists
+       of the readers and of the basis with `tx.writeValueOrThrow`, with no
+       record of a plan. The preparation of the commit
+       (`prepareBoundaryCommitSteps`, `deriveFlowJoin`) gives each written path
+       the join of what the transaction read, and the persist path writes each
+       document's envelope with its `labelMap` in place (version 1): one entry
+       for each written path, each holding the label whole. The client sends
+       each document as a `set` operation with that envelope.
+     - _What the commit held._ 295 operations: 142 parts of the lists of the
+       readers (884 label entries), 143 parts of the basis (286), the basis, the
+       units, six list documents. Of the 1,195 label entries, 1,177 hold one and
+       the same label, 30,548 bytes: the join of the 200 clauses. It is the same
+       value at every entry, in the same order; the join is not a different
+       object or a differently ordered value per document.
+     - _Why `commitLabelTableV1` does not collapse it._ The table is applied to
+       these writes (`mapCommitMetadata` maps the label of each `set`), and
+       `collectCandidate` finds the one label by its hash. But
+       `compressLabelMetadata` (`runtime/memory/v2/label-metadata-table.ts`)
+       sums the bytes every reference would expand to, here 1,177 times 30,548
+       bytes, about 36 MB, and returns the envelope uncompressed where the sum
+       exceeds `MAX_LABEL_METADATA_EXPANSION_BYTES` (16 MB), which is also the
+       receiver's budget (`expandLabelMetadata`). The server then counts the
+       slots of the inline message (`decodeMemoryBoundary`,
+       `MAX_UNTRUSTED_MESSAGE_SLOTS`, 1,000,000) and refuses it
+       (`MessageTooLargeError`). The count is taken on the wire, after the table
+       would have been applied; it is the table that is not applied.
+     - _Today's path has the same cost._ A transaction that reads 200 documents,
+       each under a clause of its own, and writes N plain documents
+       (`today-wide-join.test.ts` in the log folder, `cfcFlowLabels` at
+       `persist`): N = 1, 32, 64 and 256 commit, each written document storing
+       58,454 bytes of envelope (two entries of the join); N = 600 and 1,200 are
+       refused with `MessageTooLargeError`, on emulated storage and over a
+       socket. 256 documents expand to about 15 MB and are compressed; 600 to
+       about 35 MB and are sent inline. So it is a defect of `main`, in
+       `compressLabelMetadata` and `expandLabelMetadata` together with the slot
+       limit: the cost of a commit follows (entries) times (label size) where
+       the label is one value.
+     - _The representation that costs the join once exists._ With
+       `RuntimeOptions.cfcContentAddressedLabels` on, each entry holds a
+       reference to one content-addressed label document: today's transaction
+       commits at 600 and 1,200 documents, the serving branch's case at 201
+       items passes, and so do the trunk's three cases of
+       `row-documents.test.ts` run with 201 items in the place of 41, on
+       emulated storage and over a socket. With it off the same four cases are
+       refused. The option is off by default because a reader that predates
+       version 2 fails closed (`docs/development/EXPERIMENTAL_OPTIONS.md`);
+       turning it on is a decision of deployment, not taken here. Nothing was
+       changed.
+     - _How many parts a start writes._ A start over 200 items wrote 142 parts
+       of the lists of the readers and 143 parts of the basis, the number of the
+       256 parts the hashes of about 200 sources fall into: the number of parts
+       follows the collection up to 256 and stays there. The label entries do
+       not stop at 256: 884 entries in the parts of the lists of the readers,
+       one for each path written, which follows the rows. With a label that
+       grows with the clauses read, the bytes of a start follow the rows times
+       the clauses.
+984. **Three layouts of the lists of links, side by side with today's path, and
+     where the seconds of a list in chunks go.** One run of each cell, one
+     process at a time, at load averages of 6 to 15 (1 minute) from other
+     sessions. (a) links in place in the result document
+     (`SCALE_LISTS=in-place`); (b) one list document for each collection with no
+     chunks (`SCALE_LIST_WHOLE=1000000`); (c) chunks above 128 rows, the default
+     (P393).
+     - _`compare/serving-path.ts`, milliseconds until the second client reads
+       the row, medians of five,_ at 1,000 and at 10,000 rows. A client watches
+       the one row in today's path, (a) and (b), and the row of a rename through
+       its chunk in (c) (`SCALE_WATCH=chunk`); an add in (c) is watched on the
+       whole list, since its chunk is not known before it.
+
+       | Layout | Load           | Rename   | Add            | Piece's own time, 10 events | First event after a takeover | RSS after the events |
+       | ------ | -------------- | -------- | -------------- | --------------------------- | ---------------------------- | -------------------- |
+       | today  | 2,495 / 46,332 | 18 / 38  | 189 / 2,747    |                             | 15 / 31 (no executor)        | 1,501 / 4,370 MB     |
+       | (a)    | 726 / 3,799    | 21 / 32  | 48 / 223       | 23 / 52                     | 30 / 125                     | 761 / 2,134 MB       |
+       | (b)    | 510 / 3,898    | 17 / 35  | 57 / 408       | 49 / 328                    | 30 / 133                     | 687 / 2,410 MB       |
+       | (c)    | 956 / 7,710    | 381 / 22 | 5,023 / 67,732 | 23 / 53                     | 35 / 800                     | 1,590 / 4,430 MB     |
+
+       Every compiled run found the piece current after the takeover and
+       evaluated 6 entries at the wake. (b) writes the whole list document at
+       each add, so its own time follows the rows (328 ms at 10,000); (a) writes
+       one link and the length.
+     - _Where the seconds of (c) go: in a client that watches a whole list,
+       whatever the layout._ With a client watching the whole list at 1,000
+       rows, a rename is read after 1,840 ms in (a), 1,758 in (b) and 1,762 in
+       (c), and an add after 16,351, 16,089 and 11,285: the cost is that of the
+       watch, not of the chunks. The sink is called back 405 to 411 times in a
+       run of 10 events, the load and the takeover. In a profile of two adds
+       (`clist-1000.cpuprofile`, 18 s sampled), 8.8 s are in the client's
+       reactive action of the sink (`Cell.sink`, `subscribeToReferencedDocs`,
+       `deepTraverse`, which visits every row of the list at each callback) and
+       its commit: 6.2 s in `prepareTxForCommit` of that action (`#prepareCfc`,
+       `deriveFlowJoin`, `forEachFlowObservation`), a CFC preparation of an
+       action that reads 1,000 rows and writes nothing. That is code of today's
+       runtime, and a client of today's piece that watched its whole list would
+       pay it as well; it was not measured on today's path. A layout in chunks
+       forces the whole-list watch on any client that wants the rows in order,
+       since no flattening of a list in chunks is built (P393); a client that
+       knows the chunk of a row reads a rename after 22 to 381 ms.
+     - _The Topics serving arm (`SCALE_BOARD=filing-order`), milliseconds until
+       the second client reads,_ at 1,000 / 2,000 topics. Today's path ran on
+       `main.tsx` of this branch, as in note 846, since today's compiler refuses
+       the board of the measurement branch (`groupBy` on the result of a
+       `flatMap`).
+
+       | Layout | Edit of a middle title | Edit of the mentions | Edit of the `shortName` | Create, median of three |
+       | ------ | ---------------------- | -------------------- | ----------------------- | ----------------------- |
+       | today  | 983 / 1,435            | 665 / 1,567          | 1,266 / 2,810           | 4,541 / 9,122           |
+       | (a)    | 1,142 / 2,416          | 96 / 161             | 1,518 / 2,221           | 5,935 / 4,734           |
+       | (b)    | 1,056 / 2,474          | 75 / 113             | 1,338 / 2,073           | 5,310 / 4,208           |
+       | (c)    | 1,009 / 2,402          | 66 / 146             | 1,277 / 2,082           | 4,978 / 4,088           |
+
+       The three layouts differ little here because another cost dominates; see
+       the finding below.
+     - _A defect of the merged tree, found and not diagnosed: an edit of a
+       Topics title follows the board._ In every layout an edit of a title
+       evaluates 8 entries, reads 11 positions and gives 4 records, and the
+       piece's own time is 120 to 134 ms at 1,000 topics and 239 to 285 ms at
+       2,000; the second client reads it after 1.0 and 2.4 s. The serving branch
+       measured 17 to 68 ms for the same edit (notes 846 and 928). A create
+       gives 20,000 to 46,000 records in its second run and is refused with
+       `StorageTransactionInconsistent` on the result document of the created
+       topic, once to three times. The board and the topic hold documents of the
+       scope `session` (`newTitle`, `bodyDraft`), so after the merge with the
+       scopes the piece derives for each principal and session that demands it,
+       with the open item of note 892 (the runs of one pass for several
+       principals do not see each other's writes). That this is the cause is a
+       guess; a profile of the arm did not end (the harness runs the arm in a
+       process of its own, which `--cpu-prof` does not reach) and was stopped.
+     - _Which layout by Z91._ Today's `map` keeps the links of all rows in one
+       result cell, so (a) is today's layout and (b) is today's with the links
+       moved into a document of their own; chunks (c) have no counterpart, and
+       the write they save at an append is an optimization for long lists that
+       today's runtime does not make, while they make every client that reads a
+       list of more than 128 rows read it whole or know its layout. The
+       recommendation is (b), or (a), as the default, and (c) not as the
+       default; the general defect behind the seconds above is the cost of a
+       client watching a long list (the traversal at each callback and the CFC
+       preparation of a read-only action), which is today's runtime's and is the
+       one to fix. (b) does not pass every test: with `LIST_WHOLE` unbounded,
+       five cases of `link-lists.test.ts` that hold the size of the documents an
+       append or a move writes, and the layout a resume keeps, fail, as they are
+       written to (the case of `row-documents.test.ts` at 201 items fails with
+       or without it, note 983), so the default was not changed.
+985. **A scoped output of a `map` over an array of references: what made a
+     FabriChat send give five records for each message held, and what per-row
+     storage would take.**
+     - _The cause, closed._ `messageRights` of the room's copy is a `map` over
+       the stored messages, an array of references, whose output is of the scope
+       `session`. `Instance.#scopedOutput` stores such an output whole at its
+       path in the scope instance of the document of the scoped outputs
+       (`#scopedPlace`, `#putScoped`). `#putScoped` wrote member by member only
+       where the array kept its length; an append changes the length, so the
+       whole array was put and every row and every member gave its record again.
+       It now splices the one run of positions that differs, as today's runtime
+       diffs an array it writes (`diffAndUpdate` writes the added positions and
+       the length), so the change helps every pattern with an output of a scope
+       that is an array, and today's runtime has the same mechanism. Test:
+       "writes the added row of a principal's rows and no row that stayed" of
+       `exec/test/scope-instances.test.ts`, seen failing on `rows` put whole.
+     - _Measured,_ `compare/fabrichat/scale.ts runner room` with
+       `SCALE_STAND_INS=table`, one run at a load average of about 7: a send at
+       100 messages gives 188 records (before: 688 to 698; the serving branch
+       alone: 189), at 10 messages 99 to 101 (149 to 161; the serving branch:
+       100 to 102); 32 evaluations, 549 to 559 positions read, 18 documents
+       changed of 585 to 592 KB, as before, and 192 to 216 ms. The reader's
+       rights of every message read back equal.
+     - _What still follows the room._ The scope instance holds the rights of
+       every message in one document, and a send changes it: the documents a
+       send changes are 18 where the serving branch has 24, and their size stays
+       175 KB above it at 100 messages, growing with the room. Today's `map`
+       keeps each row in a cell of its own and the links of all rows in one
+       result cell, so per-row storage of a scoped output is what today's
+       runtime does, and the record count above is not yet the whole of it.
+     - _What per-row storage of a scoped output needs (plan, not built)._ The
+       rows of a scoped assembly would be documents named by the scope instance
+       and the key
+       (`identifierOf({ rows: [<scoped outputs>~<scope>,
+       ...path], key })`),
+       with a list document for each scope key.
+       `RuntimeTransactions.#rowArraysOf` serves the result document alone
+       (`doc !== this.#owner`), and a `RowArray` would need one entry for each
+       scope key, with the identity of the transaction choosing the instance;
+       `#scopedRows` stores the rows whole and gives an error state below a row
+       of another collection, which would become a link per row; the stored
+       links would name the scope of their target; the resume of a piece with
+       scoped documents is whole (note 892), so no list of readers is needed.
+       The tests to write first: a scoped `map` over an array of references
+       whose append writes one row document and the list document for the acting
+       key and no document of another key; a second principal reads its own
+       rows; a refused commit restores the row documents of one key. It is not
+       contained: it reaches the adapter's row arrays, the encoding of links and
+       the scope instances, so it was not built.
+     - _Gates at the head of the continuation,_ exit status 0:
+       `deno fmt
+       --check`, `deno lint`, `deno task check`, the six
+       `check-*` tasks, the executor tests (206 tests, 1,003 steps), the nine
+       CFC test files with `test/cfc/compiled-writer.test.ts` (11 tests, 344
+       steps), `cargo test` (586 tests), `cargo fmt --check`, `cargo clippy`.
+       Exit status 1: `test/compiled/` on emulated storage and over a socket, 54
+       tests passed and the one case of note 983 failed in each, as at note 982.
+
+### CFC questions deferred, round seventeen continued
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+3. A change that can store less label (note 985): a row of an output of a scope
+   that an append left as it was is no longer written again, so no record is
+   given again for it, and it keeps the label its last record stored. Where the
+   record of such a row would now give another label, as where a label of the
+   membership of the array it stands in changed, the row keeps the earlier one
+   until it is written. No test shows a case where the two differ.
+4. Note 983: the label entries of a document written with no record of a plan
+   are one for each written path, each holding the join of what the transaction
+   read. Whether such a document needs an entry for each path whose label equals
+   that of the path above it is part of question 1 of round 13.
