@@ -292,7 +292,7 @@ type CaptionPath = {
  * The path of the row at `index` below an array of rows of a board that
  * was loaded with `size` topics: the index, or, unless `SCALE_LISTS` is
  * `in-place`, for more topics than one list document holds
- * (`SCALE_LIST_WHOLE`, or 64), the chunk and the place in it. A load lays
+ * (`SCALE_LIST_WHOLE`, or 128), the chunk and the place in it. A load lays
  * the rows out in chunks of 48 (`LIST_FILL` of
  * `runtime/runner/src/compiled/transactions.ts`), and a topic that is
  * appended afterwards moves none of them.
@@ -303,7 +303,7 @@ const rowAt = (
   index: number,
 ): (string | number)[] =>
   arm === "serving" && Deno.env.get("SCALE_LISTS") !== "in-place" &&
-    size > Number(Deno.env.get("SCALE_LIST_WHOLE") ?? 64)
+    size > Number(Deno.env.get("SCALE_LIST_WHOLE") ?? 128)
     ? [Math.floor(index / 48), index % 48]
     : [index];
 

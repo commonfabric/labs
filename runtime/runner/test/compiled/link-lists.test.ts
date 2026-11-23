@@ -40,7 +40,7 @@ const BOUND = 64_000;
 // references whose rows are documents of their own, a list of links to the
 // rows, and for an index it keeps, a record of links to the buckets. With
 // the option `lists` at `documents`, each is stored in documents of its
-// own, an array of more than 64 rows in chunks, and the result document
+// own, an array of more than 128 rows in chunks, and the result document
 // holds a link to it. So a step that changes one link of an array writes
 // documents whose size does not follow the number of rows.
 describe("the lists of links of the result of a compiled piece, with the option `lists` at `documents`", () => {
@@ -270,7 +270,7 @@ describe("the lists of links of the result of a compiled piece, with the option 
     expect(rows[147].mentionedBy).toEqual(["t148", "t149"]);
   });
 
-  it("holds the rows of an array of at most 64 in the document the link leads to, so that a reader reads the array at its path", async () => {
+  it("holds the rows of an array of at most 128 in the document the link leads to, so that a reader reads the array at its path", async () => {
     const { list } = await ranked(40);
     const result = await start("sorted-rows", { items: list });
 

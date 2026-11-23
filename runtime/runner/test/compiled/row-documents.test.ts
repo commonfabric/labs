@@ -618,9 +618,9 @@ describe("the rows of a `map` over an array declared as references", () => {
       expect(storedRows(result).length).toBe(5);
     });
 
-    it("writes the links of one chunk at most, and gives as many records, for a member added at the end of 4 members as of 100", async () => {
+    it("writes the links of one chunk at most, and gives as many records, for a member added at the end of 4 members as of 200", async () => {
       const few = await after(5, (cells) => cells);
-      const many = await after(101, (cells) => cells);
+      const many = await after(201, (cells) => cells);
 
       expect(many.links).toBeLessThanOrEqual(64);
       expect(many.records).toBe(few.records);

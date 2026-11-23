@@ -309,9 +309,12 @@ const LIST_CHUNK = 64;
  * The most links to rows that a `LinkList` holds in the list document
  * itself, unless the option `listWhole` gives another number. A reader
  * through the runtime reads a list of at most this many rows as the array
- * of the rows; a longer one it reads as an array of chunks.
+ * of the rows; a longer one it reads as an array of chunks. Measured on
+ * the Topics board under the serving loop (note 925 of
+ * `base/pattern-compiler/SPEC-NOTES.md`), a topic created takes as long
+ * with 128 links in one document as in chunks, and longer with 256.
  */
-const LIST_WHOLE = 64;
+const LIST_WHOLE = 128;
 
 /**
  * The links a chunk is given where a list is laid out anew or a chunk is
