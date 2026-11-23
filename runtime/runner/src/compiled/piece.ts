@@ -444,6 +444,15 @@ export class CompiledPiece {
     this.#basis.wrote(tx, [this.transactions.mintedDocument], []);
   }
 
+  /**
+   * Has the scheduler run the derivation, as the piece does after each
+   * event it handles: for a caller that hands the executor an event
+   * itself (`RuntimeTransactions.within`).
+   */
+  derive(): void {
+    this.#invalidate();
+  }
+
   /** Has the scheduler run the derivation action. */
   #invalidate(): void {
     if (this.#started && !this.#stopped) {

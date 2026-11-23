@@ -3315,15 +3315,32 @@ export class RuntimeTransactions implements TransactionHooks {
     const kept = this.#touched.has(doc) ? undefined : this.#entries.get(doc);
     if (kept !== undefined) {
       this.#unchanged.set(doc, kept);
+      if (this.#entriesOf.has(doc)) {
+        this.#labelsOfEntries.set(kept, this.#entriesOf.get(doc));
+      }
       return;
     }
     const tx = this.#runtime.edit();
     try {
-      this.#unchanged.set(doc, entriesOf(this.#storedLabels(tx, doc)));
+      const stored = this.#storedLabels(tx, doc);
+      const entries = entriesOf(stored);
+      this.#labelsOfEntries.set(entries, stored);
+      this.#unchanged.set(doc, entries);
     } finally {
       tx.abort();
     }
   }
+
+  /**
+   * The stored labels that each map of label entries kept for
+   * `#reportUnchanged` was made of, so that a change of the entries can be
+   * told from a change of the label a read consumes
+   * (`LabelChange.unchanged`).
+   */
+  readonly #labelsOfEntries = new WeakMap<
+    Map<string, string>,
+    CfcMetadata | undefined
+  >();
 
   /**
    * Tells the executor of the label entries that the transaction that just
@@ -3336,11 +3353,39 @@ export class RuntimeTransactions implements TransactionHooks {
     const tx = this.#runtime.edit();
     try {
       for (const [doc, before] of unchanged) {
-        const after = entriesOf(this.#storedLabels(tx, doc));
+        const now = this.#storedLabels(tx, doc);
+        const after = entriesOf(now);
         const { paths, alone } = changedLabelPaths(before, after);
         if (paths.length === 0) continue;
         this.#counts.labelEntriesChanged += paths.length;
-        changes.push({ doc, paths, ...(alone.length > 0 ? { alone } : {}) });
+        // Where the labels the document stored before are known, a record
+        // that read a path is given again only where a read of the path
+        // consumes another label than before, as for a change that
+        // `#reportLabels` tells of: an entry stored for an appended member
+        // changes the entries below the array, and no label that a read of
+        // the reference at the array consumes.
+        const known = this.#labelsOfEntries.has(before);
+        const was = this.#labelsOfEntries.get(before);
+        const answered = new Map<string, boolean>();
+        changes.push({
+          doc,
+          paths,
+          ...(alone.length > 0 ? { alone } : {}),
+          ...(known
+            ? {
+              unchanged: (path: readonly string[], observes: string) => {
+                const asked = `${observes}\n${JSON.stringify(path)}`;
+                let answer = answered.get(asked);
+                if (answer === undefined) {
+                  answer = this.#labelIn(was, path, observes) ===
+                    this.#labelIn(now, path, observes);
+                  answered.set(asked, answer);
+                }
+                return answer;
+              },
+            }
+            : {}),
+        });
       }
     } finally {
       tx.abort();

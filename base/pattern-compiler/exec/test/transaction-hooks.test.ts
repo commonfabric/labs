@@ -1928,7 +1928,7 @@ describe("a slot of the reference at a position that a body named through a hand
     }
   });
 
-  it("gives no record of a row again when the label at the position of another member changed, among 10 members and among 1,000", async () => {
+  it("gives the record of one row again when the label at the position of its member changed, and of no other row, among 10 members and among 1,000", async () => {
     for (const count of [10, 1_000]) {
       const { instance, recorder } = await over(count);
       const given = recorder.left.length;
