@@ -1216,7 +1216,7 @@
               },
               "type": "array"
             },
-            "description": "`people`, for a session that has asked for them (`askForPeople`), and no\none before: until a picker of the people is opened, nothing reading it\nreads a room's roster.",
+            "description": "The same as `people`, under the name a view reads it by.",
             "properties": {},
             "scope": "session",
             "type": "object"
@@ -1294,9 +1294,9 @@
               },
               "type": "array"
             },
-            "description": "The people this user's rooms list, other than this user: by the principal\neach one's profile attests, the profiles attesting it, each once, in the\norder the rooms, newest first, list them. Reading it reads every listed\nroom's roster; a view reads `askedPeople` instead.",
+            "description": "The people this user's rooms list, other than this user, for a session\nthat has asked for them (`askForPeople`), and no one before: by the\nprincipal each one's profile attests, the profiles attesting it, each\nonce, in the order the rooms, newest first, list them. Until the session\nasks, nothing reading it reads a room's roster.",
             "properties": {},
-            "scope": "user",
+            "scope": "session",
             "type": "object"
           },
           "requests": {
@@ -1374,7 +1374,7 @@
               },
               "type": "array"
             },
-            "description": "`people`, for a session that has asked for them (`askForPeople`), and no\none before: until a picker of the people is opened, nothing reading it\nreads a room's roster.",
+            "description": "The same as `people`, under the name a view reads it by.",
             "properties": {},
             "scope": "session",
             "type": "object"
@@ -1452,9 +1452,9 @@
               },
               "type": "array"
             },
-            "description": "The people this user's rooms list, other than this user: by the principal\neach one's profile attests, the profiles attesting it, each once, in the\norder the rooms, newest first, list them. Reading it reads every listed\nroom's roster; a view reads `askedPeople` instead.",
+            "description": "The people this user's rooms list, other than this user, for a session\nthat has asked for them (`askForPeople`), and no one before: by the\nprincipal each one's profile attests, the profiles attesting it, each\nonce, in the order the rooms, newest first, list them. Until the session\nasks, nothing reading it reads a room's roster.",
             "properties": {},
-            "scope": "user",
+            "scope": "session",
             "type": "object"
           },
           "requests": {
@@ -3233,6 +3233,9 @@
       "$UI": {
         "$ref": "https://commonfabric.org/schemas/vnode.json"
       },
+      "activeTab": {
+        "type": "string"
+      },
       "addFavorite": {
         "asCell": [
           "stream"
@@ -3567,6 +3570,7 @@
       "removeSpace",
       "adoptSpace",
       "renameSpace",
+      "activeTab",
       "$NAME",
       "$UI"
     ],
