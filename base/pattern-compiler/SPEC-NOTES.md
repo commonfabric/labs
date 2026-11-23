@@ -12571,6 +12571,373 @@ note says `map`, it names the case. `PL` is `plan-and-label-templates.md`.
      `keyEntries()`, the one label entry of P69, the profile of a step at 1,000
      after the last changes, and the label sizes with a clause for each topic.
 
+## Milestone 3, sixth round: the time of a Topics step that still follows the board
+
+Notes 636 on are about the sixth round of milestone 3 (2026-11-22). Whenever a
+note says `map`, it names the case. A function of a profile is named with its
+file; a profile is of the whole process, sampled every half millisecond, of one
+step (`SCALE_PROFILE_STEP` of `compare/topics/scale.ts`).
+
+636. **What the round did.** Each step of the board `filing-order` was profiled
+     at 1,000 and 2,000 topics, with the documents each commit changed
+     (`SCALE_COMMITS`), the write records of each transaction (`SCALE_RECORDS`)
+     and the label entries of the result document (`SCALE_RESULT_SHAPE`). Three
+     causes were removed (notes 637, 639 and 640), the sort by a key was built
+     as the method `sortBy` (note 642), and the boards were measured again (note
+     644). Not built: an index stored so that a change of one bucket writes no
+     document that grows with the board (note 641, a plan), the read of a
+     collection that a `lift` of a new topic is handed (note 641), and the key
+     of a plain value that holds references (note 643, a plan).
+637. **Every edit of a topic read every label entry of the result document
+     (provisional decision P82).** An edit of a title gave ten write records.
+     Nine are of the row of the topic in `mentionable` and of its card, which
+     are documents of their own. The tenth named `crossrefIndex` in the result
+     document, as a write that leaves the value as it is and forms the label
+     again (`PlanWrite.relabel`). The write of the other writer changed the
+     label entry at `title` of the topic's document. `Instance.#regroupReaders`
+     of `exec/executor.ts` then updated the group of the element of the pivot
+     that read the document, which has a reader at the root of the document, and
+     gave the record of every output whose template folds over the pivot again,
+     whether or not the element's group changed. The index of the pivot by name
+     is such an output. So an edit of any field of any topic, the title,
+     `lastActivityAt` and the mentions included, gave a record of the result
+     document.
+     - _What that record cost at 1,000 topics, from the profile of an edit of
+       the title of the middle topic:_ the result document holds 4,094 label
+       entries. `entriesOf` of `runtime/runner/src/compiled/transactions.ts`
+       formed the canonical text of each of them twice, 9 ms each time, once for
+       `#noteUnchanged` and once for `#reportUnchanged`; and the preparation,
+       `prepareBoundaryCommitSteps` of `runtime/runner/src/cfc/prepare.ts`, took
+       20 ms of its 23 ms on the stored labels of the result document
+       (`canonicalizeCfcMetadata`, `deepEqual`, `pathKey`). All three follow the
+       number of label entries of the result document, which is four for each
+       topic (note 638).
+     - _What is built._ `#regroupKey` returns whether the element is in another
+       group than before, and `#regroupReaders` gives the records of the folds
+       over the collection again only then. The group of an element is the
+       identifier of the labels its cone instances consumed, so an element that
+       stays in its group consumes what it consumed, and the label of the fold
+       is what it was.
+     - _Test._ `runtime/runner/test/compiled/crossref.test.ts`, "gives no record
+       of the index of the rows by name when another writer writes the title of
+       a topic, which no body reads", written first and seen to fail on the
+       record at `byName`. The same case over the fixtures `kept-index` and
+       `index-of-rows` gave no such record before the change: the reader at the
+       root of the member's document is there where a row holds its element as a
+       reference.
+     - _Result._ An edit of a title of the middle topic takes 11, 12 and 18 ms
+       at 100, 1,000 and 2,000 topics, and an edit of `lastActivityAt` on
+       `filing-order` 8, 10 and 11 ms; before, 15, 48, 89 and 37, 234, 462.
+638. **What the result document holds, and the 200 to 450 ms that some steps
+     took beyond the piece and the preparation.**
+     - _The document._ At 1,000 topics the result document is 2.1 to 2.3 MB as
+       JSON. Its values are 0.84 MB: three arrays of 1,000 links or rows
+       (`mentionable`, `crossrefs`, `namesTable`), the children of the list of
+       cards, and the index with a bucket for each topic. Its label entries are
+       the rest: 4,094 entries, of which one is the `enumerate` entry of each
+       bucket and three are of each row of `namesTable` (`namesTable/<i>/name`
+       twice and `namesTable/<i>/member`).
+     - _The rows of `namesTable` are in place on the boards,_ and not documents
+       as note 632 states. `rowDocumentCollections` of `exec/row-documents.ts`
+       takes a `map` over the entries of a record whose schema declares its
+       values as cells, and the boards declare `names` as a cell of a record of
+       unknown values. The fixture `names-table.tsx` declares the values as
+       cells and its rows are documents.
+     - _The first edit of a run_ wrote the result document whole, with one path
+       changed, `cfc`: the load stores an entry `namesTable/<i>/member` for each
+       row, and the first preparation that touches the labels of the result
+       document stores them as the one entry `namesTable/*`. At 1,000 topics
+       that commit took 93 ms in `applyCommitTransaction` of the memory server,
+       of which 53 ms in `reconstructPatchedDocument` and 52 ms in
+       `compressLabelMetadata`, and 63 ms in the preparation. It is now paid by
+       the first step that writes the result document, since an edit of a title
+       no longer touches it.
+     - _An edit of `lastActivityAt` on `filing-order`_ wrote the result document
+       whole as well, because the edit of the `shortName` before it in the
+       harness had stored the `enumerate` entry of each bucket without its
+       confidentiality, and the record of note 637 stored them again with it
+       (CFC question 8).
+     - _A major collection._ At 1,000 topics the heap is 1.1 GB after the load.
+       One run with `--v8-flags=--trace-gc` showed one mark-compact collection
+       of 181 ms (1,156 MB to 447 MB) during the edits, which falls on whichever
+       step allocates past the limit: the edit of the mentions in three runs of
+       this round at 1,000 topics.
+     - _A weak table that grows._ In one profile at 1,000 topics an edit of the
+       title of the last topic spent 194 ms in `addToDeepFrozenCache` of
+       `base/data-model/src/deep-freeze.ts`, under the `Cell.set` of the
+       harness's own write (`recordCfcWritePolicyInput`): one insertion into the
+       weak set of deep-frozen objects, which holds an entry for every container
+       of every frozen value alive. Neither pause is the piece's work, and both
+       follow the number of objects the process holds.
+639. **An edit of the `shortName` gave a record for half the topics (provisional
+     decision P83).** The kept index stores its occupied keys as an array,
+     `keys`, in the order the buckets came to exist. A topic whose name changes
+     takes its old key out of the middle and adds the new key at the end, so the
+     array keeps its length and every position behind the one that left holds
+     another key. `put` in `Instance.#place` compares two arrays of one length
+     position by position, and wrote each such position with a record of its
+     own: 500 of the 521 records at 1,000 topics. For each of those writes
+     `RuntimeTransactions.#recordSchema` read the stored label paths of the
+     result document (`readStoredCfcLabelPaths`, 80 ms of the piece's 131 ms),
+     and `starEntryHolds` of the preparation took 118 ms, which is the number of
+     records times the number of entries.
+     - _What is built._ An array of scalars that differs from the stored one at
+       more than one position is written whole, as an array of another length
+       is: one write and one record (`shiftedScalars`).
+     - _Test._ `runtime/runner/test/compiled/kept-index.test.ts`, "gives one
+       record of the occupied keys, and none of a position among them, when a
+       key leaves the middle of them and another enters", written first and seen
+       to fail on the four records at `byTag/keys/<i>`. It also reads the clause
+       of every member for each bucket and its length afterwards.
+     - _Result._ 20 records given and 18 recorded at every size, the piece's own
+       time 6, 34 and 68 ms and the preparation 9, 53 and 119 ms. The step still
+       takes 42, 275 and 969 ms: it writes the result document (note 641).
+640. **A change of one segment of a `flatMap` formed the whole assembly
+     (provisional decision P84).** The assembly of a `flatMap` over an array of
+     references depended on each element's body and, through `Host.settled`, on
+     the inner assembly each body returned, and `Instance.#reassemble` refused
+     an entry with a dependency beside those of the elements. So a change of one
+     topic's mentions formed every segment again, formed the key of every pair
+     again (`memberKey`, which decodes both keys), and located every member:
+     1,003 positions read at 1,000 topics.
+     - _What is built._ Where every body returned the assembled result of
+       another per-element construct, the assembly keeps the length of each
+       segment and its dependency on each inner assembly (`Rows.segments`). A
+       mark that names an element or its inner assembly puts the members and the
+       values of that segment in the place of those it had, as one splice, which
+       a collection over the result applies as it applies the splices of a
+       `map`. A change of the source array, and a `flatMap` whose body returns a
+       stored array or writes one, are formed whole as before. The members
+       behind the splice are numbered again, which is a step for each of them
+       and no read.
+     - _Tests._ `exec/test/crossref.test.ts`: "forms the segment of the one
+       topic whose mentions changed, among 1,000 topics as among 10", written
+       first and seen to fail on 10 segments formed where one was expected
+       (`Counts.segmentsFormed`), and "splices the segments of two topics whose
+       mentions change in one transaction, and of a topic whose mentions empty".
+     - _Result._ An edit of the mentions reads 4 positions at every size, and
+       the piece's own time is 2, 3 and 3 ms; before, 7, 51 and 97 to 817.
+641. **What still follows the board: every write of the result document, and a
+     create.**
+     - _An edit of the `shortName`_ moves one row between two buckets and
+       changes one key. The piece's own work and the preparation still follow
+       the board, because the `buckets` record is written whole where a name
+       leaves it and another enters, and both read the label entries of the
+       result document. The rest of the step is the commit of the result
+       document: the client encodes its labels (`compressLabelMetadata`, 36 ms
+       at 1,000), the server reconstructs it from its patches and applies the
+       patch (`applyCommitTransaction`, 95 ms), and the reply is compressed
+       again.
+     - _An edit of `lastActivityAt` on `sorted-references`_ moves one card from
+       the middle of the list to its front. The piece evaluates 5 entries and
+       gives 11 records at every size. The list of cards is an array of links in
+       the result document, and the move writes each position between the old
+       place and the new: 501 paths at 1,000 topics, in a commit of the whole
+       document.
+     - _A create,_ at 1,000 topics, from the profile of the second create (1,174
+       ms, the piece 419 ms, the preparation 285 ms):
+       1. The new topic's `lift` `backlinksOf` declares the pivot and its index
+          as cells and reads one bucket. The executor hands a body each computed
+          value read whole (`Host.pass`, `Store.read`), so the first derivation
+          of the new topic and the derivation behind it each copy the pivot and
+          the index: 67 ms and 84 ms. These are the 7 positions read for each
+          topic.
+       2. The record of each row of the pivot is given again (1,000 of the 1,102
+          records): the label of a row names the fold over every topic's
+          mentions, and the topic that is made has a label of its own.
+          `Instance.#relabel` took 68 ms, and the preparation instantiates a
+          label for each record. This is the cost of P69.
+       3. Three documents that grow with the board are written: the array of
+          topic references (372 KB) and the record of names (369 KB), which the
+          handler appends to, and the result document (1.6 MB), which gains a
+          link in three arrays, a card and a bucket.
+     - _The create without the records of the rows._ One run of each size with a
+       change that is not committed, which leaves the records of `mentionedBy`
+       out of `Instance.labelsChanged`: 101 records in place of 1,102, and the
+       create takes 1,010 to 1,024 ms at 1,000 topics and 1,806 to 1,833 ms at
+       2,000 (1,145 to 1,215 and 2,707 to 3,321 with them). So the records of
+       P69 are about an eighth of a create at 1,000 topics and a third at 2,000
+       in these runs, and items 1 and 3 are the rest.
+     - _Plan, not built: the index as documents of its own._ One document for
+       each bucket, named by the index and the encoded key, which holds the
+       members and the one label of the membership; no record of all buckets and
+       no array of the occupied keys, so a member that changes its key writes
+       two bucket documents and nothing else. `lookup` in a handed index
+       resolves the bucket's document from the key, in place of a `pick` below
+       `buckets`. `keys()` and `keyEntries()`, which are not built, then need a
+       listing that is kept apart. This is the state document of
+       `execution-and-storage.md` §6.3 split by bucket, and with it the label of
+       all buckets is stored once in each bucket document and not N times in one
+       document.
+     - _Plan, not built: the arrays of the result._ An append and a move write a
+       document as long as the list. The part documents of provisional decision
+       P20 (`exec/parts.ts`: an array over 64 KB as chunk documents) are what
+       bounds that write, and the runner path runs with `parts:
+       false`.
+     - _Plan, not built: a cell a `lift` declares is handed as a handle,_ so
+       that `backlinksOf` reads the one bucket it asks for. `Host.pass` reads a
+       reference whole unless `Body.computed` has no `value` entry at or below
+       the path; the crate would give a parameter declared as a cell no `value`
+       entry, and the handle would read on `get`.
+     - _Plan, not built: the rows of `namesTable` as documents on the boards,_
+       by declaring the values of `names` as cells in the boards' input type,
+       which takes three of the four label entries for each topic out of the
+       result document.
+642. **The sort by a key (provisional decisions P85 and P86).**
+     - _Surface (P85)._ The method `xs.sortBy((x) => key)`, the alternative of
+       note 614, in place of a recognized comparator of `toSorted`: it is one
+       arm in `Emitter::method` beside `groupBy`, and the comparator needs a
+       recognizer of its two forms. Ascending; a descending order is a negated
+       numeric key. `base/api/index.ts` declares no `sortBy`, so a source that
+       uses it does not run on today's runtime, as the two boards already do not
+       (P80).
+     - _The plan._ A `Collection` whose `construct` is `sortBy`. Its body cone
+       is the key function, observed as `value`. Its `membership` is the
+       template of a `filter`: the `fold` of the key's template over every
+       element, joined with the source's membership. An element is the source
+       element passed through (`Emitter::collection` of `src/plan.rs`;
+       `is_selector_method` of `src/api.rs`; the parameter's type in
+       `src/infer.rs`). Test: `tests/plan.rs`,
+       `a_sort_by_a_key_has_the_fold_of_its_key_and_a_map_over_it_is_a_collection_over_it`,
+       written first and seen to fail on
+       `the method sortBy in the reactive tier`.
+     - _The order of keys_ (`compareSortKeys` of `exec/executor.ts`): numbers by
+       value, texts by their code units, `false` before `true`; a number before
+       a text before a boolean; `null`, `undefined` and `NaN` behind every other
+       key. Equal keys keep the order of the source. Texts are not compared with
+       `localeCompare`, whose order follows the locale of the process.
+     - _Incremental execution, over an array of references._ The assembly keeps
+       the key each element was placed by (`Rows.sortKeys`) and its members in
+       the sorted order. An element whose key changed is found at its old place
+       by binary search on the key it was placed by, taken out, and put in by
+       binary search on its new key and its position in the source: two splices,
+       which a `map` over the result applies, with one evaluation of the body of
+       the element that moved. A key that is evaluated again and compares equal
+       moves nothing. An element that moved in the source forms the order whole,
+       since it can have changed places with one of an equal key.
+       `exec/test/sort-by.test.ts` (the fixture `compare/fixtures/sort-by.tsx`),
+       written first and seen to fail on `an element construct sortBy`: the
+       order; a changed key; equal keys; an element appended and removed; a
+       title, which no key reads; and the same 6 evaluations for a change of one
+       key among 1,000 elements as among 10.
+     - _Over the result of another per-element construct_ the order is formed
+       whole for each change, as the result of a `filter` over such a result is:
+       the assembly then depends on each upstream row beside its elements, and
+       `#reassemble` takes no such entry. The values are tested; one change
+       among 16,000 elements of the fixture takes 158 ms, which is this second
+       sort and the `map` over it.
+     - _Rows as documents (P86)._ `rowDocumentCollections` takes a `map` over a
+       `sortBy` of an array of references as it takes one over a `filter` of
+       one.
+     - _Stored labels._ `runtime/runner/test/compiled/sort-by.test.ts`, written
+       after the code: with each item under a clause of its own, the title at a
+       position of the sorted result and the number of titles consume the clause
+       of every item, the number of items consumes none, and a change of one
+       rank by another writer moves one title.
+     - _On `sorted-references`,_ on the branch of the measurements, the cards
+       are a `map` over
+       `topics.sortBy((topic) => -(topic.lastActivityAt ||
+       topic.createdAt))`,
+       in place of the `lift` `topicsByActivity`. A topic that reads as
+       `undefined` has a card behind every other, where the `lift` leaves it
+       out. The facts the harness reads of the board at 100 topics, over the
+       load and every step, equal those of the board with the `lift`. An edit of
+       `lastActivityAt` now evaluates 5 entries, reads 10 positions and gives 11
+       records at every size (4, 4,010 and 4,003 at 1,000 topics before), and
+       takes 38, 232 and 558 ms, which is the write of the result document (note
+       641).
+643. **The hash that follows every reference: not built, a plan.**
+     `Instance.#table` keys a plain value of an array that a computation
+     returned by `this.store.partOf(this.stored(host.v(member.value)))`, and
+     `Host.v` reads each reference in the value with every link followed, so the
+     key is a hash of what the references name. _Plan:_ key the value by its
+     plain content with each reference in it as the address of what it names
+     (`Store.addressOf` of the located position, as a member that is a reference
+     is keyed), and read nothing of what is stored there. A value that holds no
+     reference keeps the key it has. The keys of values that hold references
+     change, and with them the identity of what is derived for each. The keying
+     then registers no read of the documents referred to, where it now reads
+     them whole, which is CFC question 10; the test is a fixture of values that
+     refer to members that refer to each other, at a size that does not load
+     now.
+644. **Topics measured.** The arm `runner`, rows as documents, the load in
+     bounded transactions, no pull, `SCALE_TOPIC_SCHEMA=mentions-as-cells`, one
+     process for each board and size, three runs, on an 18-core machine at load
+     averages of 3.3 to 10.1. A cell is the median of the three runs of the time
+     until the board is up to date, in ms, with the lowest and the highest run;
+     a create is the median of three creates in each run. The column "lifts" is
+     note 606, the boards with the three whole-list lifts; "round 5" is
+     note 633.
+
+     | Board `filing-order`     | lifts (note 606)  | round 5 (note 633) | this round        |
+     | ------------------------ | ----------------- | ------------------ | ----------------- |
+     | load                     | 450, 4,031, 7,485 | 370, 3,329, 6,748  | 431, 3,420, 7,993 |
+     | edit of a title, first   | 13, 17, 15        | 39, 227, 455       | 16, 18, 23        |
+     | edit of a title, middle  | 11, 10, 13        | 15, 48, 89         | 11, 12, 18        |
+     | edit of a title, last    | 9, 9, 265         | 14, 213, 83        | 11, 11, 12        |
+     | edit of the mentions     | 34, 273, 517      | 21, 107, 866       | 13, 181, 17       |
+     | edit of the `shortName`  | 44, 365, 773      | 45, 452, 1,204     | 42, 275, 969      |
+     | edit of `lastActivityAt` | 7, 9, 14          | 37, 234, 462       | 8, 10, 11         |
+     | create                   | 158, 1,034, 1,783 | 159, 1,141, 2,174  | 165, 1,109, 3,323 |
+
+     | Board `sorted-references` | lifts (note 606)  | round 5 (note 633) | this round        |
+     | ------------------------- | ----------------- | ------------------ | ----------------- |
+     | load                      | 445, 4,095, 7,762 | 401, 3,321, 7,163  | 437, 3,568, 7,997 |
+     | edit of a title, first    | 13, 16, 16        | 43, 230, 464       | 17, 18, 25        |
+     | edit of a title, middle   | 10, 13, 14        | 15, 48, 95         | 13, 14, 14        |
+     | edit of a title, last     | 10, 10, 256       | 14, 237, 87        | 10, 10, 16        |
+     | edit of the mentions      | 32, 253, 500      | 22, 102, 569       | 14, 16, 16        |
+     | edit of the `shortName`   | 43, 346, 694      | 47, 444, 1,245     | 47, 417, 1,037    |
+     | edit of `lastActivityAt`  | 57, 445, 868      | 84, 664, 1,351     | 38, 232, 558      |
+     | create                    | 163, 1,163, 2,019 | 171, 1,853, 3,355  | 178, 1,293, 3,096 |
+
+     Each cell holds the figures at 100, 1,000 and 2,000 topics. What one step
+     does on `filing-order` at the three sizes, from the first run, and the size
+     as JSON of the documents its last commit changed, from a fourth run with
+     the commits listed:
+
+     | step                     | evaluations | positions read     | records given     | piece's own ms | preparation ms | bytes of the last commit's documents |
+     | ------------------------ | ----------: | ------------------ | ----------------- | -------------- | -------------- | ------------------------------------ |
+     | edit of a title, middle  |           5 | 11, 11, 11         | 9, 9, 9           | 2, 3, 3        | 3, 3, 3        | 8,630, 8,636, 8,642                  |
+     | edit of the mentions     |          12 | 4, 4, 4            | 5, 5, 5           | 2, 3, 3        | 3, 4, 3        | 10,358 at every size                 |
+     | edit of the `shortName`  |           8 | 11, 11, 11         | 20, 20, 20        | 6, 34, 68      | 9, 53, 119     | 230,877, 1,998,490, 3,969,496        |
+     | edit of `lastActivityAt` |           3 | 10, 10, 10         | 7, 7, 7           | 2, 2, 2        | 2, 2, 2        | 5,877, 5,880, 5,883                  |
+     | create                   |          21 | 801, 7,101, 14,101 | 202, 1,102, 2,102 | 50, 387, 1,636 | 42, 267, 605   | 216,197, 1,634,632, 3,216,632        |
+
+     On `sorted-references` an edit of `lastActivityAt` evaluates 5 entries,
+     reads 10 positions and gives 11 records at every size, with the piece's own
+     time 4, 24 and 56 ms, the preparation 6, 36 and 86 ms, and a last commit of
+     documents of 228,506, 1,996,116 and 3,967,119 bytes. The edit of the
+     mentions on `filing-order` at 1,000 topics took 174 to 222 ms in all three
+     runs with the piece and the preparation at 7 ms together: the collection of
+     note 638. The create at 2,000 topics is slower than in round 5 on
+     `filing-order`. No change of this round is on its path but the write of the
+     keys; the load averages were higher (5 to 10 against 3 to 6), and it was
+     not examined. Every table, with the lowest and the highest run, is in
+     `tables.md` of the round's raw output.
+
+     Today's runtime with labels on `main.tsx`, from note 586 (one process, an
+     edit the median of three, the pull of the result included): an edit of a
+     title 986 ms at 100 topics and 14,478 ms at 1,000, a create 2,273 ms and
+     24,715 ms; from note 570, one run at 2,000: an edit 30.8 to 37.3 s. It was
+     not run again in this round.
+645. **Provisional decisions of the round, and what was not done.** P82: a
+     change of a label that leaves an element of a folded collection in its
+     group gives no record of the fold again (note 637). P83: an array of
+     scalars that differs at more than one position is written whole (note 639).
+     P84: the assembly of a `flatMap` whose bodies return the result of an inner
+     per-element construct keeps its segments and splices the one that changed
+     (note 640). P85: the sort by a key is the method `sortBy` with one key
+     function, ascending, with the order of keys of note 642 and texts by code
+     units. P86: a `map` over a `sortBy` of an array of references has its rows
+     as documents (note 642). Not done: the index as a document for each bucket,
+     the arrays of the result as part documents, a declared cell of a `lift`
+     handed as a handle, the rows of `namesTable` as documents on the boards
+     (note 641); an incremental sort over the result of another per-element
+     construct (note 642); the key of a plain value that holds references (note
+     643); `keys()` and `keyEntries()`; the one label entry of P69; today's
+     runtime measured again; the label sizes with a clause for each topic.
+
 ### CFC questions deferred
 
 Noted and not resolved, by the owner's instruction of 2026-11-22.
@@ -12604,3 +12971,26 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 7. The join of `SlotBinding.through` takes the integrity that the output and the
    read both carry, and the read's alone where the output has no label (note
    625).
+8. After a transaction that writes a kept index, the `enumerate` entry of each
+   bucket (`crossrefIndex/buckets/<key>` on the boards) is stored with its
+   integrity alone, without the confidentiality the load stored there. A read of
+   a bucket and of its length still consumes the clause of every member
+   (`kept-index.test.ts`), through the entry at the index. Before P82 the next
+   record of the index, which any edit of a topic gave, stored the entries with
+   their confidentiality again; now they stay as that transaction left them.
+   Whether the entry of a bucket must itself carry the fold.
+9. P82 (note 637): the record of a fold is not given again when a label entry of
+   a member's document changed and the element's group is the one it was. The
+   group is the identifier of the labels the element's cone instances consumed.
+   Whether the stored label of the fold may stay whenever what a read of the
+   member consumes did not change, whatever entries changed.
+10. Note 643, a plan: a plain value keyed by the identity of the references it
+    holds is keyed without a read of the documents referred to, where the keying
+    now reads them whole and the transaction reports those reads. Whether the
+    membership of a collection over such values then consumes less than it
+    should.
+11. P83 (note 639): the occupied keys of an index are written as one array with
+    one record, in place of a record for each position that changed. A read of
+    the array consumes the clause of every member, as before
+    (`kept-index.test.ts`); a read of one position among the keys was not
+    compared.
