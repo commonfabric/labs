@@ -182,6 +182,33 @@ rewritten since):
 Each thread on the pull request gets a reply and is resolved when its
 finding is fixed or shown not to hold.
 
+**Review findings on #9788 not yet addressed** (three, from the review of
+the commit `243e0368a4`; each is a claim to check against the specification
+text, and a design point settled is a provisional decision with a question
+for the owner, as P410 and P411 were):
+
+- `footprint-analysis.md`, the array methods table: `entries()` of an input
+  array is modeled as the members `rows/*` and not as pairs of a computed
+  index and `v/*`, so `for (const [, row] of rows.entries())` followed by
+  `row.price` gives an observation at `rows/*/1/price` where `rows/*/price`
+  is read; `keys()` likewise needs computed indices (review comment
+  4670309323). A wrong footprint narrows the argument wrongly.
+- `scheduler-and-serving-loop.md` §10.4, the basis index: for an array of
+  references `[D, D, E]` the two occurrences of D are two cone instances
+  that share one basis row for the document D. Demanding the first after D
+  changed advances that row while the second occurrence's stored output is
+  stale, and a restart then takes the stale output as current (comment
+  4670309332). This bears on the resume by units as built: check whether
+  `PieceUnits` and the basis of a piece have the same gap for a document two
+  rows read.
+- `footprint-analysis.md` §7, the syntactic exclusions that make a handle
+  read conditional: the body of a `do...while` and a bypass through `break`
+  or `continue` are not among them, so
+  `do { if (skip) break; h.get(); } while (false)` has its read classed as
+  static, and the target is demanded and its label joined on the path that
+  skips the read (comment 4670309338). That is an over-label and an
+  unneeded demand, against §1.4.
+
 **Questions of Contextual Flow Control** are deferred by the ruling Z88 and
 listed in the plan as questions 391 to 467 and 512, and per round under
 "CFC questions deferred" in `SPEC-NOTES.md`. Several are suspected
