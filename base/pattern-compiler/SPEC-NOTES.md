@@ -18014,112 +18014,394 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 
 ## Round 13: write integrity of a compiled piece
 
-The round of 2026-11-23 on the write policies, the added integrity and the
-write authorizations of a compiled piece, from the commit `5f45021c1d`. Its
-tables and logs are in the folder of the round, `r13-write/`. By the owner's
-instruction of that day the round is label work limited to write integrity.
-`docs/development/cfc-spec-correspondence.md` governs it, and each change
-below says its class.
+The round of 2026-11-23 on the write policies, the added integrity and the write
+authorizations of a compiled piece, from the commit `5f45021c1d`. Its tables and
+logs are in the folder of the round, `r13-write/`. By the owner's instruction of
+that day the round is label work limited to write integrity.
+`docs/development/cfc-spec-correspondence.md` governs it, and each change below
+says its class.
 
-760. **How today's path decides a writer claim.** The three refusals of note
-     729 are about three claims of a schema, and today's path decides each in
-     `verifyInputRequirements` of `runtime/runner/src/cfc/prepare.ts`, once
-     for each entry of the schema that applies to a write the transaction
-     attempted.
+760. **How today's path decides a writer claim.** The three refusals of note 729
+     are about three claims of a schema, and today's path decides each in
+     `verifyInputRequirements` of `runtime/runner/src/cfc/prepare.ts`, once for
+     each entry of the schema that applies to a write the transaction attempted.
      - **The stored form.** `WriteAuthorizedBy<T, typeof b>` is lowered to
        `ifc.writeAuthorizedBy: { __ctWriterIdentityOf: { file, path: [b],
-       moduleIdentity } }` (`#buildWriteAuthorizedByMetadataForArg` of
-       `base/schema-generator/src/formatters/common-fabric-formatter.ts`;
-       the transformer of `base/ts-transformers/src/transformers/schema-generator.ts`
-       adds `moduleIdentity` where the compile knows the identities of its
-       modules). `TrustedActionWrite` gives the same claim with
-       `ifc.uiContract` beside it, and never inside it.
-       `WritePolicyAnyOf<T, [P, ...]>` is `ifc.writePolicyAnyOf`, a list of
-       records `{ writeAuthorizedBy, uiContract? }`, which
+       moduleIdentity } }`
+       (`#buildWriteAuthorizedByMetadataForArg` of
+       `base/schema-generator/src/formatters/common-fabric-formatter.ts`; the
+       transformer of
+       `base/ts-transformers/src/transformers/schema-generator.ts` adds
+       `moduleIdentity` where the compile knows the identities of its modules).
+       `TrustedActionWrite` gives the same claim with `ifc.uiContract` beside
+       it, and never inside it. `WritePolicyAnyOf<T, [P, ...]>` is
+       `ifc.writePolicyAnyOf`, a list of records
+       `{ writeAuthorizedBy, uiContract? }`, which
        `isWellFormedWritePolicyAnyOf` requires: a nonempty list, each member
        with a `writeAuthorizedBy`, no other key than `uiContract`, and no
        `writeAuthorizedBy` or `uiContract` of the position beside the list.
-     - **Who is named, and by what identity.** The handler, by the pair of
-       the content-addressed identity of its module and the path of its
-       binding in that module. The specification states the pair: "the pair
-       (content hash of the verified code artifact, symbol within it)"
-       (§8.15.1, `08-15-write-authority.md`), and "both the artifact hash
-       and the symbol must match" (§8.15.6). `file` is the spelling of the
-       module's path and does not take part in the check.
+     - **Who is named, and by what identity.** The handler, by the pair of the
+       content-addressed identity of its module and the path of its binding in
+       that module. The specification states the pair: "the pair (content hash
+       of the verified code artifact, symbol within it)" (§8.15.1,
+       `08-15-write-authority.md`), and "both the artifact hash and the symbol
+       must match" (§8.15.6). `file` is the spelling of the module's path and
+       does not take part in the check.
      - **Where the identity of the running handler comes from.** The runner
        resolves it from the function object it is about to invoke
        (`resolvePolicyFacingImplementationIdentity` of
-       `cfc/implementation-identity.ts`): an identity of kind `verified`
-       exists only for a function that the engine recorded while it
-       evaluated a verified module (`recordVerifiedProvenance` of
-       `harness/verified-provenance.ts`), with the identity of that module
-       and the binding the transformer attached. The runner sets it on the
-       transaction (`setCfcImplementationIdentity`), which pattern code
-       cannot call. Each write-policy input of kind `schema` or `link-write`
-       keeps the identity that was current when it was recorded
+       `cfc/implementation-identity.ts`): an identity of kind `verified` exists
+       only for a function that the engine recorded while it evaluated a
+       verified module (`recordVerifiedProvenance` of
+       `harness/verified-provenance.ts`), with the identity of that module and
+       the binding the transformer attached. The runner sets it on the
+       transaction (`setCfcImplementationIdentity`), which pattern code cannot
+       call. Each write-policy input of kind `schema` or `link-write` keeps the
+       identity that was current when it was recorded
        (`CfcTxState.writePolicyInputIdentities`), and a claim at a path is
-       checked against the identity of every input at, above and below the
-       path (`identitiesForClaimPath`).
+       checked against the identity of every input at, above and below the path
+       (`identitiesForClaimPath`).
      - **What the check compares.** `writeAuthorizedByReason`: the claim's
-       `moduleIdentity` with the identity's, or with a module the space
-       attests the writer's module succeeds (`moduleSucceeds`), and the
-       claim's `path` with the identity's `bindingPath`. A claim of another
-       form is "unsupported trust-sensitive claim writeAuthorizedBy", an
-       identity that is not `verified` with a binding path "requires a
-       trusted verified binding identity", and a mismatch "writeAuthorizedBy
-       failed". `writePolicyAnyOfReason` applies the same check to the
-       writer of each alternative whose gesture is satisfied, and says
-       "writePolicyAnyOf failed".
-     - **A first value is no modification.** A cell created with a default
-       is written by the runtime with a record of kind `initialization` and
-       mode `seed` under the runtime's mark (`data-updating.ts`), and
-       `writeIsRuntimeInitialization` waives the writer claim for a slot
-       that was absent before the transaction and ends it holding the
-       recorded value (§8.15.4, "Seeding a new cell").
+       `moduleIdentity` with the identity's, or with a module the space attests
+       the writer's module succeeds (`moduleSucceeds`), and the claim's `path`
+       with the identity's `bindingPath`. A claim of another form is
+       "unsupported trust-sensitive claim writeAuthorizedBy", an identity that
+       is not `verified` with a binding path "requires a trusted verified
+       binding identity", and a mismatch "writeAuthorizedBy failed".
+       `writePolicyAnyOfReason` applies the same check to the writer of each
+       alternative whose gesture is satisfied, and says "writePolicyAnyOf
+       failed".
+     - **A first value is no modification.** A cell created with a default is
+       written by the runtime with a record of kind `initialization` and mode
+       `seed` under the runtime's mark (`data-updating.ts`), and
+       `writeIsRuntimeInitialization` waives the writer claim for a slot that
+       was absent before the transaction and ends it holding the recorded value
+       (§8.15.4, "Seeding a new cell").
 761. **How today's path decides integrity of the current principal.**
      `AuthoredByCurrentUser<T>` and `RepresentsCurrentUser<T>` are
      `ifc.addIntegrity: [{ kind, subject: { __ctCurrentPrincipal: true } }]`.
-     `currentPrincipalIntegrityReason` requires a trust snapshot with an
-     acting principal and a writer claim at the position. On a serving
-     runtime it refuses with "requires the run's actor" where the run acts
-     for no one (`servedRunActsForNoOne`): the transaction carries the
-     serving identity and no stamped actor. The actor of a handler's run is
-     the principal the memory server stamped on the stored event
-     (`ServedEventDispatch.firedAt`): the drain of the serving loop passes it
-     to `queueEvent`, the dispatch of the scheduler hands it to
-     `Runtime.stampServerRun`, and the stamper of the serving loop
-     (`SpaceServer`) sets the trust snapshot of that principal and stamps the
-     run context with `acting` (`stampWaveRunContext`). Nothing of the
-     event's payload reaches it. A derivation is stamped with no actor. On a
+     `currentPrincipalIntegrityReason` requires a trust snapshot with an acting
+     principal and a writer claim at the position. On a serving runtime it
+     refuses with "requires the run's actor" where the run acts for no one
+     (`servedRunActsForNoOne`): the transaction carries the serving identity and
+     no stamped actor. The actor of a handler's run is the principal the memory
+     server stamped on the stored event (`ServedEventDispatch.firedAt`): the
+     drain of the serving loop passes it to `queueEvent`, the dispatch of the
+     scheduler hands it to `Runtime.stampServerRun`, and the stamper of the
+     serving loop (`SpaceServer`) sets the trust snapshot of that principal and
+     stamps the run context with `acting` (`stampWaveRunContext`). Nothing of
+     the event's payload reaches it. A derivation is stamped with no actor. On a
      client that runs its own handlers every run acts for the runtime's user.
 762. **The compiled path as it was.** The crate emitted a writer policy into a
-     schema as the record its checker holds: `ifc.writeAuthorizedBy: { body:
-     { module, binding }, uiContract? }` with `module` the path of the file,
-     and `ifc.writePolicyAnyOf` as a list of such records. The plan held the
-     same records in `Plan.constraints` (`{ kind: "writer", anyOf }`), which
-     the crate checks at compile time for a static write edge
-     (`cfc-flow:write-policy`) and which nothing at run time read. No body of
-     a plan had `Body.code`. The piece registered each stream with
-     `Scheduler.addEventHandler` and ran the compiled handler in the
+     schema as the record its checker holds:
+     `ifc.writeAuthorizedBy: { body:
+     { module, binding }, uiContract? }`
+     with `module` the path of the file, and `ifc.writePolicyAnyOf` as a list of
+     such records. The plan held the same records in `Plan.constraints`
+     (`{ kind: "writer", anyOf }`), which the crate checks at compile time for a
+     static write edge (`cfc-flow:write-policy`) and which nothing at run time
+     read. No body of a plan had `Body.code`. The piece registered each stream
+     with `Scheduler.addEventHandler` and ran the compiled handler in the
      transaction the scheduler gave it without setting an identity on it, so
-     every write-policy input of the handler had the identity `undefined`.
-     The first value of a state cell was written with no record of an
+     every write-policy input of the handler had the identity `undefined`. The
+     first value of a state cell was written with no record of an
      initialization. The scheduler stamps the transaction of an event of a
-     compiled piece as it stamps any, so under a serving loop it has the
-     event's actor; a harness that queues an event on a runtime in the
-     serving posture with no serving loop has no stamper, and the run acts
-     for no one.
+     compiled piece as it stamps any, so under a serving loop it has the event's
+     actor; a harness that queues an event on a runtime in the serving posture
+     with no serving loop has no stamper, and the run acts for no one.
 763. **The three refusals, each by its difference.**
-     1. "malformed writePolicyAnyOf": the members of the list were `{ body,
-        uiContract }` and had no `writeAuthorizedBy`. The difference is the
-        stored form alone.
-     2. "requires the run's actor": the same check as today's, on a run that
-        has no actor because the harness has no serving loop. There is no
-        difference of the compiled path under a serving loop; what was
-        missing is a test that says so, and an actor in the harness.
+     1. "malformed writePolicyAnyOf": the members of the list were
+        `{ body,
+        uiContract }` and had no `writeAuthorizedBy`. The
+        difference is the stored form alone.
+     2. "requires the run's actor": the same check as today's, on a run that has
+        no actor because the harness has no serving loop. There is no difference
+        of the compiled path under a serving loop; what was missing is a test
+        that says so, and an actor in the harness.
      3. "unsupported trust-sensitive claim writeAuthorizedBy": the claim was
-        `{ body }`, which `parseWriteAuthorizedByBindingIdentity` does not
-        read. With the claim in the stored form the refusal is the corpus's
-        "requires a trusted verified binding identity", for two reasons: the
-        transaction of a handler has no identity, and the first value of a
-        state cell has no record of an initialization.
+        `{ body }`, which `parseWriteAuthorizedByBindingIdentity` does not read.
+        With the claim in the stored form the refusal is the corpus's "requires
+        a trusted verified binding identity", for two reasons: the transaction
+        of a handler has no identity, and the first value of a state cell has no
+        record of an initialization.
+764. **The identity of a compiled handler (step 2, done).** A handler of a
+     compiled pattern is named by the pair that today's path verifies and the
+     specification states (§8.15.1, `08-15-write-authority.md`: "the pair
+     (content hash of the verified code artifact, symbol within it)"): the
+     content-addressed identity of the module that declares it
+     (`Resolver::module_identity` of the crate: the hash of the path and the
+     text of the module and of the identities of what it imports) and the path
+     of its binding. It is not the identity of the compiled pattern: one handler
+     bound by two patterns is one writer (§8.15.8), and a policy in a type
+     cannot name the hash of a plan that holds the policy.
+     - **The crate.** `Body.code` of a handler declared at a `const` of module
+       scope is the record `{ module, binding }` (`writer::body_code`, set in
+       `handler_body` of `src/plan.rs`). A handler written in place and an
+       `action` have none. A writer policy holds the identity of the module
+       beside the path (`policy_of_alias` of `src/types.rs`), and a schema holds
+       a policy as the runtime stores a writer claim:
+       `{ __ctWriterIdentityOf: { file,
+       path, moduleIdentity } }`, with
+       the UI contract beside the claim (`writer::insert_label`, called in
+       `schema_at` of `src/schema.rs`). `Plan.constraints` holds the policy
+       record with the new member `identity`.
+     - **The stamp.** The piece stamps the transaction of a handler, for the run
+       of the handler alone, with `{ kind: "compiled", pattern, body }`
+       (`CompiledPiece.#registerStream`, `RuntimeTransactions.handlerOf`,
+       `handlerIdentityOf`): the identity `CompiledPlanRegistry.register`
+       returned for the artifact of the stream's instance, and the body the
+       registered plan names for the binding. The stamp asserts nothing of the
+       handler.
+     - **What verifies it.** `writeAuthorizedByReason` of `cfc/prepare.ts`
+       reads, for a stamp of that kind, `Body.code` of the body from the plan
+       the runtime registered (`compiledWriterOf` of `cfc/compiled-writer.ts`)
+       and compares it with `moduleIdentity` and `path` of the claim. A stamp
+       that names an identity the runtime did not register, a body without
+       `Body.code`, or no body gives no writer, and the claim refuses with
+       "requires a trusted verified binding identity". The identity of a
+       registered pattern is the hash of the plan and the value code, so a plan
+       with another `Body.code` is another pattern. No succession of modules is
+       read for a compiled writer (`moduleSucceeds`): a claim admits the module
+       it names alone.
+     - **What stops a forged claim, by the path a piece starts by.**
+       `Runtime.run` through `runCompiledPatterns` and the serving loop through
+       `serveCompiledPieces` compile the source themselves, and a stored text
+       that is no program starts nothing (`patternProgramOf`; the case "is not
+       evaluated where a client wrote an artifact in the place of the source" of
+       `test/compiled/compiled-serving.test.ts`). A source whose handler has the
+       binding name and the module path of the named one has another text and so
+       another module identity. A caller of `startCompiledPiece` hands an
+       artifact, and is host code, which can also call
+       `setCfcImplementationIdentity`: the registry takes a plan with the
+       runtime's mark alone, and nothing checks `Body.code` of a handed artifact
+       against a source. Nothing here verifies that the crate's binary is the
+       one the checkout builds.
+     - **The first value of a state cell** is recorded as an initialization of
+       mode `seed` (`isStateCellSeed`, `recordStateCellSeed` of
+       `compiled/initialization.ts`, called where `RuntimeTransactions.change`
+       first writes the document): the whole document of a state cell, with a
+       `stateFirst` record or with the default its schema declares.
+     - Classes: the stored form of a claim and the seed record are a conforming
+       implementation (§8.15.1, §8.15.4 "Seeding a new cell"). The stamp of kind
+       `compiled` and its resolution through the registered plan are a semantic
+       gap: the specification names "the verified code artifact" and does not
+       say that the source module of a compiled pattern is one, nor that a plan
+       the runtime registered attests the handler. Its two deciding sites carry
+       the marker for specs#91. They are fail-closed with respect to today's
+       rule: the claim compares the same pair, and admits nothing where the pair
+       is absent.
+     - Tests: `test/compiled/write-policy.test.ts` (4 cases, seen to fail with
+       "unsupported trust-sensitive claim writeAuthorizedBy at /", and after the
+       stored form with "requires a trusted verified binding identity at /"),
+       `test/cfc/compiled-writer.test.ts` (6 cases), `tests/writer.rs` of the
+       crate (2 cases).
+765. **The actor of an event (step 3, done; builds on the round of `wish`).**
+     The commits `d391e27356`, `f84027cabb` and `e6f2b7b96e` of the branch
+     `claude/compiled-pattern-sandbox-m5` were cherry-picked first: they give a
+     compiled handler a frame and `CompiledPieceOptions.actsFor` (P292). One
+     conflict, in `CompiledPiece.#registerStream`, where both rounds stamp the
+     transaction; both stamps are kept.
+     - Under a serving loop the transaction of a compiled handler has the actor
+       of the event with no change of this round: the case of
+       `test/compiled/compiled-serving-principals.test.ts` sends the event of
+       one principal and then of another to one piece, and the stored label of
+       the written cell names the first and then the second. It passed once the
+       first value of the state cell was recorded as a seed (note 764); before
+       that the piece did not start, which is the refusal at start that the
+       round of `wish` reported.
+     - `actsFor` stamped the run context and left the trust snapshot of the
+       runtime: a claim about the current principal then named the serving
+       identity and not the principal the harness named. `CompiledPiece.#stamp`
+       now sets the trust snapshot of the principal for a handler, as the
+       stamper of the serving loop does (`test/compiled/event-actor.test.ts`,
+       seen to fail with the runtime's own identity in the place of the
+       principal).
+     - A derivation has no actor. A derivation that writes a kept output whose
+       type adds integrity of the current principal is refused with
+       "current-principal integrity requires the run's actor" (same file), which
+       needed note 766.
+     - Class: host arrangement (which principal a harness's run acts for).
+766. **The write policies of the result type (found in step 3, done for the
+     result document of the instance a piece was started with).** A piece wrote
+     its result document under no schema, so a writer claim, a UI contract and
+     added integrity declared in the result type were held to nothing: a
+     derivation wrote a value at a path that names a handler as its only writer,
+     and the commit was taken, where today's path refuses the write of the
+     computation's own cell. The piece now records, once for each transaction
+     that writes the result document, the result schema reduced to those members
+     (`writePoliciesOf` of `compiled/result-policy.ts`,
+     `RuntimeTransactions.#recordResultPolicy`). A reference that a derivation
+     leaves at a path with a writer claim or a UI contract is recorded as an
+     initialization of mode `binding` (§8.15.4: "The reference that exposes the
+     new cell is protected in its own right"), so the claim is stored for the
+     reference and the piece's own derivation may set it. The confidentiality
+     and the integrity the result type declares are not recorded: the labels of
+     the result stay those of the templates. Class: conforming implementation
+     (§8.15.4, §8.15.6). Not done: the result document of an instance a body or
+     a handler made, and the argument document, whose claims are stored only
+     where a handler's own state type restates them.
+767. **A handler that adds members behind a stored array.** The send of the room
+     puts a new array in the place of `messages`, an array of plain values in
+     place, and the adapter wrote the array whole. The gesture of a write is
+     recorded for the paths the transaction wrote, and a claim declared for a
+     member (`/messages/*`) is matched by a write of a member and not by a write
+     of the array, so "writePolicyAnyOf failed" refused every send. Where the
+     schema of the write declares a policy for the members, and the new array is
+     the stored one with members added behind it, the adapter now writes the
+     number of members and the added positions (`appendedBehind` of
+     `compiled/appended.ts`, in `RuntimeTransactions.change`). The comparison
+     reads every member the two arrays share, so it costs time in the length of
+     the array for each send; the executor gives no splice for such a `set`.
+     Class: host arrangement (the shape of a write).
+768. **`writeAuthorizedBy` in Home and in the corpus (step 4, done as far as the
+     refusals named; the rest left refused).** The claim is read by the identity
+     of note 764, so no module is refused for the form of a claim.
+     `dev/test/writer-policy/main.tsx` now commits every event and holds the
+     executor's values. `dev/test/cfc-trusted-write/frozen.tsx` and `main.tsx`
+     start, and the handlers they write to be refused are refused with
+     "writeAuthorizedBy failed", the message today's path gives a handler the
+     claim does not name.
+769. **Both paths (step 5, partly done).** No harness runs one pattern on both
+     paths with the same gestures, and none was built. What was compared is the
+     outcome of each module of the corpus with a write policy against what its
+     test of today's path (`patterns/dev/test/cfc-trusted-write/*.test.tsx`)
+     expects. The cases found where the compiled path is weaker than today's,
+     each fixed or listed: a derivation's write to a path of the result with a
+     writer claim committed (fixed, note 766); a claim of the argument type is
+     not stored for the argument document (open); a member a handler adds to an
+     array of plain values in place under a schema that declares
+     `AuthoredByCurrentUser` for its members alone commits and stores no
+     `authored-by` claim, with or without an actor, where the schema of the
+     handler's write reaches the adapter as `undefined` and the write answers to
+     the stored schema, which stamps nothing (open; reported by the round of
+     `wish`, confirmed here); a handler whose state type does not restate
+     `AuthoredByCurrentUser` stores the claim for a write of the root of a state
+     cell (`fixtures/principal-integrity.tsx`), which was not compared with
+     today's path. The messages differ in one case: a handler written in place,
+     or an `action`, that writes a claimed path is refused with "requires a
+     trusted verified binding identity", since it has no `Body.code`, where
+     today's path says "writeAuthorizedBy failed".
+770. **Measured (step 6).** `compare/fabrichat/scale.ts`, arm `runner`, two runs
+     of each cell, three timed sends each, on an Apple M5 Max with a load
+     average of 6.3 to 7.3 from the runs of other sessions; the runtime's own
+     `wish` and built-ins of the round of `wish` are in the branch, so the
+     figures without the policies are not those of note 740. A send with the
+     policies kept is a gesture, which the scheduler delivers as input of a
+     renderer: after ten in a row it delivers one for each second
+     (`MAX_DELIVERY_DELAY_MS` and `BURST_CAPACITY` of
+     `scheduler/wake-shaping.ts`), so a room of 10 or of 100 messages is
+     measured behind that wait, and the rooms of 3 and of 6 are not.
+
+     | room | policies | a send, ms   | of them in the piece, ms | commits |
+     | ---- | -------- | ------------ | ------------------------ | ------- |
+     | 3    | removed  | 23 to 26     | 7.2 to 7.7               | 5       |
+     | 3    | kept     | 42 to 49     | 8.1 to 8.9               | 5       |
+     | 6    | removed  | 23 to 28     | 7.5 to 8.9               | 5       |
+     | 6    | kept     | 42 to 43     | 7.8 to 8.9               | 5       |
+     | 10   | removed  | 26 to 32     | 7.8 to 10.8              | 5       |
+     | 10   | kept     | 499 to 1,005 | 9.5 to 13.6              | 5       |
+     | 100  | removed  | 96 to 130    | 32.9 to 37.8             | 5       |
+     | 100  | kept     | 822 to 1,180 | 33.9 to 38.9             | 5       |
+
+     Every send commits with the policies kept, none is refused while the room
+     is seeded, and the room holds the messages sent. Below the wait, a send
+     with the policies costs 17 to 19 ms more, none of it in the piece: the time
+     of the preparation was not taken apart from the commit and the delivery.
+     The seed of 100 messages takes 90 s with the policies, which is the wait.
+     Home with the policies kept starts in 421 ms (303 ms without, one run each)
+     with the same cones in an error state on both, and its event commits in 30
+     ms (25 ms without). The room and Home start and send with
+     `SCALE_POLICIES=keep`.
+771. **The corpus on the runner path.** `compare/runner-corpus.ts`, one run: 273
+     modules run, 266 start, 223 take every event, 252 have no commit refused,
+     232 hold the values of the executor in memory. At the starting commit the
+     figures were 272, 258, 219, 248 and 228, and at the end of the round of
+     `wish`, whose first three commits this branch holds, 273, 264, 221, 251 and
+     231 (`r13-wish/corpus.jsonl`). Against that run five lines changed
+     (`r13-write/corpus-changes.txt`): `dev/test/cfc-trusted-write/frozen.tsx`
+     and `main.tsx` start where their first commit was refused, and their
+     handlers are refused with "writeAuthorizedBy failed", `main.tsx` also for a
+     missing gesture; `dev/test/writer-policy/main.tsx` has no refusal and holds
+     equal values where it was refused; `apps/reward-spinner/reward-spinner.tsx`
+     and `dev/experimental/folksonomy-stress-test.tsx` differ from the executor
+     at another path than before and are unequal in both runs. Modules with a
+     refusal, by message, before and after: "unsupported trust-sensitive claim
+     writeAuthorizedBy" 3 and 0; "writeAuthorizedBy failed" 0 and 2; "missing
+     trusted-event policy input" 6 and 7; "writer-fit confidentiality misfit" 4
+     and 4; "maxConfidentiality failed" 2 and 2. The corpus sends no gesture, so
+     a write under a UI contract is refused in it on both paths. A first run of
+     the corpus in this round showed two regressions, both fixed before this
+     one: 13 modules refused for a write record that names an array whose
+     positions the transaction wrote, and 6 modules that did not start for a
+     missing gesture at a reference of the result (the commit `e8bd509b99`).
+772. **Provisional decisions of the round, and what was not done.** P310:
+     `Body.code` is the record `{ module, binding }` and not its hash, and a
+     writer claim of a compiled pattern has the stored form of today's claim, so
+     one check compares the pair for both paths (note 764). P311: only a handler
+     declared at a `const` of module scope has `Body.code`; a handler written in
+     place and an `action` are no writer a claim admits (note 764). P312: a
+     compiled writer is admitted by the module the claim names alone, with no
+     succession of modules (note 764). P313: the first write of the whole
+     document of a state cell is a seed where a `stateFirst` record names it or
+     its value is the default of its schema (note 764). P314: a piece records
+     for its result document the writer claims, the UI contracts and the added
+     integrity of the result type, and none of its declared confidentiality or
+     integrity (note 766). P315: a reference a derivation leaves at a claimed
+     path of the result is a binding, which the derivation may set again, and
+     not a capture (note 766). P316: a handler's write of an array is written as
+     added positions where the schema of the write declares a policy for the
+     members (note 767). Not done: a run of one pattern on both paths with the
+     same gestures (note 769); the claims of the argument type on the argument
+     document, and the result document of an instance a body or a handler made
+     (note 766); the `authored-by` claim of a member a handler adds under a
+     schema that reaches the adapter as `undefined` (note 769); a succession of
+     modules for a compiled writer, which an update of a compiled pattern needs;
+     Home with its event under the policies kept beyond what note 770 says; more
+     than two runs of a cell; a machine with no other load.
+
+### CFC questions deferred, round 13
+
+Noted and not resolved, by the owner's instruction of 2026-11-22. The first
+three are the rules the compiled path now applies that the specification does
+not state, for the specification pull request (specs#91).
+
+1. **The identity of a compiled handler.** §8.15.1 names "the content hash of
+   the verified code artifact" and the symbol in it. The compiled path takes the
+   artifact to be the source module, by the identity the crate computes from its
+   path, its text and the identities of what it imports, and the symbol to be
+   the path of the handler's binding. Whether the artifact of a compiled handler
+   is the source module, the compiled pattern, or the emitted value code, and
+   whether the crate's identity of a module is the content hash the section
+   means.
+2. **What verifies it.** The runtime reads the pair from `Body.code` of a plan
+   it registered under the hash of the plan and the value code, for a
+   transaction stamped with that hash and a body. The plan is what the crate
+   emitted for a source the runtime compiled, or what host code handed. The
+   specification does not say that a compiler's statement about a handler
+   attests it, nor what a runtime owes for a plan it did not compile.
+3. **The actor of an event** of a compiled piece is the actor the serving loop
+   stamps for any handler. Where no serving loop stamps, a harness names the
+   principal (`CompiledPieceOptions.actsFor`), and the piece sets the trust
+   snapshot of that principal. Which runs outside a serving loop may act for a
+   principal, and who may name it.
+4. A reference that a derivation leaves at a claimed path of the result is
+   recorded as a binding (P315). §8.15.4 lists three operations that initialize,
+   and a derivation's write of a kept output is none of them by name. Whether it
+   is the first ("the reference that exposes the new cell"), and whether a
+   derivation may set the reference again.
+5. A seed is recorded where the first value of a state cell is one a cone
+   computed (`stateFirst`), which reads inputs. §8.15.4 speaks of a cell
+   "created with a default". Whether a computed first value is a seed.
+6. The first value of a state cell written in the transaction of a handler
+   counts as attributed to the principal of the event, as today's seeds in a
+   handler's run do. Which state cells a compiled handler's transaction can seed
+   was not listed.
+7. A claim of the argument type is stored for the argument document only where a
+   handler's state type restates it (note 766). Until the argument document is
+   written under its schema, a handler whose state type declares a plain cell
+   writes an argument path that the pattern's argument type protects.
+8. A handler whose state type declares a plain cell wrote the root of a state
+   cell whose schema adds integrity of the current principal, and the claim was
+   stored (note 769), where a write that answers to a stored schema is said to
+   be stamped nothing by it. Which of the two holds for the root of a document,
+   on either path.

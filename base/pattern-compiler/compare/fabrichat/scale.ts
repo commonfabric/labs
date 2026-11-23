@@ -36,6 +36,11 @@
  *
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
+ * With them kept, a send of the room is sent as a gesture on the send
+ * surface, which the scheduler delivers as input of a renderer: after ten
+ * of them in a row it delivers one for each second
+ * (`runtime/runner/src/scheduler/wake-shaping.ts`), so the time of a send
+ * behind the tenth is that of the wait and not of the piece.
  *
  * On the arm `runner`, a `wish` is answered by the runtime's own `wish`
  * against the home `seedHome()` of `../wish-home.ts` writes, and the
