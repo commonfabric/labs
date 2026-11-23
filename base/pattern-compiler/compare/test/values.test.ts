@@ -98,6 +98,18 @@ describe("firstDifference", () => {
   it("finds none between two equal values", () => {
     expect(firstDifference({ a: [1, "x"] }, { a: [1, "x"] })).toBeUndefined();
   });
+
+  it("names the length of two arrays where one holds further positions that hold nothing", () => {
+    expect(firstDifference({ a: [] }, { a: [undefined] }))
+      .toEqual({ path: "a/length", a: "0", b: "1" });
+    expect(firstDifference([1], [1, undefined]))
+      .toEqual({ path: "length", a: "1", b: "2" });
+  });
+
+  it("names the first position that differs in two arrays of two lengths", () => {
+    expect(firstDifference([1], [1, 2]))
+      .toEqual({ path: "1", a: "undefined", b: "2" });
+  });
 });
 
 describe("the values of a fixture", () => {
