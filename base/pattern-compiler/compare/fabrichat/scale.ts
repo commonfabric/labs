@@ -28,7 +28,10 @@
  *   The time is of all of them.
  * - `send`: three more events, each timed until the piece is up to date,
  *   with the counters of the executor for that event alone (evaluations,
- *   evaluations of element bodies, assemblies).
+ *   evaluations of element bodies, assemblies), and on the arm `runner`
+ *   the documents its commits changed, each counted once for a commit,
+ *   and their size as JSON after the commit (`changedDocuments`,
+ *   `changedBytes`).
  * - `read`: the messages of the result are read, and the step says how
  *   many the room holds, the text of the last, and for how many the
  *   result holds the reader's rights, with those of the last.
@@ -248,6 +251,26 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
     experimental: { compiledPatterns: true },
     servingPosture: true,
   });
+  // What the commits of the runtime changed: the documents, each counted
+  // once for a commit, and the size of each as JSON after the commit.
+  const changedByCommits = { documents: 0, bytes: 0 };
+  runtime.storageManager.subscribe({
+    // deno-lint-ignore no-explicit-any
+    next(notification: any) {
+      if (notification.type !== "commit") return undefined;
+      const seen = new Set<string>();
+      for (const { address, after } of notification.changes) {
+        if (seen.has(address.id)) continue;
+        seen.add(address.id);
+        changedByCommits.documents += 1;
+        changedByCommits.bytes += after === undefined ? 0 : JSON.stringify(
+          after,
+          (_, member) => typeof member === "bigint" ? `${member}n` : member,
+        ).length;
+      }
+      return undefined;
+    },
+  });
   // The profile is a document of the room's own space: a compiled piece
   // reads no document of another space yet (note 728).
   const seeded = runtime.edit();
@@ -383,6 +406,8 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         ),
         derivations: piece.counts.derivations,
         ownMs: piece.counts.ownMs,
+        changedDocuments: changedByCommits.documents,
+        changedBytes: changedByCommits.bytes,
       };
     },
     stop: async () => {
