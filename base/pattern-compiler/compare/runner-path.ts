@@ -514,7 +514,8 @@ if (import.meta.main) {
   const later = Number(flag("later") ?? 5);
   const arms = (flag("arms") ?? "compiled,today").split(",") as Arm[];
   // `--profile=<file>` with `--operation=<name>`: a CPU profile of the
-  // later changes of that operation on the compiled piece.
+  // later changes of that operation on the compiled piece, or with
+  // `--operation=load` of the load of the first arm given.
   const profile = flag("profile");
   const profiled = flag("operation") ?? "edit one field";
   const cases = flag("case") === undefined
@@ -524,6 +525,11 @@ if (import.meta.main) {
     for (const length of lengths) {
       const started = [];
       for (const arm of arms) {
+        // `--operation=load`: the profile is of the load of the first arm.
+        const stopLoadProfile =
+          profile !== undefined && profiled === "load" && started.length === 0
+            ? await startProfile(profile)
+            : undefined;
         started.push({
           arm,
           ...(await growthArm(
@@ -535,6 +541,7 @@ if (import.meta.main) {
             flag("slots") === undefined ? undefined : Number(flag("slots")),
           )),
         });
+        await stopLoadProfile?.();
       }
       const row = (operation: string, costs: Row): void =>
         console.log(JSON.stringify({ ...costs, operation }));

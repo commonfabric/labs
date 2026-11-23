@@ -266,6 +266,21 @@ An entry of `Body.reads` of the plan holds the slot and the path in the body's
 argument at which the slot's value is placed (PL §1.1, `ReadInput`), and the
 executor builds the slot part of the argument from those entries.
 
+Where the body declares a handle at the entry's place, the entry holds
+`handle: true` and, where the crate has the type, `schema`: the schema of the
+type the body declares for the handle, which is narrower than the slot's schema,
+the type of the place, wherever the body names fewer fields. An `identity` entry
+of `Body.computed` holds `schema` the same way. A read through the handle is
+made under that schema: a member of a record that the schema does not declare is
+left out, and the positions of the declared members are the ones read where the
+record holds another member, so a change of a field the body's type does not
+name evaluates nothing (`Store.locate`, `members`). The read of an `enumeration`
+slot gives the members of its container as references, and reads none, where no
+slot of the cone reads a child as a value or a shape, or where every body handed
+the container is handed a handle at each child (`Host.slot`):
+`items.get().length` and a `lift` over an array of references then depend on the
+members the array has and not on what a member holds.
+
 A path of the argument of a pattern compiled in that the call leaves out is
 bound to the default the callee's argument type declares for it, as a constant:
 the setup function holds it, and the state of a binding that captures it has it
@@ -1047,10 +1062,18 @@ derivation are written into `tx`, which the caller commits. The runner imports
   (`Instance.takeQueued`). No event is appended to a stream document.
 - **The derivation.** One action of the scheduler, an effect, runs
   `Instance.settle()` in the scheduler's transaction. The piece invalidates it
-  after an event, after a change by another writer, and when a stored label
-  changed alone. `Runtime.idle()` therefore resolves when the piece is up to
-  date. The action opts out of the scheduler's delay for actions that are slow
-  on average.
+  after an event, after a change by another writer, when a commit of another
+  writer changed a label the executor read, and after a refused commit.
+  `Runtime.idle()` therefore resolves when the piece is up to date. The action
+  opts out of the scheduler's delay for actions that are slow on average.
+- **Labels that change.** The label of a write record is formed again when a
+  label that its inputs read changed and the record was not given again, whether
+  or not a value changed with the label (`Instance.labelsChanged`). The store
+  says for each change whether a read at a position consumes the label it
+  consumed before (`LabelChange.unchanged`), so an entry added under the label
+  of its ancestor forms no label again. The row documents a `lift` writes are
+  such readers too, and a row that holds what it held under the labels the
+  `lift` had read is given no record when the `lift` runs again.
 - **The store.** The executor keeps its documents in memory. A document it did
   not make, such as an input cell the argument links to, is read from the
   replica when a reference first leads to it (`Store` option `load`), and a
@@ -1061,9 +1084,19 @@ derivation are written into `tx`, which the caller commits. The runner imports
   declares the array or its members as cells, whose rows are records or view
   nodes (`rowDocumentCollections` of `exec/row-documents.ts`), each row is an
   entity of its own, named by the array and the key of the row, and the array
-  holds links, which the runtime follows. `CompiledPieceOptions.rows` set to
-  `in-place` keeps the rows in the array. The rows of every other collection
-  stay in place.
+  holds links, which the runtime follows. The array can stand below a member of
+  an array, as the rows among the children of a view node do.
+  `CompiledPieceOptions.rows` set to `in-place` keeps the rows in the array. The
+  rows of every other collection stay in place. A member added at the end of
+  such an array writes the number of members and one link; any other change of
+  the members writes the array of links whole. A write by another writer into
+  the document of a row is applied to the row the executor holds; a write of the
+  array of links is reported (`CompiledPiece.refusals`) and not applied.
+- **A refused commit.** The executor has gone on when a commit of the piece is
+  refused. The piece then takes, for each document the transaction wrote, what
+  the storage holds in place of what the executor holds (`Instance.restore`),
+  and derives again. The result document of an instance is taken with the rows
+  of its collections left out, and the next derivation stores every row again.
 
 `compare/runner-path.ts` starts today's piece and the compiled piece with the
 same calls of the runtime over the lists of `fixtures/runner-lists.tsx`, makes
@@ -1073,12 +1106,18 @@ until the scheduler is idle with no commit pending:
 ```sh
 deno run -A --no-check base/pattern-compiler/compare/runner-path.ts 100 1000
 deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=compiled --case=declared --rows=in-place 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=alone --case=declared --no-pull 100 1000
 ```
 
-The tests are `runtime/runner/test/compiled/piece.test.ts` and
-`runtime/runner/test/compiled/row-documents.test.ts`; they load the artifacts of
-`compare/fixtures/`, so they need no build of the crate. Notes 579 on of
-`SPEC-NOTES.md` have what is stubbed and the figures.
+The arm `alone` starts no piece and makes the same changes: its time is that of
+the harness's own writes, which a change of the members of a long array is most
+of.
+
+The tests are in `runtime/runner/test/compiled/`: `piece.test.ts`,
+`row-documents.test.ts`, `layout-labels.test.ts`, which compares what a read
+consumes with rows as documents and in place, and `refused-commit.test.ts`. They
+load the artifacts of `compare/fixtures/`, so they need no build of the crate.
+Notes 579 on of `SPEC-NOTES.md` have what is stubbed and the figures.
 
 ## Topics
 
