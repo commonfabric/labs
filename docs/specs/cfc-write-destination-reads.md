@@ -290,6 +290,9 @@ The add-unique snapshot is the second shape at a list. Whether
 was already present. That is one bit of the list's membership, landing in the
 list document's own write set, and repeated attempts with candidates of the
 writer's choosing make it a membership oracle for whoever sees that write set.
+Pattern code does not: the method returns nothing, and reading the list back,
+or running because it changed, is a labeled observation. The write set reaches
+only the runtime and the memory server, which the threat model trusts.
 
 Write elision is what opens that channel, and elision is not new here. What
 the exclusion changes is that the elision's influence is no longer labeled at
