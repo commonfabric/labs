@@ -91,6 +91,9 @@ export interface MainOutput {
   /** Creates one of the person's profiles. */
   createProfile: Stream<CreateProfileEvent>;
 
+  /** Starts a direct room from the person's manager. */
+  openDirect: Stream<ManagerStreamEvent>;
+
   /** Creates a group room from the person's manager. */
   createGroup: Stream<ManagerStreamEvent>;
 
@@ -164,6 +167,7 @@ export default pattern<MainInput, MainOutput>((
       }),
     }),
     createProfile: createProfile({ profiles }),
+    openDirect: chats.openDirect,
     createGroup: chats.createGroup,
     requests: chats.requests,
     chatManager: chats,
