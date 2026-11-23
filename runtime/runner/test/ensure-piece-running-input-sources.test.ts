@@ -17,7 +17,11 @@ import type { NormalizedFullLink } from "../src/link-types.ts";
 import { getMetaLink, parseLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { systemPatternSource } from "../src/pattern-source-scheme.ts";
-import { getPatternIdentityRef, setPatternSource } from "../src/runner.ts";
+import {
+  getPatternIdentityRef,
+  type RunnerStartOptions,
+  setPatternSource,
+} from "../src/runner.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { type ExperimentalOptions, Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -559,12 +563,7 @@ describe("ensure-piece-running", () => {
       options?: StartWithInputSourcesOptions,
     ) => {
       const owner = await nestedOwner(opener, stream);
-      const started = await startWithInputSources(
-        opener,
-        owner,
-        () => opener.start(owner),
-        options,
-      );
+      const started = await startWithInputSources(opener, owner, options);
       opener.scheduler.queueEvent(stream, {});
       await opener.idle();
       return { owner, started, seen: await seenIn(opener) };
@@ -606,6 +605,32 @@ describe("ensure-piece-running", () => {
       );
     });
 
+    it("calls the opened piece's start before the enclosing piece runs, with work to wait for that settles once it runs", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+      const enclosingCell = opener.getCellFromLink(enclosing);
+      const start = opener.start.bind(opener);
+      let enclosingRanAtStart: boolean | undefined;
+      let enclosingRanAtRelease: boolean | undefined;
+      opener.start = ((cell, options) => {
+        enclosingRanAtStart = opener.runner.isRunning(enclosingCell);
+        return start(cell, {
+          ...options,
+          instantiateAfter: options?.instantiateAfter?.then(() => {
+            enclosingRanAtRelease = opener.runner.isRunning(enclosingCell);
+          }),
+        });
+      }) as typeof start;
+
+      const started = await startWithInputSources(opener, owner);
+
+      expect(started).toBe(true);
+      expect(enclosingRanAtStart).toBe(false);
+      expect(enclosingRanAtRelease).toBe(true);
+      expect(opener.runner.isRunning(owner)).toBe(true);
+    });
+
     it("leaves the opened nested piece running when its enclosing piece stops", async () => {
       const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
       const opener = newRuntime();
@@ -645,11 +670,7 @@ describe("ensure-piece-running", () => {
       const owner = await nestedOwner(opener, stream);
       const warned = openWarnings();
 
-      const started = await startWithInputSources(
-        opener,
-        owner,
-        () => opener.start(owner),
-      );
+      const started = await startWithInputSources(opener, owner);
 
       expect(started).toBe(true);
       expect(opener.runner.isRunning(owner)).toBe(true);
@@ -676,7 +697,7 @@ describe("ensure-piece-running", () => {
             : load(identity, symbol, ...rest)) as typeof load;
       const warned = openWarnings();
 
-      await startWithInputSources(opener, owner, () => opener.start(owner));
+      await startWithInputSources(opener, owner);
 
       expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
         false,
@@ -701,11 +722,7 @@ describe("ensure-piece-running", () => {
             : load(identity, symbol, ...rest)) as typeof load;
       const warned = openWarnings();
 
-      const started = await startWithInputSources(
-        opener,
-        owner,
-        () => opener.start(owner),
-      );
+      const started = await startWithInputSources(opener, owner);
 
       expect(started).toBe(true);
       expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
@@ -726,14 +743,16 @@ describe("ensure-piece-running", () => {
         return sync(cell, options);
       }) as typeof storageManager.syncCell;
 
-      let calledStart = false;
-      const started = await startWithInputSources(opener, owner, () => {
-        calledStart = true;
+      const calls: (RunnerStartOptions | undefined)[] = [];
+      opener.start = ((_cell, options) => {
+        calls.push(options);
         return Promise.resolve(true);
-      });
+      }) as typeof opener.start;
+
+      const started = await startWithInputSources(opener, owner);
 
       expect(started).toBe(true);
-      expect(calledStart).toBe(true);
+      expect(calls).toEqual([undefined]);
       expect(walked).toEqual([]);
     });
 
@@ -743,9 +762,7 @@ describe("ensure-piece-running", () => {
       const owner = await nestedOwner(opener, stream);
 
       const opened = await Promise.all(
-        [0, 1].map(() =>
-          startWithInputSources(opener, owner, () => opener.start(owner))
-        ),
+        [0, 1].map(() => startWithInputSources(opener, owner)),
       );
       opener.scheduler.queueEvent(stream, {});
       await opener.idle();
@@ -865,7 +882,7 @@ describe("ensure-piece-running", () => {
         const opened = opener.getCellFromLink({ ...child, path: [] });
         await opened.sync();
 
-        await startWithInputSources(opener, opened, () => opener.start(opened));
+        await startWithInputSources(opener, opened);
 
         expect(opener.runner.isRunning(opened)).toBe(true);
         expect(
@@ -896,10 +913,11 @@ describe("ensure-piece-running", () => {
       const opened = opener.getCellFromLink({ ...spawnedLink, path: [] });
       await opened.sync();
 
+      opener.start = () => Promise.resolve(true);
+
       const most = await mostLoadsAtOnce(
         internal,
-        () =>
-          startWithInputSources(opener, opened, () => Promise.resolve(true)),
+        () => startWithInputSources(opener, opened),
       );
 
       expect(most).toBe(internal.length);
@@ -1010,7 +1028,7 @@ describe("ensure-piece-running", () => {
         const opener = newRuntime();
         const owner = await nestedOwner(opener, stream);
 
-        await startWithInputSources(opener, owner, () => opener.start(owner));
+        await startWithInputSources(opener, owner);
         opener.scheduler.queueEvent(stream, {});
         await opener.idle();
 
@@ -1037,11 +1055,7 @@ describe("ensure-piece-running", () => {
         const element = opener.getCellFromLink({ ...elements[0], path: [] });
         await element.sync();
 
-        await startWithInputSources(
-          opener,
-          element,
-          () => opener.start(element),
-        );
+        await startWithInputSources(opener, element);
         await opener.idle();
 
         // The instance's input is the element the enclosing piece derives.
@@ -1159,11 +1173,7 @@ describe("ensure-piece-running", () => {
         const surface = opener.getCellFromLink({ ...surfaceLink, path: [] });
         await surface.sync();
 
-        await startWithInputSources(
-          opener,
-          surface,
-          () => opener.start(surface),
-        );
+        await startWithInputSources(opener, surface);
         opener.scheduler.queueEvent(stream, {});
         await opener.idle();
 
@@ -1223,7 +1233,7 @@ describe("ensure-piece-running", () => {
       const opened = opener.getCellFromLink(row.getAsNormalizedFullLink());
       await opened.sync();
 
-      await startWithInputSources(opener, opened, () => opener.start(opened));
+      await startWithInputSources(opener, opened);
 
       expect(
         [opened, builder, producer, linker].map((piece) =>
@@ -1263,11 +1273,7 @@ describe("ensure-piece-running", () => {
         opener.getCellFromLink(producer.getAsNormalizedFullLink())
       );
       await openedHub.sync();
-      await startWithInputSources(
-        opener,
-        openedHub,
-        () => opener.start(openedHub),
-      );
+      await startWithInputSources(opener, openedHub);
 
       expect(opener.runner.isRunning(openedHub)).toBe(true);
       expect(openedLinked.map((piece) => opener.runner.isRunning(piece)))
@@ -1282,10 +1288,11 @@ describe("ensure-piece-running", () => {
       const openedHub = opener.getCellFromLink(hub.getAsNormalizedFullLink());
       await openedHub.sync();
 
+      opener.start = () => Promise.resolve(true);
+
       const most = await mostLoadsAtOnce(
         linked.map((producer) => producer.getAsNormalizedFullLink().id),
-        () =>
-          startWithInputSources(opener, openedHub, () => Promise.resolve(true)),
+        () => startWithInputSources(opener, openedHub),
       );
 
       expect(most).toBe(linked.length);
