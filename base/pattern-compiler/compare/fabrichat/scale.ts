@@ -37,13 +37,16 @@
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
  *
- * What stands in for the runtime (notes 727 and 728 of
- * `../../SPEC-NOTES.md`): a `wish` is answered from the seeded home of
- * `../wish-home.ts`, and the built-ins that read the acting principal, the
- * owner of a profile, the access list of a space and the key of an event
- * are answered by `BUILTINS` with one fixed user who owns every space. So
- * the run says what the executor evaluates and how long it takes, and
- * nothing of labels or of access.
+ * On the arm `runner`, a `wish` is answered by the runtime's own `wish`
+ * against the home `seedHome()` of `../wish-home.ts` writes, and the
+ * built-ins that read the acting principal, the owner of a profile, the
+ * access list of a space and the key of an event by the runtime's own
+ * functions (`runtimeBuiltins`), for the one user of the run, who owns the
+ * space. The arm `executor`, and the arm `runner` with `SCALE_STAND_INS`
+ * set to `table`, use what stood in for the runtime before round thirteen
+ * (notes 727 and 728 of `../../SPEC-NOTES.md`): a `wish` is answered from
+ * the table of `../wish-home.ts`, and the built-ins by `builtinsOf` with
+ * one fixed user who owns every space.
  */
 import { Identity } from "@commonfabric/identity";
 import { isWellFormedDID, parseDID } from "@commonfabric/identity/did";
@@ -57,6 +60,7 @@ import {
   type CompiledPiece,
   startCompiledPiece,
 } from "../../../../runtime/runner/src/compiled/piece.ts";
+import { ACLManager } from "../../../../runtime/runner/src/acl-manager.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { joinSpaceMembers } from "../../../../runtime/runner/src/space-members.ts";
 import {
@@ -65,7 +69,7 @@ import {
 } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
 import { startCpuProfile } from "../cpu-profile.ts";
-import { homeStubs, memoryHome, PROFILE } from "../wish-home.ts";
+import { homeStubs, memoryHome, PROFILE, seedHome } from "../wish-home.ts";
 
 const REPOSITORY = new URL("../../../../", import.meta.url);
 
@@ -232,8 +236,22 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
     experimental: { compiledPatterns: true },
     servingPosture: true,
   });
-  // The profile is a document of the room's own space: a compiled piece
-  // reads no document of another space yet (note 728).
+  const standIns = Deno.env.get("SCALE_STAND_INS") === "table";
+  if (!standIns) {
+    // The home as today's `wish` resolves it, with the profile in a space
+    // of its own, and an access list that names the user as the owner.
+    // The profile declares no confidentiality: with the user atom that
+    // `seedHome()` declares by default, the derivation that reads the
+    // profile is refused where it writes the marker of a stream (note 745
+    // of `../../SPEC-NOTES.md`).
+    await seedHome(runtime, space, {
+      confidential: Deno.env.get("SCALE_PROFILE") === "confidential",
+    });
+    await new ACLManager(runtime, space).set(space, "OWNER");
+    await runtime.scheduler.idleWithPendingCommits();
+  }
+  // With the stand-ins, the profile is a document of the room's own space
+  // and has no claim of whose it is.
   const seeded = runtime.edit();
   const profile = runtime.getCell(space, "profile", undefined, seeded);
   profile.set(structuredClone(PROFILE) as never);
@@ -245,8 +263,10 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       pieceRegistry: [],
     } as never,
   );
-  const seeding = await seeded.commit().settled;
-  if (seeding.error !== undefined) throw seeding.error;
+  if (standIns) {
+    const seeding = await seeded.commit().settled;
+    if (seeding.error !== undefined) throw seeding.error;
+  } else seeded.abort();
   const home = homeStubs({
     profile: {
       id: profile.getAsNormalizedFullLink().id,
@@ -270,8 +290,12 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
           (plan as { patterns?: string[] }).patterns?.[0] === id
         ),
       now: Date.now(),
-      wishes: home.wishes,
-      builtins: builtinsOf(space, space),
+      ...(standIns
+        ? { wishes: home.wishes, builtins: builtinsOf(space, space) }
+        // The runtime of the run has no serving loop, which is what names
+        // the principal a run acts for. `SELF` is no built-in the runtime
+        // answers: it is the stand-in of the executor's harness.
+        : { actsFor: space, builtins: { SELF: "$SELF" } }),
     });
   } catch (error) {
     tx.abort();
