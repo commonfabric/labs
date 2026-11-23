@@ -130,6 +130,27 @@ describe("a compiled piece whose value code calls built-ins the runtime answers"
     expect(held().last.key).toMatch(/^evk:/);
   });
 
+  it("gives a handler no principal where nothing names the one the run acts for", async () => {
+    piece.stop();
+    const result = runtime.getCell<Held>(space, "built-ins with no principal");
+    const compiled = await artifact();
+    await commit((tx) => {
+      piece = startCompiledPiece(
+        runtime,
+        tx,
+        compiled,
+        { notes: runtime.getCell<string[]>(space, "notes") },
+        result.withTx(tx),
+        {},
+      );
+    });
+
+    await record({ text: "first" });
+
+    expect(held().last.text).toBe("first");
+    expect(held().last.by).toBe("nobody");
+  });
+
   it("gives two events two keys", async () => {
     await record({ text: "first" });
     const first = held().last.key;
