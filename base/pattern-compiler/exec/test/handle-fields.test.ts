@@ -50,7 +50,7 @@ describe("a read through a handle whose declared type names its fields", () => {
     expect(instance.counts.evaluations).toBeGreaterThan(before);
   });
 
-  // Not built (note 582 of `SPEC-NOTES.md`): the plan holds no schema for
+  // Not built (note 583 of `SPEC-NOTES.md`): the plan holds no schema for
   // the type a body declares for a handle, so the executor reads a member
   // under the type of the place, which names every field.
   it.ignore("does not evaluate the body again when a field the type does not name changes", async () => {

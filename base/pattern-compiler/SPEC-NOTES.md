@@ -10893,8 +10893,61 @@ it names the case.
      of the arm `today-labeled`: each topic and each input a cell written with
      `Cell.set` under a schema with the clause of the input `topics`, an edit a
      `Cell.set` of a title, a create `Cell.send` on `addTopic`. The facts the
-     arms read of the board are equal after every step. The tables are in the
-     report of the round and in note 588.
+     arms read of the board are equal after every step. One process for each
+     arm, board and size; an edit is the median of three edits and a create the
+     median of three creates. An 18-core machine at load averages of 6 to 10,
+     and of 17 for the run of `filing-order` at 2,000 with rows in place. Times
+     in ms. Today's figures include the pull of the result that today's piece
+     needs in each step; the runner's do not, and the pull behind an edit of the
+     runner is in the last table. The arm `today-labeled` was not run at 2,000
+     in this round, nor on `sorted-references` at 1,000.
+
+     | One edit                                   | 100 |  1,000 |  2,000 |
+     | ------------------------------------------ | --: | -----: | -----: |
+     | `filing-order`, runner, rows as documents  | 286 |  3,178 |  7,389 |
+     | `filing-order`, runner, rows in place      | 298 |  3,681 | 11,143 |
+     | `filing-order`, today                      | 874 | 11,621 |      - |
+     | `sorted-references`, runner, as documents  | 318 |  2,906 |  8,212 |
+     | `sorted-references`, runner, rows in place | 335 |  3,514 |      - |
+     | `sorted-references`, today                 | 896 |      - |      - |
+     | `main`, runner (no rows are documents)     | 349 |  3,400 |  9,946 |
+     | `main`, today                              | 986 | 14,478 |      - |
+
+     | One create                                 |   100 |  1,000 |  2,000 |
+     | ------------------------------------------ | ----: | -----: | -----: |
+     | `filing-order`, runner, rows as documents  |   440 |  4,854 | 12,385 |
+     | `filing-order`, runner, rows in place      |   658 |  8,446 | 20,419 |
+     | `filing-order`, today                      | 1,436 | 18,465 |      - |
+     | `sorted-references`, runner, as documents  |   336 |  4,033 | 11,950 |
+     | `sorted-references`, runner, rows in place |   640 |  8,207 |      - |
+     | `main`, runner                             |   730 |  8,146 | 27,147 |
+     | `main`, today                              | 2,273 | 24,715 |      - |
+
+     | The load                                  |   100 |   1,000 |  2,000 |
+     | ----------------------------------------- | ----: | ------: | -----: |
+     | `filing-order`, runner, rows as documents |   588 |   5,709 | 17,324 |
+     | `filing-order`, runner, rows in place     |   543 |   6,132 | 18,262 |
+     | `filing-order`, today                     | 5,318 | 125,242 |      - |
+     | `main`, runner                            |   425 |   4,640 | 14,880 |
+     | `main`, today                             | 3,058 |  37,813 |      - |
+
+     | A pull of the runner's result behind an edit | 100 | 1,000 |  2,000 |
+     | -------------------------------------------- | --: | ----: | -----: |
+     | `filing-order`, rows as documents            | 491 | 5,674 | 12,179 |
+     | `filing-order`, rows in place                | 468 | 5,395 | 12,604 |
+     | `sorted-references`, rows as documents       | 501 | 5,202 | 12,701 |
+
+     Per edit at every size the runner path makes 2 commits and 2 preparations
+     and evaluates 8 or 9 cones. What follows the board on `filing-order` with
+     rows as documents: the positions read through the transaction (612, 6,012
+     and 12,012), the write records given (110, 1,010 and 2,010, recorded as
+     11), the label entries of the documents the edit wrote (2,160, 21,060 and
+     42,060) and the time of the preparations (54, 579 and 1,230 ms). An edit on
+     the runner path is below today's at 100 and at 1,000 topics, by a factor of
+     3.0 and 3.7 on `filing-order`, and it grows with the board as today's does:
+     11 times from 100 to 1,000 and 2.3 times from 1,000 to 2,000. With the pull
+     of the whole result added, as today's figure has it, the runner takes 0.78
+     s, 8.9 s and 19.6 s.
 
      What one edit at 1,000 topics is made of, board `filing-order`, rows as
      documents, the edit of topic 500 alone under the sampling profiler (3.27 s
