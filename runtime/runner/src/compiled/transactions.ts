@@ -992,9 +992,14 @@ export class RuntimeTransactions implements TransactionHooks {
    * executor's.
    */
   external(doc: string, space?: MemorySpace): void {
-    this.entityOf(doc);
+    const entity = this.entityOf(doc);
     this.#documents.add(doc);
-    if (space !== undefined) this.#spaces.set(doc, space);
+    if (space !== undefined && space !== this.#space) {
+      this.#spaces.set(doc, space);
+      // The caller named the document by its entity alone: a link into
+      // that space leads to it under the name the caller gave.
+      this.#byEntity.set(documentIn(entity, space), doc);
+    }
   }
 
   /** The space a document of the executor is in. */
@@ -1025,6 +1030,9 @@ export class RuntimeTransactions implements TransactionHooks {
       link.id.startsWith("data:")
     ) return this.documentOf(link.id);
     const doc = documentIn(link.id, link.space);
+    // A document a caller handed under another name (`external`).
+    const known = this.#byEntity.get(doc);
+    if (known !== undefined) return known;
     this.entityOf(doc);
     return doc;
   }
