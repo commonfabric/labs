@@ -50,6 +50,7 @@ import {
   isRuntimeMintedTemplate,
   labelForConsumedEntries,
 } from "../cfc/consumed-label.ts";
+import { ConsumedLabelIndex } from "../cfc/consumed-label-index.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import {
   type NestedPlanInputs,
@@ -93,6 +94,7 @@ import type {
   SlotBindings,
 } from "../../../../base/pattern-compiler/exec/plan-write.ts";
 import {
+  canonical,
   identifierOf,
   isLink,
   isStream,
@@ -327,6 +329,12 @@ export class RuntimeTransactions implements TransactionHooks {
    * text of its path, which a change of the document is compared against.
    */
   readonly #entries = new Map<string, Map<string, string>>();
+  /**
+   * The stored labels of each document of `#entries` as they were when
+   * the entries were taken, which a change is compared against by the
+   * label a read consumes (`LabelChange.unchanged`).
+   */
+  readonly #entriesOf = new Map<string, CfcMetadata | undefined>();
   /** The documents of `#entries` that a commit changed since. */
   readonly #touched = new Set<string>();
   /** What the executor registered to hear of changed labels. */
@@ -369,6 +377,7 @@ export class RuntimeTransactions implements TransactionHooks {
     | ((entity: URI, stream: StreamOfExecutor) => void)
     | undefined;
   readonly #onChanges: ((changes: ChangeByOther[]) => void) | undefined;
+  readonly #onLabels: (() => void) | undefined;
   readonly #onApplied: (() => void) | undefined;
   readonly #onRefused: ((reason: string) => void) | undefined;
 
@@ -420,6 +429,14 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       changes?: (changes: ChangeByOther[]) => void;
       /**
+       * Called when a commit of another writer changed a document whose
+       * stored labels the executor has read. The executor is told of the
+       * labels that changed when it next opens a transaction or is handed
+       * one, and the label of a record that read one of them is then
+       * formed again.
+       */
+      labels?: () => void;
+      /**
        * Called when the replica applied the commit of a transaction the
        * adapter was handed, after the executor was told of the labels it
        * stored.
@@ -438,6 +455,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#rowCollections = options.rowDocuments ?? new Set();
     this.#onStream = options.stream;
     this.#onChanges = options.changes;
+    this.#onLabels = options.labels;
     this.#onApplied = options.applied;
     this.#onRefused = options.refused;
     this.#countRecordBytes = options.countRecordBytes === true;
@@ -464,10 +482,14 @@ export class RuntimeTransactions implements TransactionHooks {
           const own = source !== undefined && this.#own.has(source);
           const byOther: ChangeByOther[] = [];
           const seen = new Set<string>();
+          let labelsByOther = false;
           for (const { address, before, after } of notification.changes) {
             const doc = this.#byEntity.get(address.id);
             if (doc === undefined) continue;
-            if (this.#entries.has(doc)) this.#touched.add(doc);
+            if (this.#entries.has(doc)) {
+              this.#touched.add(doc);
+              if (!own) labelsByOther = true;
+            }
             if (
               own || this.#onChanges === undefined ||
               address.scope !== "space" || !this.#documents.has(doc) ||
@@ -517,6 +539,7 @@ export class RuntimeTransactions implements TransactionHooks {
             if (handed !== undefined) this.#applied(handed);
           }
           if (byOther.length > 0) this.#onChanges?.(byOther);
+          if (labelsByOther) this.#onLabels?.();
           return undefined;
         },
       };
@@ -664,11 +687,21 @@ export class RuntimeTransactions implements TransactionHooks {
       for (const doc of this.#touched) {
         this.#metadata.delete(doc);
         const before = this.#entries.get(doc) ?? new Map();
-        const after = entriesOf(this.#storedLabels(tx, doc));
+        const was = this.#entriesOf.get(doc);
+        const now = this.#storedLabels(tx, doc);
+        const after = entriesOf(now);
         this.#entries.set(doc, after);
+        this.#entriesOf.set(doc, now);
         const { paths, alone } = changedLabelPaths(before, after);
         if (paths.length > 0) {
-          changes.push({ doc, paths, ...(alone.length > 0 ? { alone } : {}) });
+          changes.push({
+            doc,
+            paths,
+            ...(alone.length > 0 ? { alone } : {}),
+            unchanged: (path, observes) =>
+              this.#labelIn(was, path, observes) ===
+                this.#labelIn(now, path, observes),
+          });
         }
       }
     } finally {
@@ -687,16 +720,23 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #toExecutor(changes: readonly LabelChange[]): LabelChange[] {
     if (this.#rowDocuments.size === 0) return [...changes];
-    return changes.map(({ doc, paths, alone }) => {
-      if (!this.#rowDocuments.has(doc)) {
-        return { doc, paths, ...(alone === undefined ? {} : { alone }) };
-      }
+    return changes.map((change) => {
+      const { doc, paths, alone, unchanged } = change;
+      if (!this.#rowDocuments.has(doc)) return change;
       const moved = (path: readonly string[]) =>
         this.#addressOfStored(doc, path).path;
+      const row = moved([]);
       return {
         doc: this.#addressOfStored(doc, []).doc,
         paths: paths.map(moved),
         ...(alone === undefined ? {} : { alone: alone.map(moved) }),
+        // A position at or above the row is not one of the row's document.
+        ...(unchanged === undefined ? {} : {
+          unchanged: (path: readonly string[], observes: string) =>
+            path.length >= row.length &&
+            row.every((segment, index) => segment === path[index]) &&
+            unchanged(path.slice(row.length), observes),
+        }),
       };
     });
   }
@@ -866,7 +906,6 @@ export class RuntimeTransactions implements TransactionHooks {
         )
       )
     ) return undefined;
-    const table = this.#runtime.compiledPlans.labels;
     // The label of a read of the value at or above an array whose rows are
     // documents of their own is over every row: no one identifier is kept.
     if (
@@ -884,30 +923,71 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#metadata.set(doc, metadata);
         if (!this.#entries.has(doc)) {
           this.#entries.set(doc, entriesOf(metadata));
+          this.#entriesOf.set(doc, metadata);
         }
       } finally {
         if (tx !== this.#tx) tx.abort();
       }
     }
-    const metadata = this.#metadata.get(doc);
+    return this.#labelIn(this.#metadata.get(doc), path, observes);
+  }
+
+  /**
+   * The identifier of the label that a read of the class `observes` at
+   * `path` consumes of the stored labels `metadata` of a document.
+   */
+  #labelIn(
+    metadata: CfcMetadata | undefined,
+    path: readonly string[],
+    observes: string,
+  ): string {
+    const table = this.#runtime.compiledPlans.labels;
     if (metadata === undefined) return table.empty.id;
     // The class the runtime observes the position in (`observesOf`), read
     // as its observation of a label alone is: below the position too for a
     // read of the value, and at the position for the other classes.
     const consumes = observesOf(observes);
+    // Where every entry of the document is at its root, as in a document
+    // written under one schema with one clause, a read of one class
+    // consumes one label at the root and one at every path below it.
+    let known = this.#rootLabels.get(metadata);
+    if (known === undefined) {
+      known = metadata.labelMap.entries.every(({ path }) => path.length === 0)
+        ? new Map()
+        : null;
+      this.#rootLabels.set(metadata, known);
+    }
+    const kind = `${consumes}${path.length === 0 ? " at the root" : ""}`;
+    const held = known?.get(kind);
+    if (held !== undefined) return held;
+    // The entries at, above and below the path are found through the index
+    // of the document's entries, which is built once for a list of entries:
+    // a document that holds the rows of a whole-list derivation has an
+    // entry for each row.
     const label = labelForConsumedEntries(
-      consumedEntriesForRead(metadata, path, {
-        nonRecursive: consumes !== "value",
-        consumes,
-      }),
+      consumedEntriesForRead(
+        metadata,
+        path,
+        { nonRecursive: consumes !== "value", consumes },
+        new ConsumedLabelIndex(metadata.labelMap.entries),
+      ),
       path,
       consumes !== "value",
     );
-    return table.intern({
+    const { id } = table.intern({
       confidentiality: [...label?.confidentiality ?? []],
       integrity: [...label?.integrity ?? []],
-    }).id;
+    });
+    known?.set(kind, id);
+    return id;
   }
+
+  /**
+   * For stored labels whose entries are all at the root of their document:
+   * the identifier `#labelIn` found for a read of each class, at the root
+   * and below it. `null` for stored labels with an entry at another path.
+   */
+  readonly #rootLabels = new WeakMap<CfcMetadata, Map<string, string> | null>();
 
   /** @inheritDoc */
   change(
@@ -2157,12 +2237,14 @@ const entriesOf = (metadata: CfcMetadata | undefined): Map<string, string> => {
   for (const entry of metadata?.labelMap.entries ?? []) {
     const path = JSON.stringify(entry.path);
     const texts = byPath.get(path) ?? [];
+    // The text is the same for two entries that hold the same members in
+    // another order, as an entry written again by another writer can.
     texts.push(
       `${
         appliesAtItsPathOnly(entry, isRuntimeMintedTemplate(entry))
           ? AT_ITS_PATH_ONLY
           : ""
-      }${JSON.stringify(entry)}`,
+      }${canonical(entry)}`,
     );
     byPath.set(path, texts);
   }

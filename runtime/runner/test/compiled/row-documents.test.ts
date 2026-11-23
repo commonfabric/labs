@@ -428,6 +428,78 @@ describe("the rows of a `map` over an array declared as references", () => {
     });
   });
 
+  describe("a label that changes at a position a `lift` read through a handle", () => {
+    /**
+     * `Derived` of `handle-reads.tsx`, whose `lift` reads the title of each
+     * member, and then a write by another writer of the note of the second
+     * member under a schema with one more clause than the member has: the
+     * label of the member changes, and no value the `lift` read does.
+     */
+    const relabeled = async () => {
+      const { piece, result, cells } = await started(
+        "Derived",
+        {},
+        "handle-reads",
+      );
+      const rows = () =>
+        storedRows(result).map((row) => parseLink(row as never).id!);
+      const before = rows().map(labelsOf);
+      const transactions = piece.instance.transactions.length;
+      const audience = await scenarioAudience();
+      const schema = {
+        ...await labeled("clause-two"),
+        ifc: {
+          confidentiality: [
+            inputClause("clause-two", audience),
+            inputClause("clause-added", audience),
+          ],
+        },
+      } as JSONSchema;
+      await commit((tx) =>
+        cells[1].asSchema(schema).withTx(tx).set({
+          id: "i1",
+          title: "two",
+          done: false,
+          note: "edited",
+        })
+      );
+      const evaluated = piece.instance.transactions.slice(transactions)
+        .flatMap(({ evaluated }) => evaluated);
+      return { piece, result, cells, rows, before, evaluated };
+    };
+
+    it("changes the stored label of the member and runs no `lift` again", async () => {
+      const { piece, cells, evaluated } = await relabeled();
+
+      expect(piece.refusals).toEqual([]);
+      expect(labelsOf(cells[1].getAsNormalizedFullLink().id)).toContain(
+        "clause-added",
+      );
+      expect(evaluated).toEqual([]);
+    });
+
+    it("forms the label of each row document again, which then holds the added clause", async () => {
+      const { rows, before } = await relabeled();
+
+      for (const text of before) expect(text).not.toContain("clause-added");
+      for (const row of rows()) {
+        expect(labelsOf(row)).toContain("clause-added");
+      }
+    });
+
+    it("forms the label of the output derived from the rows again", async () => {
+      const { result } = await relabeled();
+
+      const { labelMap } = JSON.parse(
+        labelsOf(result.getAsNormalizedFullLink().id),
+      ) as { labelMap: { entries: { path: string[] }[] } };
+      const titles = labelMap.entries.filter(({ path }) =>
+        path[0] === "titles"
+      );
+      expect(JSON.stringify(titles)).toContain("clause-added");
+    });
+  });
+
   describe("over the fixture `ordered-rows.tsx`", () => {
     /**
      * Starts the fixture over three items, each a cell of its own, and two

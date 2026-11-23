@@ -137,6 +137,7 @@ export class CompiledPiece {
         : { rowDocuments: rowDocumentCollections(artifact) }),
       stream: (entity, stream) => this.#registerStream(entity, stream),
       changes: (changes) => this.#changedByOthers(changes),
+      labels: () => this.#invalidate(),
       applied: () => {
         if (this.#started && this.instance.relabelPending) this.#invalidate();
       },

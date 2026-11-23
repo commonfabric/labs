@@ -742,6 +742,14 @@ export type LabelChange = {
    * of the reference to it, did not change with one of them.
    */
   alone?: readonly (readonly string[])[];
+  /**
+   * Whether a read of the class `observes` at `path` of the document
+   * consumes the label it consumed before the change, where the store can
+   * tell: an entry added at a path under the label that a read of the path
+   * consumed before changes the entries and no label. Without it, every
+   * read at, above or below a path of `paths` counts as changed.
+   */
+  unchanged?: (path: readonly string[], observes: string) => boolean;
 };
 
 /**
@@ -2266,7 +2274,10 @@ export type TransactionHooks = {
    * while their values may not have: for each document, the paths of the
    * label entries that changed. The executor then updates the group of
    * each element of a `fold` that read a position at, above or below one
-   * of them, and of no other element.
+   * of them, and of no other element, and forms again the label of each
+   * record that read one and is not given again. `alone` says that no
+   * value changed with the labels, and `stored` that the changes are what
+   * the last transaction stored.
    */
   watchLabels?(
     changed: (
@@ -2420,6 +2431,12 @@ const holdsErrorState = (value: unknown): ErrorState | undefined => {
  * function of its own runs there.
  */
 const RESULT_INPUTS = "result";
+
+/**
+ * What the key of the records of the rows a body wrote begins with, where
+ * the key of the record of an output begins with its instance.
+ */
+const CREATED = "created rows";
 
 /** The name that the writes of a handler body are kept under. */
 const HANDLER = "handler";
@@ -7715,6 +7732,26 @@ export class Instance {
   }
 
   /**
+   * On the root: whether a position the record of `key` read consumes
+   * another label than before `changes`, in a class a slot observes a
+   * position in. It does where the store cannot tell
+   * (`LabelChange.unchanged`), and at a path that names every element.
+   */
+  #readsChangedLabel(key: string, changes: readonly LabelChange[]): boolean {
+    const read = this.#recordReads.get(key) ?? [];
+    for (const { doc, unchanged } of changes) {
+      for (const position of read) {
+        if (position.doc !== doc) continue;
+        if (unchanged === undefined || position.path.includes("*")) return true;
+        for (const observes of ["value", "identity", "shape"]) {
+          if (!unchanged(position.path, observes)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
    * On the root: where a label changed alone, gives the transaction hooks
    * the record of each output whose inputs read it, in a derivation
    * transaction of its own, as that of a write that leaves the value as it
@@ -7731,6 +7768,7 @@ export class Instance {
       this.#namedIndex.clear();
       const byInstance = new Map<Instance, PlanWrite[]>();
       for (const key of keys) {
+        if (this.#relabelCreated(key)) continue;
         const [id, output, at] = JSON.parse(key) as [string, number, string[]];
         const instance = id === this.id ? this : this.#instances.get(id);
         // An output whose path holds nothing now has no label to form.
@@ -7756,6 +7794,44 @@ export class Instance {
         );
       }
     });
+  }
+
+  /**
+   * On the root, helper for `#relabel()`: where `key` names the rows a
+   * body wrote, gives the record of each row again as one that forms the
+   * label alone, with the inputs the body last had. Returns whether `key`
+   * names such rows.
+   */
+  #relabelCreated(key: string): boolean {
+    const created = this.#createdRows.get(key);
+    if (created === undefined) return key.startsWith(`["${CREATED}",`);
+    const hooks = this.options.transactions;
+    const { instance, body, write, keys, bound, rows } = created;
+    const { template } = instance.plan.bodies[body].writes[write];
+    const inputs = instance.#inputsFor(template, keys, [bound]);
+    const writes: PlanWrite[] = [...rows.values()].flatMap(({ target }) =>
+      this.store.docs.has(target.doc)
+        ? [{ target, record: { body, write }, ...inputs, relabel: true }]
+        : []
+    );
+    if (writes.length === 0) return true;
+    this.#createdStale.delete(key);
+    this.#noteRecord(key, instance.id, writes[0]);
+    created.labels = instance.#labelsRead(
+      this.#recordReads.get(key) ?? [],
+      undefined,
+      undefined,
+      true,
+    );
+    hooks?.unchanged?.(
+      writes[0].target.doc,
+      writes[0].target.path,
+      this.store,
+      undefined,
+      writes,
+      this.#inputsTable,
+    );
+    return true;
   }
 
   queue(stream: StreamRef, event: unknown): void {
@@ -8256,7 +8332,9 @@ export class Instance {
    * what that `lift` read, and not the join of what the transaction read.
    * The records are given as those of a write that left the value as it
    * was (`TransactionHooks.unchanged`): the write itself was reported when
-   * it was made, and the record gives the path its label either way.
+   * it was made, and the record gives the path its label either way. A row
+   * that holds what it held when the body last ran, under the labels the
+   * body had read then, is given no record: it has the one it was given.
    */
   #recordCreated(
     body: number,
@@ -8269,23 +8347,56 @@ export class Instance {
     const { template } = this.plan.bodies[body].writes[written.write];
     if (template === undefined) return;
     root.#namedIndex.clear();
-    const inputs = this.#inputsFor(
-      template,
-      this.contextKeys(host.context),
-      [{
-        slots: host.bound,
-        selections: host.selections,
-        picks: host.picks,
-        dynamic: host.dynamic,
-      }],
-    );
-    const writes: PlanWrite[] = [...written.targets.values()].flatMap((
-      target,
-    ) =>
+    const keys = this.contextKeys(host.context);
+    const bound: Inputs = {
+      slots: host.bound,
+      selections: host.selections,
+      picks: host.picks,
+      dynamic: host.dynamic,
+    };
+    const inputs = this.#inputsFor(template, keys, [bound]);
+    const targets = [...written.targets].filter(([, target]) =>
       this.store.docs.has(target.doc)
-        ? [{ target, record: { body, write: written.write }, ...inputs }]
-        : []
     );
+    if (targets.length === 0) return;
+    const record = { body, write: written.write };
+    const key = JSON.stringify([CREATED, this.id, body, written.write, keys]);
+    const before = root.#createdRows.get(key);
+    const relabeling = root.#relabels.has(key);
+    const stale = root.#createdStale.delete(key) || relabeling;
+    const readBefore = root.#recordReads.get(key);
+    // The rows are readers of the labels of what the body read, as the
+    // record of an output is.
+    root.#noteRecord(key, this.id, {
+      target: targets[0][1],
+      record,
+      ...inputs,
+    });
+    const read = root.#recordReads.get(key) ?? [];
+    const labels = this.#labelsRead(read, readBefore, before?.labels, stale);
+    // Every row has the label of everything the body read. Where that is
+    // the label the rows were last given, a row that holds what it held
+    // then has its record.
+    const kept = before !== undefined && labels !== undefined &&
+      before.labels !== undefined && labels.size === before.labels.size &&
+      [...labels].every((label) => before.labels!.has(label));
+    const rows = new Map<string, { target: Address; held: string }>();
+    const writes: PlanWrite[] = [];
+    for (const [text, target] of targets) {
+      const held = canonical(this.store.peek(target.doc, target.path));
+      rows.set(text, { target, held });
+      if (kept && before.rows.get(text)?.held === held) continue;
+      writes.push({ target, record, ...inputs });
+    }
+    root.#createdRows.set(key, {
+      instance: this,
+      body,
+      write: written.write,
+      keys,
+      bound,
+      rows,
+      labels,
+    });
     if (writes.length === 0) return;
     const [{ target }] = writes;
     hooks.unchanged(
@@ -8297,6 +8408,74 @@ export class Instance {
       root.#inputsTable,
     );
   }
+
+  /**
+   * The identifiers of the labels at the positions `read`, in each class a
+   * slot observes a position in, or nothing where the store names none for
+   * one of them. Where the positions `before` were read under the labels
+   * `known`, no label changed since (`stale`) and no position left, the
+   * positions that entered are asked alone: where their labels are among
+   * `known`, the set is `known`.
+   */
+  #labelsRead(
+    read: readonly Address[],
+    before: readonly Address[] | undefined,
+    known: ReadonlySet<string> | undefined,
+    stale: boolean,
+  ): Set<string> | undefined {
+    const hooks = this.root.options.transactions;
+    const labelsOf = (positions: readonly Address[]) => {
+      const labels = new Set<string>();
+      for (const { doc, path } of positions) {
+        for (const observes of ["value", "identity", "shape"]) {
+          const label = hooks?.labelOf?.(doc, path, observes);
+          if (label === undefined) return undefined;
+          labels.add(`${observes}:${label}`);
+        }
+      }
+      return labels;
+    };
+    if (before === undefined) return labelsOf(read);
+    const text = ({ doc, path }: Address) => positionText(doc, path);
+    const was = new Set(before.map(text));
+    // A position that entered is the one most likely to have no identifier,
+    // as one the transaction in progress wrote has none: these are asked
+    // first, and nothing else where one of them has none.
+    const entered = labelsOf(
+      read.filter((position) => !was.has(text(position))),
+    );
+    if (entered === undefined) return undefined;
+    if (known !== undefined && !stale) {
+      const now = new Set(read.map(text));
+      if (
+        before.every((position) => now.has(text(position))) &&
+        [...entered].every((label) => known.has(label))
+      ) return new Set(known);
+    }
+    return labelsOf(read);
+  }
+
+  /**
+   * On the root: what the body of a cone instance last gave the rows it
+   * wrote, by the key of its records (`#recordCreated`): what forms their
+   * inputs again, each row with the text of what it held, and the labels
+   * the body had read (`#labelsRead`).
+   */
+  readonly #createdRows = new Map<string, {
+    instance: Instance;
+    body: number;
+    write: number;
+    keys: [number, string][];
+    bound: Inputs;
+    rows: Map<string, { target: Address; held: string }>;
+    labels: Set<string> | undefined;
+  }>();
+
+  /**
+   * On the root: the keys of `#createdRows` whose body read a label that
+   * changed since it last ran.
+   */
+  readonly #createdStale = new Set<string>();
 
   /**
    * On the root: the table the write records of the transaction in
@@ -8614,10 +8793,16 @@ export class Instance {
    * length of the paths, and not the number of elements. `stored` says
    * that the changes are what the last transaction stored, where the
    * store reports them after that transaction ended.
+   *
+   * The label of each record that read a changed label is formed again
+   * (`#relabel`) unless the record is given again first. Whether values
+   * changed with the labels (`_alone`) does not decide that: a change of a
+   * value runs the cones that read the value, and a record that read the
+   * label through another position is not among them.
    */
   labelsChanged(
     changes: readonly LabelChange[],
-    alone = false,
+    _alone = false,
     stored = false,
   ): void {
     const regrouped = new Set<string>();
@@ -8627,12 +8812,27 @@ export class Instance {
     // The records whose bindings name a container with a group that the
     // change made or emptied.
     for (const key of this.#memberLabelsChanged(changes)) regrouped.add(key);
-    // Where the labels changed and no value did, nothing is evaluated
-    // again, and the label of an output that read a changed label, or that
-    // folds over a collection with an element that did, is formed again
-    // behind the batch in progress, or the next one (`#relabel`).
-    if (!alone) return;
-    for (const key of [...regrouped, ...this.#recordsReading(changes)]) {
+    const reading = this.#recordsReading(changes);
+    // A record whose own positions consume the labels they consumed before
+    // has the label it was given.
+    for (const key of [...reading]) {
+      if (!this.#readsChangedLabel(key, changes)) reading.delete(key);
+    }
+    // The rows a body wrote are given their record again when the body
+    // next runs, whatever they hold.
+    for (const key of reading) {
+      if (
+        this.#createdRows.has(key) &&
+        !((this.#ending || stored) && this.#givenNow.has(key))
+      ) this.#createdStale.add(key);
+    }
+    // The label of a record that read a changed label, or that folds over
+    // a collection with an element that did, is formed again behind the
+    // batch in progress, or the next one (`#relabel`), unless the record is
+    // given again before: a change that came with a change of values
+    // (`alone` not set) runs again the cones that read those values, and
+    // leaves a record that read the label alone as it was.
+    for (const key of [...regrouped, ...reading]) {
       // A record given in the transaction that stored the label holds it.
       if (!((this.#ending || stored) && this.#givenNow.has(key))) {
         this.#relabels.add(key);
