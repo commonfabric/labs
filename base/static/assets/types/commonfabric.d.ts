@@ -5967,8 +5967,7 @@ export type SuggestionAct = SuggestionPatternVerb | SuggestionWant;
 
 /**
  * A button that sends `payload` to one of the pattern's handlers. The take
- * runs as the owner of the pattern's instance, who need not be the person
- * taking it, and asks that person first only when `confirm` is set.
+ * asks the person first only when `confirm` is set.
  */
 // deno-lint-ignore no-explicit-any
 export interface SuggestionPatternVerb<E = any> {
