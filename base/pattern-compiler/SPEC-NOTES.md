@@ -18017,6 +18017,8 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 Round thirteen (2026-11-23), on the branch `claude/compiled-pattern-runner-m3`
 from the commit `5f45021c1d`. The notes are numbered from 692. The provisional
 decisions are numbered from P270. Whenever a note says `map`, it names the case.
+The numbers 700 to 704 are also those of notes of milestone 5: a note of this
+round that names one of them means the note of this round.
 
 692. **What the round did, by step.**
      - _A resume per unit (step 1), built for one construct._ A `map` in no
