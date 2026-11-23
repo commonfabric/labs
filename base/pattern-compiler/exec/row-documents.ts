@@ -87,3 +87,27 @@ export const rowDocumentCollections = (artifact: Artifact): Set<number> => {
   });
   return found;
 };
+
+/**
+ * The collections of the plan of `artifact` whose index is stored with each
+ * bucket as a document of its own: a `groupBy` or a `keyBy` that is written
+ * in no element body and that the result keeps at a path through no
+ * element. The result document then holds a link to each bucket, and a
+ * member that changes its key writes the documents of two buckets.
+ */
+export const bucketDocumentCollections = (artifact: Artifact): Set<number> => {
+  const { plan } = artifact;
+  const found = new Set<number>();
+  for (const output of plan.outputs) {
+    if (
+      output.kept !== true || output.collection === undefined ||
+      output.path.includes("*")
+    ) continue;
+    const collection = plan.collections[output.collection];
+    if (
+      (collection.construct === "groupBy" ||
+        collection.construct === "keyBy") && collection.within.length === 0
+    ) found.add(output.collection);
+  }
+  return found;
+};

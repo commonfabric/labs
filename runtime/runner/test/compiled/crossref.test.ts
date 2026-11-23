@@ -13,6 +13,7 @@ import {
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
+import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 
@@ -229,9 +230,17 @@ describe("the stored labels of the inverse of a relation of references: a groupi
     }]);
     const tx = runtime.edit();
     try {
-      const [stored] = tx.readValueOrThrow({
+      // The bucket is a document of its own, which the result links to.
+      const bucket = tx.readValueOrThrow({
         ...result.getAsNormalizedFullLink(),
         path: ["byName", "buckets", "s:2"],
+      });
+      expect(isPrimitiveCellLink(bucket)).toBe(true);
+      const [stored] = tx.readValueOrThrow({
+        space,
+        id: parseLink(bucket as never).id!,
+        path: [],
+        scope: "space",
       }) as unknown[];
       expect(isPrimitiveCellLink(stored)).toBe(true);
     } finally {
@@ -239,13 +248,18 @@ describe("the stored labels of the inverse of a relation of references: a groupi
     }
   });
 
-  it("stores the clause of every topic of the array for a bucket of the index of the rows by name, and for its occupied keys", async () => {
+  it("stores the clause of every topic of the array for a bucket of the index of the rows by name, and for the record of its buckets", async () => {
     const { result } = await crossed();
 
     expect(consumed(result, ["byName", "buckets", "s:2", "length"])).toEqual(
       clauses(...TOPICS),
     );
-    expect(consumed(result, ["byName", "keys"])).toEqual(clauses(...TOPICS));
+    // A read of the record of the buckets follows the link to each
+    // bucket's document, to each row and to each topic a row holds, the
+    // topic that is mentioned and is in no array among them.
+    expect(consumed(result, ["byName", "buckets"])).toEqual(
+      clauses(...TOPICS, "tz"),
+    );
   });
 
   it("moves a topic between the rows of the topics it mentions when another writer writes its mentions, under the clause of every topic", async () => {
@@ -275,6 +289,8 @@ describe("the stored labels of the inverse of a relation of references: a groupi
     await commit((tx) => topics[1].withTx(tx).key("title").set("written"));
 
     expect(recorded.filter((path) => path.startsWith("byName"))).toEqual([]);
-    expect(consumed(result, ["byName", "keys"])).toEqual(clauses(...TOPICS));
+    expect(consumed(result, ["byName", "buckets"])).toEqual(
+      clauses(...TOPICS, "tz"),
+    );
   });
 });

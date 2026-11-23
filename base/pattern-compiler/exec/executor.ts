@@ -3489,6 +3489,14 @@ export class Instance {
        */
       rowDocuments?: ReadonlySet<number>;
       /**
+       * The collections whose index the result keeps with each bucket
+       * stored as a document of its own (`bucketDocumentCollections` of
+       * `row-documents.ts`). The record of the buckets of one is written
+       * member by member: a bucket that changed, came to exist or emptied
+       * is one write, and the record is not written for it.
+       */
+      bucketDocuments?: ReadonlySet<number>;
+      /**
        * Where an event that a handler sends to a stream of the executor
        * is kept. `documents`, the default: it is appended to the document
        * of its stream and handled behind the events before it.
@@ -5902,6 +5910,7 @@ export class Instance {
       }
     }
     const { store, id: doc } = this;
+    const bucketPaths = this.#bucketRecordPaths();
     // What a place holds, where the form has `KEPT` at or below it.
     const filled = (form: unknown, held: unknown): unknown => {
       if (form === KEPT) return held;
@@ -5940,6 +5949,22 @@ export class Instance {
           names.length > 0 && names.length === were.length &&
           names.every((name, index) => name === were[index])
         ) {
+          for (const name of names) put([...at, name], form[name], held[name]);
+          return;
+        }
+        // The record of the buckets of an index whose buckets are
+        // documents of their own: a bucket that emptied is removed, and
+        // each other is compared by itself, so the record is written for
+        // none of them.
+        if (
+          owner === undefined && bucketPaths.size > 0 &&
+          bucketPaths.has(JSON.stringify(at))
+        ) {
+          for (const name of were) {
+            if (!Object.hasOwn(form, name)) {
+              store.put(doc, [...at, name], undefined);
+            }
+          }
           for (const name of names) put([...at, name], form[name], held[name]);
           return;
         }
@@ -7002,8 +7027,11 @@ export class Instance {
   }
 
   /**
-   * An index as a value, in the shape of today's `CollectionIndexData`:
-   * the occupied index keys and each bucket by its encoded key.
+   * An index as a value, in the shape of today's `CollectionIndexData`
+   * without its array of the occupied index keys: each bucket that has a
+   * member by its encoded key. The occupied keys are the names of the
+   * members of `buckets`, so a key that enters or leaves is a change of
+   * one member and of no array as long as the index.
    */
   indexRecord(
     index: Index,
@@ -7028,13 +7056,36 @@ export class Instance {
     return {
       kind: "collection-index",
       mode: index.mode,
-      keys: occupied.map(([, { key }]) => key),
       buckets: Object.fromEntries(occupied.map(([encoded, { keys }]) => {
         const members = keys.map(member);
         return [encoded, index.mode === "group" ? members : members[0]];
       })),
     };
   }
+
+  /**
+   * The paths of the result document, as text, at which the instance keeps
+   * the record of the buckets of an index whose buckets are stored as
+   * documents of their own (`bucketDocuments`). Made once.
+   */
+  #bucketRecordPaths(): ReadonlySet<string> {
+    if (this.#bucketPaths !== undefined) return this.#bucketPaths;
+    const found = new Set<string>();
+    const collections = this === this.root
+      ? this.options.bucketDocuments
+      : undefined;
+    for (const output of collections === undefined ? [] : this.plan.outputs) {
+      if (
+        output.kept === true && output.collection !== undefined &&
+        collections?.has(output.collection) && !output.path.includes("*")
+      ) found.add(JSON.stringify([...output.path, "buckets"]));
+    }
+    this.#bucketPaths = found;
+    return found;
+  }
+
+  /** The result of `#bucketRecordPaths()`. */
+  #bucketPaths: ReadonlySet<string> | undefined;
 
   /**
    * The path of the result at which the instance keeps the rows of the

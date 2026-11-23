@@ -2669,7 +2669,10 @@ export class Store {
       }
       if (typeof holder !== "object" || holder === null) return;
       this.journal?.push({ doc, path, old });
-      holder[path[path.length - 1]] = value;
+      const last = path[path.length - 1];
+      // A record that is put nothing at a member holds no such member.
+      if (value === undefined && !Array.isArray(holder)) delete holder[last];
+      else holder[last] = value;
     }
     this.#changed(doc, path, old);
   }

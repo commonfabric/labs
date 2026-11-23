@@ -236,6 +236,18 @@ type RowArray = {
   positions?: Map<string, number>;
 };
 
+/**
+ * The record of the buckets of an index that the result of the instance the
+ * executor was started with keeps, where each bucket is stored as a document
+ * of its own: where the record stands, and the encoded keys of the buckets
+ * the storage holds a link to there.
+ */
+type BucketRecord = {
+  doc: string;
+  path: string[];
+  keys: Set<string>;
+};
+
 /** What a handed transaction leaves for when its commit is applied. */
 type Handed = {
   unchanged: Map<string, Map<string, string>>;
@@ -439,6 +451,16 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #rowsHeld = new Set<string>();
   /** The array and the key of each row document, by its identifier. */
   readonly #rowDocuments = new Map<string, { array: RowArray; key: string }>();
+  /**
+   * The records of buckets of the result document whose buckets are
+   * documents of their own.
+   */
+  readonly #bucketRecords: BucketRecord[] = [];
+  /** The record and the encoded key of each bucket document. */
+  readonly #bucketDocuments = new Map<
+    string,
+    { record: BucketRecord; key: string }
+  >();
   /** The stream each entity that holds a stream marker is of. */
   readonly #streams = new Map<string, StreamOfExecutor>();
   /** The stream entities the transaction in progress wrote first. */
@@ -489,6 +511,16 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       rowDocuments?: ReadonlySet<number>;
       /**
+       * The collections of the plan of `artifact` whose index the result
+       * keeps with each bucket stored as a document of its own, named by
+       * the record of the buckets and the encoded key, with a link to it at
+       * the bucket's member of the record (`bucketDocumentCollections` of
+       * the executor). The executor is given the same set
+       * (`Instance` option `bucketDocuments`), so that it writes the record
+       * member by member.
+       */
+      bucketDocuments?: ReadonlySet<number>;
+      /**
        * Called when a value first stored holds a stream of the executor.
        * The stream is then stored as a link to an entity that holds the
        * runtime's stream marker, which a `Cell.send` resolves to; without
@@ -527,6 +559,21 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#space = space;
     this.#owner = options.owner;
     this.#rowCollections = options.rowDocuments ?? new Set();
+    if (options.owner !== undefined && options.bucketDocuments !== undefined) {
+      for (const output of options.artifact?.plan.outputs ?? []) {
+        if (
+          output.kept === true && output.collection !== undefined &&
+          options.bucketDocuments.has(output.collection) &&
+          !output.path.includes("*")
+        ) {
+          this.#bucketRecords.push({
+            doc: options.owner,
+            path: [...output.path, "buckets"],
+            keys: new Set(),
+          });
+        }
+      }
+    }
     this.#onStream = options.stream;
     this.#onChanges = options.changes;
     this.#onLabels = options.labels;
@@ -826,10 +873,14 @@ export class RuntimeTransactions implements TransactionHooks {
    * position of its row.
    */
   #toExecutor(changes: readonly LabelChange[]): LabelChange[] {
-    if (this.#rowDocuments.size === 0) return [...changes];
+    if (this.#rowDocuments.size === 0 && this.#bucketDocuments.size === 0) {
+      return [...changes];
+    }
     return changes.map((change) => {
       const { doc, paths, alone, unchanged } = change;
-      if (!this.#rowDocuments.has(doc)) return change;
+      if (!this.#rowDocuments.has(doc) && !this.#bucketDocuments.has(doc)) {
+        return change;
+      }
       const moved = (path: readonly string[]) =>
         this.#addressOfStored(doc, path).path;
       const row = moved([]);
@@ -1199,6 +1250,12 @@ export class RuntimeTransactions implements TransactionHooks {
           });
           array.positions = undefined;
         }
+        for (const record of this.#bucketRecordsOf(doc)) {
+          const links = valueAt(stored, record.path);
+          record.keys = new Set(
+            isWalkableObjectNotArray(links) ? Object.keys(links) : [],
+          );
+        }
         this.#metadata.delete(doc);
         restored.push({
           doc,
@@ -1258,6 +1315,21 @@ export class RuntimeTransactions implements TransactionHooks {
         tx.readValueOrThrow(this.#address(this.#rowDocument(array, key), []));
       }
     }
+    for (const record of this.#bucketRecordsOf(doc)) {
+      if (isPrefix(path, record.path)) {
+        // A read at or above a record of bucket documents reads every
+        // bucket.
+        for (const key of record.keys) {
+          tx.readValueOrThrow(
+            this.#address(this.#bucketDocument(record, key), []),
+          );
+        }
+      } else if (isPrefix(record.path, path)) {
+        // A read below a bucket crosses the link to its document, which
+        // the result document holds at the bucket's member of the record.
+        readMaybeLink(tx, this.#linkOfBucket(record, path));
+      }
+    }
   }
 
   /** @inheritDoc */
@@ -1310,6 +1382,55 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#labelsOverRows.set(text, over);
       }
       return over;
+    }
+    // A read at or above a record of bucket documents reads every bucket,
+    // and a read below a bucket crosses the link the result document holds
+    // to it: its label is the join of what the read consumes of the
+    // result document at that position, where the entry of the index
+    // stands above it, and of the documents of the buckets read.
+    const record = this.#bucketRecordsOf(doc).find((one) =>
+      isPrefix(path, one.path) || isPrefix(one.path, path)
+    );
+    if (record !== undefined) {
+      const below = path.length > record.path.length;
+      if (below || observes === "value") {
+        const text = JSON.stringify([doc, path, observes]);
+        let over = this.#labelsOverRows.get(text);
+        if (over === undefined) {
+          const parts = below
+            ? [
+              this.#labelAt(
+                this.#metadataOf(doc),
+                path.slice(0, record.path.length + 1),
+                "value",
+              ),
+              this.#labelAt(
+                this.#metadataOf(
+                  this.#bucketDocument(record, path[record.path.length]),
+                ),
+                path.slice(record.path.length + 1),
+                observes,
+              ),
+            ]
+            : [
+              this.#labelAt(this.#metadataOf(doc), path, "value"),
+              ...[...record.keys].map((key) =>
+                this.#labelAt(
+                  this.#metadataOf(this.#bucketDocument(record, key)),
+                  [],
+                  "value",
+                )
+              ),
+            ];
+          const joined = joinLabels(parts);
+          over = this.#runtime.compiledPlans.labels.intern({
+            confidentiality: [...joined.confidentiality ?? []],
+            integrity: [...joined.integrity ?? []],
+          }).id;
+          this.#labelsOverRows.set(text, over);
+        }
+        return over;
+      }
     }
     const executorDoc = doc;
     ({ doc, path } = this.#placeOf(executorDoc, path));
@@ -1477,8 +1598,14 @@ export class RuntimeTransactions implements TransactionHooks {
     // The array of rows the change is of, where it is one, and whether the
     // change is of a path above such an array.
     const array = rows.find((one) => samePath(one.path, path));
-    const above = rows.some((one) =>
-      one.path.length > path.length && isPrefix(path, one.path)
+    const buckets = this.#bucketRecordsOf(doc);
+    const above =
+      rows.some((one) =>
+        one.path.length > path.length && isPrefix(path, one.path)
+      ) || buckets.some((one) => isPrefix(path, one.path));
+    // The record of bucket documents the change is of one member of.
+    const bucket = buckets.find((one) =>
+      path.length === one.path.length + 1 && isPrefix(one.path, path)
     );
     // The address the storage holds a path of the document at: that of a
     // row document for a path below a row that is one.
@@ -1522,7 +1649,7 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#created.push(doc);
       tx.writeValueOrThrow(
         this.#address(doc, []),
-        this.#encodeWithRows(tx, store, rows, [], document.value),
+        this.#encodeWithRows(tx, store, rows, [], document.value, buckets),
       );
       this.#enroll(tx, doc);
     } else if (array !== undefined || above) {
@@ -1563,9 +1690,47 @@ export class RuntimeTransactions implements TransactionHooks {
       } else {
         tx.writeValueOrThrow(
           this.#address(doc, path),
-          this.#encodeWithRows(tx, store, rows, path, held),
+          this.#encodeWithRows(tx, store, rows, path, held, buckets),
         );
       }
+    } else if (bucket !== undefined) {
+      // A bucket that changed is written as its document, and one that
+      // came to exist also as the link to it. A bucket that emptied loses
+      // its document and its link.
+      const key = path[path.length - 1];
+      const held = store.peek(doc, path);
+      const record = writes?.find(({ target }) =>
+        target.doc === doc && samePath(target.path, path)
+      );
+      if (held === undefined) {
+        if (bucket.keys.delete(key)) {
+          tx.writeValueOrThrow(
+            this.#address(this.#bucketDocument(bucket, key), []),
+            undefined,
+            { delete: true },
+          );
+          tx.writeValueOrThrow(this.#linkOfBucket(bucket, path), undefined, {
+            delete: true,
+          });
+        }
+      } else {
+        const link = this.#writeBucket(tx, bucket, key, held);
+        if (!bucket.keys.has(key)) {
+          bucket.keys.add(key);
+          tx.writeValueOrThrow(this.#linkOfBucket(bucket, path), link);
+        }
+      }
+      // The document of a bucket is written under no record of the plan,
+      // and so is its link: each stores the join of what the transaction
+      // read. The transaction reads the index at its own position in the
+      // result document, so that join holds what a read of the bucket in
+      // place consumed through the entry of the index, which a read that
+      // follows the link to the document does not consume.
+      tx.readValueOrThrow({
+        ...this.#linkOfBucket(bucket, path),
+        path: [...bucket.path.slice(0, -1), "kind"],
+      });
+      writes = writes?.filter((write) => write !== record);
     } else {
       const parent = path.length === 0
         ? undefined
@@ -1596,6 +1761,26 @@ export class RuntimeTransactions implements TransactionHooks {
         tx.writeValueOrThrow(at(path), undefined, { delete: true });
       } else {
         tx.writeValueOrThrow(at(path), this.#encode(store.peek(doc, path)));
+      }
+    }
+    // A change at or above a record of bucket documents wrote each bucket
+    // whole. The record the executor gave for the path of the index is that
+    // of each bucket's document too, which then stores the label of the
+    // index and not the join of what the transaction read.
+    if (document !== undefined && writes !== undefined) {
+      for (const record of buckets) {
+        if (!isPrefix(path, record.path)) continue;
+        const given = writes.findLast(({ target }) =>
+          target.doc === doc && isPrefix(target.path, record.path)
+        );
+        if (given === undefined) continue;
+        writes = [
+          ...writes,
+          ...[...record.keys].map((key) => ({
+            ...given,
+            target: { doc, path: [...record.path, key] },
+          })),
+        ];
       }
     }
     if (this.#rowsApart !== undefined) {
@@ -1685,12 +1870,71 @@ export class RuntimeTransactions implements TransactionHooks {
     return id;
   }
 
+  /** The records of bucket documents of a document of the executor. */
+  #bucketRecordsOf(doc: string): readonly BucketRecord[] {
+    return doc === this.#owner ? this.#bucketRecords : [];
+  }
+
+  /** The identifier of the document of the bucket of `key` of a record. */
+  #bucketDocument(record: BucketRecord, key: string): string {
+    const id = identifierOf({ buckets: [record.doc, ...record.path], key });
+    if (!this.#bucketDocuments.has(id)) {
+      this.#bucketDocuments.set(id, { record, key });
+    }
+    return id;
+  }
+
+  /**
+   * The position of the result document that holds the link to the bucket
+   * that `path`, a path at or below the bucket, is of.
+   */
+  #linkOfBucket(
+    record: BucketRecord,
+    path: readonly string[],
+  ): NormalizedFullLink {
+    return {
+      space: this.#spaceOf(record.doc),
+      id: this.entityOf(record.doc),
+      path: path.slice(0, record.path.length + 1),
+      scope: "space",
+    };
+  }
+
+  /** Writes the document of a bucket whole, and returns the link to it. */
+  #writeBucket(
+    tx: IExtendedStorageTransaction,
+    record: BucketRecord,
+    key: string,
+    value: unknown,
+  ): FabricValue {
+    const id = this.#bucketDocument(record, key);
+    const address = this.#address(id, []);
+    tx.writeValueOrThrow(address, this.#encode(value));
+    this.#enroll(tx, id);
+    // The write policy of the write, as `change` records it for a path.
+    recordRelevantSchemaWritePolicyInput(tx, address, undefined);
+    return createSigilLinkFromParsedLink({
+      id: address.id,
+      space: address.space,
+      path: [],
+    });
+  }
+
   /**
    * Where the storage holds a path of a document of the executor: a path
    * below a row that is a document of its own is a path of that document,
+   * a path at or below a bucket that is one is a path of that document,
    * and every other path is itself.
    */
   #placeOf(doc: string, path: readonly string[]): Address {
+    for (const record of this.#bucketRecordsOf(doc)) {
+      const { length } = record.path;
+      if (path.length <= length || !isPrefix(record.path, path)) continue;
+      return {
+        doc: this.#bucketDocument(record, path[length]),
+        path: path.slice(length + 1),
+      };
+    }
     for (const array of this.#rowArrays.get(doc) ?? []) {
       const { length } = array.path;
       if (path.length <= length || !isPrefix(array.path, path)) continue;
@@ -1731,6 +1975,13 @@ export class RuntimeTransactions implements TransactionHooks {
    * row document, the path below the position of its row.
    */
   #addressOfStored(doc: string, path: readonly string[]): Address {
+    const bucket = this.#bucketDocuments.get(doc);
+    if (bucket !== undefined) {
+      return {
+        doc: bucket.record.doc,
+        path: [...bucket.record.path, bucket.key, ...path],
+      };
+    }
     const row = this.#rowDocuments.get(doc);
     if (row === undefined) return { doc, path: [...path] };
     const { array, key } = row;
@@ -1813,7 +2064,30 @@ export class RuntimeTransactions implements TransactionHooks {
     rows: readonly RowArray[],
     path: readonly string[],
     value: unknown,
+    buckets: readonly BucketRecord[] = [],
   ): FabricValue {
+    const record = buckets.find((one) => samePath(one.path, path));
+    if (record !== undefined) {
+      // The record of the buckets: each bucket as its document and a link
+      // to it. The document of a bucket the record holds no more is
+      // removed.
+      const members = isWalkableObjectNotArray(value) ? value : {};
+      for (const key of record.keys) {
+        if (Object.hasOwn(members, key)) continue;
+        record.keys.delete(key);
+        tx.writeValueOrThrow(
+          this.#address(this.#bucketDocument(record, key), []),
+          undefined,
+          { delete: true },
+        );
+      }
+      return Object.fromEntries(
+        Object.entries(members).map(([key, bucket]) => {
+          record.keys.add(key);
+          return [key, this.#writeBucket(tx, record, key, bucket)];
+        }),
+      );
+    }
     const array = rows.find((one) => samePath(one.path, path));
     if (array !== undefined) {
       if (!Array.isArray(value)) {
@@ -1837,19 +2111,29 @@ export class RuntimeTransactions implements TransactionHooks {
     const on = rows.filter((one) =>
       one.path.length > path.length && isPrefix(path, one.path)
     );
-    if (on.length === 0) return this.#encode(value);
+    const inside = buckets.filter((one) =>
+      one.path.length > path.length && isPrefix(path, one.path)
+    );
+    if (on.length === 0 && inside.length === 0) return this.#encode(value);
     // An array of rows can stand below a member of an array, as the
     // children of a view node do.
     if (Array.isArray(value)) {
       return value.map((member, index) =>
-        this.#encodeWithRows(tx, store, on, [...path, `${index}`], member)
+        this.#encodeWithRows(
+          tx,
+          store,
+          on,
+          [...path, `${index}`],
+          member,
+          inside,
+        )
       );
     }
     if (!isWalkableObjectNotArray(value)) return this.#encode(value);
     return Object.fromEntries(
       Object.entries(value).map(([name, member]) => [
         name,
-        this.#encodeWithRows(tx, store, on, [...path, name], member),
+        this.#encodeWithRows(tx, store, on, [...path, name], member, inside),
       ]),
     );
   }
@@ -2243,6 +2527,8 @@ export class RuntimeTransactions implements TransactionHooks {
         seen.add(key);
       }
       listed.push(this.#cfcAddress(address));
+      const link = this.#crossedBucketLink(address);
+      if (link !== undefined) listed.push(link);
     }
     return listed.length === addresses.length ? { listed } : {
       listed,
@@ -2409,14 +2695,25 @@ export class RuntimeTransactions implements TransactionHooks {
     // observe: it observes the label stored there in the committing
     // transaction and reads no value (ruling (c)).
     const observes = observesOf(binding.observes);
+    // A chain that ends at or below a bucket that is a document of its own
+    // crossed the link to it, which the result document holds below the
+    // entry of the index: that position is observed with the chain.
+    const crossed = [binding.chain, ...(binding.below ?? [])].flatMap(
+      (chain) => {
+        const link = this.#crossedBucketLink(chain[chain.length - 1]);
+        return link === undefined ? [] : [[link]];
+      },
+    );
+    const below = [
+      ...(binding.below ?? []).map((chain) =>
+        chain.map((address) => this.#cfcAddress(address))
+      ),
+      ...crossed,
+    ];
     return {
       chain: binding.chain.map((address) => this.#cfcAddress(address)),
       observes,
-      ...(binding.below === undefined ? {} : {
-        below: binding.below.map((chain) =>
-          chain.map((address) => this.#cfcAddress(address))
-        ),
-      }),
+      ...(below.length === 0 ? {} : { below }),
       ...(binding.members === undefined ? {} : {
         members: binding.members.map(({ container, count, groups }) => ({
           container: this.#cfcAddress(container),
@@ -2443,6 +2740,21 @@ export class RuntimeTransactions implements TransactionHooks {
       written.length <= path.length &&
       written.every((segment, index) => segment === path[index])
     );
+  }
+
+  /**
+   * The runtime's address of the position of the result document that
+   * holds the link to a bucket document, for an address at or below the
+   * bucket; nothing for any other address.
+   */
+  #crossedBucketLink(address: Address | undefined): CfcAddress | undefined {
+    if (address === undefined) return undefined;
+    const record = this.#bucketRecordsOf(address.doc).find((one) =>
+      address.path.length > one.path.length && isPrefix(one.path, address.path)
+    );
+    if (record === undefined) return undefined;
+    const { space, id, path } = this.#linkOfBucket(record, address.path);
+    return { space, id, scope: "space", path: [...path] };
   }
 
   /** The runtime's address of a position of a document of the executor. */
@@ -2777,7 +3089,10 @@ export class RuntimeTransactions implements TransactionHooks {
       const stream = this.#streams.get(link.id ?? "");
       if (stream !== undefined) return { $stream: stream };
       const row = this.documentOf(link.id ?? "");
-      if (rows !== undefined && this.#rowDocuments.has(row)) {
+      if (
+        rows !== undefined &&
+        (this.#rowDocuments.has(row) || this.#bucketDocuments.has(row))
+      ) {
         return this.#decode(
           rows.readValueOrThrow(this.#address(row, [])),
           rows,

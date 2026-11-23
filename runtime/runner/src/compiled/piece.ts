@@ -35,7 +35,10 @@ import {
   Instance,
   type ModuleEvaluator,
 } from "../../../../base/pattern-compiler/exec/executor.ts";
-import { rowDocumentCollections } from "../../../../base/pattern-compiler/exec/row-documents.ts";
+import {
+  bucketDocumentCollections,
+  rowDocumentCollections,
+} from "../../../../base/pattern-compiler/exec/row-documents.ts";
 import { Ref } from "../../../../base/pattern-compiler/exec/store.ts";
 import { makeFrame, runInFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";
@@ -74,7 +77,10 @@ export type CompiledPieceOptions = {
    * are stored, where a row is a record or a view node. `documents`, the
    * default: each row in a document of its own, named by the array and the
    * key of the row, with a link at the row's position. `in-place`: in the
-   * array. The rows of every other collection are stored in place.
+   * array. The rows of every other collection are stored in place. The
+   * buckets of an index the result keeps are stored the same way: each in
+   * a document of its own with a link at its member of the record of the
+   * buckets, or in that record.
    */
   rows?: "documents" | "in-place";
   /**
@@ -151,11 +157,15 @@ export class CompiledPiece {
     const rowDocuments = options.rows === "in-place"
       ? undefined
       : rowDocumentCollections(artifact);
+    const bucketDocuments = options.rows === "in-place"
+      ? undefined
+      : bucketDocumentCollections(artifact);
     const transactions = new RuntimeTransactions(runtime, space, {
       owner: result.id,
       artifact,
       countRecordBytes: options.countRecordBytes,
       ...(rowDocuments === undefined ? {} : { rowDocuments }),
+      ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
       stream: (entity, stream) => this.#registerStream(entity, stream),
       changes: (changes) => this.#changedByOthers(changes),
       labels: () => this.#invalidate(),
@@ -202,6 +212,7 @@ export class CompiledPiece {
           transactions,
           evaluate: options.evaluate ?? compartmentEvaluator(),
           ...(rowDocuments === undefined ? {} : { rowDocuments }),
+          ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
           load: (id) => transactions.load(id),
         },
       ), { loadRows: options.loadRows ?? 250 });
