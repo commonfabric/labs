@@ -7410,7 +7410,8 @@ export class Instance {
       }
       differs = spliced.length > 0;
       if (differs) {
-        const first = Math.min(...spliced.map(({ start }) => start));
+        let first = rowsNow.length;
+        for (const { start } of spliced) first = Math.min(first, start);
         for (let index = first; index < rowsNow.length; index++) {
           if (rowsNow[index].index !== index) {
             rowsNow[index] = { ...rowsNow[index], index };
