@@ -23,7 +23,8 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-topics` | `compiled-pattern-topics-merge` | The crate on the corpus of `main`, Topics on the executor | #10016 |
 | `claude/compiled-pattern-runner-m3` | `compiled-pattern-m3` | The trunk of the build: milestones 3 to 6 merged, the store with frozen values, a resume by units | #10140 |
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
-| `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes; the trunk at `a467194a96` and the carry branch are merged into it | none |
+| `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch: the trunk head, the carried fixes, the runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes, write integrity | none |
+| `merge-attempt/serving-m6` | `compiled-pattern-m5` (checked out by the round in progress) | The attempt to merge the serving branch into the merged branch; one test fails | none |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
 | `claude/compiled-pattern-topics-runs` | `compiled-pattern-topics-runs` | The measured Topics boards; the serving branch is merged into it for measurements (local) | none |
@@ -35,46 +36,62 @@ branch of its own cut from `main`. The owner's instruction of 2026-11-23
 
 ## What is not merged
 
-The trunk is `claude/compiled-pattern-runner-m3`. Four branches were cut from
-it, or from each other, at different commits and each changed
-`base/pattern-compiler/exec/executor.ts`, `exec/store.ts`,
-`runtime/runner/src/compiled/piece.ts`, `transactions.ts` and `resume.ts`:
+`claude/compiled-pattern-runner-m3` is the trunk of the pull request #10140.
+The work after it is on two branches:
 
-1. `claude/compiled-pattern-sandbox-m5` (cut from the trunk at `5f45021c1d`).
-   The trunk at `a467194a96` and the carry branch are merged into it (head
-   `ad153f2c34`, note 892). The trunk has since moved to `7b2a492b82`, which
-   is not merged. The merge settled how a resume treats a piece with scoped
-   documents: a piece that has named a document of a scope resumes whole,
-   with no row left as stored, its basis names a source with no number
-   (P354), and it writes no list of readers. A piece with no scoped document
-   is woken by units as on the trunk. A piece with a `wish` has scoped
-   state, so under the serving loop with resume 71 corpus pieces are found
-   current where the trunk finds 80, and `apps/redactor/vault.tsx` does not
-   resume there: its whole resume is refused for writer fit.
-2. `claude/compiled-pattern-write-integrity` (cut at `5f45021c1d`). It
-   cherry-picked three commits of the sandbox branch (`d391e27356`,
-   `f84027cabb`, `e6f2b7b96e`), so it merges with that branch first.
-3. `claude/compiled-pattern-serving-m6` (cut at `820fa700ee`, before the
-   store round). The store round rewrote `exec/store.ts`; this branch added
-   list documents in the adapter and changed `Handle.key`.
-4. `claude/compiled-pattern-carry` (cut at `aabee19586`). Merged into the
-   sandbox branch; nothing of it is left to merge.
+1. `claude/compiled-pattern-sandbox-m5` is the merged branch. It holds the
+   trunk head `7b2a492b82`, the carry branch, scopes and write integrity
+   (head `121959d0fa`, notes 892, 980 and 981), and every gate passes
+   there. A piece that has named a document of a scope resumes whole, with
+   no row left as stored, and writes no list of readers (P354, note 892); a
+   piece with no scoped document is woken by units as on the trunk. A piece
+   with a `wish` has scoped state, so under the serving loop with resume 71
+   corpus pieces are found current where the trunk finds 80.
+2. `claude/compiled-pattern-serving-m6` is the one branch not merged. The
+   attempt is the branch `merge-attempt/serving-m6` (head `1d609076c0`, note
+   982), cut from the merged branch. One test of the serving branch fails
+   there, for a defect of the trunk that the merge exposed and did not
+   create (below).
 
-Merge in this order, one merge at a time, each by an agent that is given
-both sides' notes and tests as the bar: the trunk head `7b2a492b82` into the
-sandbox branch, then write integrity, then serving; the result becomes the
-trunk. For each merge: resolve the textual
-conflicts, then check the places where both sides changed the same
-machinery without a textual conflict, regenerate the emitted fixtures
-(`cargo build --release` in `base/pattern-compiler`, then the script the
-sandbox notes name, which runs `pattern-compiler emit --unchecked` for each
-`compare/fixtures/*.emit.json`), run the gates below, rerun one figure of
-each side, and run `compare/runner-corpus.ts` in its four modes. Three
-merges each produced defects neither parent had (two time values compared
-as equal; a handler-sent event that was either not durable or threw; in the
-merge of the trunk into the sandbox branch, every row evaluated at a wake
-and a restore that dropped another principal's memo entry), so a merge is
-not finished when the conflicts are gone.
+The merged branch becomes the trunk once the serving branch is in. For a
+merge: resolve the textual conflicts, then check the places where both
+sides changed the same machinery without a textual conflict, regenerate the
+emitted fixtures (`cargo build --release` in `base/pattern-compiler`, then
+`work/r17-merge/regen.sh` under the session's project directory, which
+handles the three trunk fixtures that name their module from the repository
+root), run the gates below, rerun one figure of each side, and run
+`compare/runner-corpus.ts` in its four modes. Four merges each produced
+defects neither parent had (two time values compared as equal; a
+handler-sent event that was either not durable or threw; every row evaluated
+at a wake and a restore that dropped another principal's memo entry; a wake
+by units that left no row of a list stored in documents), so a merge is not
+finished when the conflicts are gone.
+
+**What blocks the last merge, and what it showed** (notes 982 onward on
+`merge-attempt/serving-m6`; a continuation of round seventeen is diagnosing
+all three):
+
+- *The start commit of a piece over about 150 distinctly labeled items is
+  refused as too large.* Every document of the lists of readers (P271, 256
+  hashed parts) and of the basis parts is written by
+  `RuntimeTransactions.writeOwn` with no plan record, so each stores the
+  join of everything the transaction read. At 201 items under one clause
+  each, the commit stands for 1.44 million slots where the memory server
+  admits 1 million. The trunk head alone fails the same way when its own
+  `row-documents` case is run with 201 items. Open: why the label table of
+  the commit does not store that join once, whether today's path has the
+  same cost, and what label such a document owes (deferred question 1 of
+  round thirteen).
+- *A client that reads a list of 1,000 rows stored in chunks sees a rename
+  after 3.4 s and an add after 13 s,* while the piece spends 50 ms. Chunks
+  above 128 rows (P393) have no counterpart on today's path, where a `map`
+  keeps the links of all rows in one result cell. The layouts to compare
+  are links in place, one list document without chunks, and chunks.
+- *A FabriChat send at 100 messages gives 688 to 698 records on the merged
+  code where the serving branch gives 189.* `messageRights` is a `map` over
+  an array of references whose output is `PerSession`; the scopes code
+  stores a scoped output whole in its scope instance with a record for
+  every path, about 5 records per message held.
 
 Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
