@@ -3454,21 +3454,43 @@ export class RuntimeTransactions implements TransactionHooks {
     return identifierOf({ type: "minted", parent: this.#owner ?? "" });
   }
 
-  /** What the replica holds of the counts of the instance, for a resume. */
-  heldMinted(): { events: number; created: number } | undefined {
+  /**
+   * What the replica holds of the counts of the instance, and of the
+   * instances its handlers made, each by its identifier with the identity
+   * of its pattern, for a resume.
+   */
+  heldMinted():
+    | { events: number; created: number; made: Record<string, string> }
+    | undefined {
     const held = this.#held(this.#mintedDocument())?.value;
-    return isWalkableObjectNotArray(held)
-      ? { events: Number(held.events), created: Number(held.created) }
-      : undefined;
+    if (!isWalkableObjectNotArray(held)) return undefined;
+    const made: Record<string, string> = {};
+    if (isWalkableObjectNotArray(held.made)) {
+      for (const [id, pattern] of Object.entries(held.made)) {
+        if (typeof pattern === "string") made[id] = pattern;
+      }
+    }
+    return {
+      events: Number(held.events),
+      created: Number(held.created),
+      made,
+    };
   }
 
-  /** Writes the counts of the instance into `tx`. */
+  /**
+   * Writes the counts of the instance into `tx`, with the instances its
+   * handlers made.
+   */
   writeMinted(
     tx: IExtendedStorageTransaction,
-    minted: { events: number; created: number },
+    minted: { events: number; created: number; made: Record<string, string> },
   ): void {
     const doc = this.#mintedDocument();
-    tx.writeValueOrThrow(this.#address(doc, []), { ...minted });
+    tx.writeValueOrThrow(this.#address(doc, []), {
+      events: minted.events,
+      created: minted.created,
+      made: { ...minted.made },
+    });
     if (this.#heldBefore.delete(doc)) this.#enroll(tx, doc);
     if (!this.#documents.has(doc)) {
       this.#documents.add(doc);

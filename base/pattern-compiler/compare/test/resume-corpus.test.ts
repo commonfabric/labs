@@ -46,6 +46,17 @@ describe("a module of the corpus that a second runtime resumes from its basis", 
     expect(outcome.equal).toBe(true);
   });
 
+  it("holds the values of the executor in memory after the later events, for a piece whose handler makes an instance of a pattern", async () => {
+    const outcome = await resumed(
+      "/dev/self-reference-test/self-reference-test.tsx",
+    );
+
+    expect(outcome.resume?.current).toBe(true);
+    expect(outcome.events?.handled).toBe(outcome.events?.sent);
+    expect(outcome.refusals).toEqual([]);
+    expect(outcome.equal).toBe(true);
+  });
+
   // Each of the two renders a record as text, so the text holds the order
   // in which the value code read the members of the record: the order of
   // the storage, in the runtime that wrote the record as in the one that
