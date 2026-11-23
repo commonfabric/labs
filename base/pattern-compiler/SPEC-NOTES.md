@@ -13424,6 +13424,430 @@ on from those of the sixth round.
     it; with the buckets as documents it does (note 649). Whether the read in
     place under-labels: it follows the same links to the same topic.
 
+## Milestone 3, eighth round: a create, a sorted move and the load
+
+Notes 657 on are about the eighth round of milestone 3 (2026-11-23). Whenever a
+note says `map` or `flatMap`, it names the case. A function of a profile is
+named with its file. The numbers 670 to 699 are left to later rounds of
+milestone 3.
+
+657. **What the round did.** In order: a change of the source of a `flatMap`
+     applied to its kept segments (note 659); the read of an `enumeration` entry
+     of a handler's state (note 660); a row that holds the bucket it looked up
+     by a link, with the membership of the index stored at the index (note 661);
+     a kept index stored bucket by bucket (note 662); the two boards on that
+     layout (note 663); the array of a sorted order written once for a move, and
+     what the wire carries for it (note 664); the load (note 665); and the
+     boards and the corpus measured (notes 667 and 668). Stubbed with a plan: a
+     sorted move that writes a bounded number of positions (note 664), and the
+     read of a frozen stored value without a copy (note 666). Three findings on
+     labels came out of the tests of the round and are not resolved (note 658).
+658. **Soundness and structure: what the tests of the round found.**
+     - _A member that enters a folded collection under a label of its own gives
+       no record again where its label is stored when it enters._ The fixture
+       `crossref.tsx` and the new `bucket-reference.tsx`, with a topic under a
+       clause of its own that mentions no topic pushed onto the array by another
+       writer in the transaction that writes the topic: the rows of the other
+       topics are given no record, and a read of the bucket of any of them does
+       not consume the clause of the topic that entered, although its list of
+       mentions decided that it is in no bucket. The groups of the stored array
+       (`MemberGroups`) are brought up to date for a member that enters, and the
+       records that read the array (`MemberGroups.records`) are given again only
+       by `Instance.#memberLabelsChanged`, which a change of stored labels
+       calls. On Topics a create gives the records because the label of the new
+       topic is stored one commit later. This is in the code the round started
+       from, in both layouts, and is CFC question 20.
+     - _A row that holds the membership of an index in place keeps the label it
+       was given until its own record is given again._ With the list of mentions
+       of one topic written under another clause by another writer, the row of
+       that topic and the rows whose buckets changed consume the new clause, and
+       the row of a topic that is mentioned by none, which holds an empty array
+       in place, does not (`crossref.tsx`, the last row). CFC question 21.
+     - _The wire form of an array written at its path is a `replace` of the
+       array._ Note 651 left unread what a commit sends for a move. Read from
+       `V2StorageTransaction.getNativeCommit` for an array of 1,000 links: a
+       write at the path of the array is one `replace` patch that holds the
+       array, 88 KB; writes of the positions that differ, under a read of the
+       array, are two marked splices; and `Cell.set` of the array is two marked
+       splices. `findArrayPatchPath` of
+       `runtime/runner/src/storage/v2-transaction.ts` groups a write as one of
+       an array only where an array stands above the path written. The adapter
+       writes the array at its path (P90), so a move sends the array.
+659. **A change of the source of a `flatMap` is applied to its kept segments
+     (provisional decision P140).** A `flatMap` over an array of references
+     whose bodies return the result of an inner per-element construct was formed
+     whole when the source array changed (note 640). An append of one topic
+     formed the segment of every topic and located every member of the array:
+     one of the two positions that a create read for each topic.
+     `Instance.#reassemble` of `exec/executor.ts` now applies the splices of the
+     source to the kept segments: the lengths, the dependencies on the inner
+     assemblies, the members and the values of the elements that left are taken
+     out, and the segment of each element that entered is formed and put at its
+     place by the path that puts in a changed segment. Finding the place of a
+     segment adds up the lengths of the segments before it, a step for each
+     element and no read. A `flatMap` over an empty source keeps no segments and
+     is formed whole at its first element.
+     - _Tests._ `exec/test/crossref.test.ts`, "forms the segment of the one
+       topic appended, among 1,000 topics as among 10, and takes out the segment
+       of a topic removed", written first and seen to fail on 11 segments formed
+       where one was expected, and "splices the segment of a topic inserted in
+       the middle of the array, between those of its neighbors".
+     - _Result._ A create at 1,000 topics reads 1,082 positions, from 2,083, and
+       the piece's own time is 130 ms, from 215.
+660. **An `enumeration` entry of a handler's state that gives way to a handle
+     follows no link (provisional decision P141).** The other position for each
+     topic was read by `Instance.#attempt`: it read each slot of a handler's
+     state that does not observe `identity` with every link followed.
+     `addBoardTopic` reads `Object.keys(names.get() ?? {})`, so its plan has an
+     `enumeration` entry at the path of the handle `names`, and the read of that
+     entry followed the link of each member of the namespace into each topic's
+     document, before the body read the record through its handle under its
+     declared type, which follows none. The entry is now read under a schema
+     that types each child as unknown (`CHILDREN_UNREAD`), where it gives way to
+     a handle the state holds at or above its path (`Instance.gives`). The slot
+     is bound to the positions of the container.
+     - _Test._ `exec/test/handler-enumeration.test.ts` over the fixture
+       `compare/fixtures/handler-enumeration.tsx`, "reads no document that a
+       member of the record refers to", written first and seen to fail on the
+       three documents read.
+     - _Result._ A create reads 57 to 76 positions at 100 and at 1,000 topics.
+     - _What the transaction no longer reads_ is CFC question 22.
+661. **A row holds the bucket it looked up by a link, and the membership of the
+     index is stored at the index (provisional decisions P142 and P143).** This
+     is the layout the brief of the round describes for the records of P69.
+     - _Which rows._ A row of a per-element construct whose value holds what
+       `lookup` gave, as it gave it, for an index of the same instance that the
+       result keeps with its buckets as documents (`bucketDocumentCollections`).
+       `Host.lookup` notes, for the array of members it gives, the position of
+       the bucket below the record `buckets` of the kept index (`bucketPlaces`,
+       `Instance.bucketRecordOf`), and `Instance.#formOf` stores a reference to
+       that position where the value of an output holds that array. The
+       evaluation still depends on the bucket, and what reads the row in memory
+       reads the members. A row derived from the bucket, as
+       `lookup(topic).map((pair) => pair.from)` is, holds no bucket and is
+       stored as before.
+     - _The link is to the position in the result document,_ and not to the
+       bucket's document. The result document holds, at that position, the link
+       to the bucket's document. A read through the row's link therefore reads
+       the result document at `<index>/buckets/<key>`, below the entry of the
+       index, and then the bucket's document.
+     - _The record of the row (P142)._ The template of the output is the join of
+       the key and of the output of the index. `Instance.#heldByReference` gives
+       the record with the inputs of the output of the index replaced by inputs
+       under which that output has no label: every slot a constant of the plan,
+       every `fold` with no element. No code of the preparation changed. The
+       label stored at the row's position is that of the key.
+       `Instance.#noteRecord` registers a `fold` with no element as a reader of
+       no group, so a change of the membership gives no record of the row.
+     - _The record of the index at its path (P143)._ A change of a bucket wrote
+       the record of the index at the leaves the comparison found unchanged,
+       `kind` and `mode`, which a read of a bucket does not pass. Where a bucket
+       changed, `Instance.#storeIndex` now gives the record of the index at the
+       path of the index as a record that forms the label alone
+       (`#unchangedOutput`), so the entry above the buckets holds the membership
+       as it is now. A change of a label alone gave it there already
+       (`#relabel`).
+     - _A key with no bucket._ The row holds an empty array in place under the
+       record it had, which names the membership. So a row whose key no member
+       has is given its record again as before, and its label goes stale as
+       before (note 658). A reference to a position that holds nothing would
+       read as `undefined` through the runtime where the executor in memory
+       gives an empty array.
+     - _Tests._ `runtime/runner/test/compiled/bucket-reference.test.ts` over the
+       fixture `compare/fixtures/bucket-reference.tsx`, seven cases: the values;
+       the link of a row whose topic is mentioned and the empty array of one
+       that is not; the clause of every topic for a read of the bucket a row
+       holds; one record of `mentionedBy` when a topic enters the array; the
+       transitions between an empty array and a link; no record of a row when a
+       member enters its bucket; and, with the list of mentions of one topic
+       written under another clause, the record of the index given again at its
+       path, one record of `mentionedBy`, and that clause consumed by a read of
+       a bucket that no transaction wrote, through the link of a row that no
+       transaction wrote. The cases of the link, of the count of records and of
+       the record at the path of the index failed first, each for the stated
+       reason. No existing assertion changed.
+     - _What the layout leaves:_ the bucket's document keeps the label it was
+       written with (CFC question 13), and the read consumes the entry of the
+       index above the link beside it.
+662. **A kept index is stored bucket by bucket (provisional decision P144).**
+     The result of an instance held an index whole (`Host.output`), so a change
+     of one bucket evaluated the result again, formed the record of every bucket
+     (`Instance.indexRecord`), formed its canonical text and compared each
+     bucket with what the store held. Where the buckets are documents of their
+     own, the result now holds the reference to the index. `Instance.#indexForm`
+     stores the index whole the first time it stands at its path, and afterwards
+     `Instance.#storeIndex` writes the buckets that `#reassemble` changed
+     (`Index.changed`) and removes those that emptied. An index that is formed
+     again whole is stored whole, each bucket compared.
+     - _Tests._ `exec/test/bucket-documents.test.ts` over `kept-index.tsx` with
+       the option `bucketDocuments`: the buckets after a member moves, enters
+       and leaves, and "does not evaluate the result of the instance when a
+       member moves between two buckets", written first and seen to fail on the
+       evaluation of `result`.
+     - _Result._ An edit of the `shortName` has the piece's own time at 3 to 5
+       ms at every size, from 5, 12 and 16.
+663. **The two boards on that layout (provisional decision P145).** On the
+     branch `claude/compiled-pattern-topics-runs`, a row of the pivot holds
+     `mentionedBy: byMentioned.lookup(topic)`, the pairs, where it held the
+     topics that mention, and the result keeps the index of the pairs as
+     `mentionIndex`. `backlinksOf` of `topic.tsx` reads `from` of each pair on
+     the path of an index that a `groupBy` keeps. The facts the harness reads of
+     the board at 100 topics, over the load and every step, equal those before
+     the change. The result document holds one more record of links and is 1.14
+     MB at 1,000 topics, from 0.84 MB, and the load writes one more document for
+     each topic that is mentioned.
+664. **The move of one row of a sorted order: one write of the array, and still
+     not bounded (provisional decision P146).**
+     - _What a move did._ A change of one sort key gives two changes of the
+       array of row documents, one that takes the row out and one that puts it
+       in. Neither is given as a splice of positions, so the adapter wrote the
+       array of links whole for each, and built the link of every position each
+       time: the identifier of the document of each row is a hash of the array
+       and the key (`#rowDocument`). In the profile of a move at 2,000 topics
+       the piece's own 48 ms were 14 ms of links and 24 ms of the two writes.
+     - _What is built._ `RuntimeTransactions` keeps the identifier and the link
+       of the document of each row by its key (`RowArray.ids`, `RowArray.links`)
+       and writes an array whose positions shifted once, when the transaction
+       ends (`#writeSplicedArrays`). The rows that entered are written when
+       their change arrives. Test:
+       `runtime/runner/test/compiled/sorted-rows.test.ts` over the fixture
+       `compare/fixtures/sorted-rows.tsx`, five cases, written after the code:
+       one write of the array (`RuntimeCounts.rowArraysWritten`) for a move
+       across 39 positions with the document of each row where it was, two moves
+       in one transaction, a move to the next place, a member that enters and
+       one that leaves.
+     - _Why the array is still written whole._ The reader of the order is the
+       list of the children of a view node, an array in the result document. The
+       commit sends marked splices where the transaction wrote positions (note
+       658). Tried: the positions between the first and the last that differ,
+       written one by one when the transaction ends. The preparation refuses the
+       commit: "a plan-write names `/$UI/children/0/children/1/children/0` ...,
+       which the transaction did not write". The record of the array names the
+       array, and a record of the plan has to name a path the transaction wrote.
+       So a splice on the wire needs a record for each position written, which
+       is one for each position between the old place and the new, or a record
+       of the plan that covers the positions of a splice. CFC question 23.
+     - _What a move costs now_ is in note 667. The storage reports one changed
+       path for each position between the old place and the new, and the commit
+       carries the array.
+     - _Plan, not built: the order in chunks._ The array of a kept collection of
+       row documents stored as documents of at most 64 links, with the result
+       holding the list of the chunks: a move writes the two chunks it touches,
+       and an append the last. The part documents of P20 (`exec/parts.ts`) are
+       this for an array above a size, and the runner path runs with
+       `parts: false`. What it needs: (1) the adapter's `#placeOf` and `read`
+       for a position of the array, which find the chunk as they find a row's
+       document; (2) a reader through the runtime that reads the children of a
+       view node through the chunks, which is a change of the renderer or a
+       flattening read; (3) the label of the membership at the list of chunks,
+       where a read of any position passes it, as the entry of an index stands
+       above its buckets. An order key for each row with the reader sorting, and
+       a linked order, both change what the children of a view node are for
+       every reader, and were not taken.
+665. **The load.**
+     - _Removed._ `Instance.#keysAlong` parsed the text of the key of each row
+       on the path of every write record, and used it for a row of a `flatMap`
+       alone: `recordOfKey`, 0.42 s of a load of 2,000 topics in the profile.
+       The identifier of a row's document is hashed once for a row (note 664).
+       `Instance.#addressesOf` forms no text of the one position a slot is bound
+       to.
+     - _Added by the layout of note 663:_ one bucket document for each topic
+       that is mentioned, 12,011 documents at 2,000 topics, from 10,011.
+     - _What remains, from the profile of a load of `filing-order` at 2,000
+       topics_ (10.2 s under the profiler, at a load average of 11): the piece's
+       own 5.1 s, of which the commits of the row documents in bounded
+       transactions are 1.9 s (the runtime's preparation and storage), the
+       evaluations 1.3 s, the write records 0.7 s (`#outputRecord`, of which
+       `#shareKey` and `#labelsOf` 0.3 s), the stored form and the canonical
+       text of each value 1.0 s (`Instance.stored`, `canonical`), the forms of
+       the rows 0.5 s, and the adapter's encoding 0.36 s. Outside the piece: the
+       preparation of the handed transaction 1.5 s, the memory server's
+       `applyCommitTransaction` 1.1 s, garbage collection 0.8 s,
+       `compressLabelMetadata` 0.75 s, `deepFreeze` with its weak table 1.3 s,
+       and hashing 0.67 s.
+     - _Whose it is._ The executor's: the evaluations, the write records and the
+       canonical texts, about 3 s of the 10. The canonical text of a value is
+       formed at each evaluation to compare with at the next one; forming it
+       when the entry is next evaluated would take it out of the load, and needs
+       the entries whose value the executor changes in place, an index among
+       them, kept apart. Not built. The runtime's: the rest.
+     - _Against today's runtime._ The table of note 570 has the load of
+       `main.tsx` at 1,000 topics on today's runtime at 14.7 to 17.7 s with no
+       label stored and 37.7 to 42.7 s with labels, and note 591 has 110 s with
+       labels. Neither was run again in this round. The compiled load at 1,000
+       is in note 667.
+666. **The read of a frozen stored value without a copy: stubbed.** Not started,
+     as in the seventh round. The plan of note 704, with what the executor's
+     store needs for it: (1) `Store.put` and `Store.write` freeze what they
+     store, which costs a pass over each written value; (2) `Store.#copy`
+     returns a stored container itself where nothing below it is a link,
+     registered in `Store.addresses` once with the position it is stored at, and
+     copies a container that holds a link as now; (3) a read through a handle in
+     a function body (`copies`) stays a copy, since a body may change what it is
+     handed; (4) the corpus is run both ways (`compare/runner-corpus.ts`), since
+     a value function that sorts or writes into what it read then throws. A
+     stored container that two positions hold cannot carry two addresses, so (2)
+     needs the store to hold no container at two positions, which `Store.put` of
+     a value read elsewhere does not guarantee now.
+667. **Topics measured.** The arm `runner` of `compare/topics/scale.ts`, rows
+     and buckets as documents, the load in bounded transactions, no pull,
+     `SCALE_TOPIC_SCHEMA=mentions-as-cells`, one process for each board and
+     size, three runs, one process at a time, on an 18-core machine at load
+     averages of 6.3 to 12.0 from other sessions, which is higher than in the
+     seventh round (4.3 to 7.1). A cell is the median of the three runs of the
+     time until the board is up to date, in ms, at 100, 1,000 and 2,000 topics;
+     a create is the median of three creates in each run. "Round 7" is note 655.
+
+     | Board `filing-order`     | round 7 (note 655) | this round        | lowest to highest at 1,000 |
+     | ------------------------ | ------------------ | ----------------- | -------------------------- |
+     | load                     | 495, 4,088, 8,773  | 458, 3,754, 7,572 | 3,622 to 3,908             |
+     | edit of a title, first   | 17, 20, 22         | 18, 19, 26        | 19 to 19                   |
+     | edit of a title, middle  | 12, 15, 19         | 11, 13, 14        | 12 to 13                   |
+     | edit of a title, last    | 11, 182, 14        | 10, 184, 12       | 13 to 294                  |
+     | edit of the mentions     | 13, 16, 29         | 18, 23, 26        | 19 to 216                  |
+     | edit of the `shortName`  | 20, 35, 389        | 18, 27, 386       | 25 to 33                   |
+     | edit of `lastActivityAt` | 9, 9, 9            | 8, 9, 11          | 8 to 11                    |
+     | create                   | 145, 792, 1,465    | 98, 279, 547      | 270 to 297                 |
+
+     | Board `sorted-references` | round 7 (note 655) | this round        | lowest to highest at 1,000 |
+     | ------------------------- | ------------------ | ----------------- | -------------------------- |
+     | load                      | 503, 4,031, 8,424  | 465, 3,806, 7,620 | 3,696 to 4,021             |
+     | edit of a title, first    | 17, 20, 22         | 18, 20, 30        | 19 to 23                   |
+     | edit of a title, middle   | 13, 13, 19         | 11, 14, 15        | 13 to 14                   |
+     | edit of a title, last     | 11, 171, 12        | 10, 164, 12       | 14 to 196                  |
+     | edit of the mentions      | 13, 16, 48         | 19, 23, 35        | 21 to 202                  |
+     | edit of the `shortName`   | 20, 38, 349        | 19, 29, 388       | 26 to 30                   |
+     | edit of `lastActivityAt`  | 19, 56, 94         | 18, 52, 81        | 48 to 56                   |
+     | create                    | 150, 763, 1,501    | 102, 315, 590     | 297 to 332                 |
+
+     What one step does on `filing-order` at the three sizes, from the first
+     run, and the size as JSON of the documents its last commit changed, from a
+     fourth run with the commits listed:
+
+     | step                     | evaluations | positions read | records given | piece's own ms | preparation ms | bytes of the last commit's documents |
+     | ------------------------ | ----------: | -------------- | ------------- | -------------- | -------------- | ------------------------------------ |
+     | edit of a title, middle  |           5 | 11, 11, 11     | 9, 9, 9       | 2, 2, 3        | 3, 3, 3        | 8,630, 8,636, 8,642                  |
+     | edit of the mentions     |          10 | 4, 4, 4        | 2, 2, 2       | 3, 4, 4        | 4, 6, 7        | 152,050, 1,142,954, 2,244,954        |
+     | edit of the `shortName`  |           7 | 11, 11, 11     | 10, 10, 10    | 3, 5, 4        | 4, 6, 10       | 145,576, 1,136,488, 2,238,496        |
+     | edit of `lastActivityAt` |           3 | 10, 10, 10     | 7, 7, 7       | 2, 2, 2        | 2, 2, 2        | 5,877, 5,880, 5,883                  |
+     | create                   |          20 | 57, 57, 57     | 102, 102, 102 | 17, 32, 46     | 19, 39, 65     | 168,952, 1,159,875, 2,261,877        |
+
+     On `sorted-references` an edit of `lastActivityAt` evaluates 5 entries,
+     reads 10 positions and gives 11 records at every size, with the piece's own
+     time 3, 9 and 15 ms and the preparation 4, 17 and 31 ms. Every table, with
+     the lowest and the highest run and the counters of both boards, is in
+     `tables-final.md` of the round's raw output.
+
+     - _A create_ reads the same positions and gives the same records at every
+       size, and takes 98, 279 and 547 ms on `filing-order`: it still follows
+       the board, at about a third of the time of the seventh round. In the
+       profile of a create at 2,000 topics on `sorted-references` the piece's
+       own work is 56 ms in the derivation and 14 ms in the handler, the
+       preparation 73 ms, and the rest is what three documents as long as the
+       board cost the runtime: the memory server's `refreshTrackedGraph` 147 ms
+       and `applyCommitTransaction` 110 ms, `compressLabelMetadata` 73 ms,
+       hashing 85 ms, `deepFreeze` 50 ms and garbage collection 58 ms. Of the
+       piece's own work, 35 ms is the array of cards, which a create on that
+       board changes at its front, and 29 ms the table of the entries of the
+       namespace, which is formed whole when an entry is added, with its
+       canonical text. The 3 records of `mentionedBy` that a create gives are of
+       the rows whose topic no topic mentions (note 661).
+     - _An edit of the mentions writes the result document,_ where it wrote four
+       small documents: the record of the index at its path (P143) stores a
+       label entry of the result document, and the commit carries that document,
+       1.14 MB at 1,000 topics. The step takes 18, 23 and 26 ms, from 13, 16
+       and 29.
+     - _An edit of `lastActivityAt` on `sorted-references`_ takes 18, 52 and 81
+       ms, from 19, 56 and 94, and follows the board (note 664).
+     - _The load_ is 3.75 s at 1,000 topics on `filing-order`, 3.8 ms for each
+       topic, against 14.7 to 17.7 s for today's runtime with no label stored
+       (note 665).
+     - _Cells that are a pause and not the piece:_ an edit of the `shortName` at
+       2,000 topics (386 and 388 ms, with the piece and the preparation at 14 ms
+       together), an edit of the title of the last topic at 1,000 in two of
+       three runs, and an edit of the mentions at 1,000 in one of three: the
+       pauses of note 655.
+668. **The corpus on the runner path.** `compare/runner-corpus.ts`, as in the
+     seventh round: of 373 modules 239 are run, 230 start, 200 handle every
+     event, 215 have no commit refused and 209 hold the values of the executor
+     in memory. The report is the same text as that of the head the round
+     started from, and no module has another outcome line.
+669. **Provisional decisions of the round, and what was not done.** P140: a
+     change of the source of a `flatMap` whose segments are kept takes out the
+     segments of the elements that left and forms those of the elements that
+     entered (note 659). P141: an `enumeration` or a `shape` entry of a
+     handler's state that gives way to a handle is read with no link of a child
+     followed (note 660). P142: a row whose value holds what `lookup` gave for a
+     kept index with buckets as documents stores a link to the position of the
+     bucket in the result, with a record under which the output of the index has
+     no label; a key with no bucket holds an empty array in place under the
+     record it had (note 661). P143: where a bucket of such an index changed,
+     the record of the index is given again at the path of the index (note 661).
+     P144: the result holds such an index by reference, and the buckets that
+     changed are stored by themselves (note 662). P145: the rows of the pivot of
+     the two measured boards hold the pairs of their bucket, and the boards keep
+     the index of the pairs (note 663). P146: an array of row documents that a
+     transaction splices so that positions shift is written once, when the
+     transaction ends, from one link kept for each row (note 664). Not done: a
+     move that writes a bounded number of positions, and the order in chunks
+     (note 664); the read of a frozen stored value without a copy (note 666); a
+     row whose key has no bucket held by a reference (note 661); the canonical
+     text of a value formed when its entry is next evaluated (note 665); the
+     three label findings of note 658; a link written without the space of its
+     target; `keys()` and `keyEntries()`; today's runtime measured again; more
+     than three runs for each cell, and a machine with no other load.
+
+### CFC questions deferred
+
+Noted and not resolved, by the owner's instruction of 2026-11-22. The numbers go
+on from those of the seventh round.
+
+20. A member that enters a stored array of references under a label of its own,
+    where that label is stored when it enters, leaves the records that read the
+    array as they were: the groups of the array are brought up to date
+    (`MemberGroups`), and the records are given again only when stored labels
+    change (`Instance.#memberLabelsChanged`). With a topic under a clause of its
+    own that mentions none pushed onto the array of the fixtures `crossref.tsx`
+    and `bucket-reference.tsx`, no read of a bucket consumes that clause
+    afterwards, in either layout. Suspected under-label, in the code the round
+    started from. Whether a change of the groups by a change of the members has
+    to give those records again, which is one record for each row in the layout
+    where a row holds the membership.
+21. A row that holds the membership of an index in place, as a row whose key has
+    no bucket does in the layout of P142 and every row of a derived bucket does,
+    keeps the label it was given when the list of mentions of another topic
+    comes under another clause in a transaction that also changes values: the
+    rows the transaction evaluates are given their records with the membership
+    as it is, and no other row is (`crossref.tsx`). Suspected under-label, in
+    the code the round started from. In the layout of P142 a row that holds a
+    link consumes the entry of the index, which P143 keeps current.
+22. P141 (note 660): the transaction of a handler that reads which names a
+    record of references holds no longer reads the documents the members refer
+    to. The join of what the transaction read, which a write under no record
+    stores, holds less; the slot is bound to the positions of the record, in the
+    class `enumeration`. Whether anything relied on that join. Of the kind of
+    question 16.
+23. A record of the plan has to name a path the transaction wrote. An array
+    written as the positions that differ, which the commit sends as marked
+    splices, leaves the record of the array without a write at its path, and the
+    preparation refuses it (note 664). Whether the record of the membership of
+    an array may cover a write of positions of it, as `#recordAppended` has it
+    cover the positions an append adds.
+24. P142 (note 661): the label stored at the position of a row that holds its
+    bucket by a link is that of the key, and the membership of the index is
+    consumed where the link leads, at the entry of the index. A reader that
+    reads which link the position holds and does not follow it consumes the
+    key's label alone. Whether which bucket a row holds may be known under the
+    label of the key, where the bucket existing at all depends on the
+    membership: a row whose key has no bucket holds an empty array under the
+    membership, so the two forms are told apart under the row's own label. This
+    is question 4 with a layout built for it.
+25. P143 (note 661): the record of the index is given at the path of the index
+    as a record that forms the label alone, in each transaction that changes a
+    bucket. The entries the record of a bucket's own write stored at the
+    bucket's link (question 15) stay beside it. Whether the entry of the index
+    is the one place the membership has to be stored, with no entry at a bucket.
+
 ## Milestone 5: value code in a compartment, and compile on load
 
 Milestone 5 of `docs/plans/compiled-pattern-language-integration.md`, on the
