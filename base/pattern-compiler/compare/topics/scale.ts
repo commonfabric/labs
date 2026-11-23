@@ -1173,6 +1173,8 @@ export type TodayStep = Step & {
   pull?: number;
   /** On the arm `runner`: what the compiled piece did in the step. */
   compiled?: Record<string, number>;
+  /** On the arm `runner`: the cones the step evaluated, where asked for. */
+  evaluated?: Record<string, number>;
   /** The preparations of Contextual Flow Control, and their time. */
   preparations: number;
   prepareMs: number;
@@ -1371,14 +1373,21 @@ const runToday = async (
       resetAllTimingStats();
       changed.clear();
       const before = piece === undefined ? undefined : {
+        transactions: piece.instance.transactions.length,
         records: piece.transactions.counts,
         piece: piece.counts,
         evaluations: piece.instance.counts.evaluations,
       };
+      // `SCALE_PROFILE_STEP` names the one step that `SCALE_CPU_PROFILE` is
+      // a profile of, in place of the whole run.
+      const stopStepProfile = Deno.env.get("SCALE_PROFILE_STEP") === step
+        ? await startProfile(Deno.env.get("SCALE_CPU_PROFILE") ?? "")
+        : undefined;
       const began = performance.now();
       await change();
       await settle();
       const settled = performance.now();
+      await stopStepProfile?.();
       read();
       const done = performance.now();
       const preparations = timed("extended-storage-transaction/prepareCfc");
@@ -1418,6 +1427,19 @@ const runToday = async (
             recordBytes: after.recordBytes -
               (before?.records.recordBytes ?? 0),
           },
+          // With `SCALE_EVALUATED` set: the cones the step evaluated, each
+          // with how many times.
+          ...(Deno.env.get("SCALE_EVALUATED") === undefined ? {} : {
+            evaluated: piece.instance.transactions.slice(
+              before?.transactions ?? 0,
+            ).flatMap(({ evaluated }) => evaluated).reduce(
+              (counts, cone) => ({
+                ...counts,
+                [cone]: (counts[cone] ?? 0) + 1,
+              }),
+              {} as Record<string, number>,
+            ),
+          }),
         }),
         ...(pull === undefined ? {} : { pull }),
         work: workOfStep,
@@ -1454,6 +1476,12 @@ const runToday = async (
             now: 1_000_000,
             secret: "the secret of the comparison",
             countRecordBytes: true,
+            // `SCALE_ROWS=in-place` keeps the rows of every collection in
+            // the result; otherwise the rows of a `map` over references
+            // are documents of their own.
+            ...(Deno.env.get("SCALE_ROWS") === "in-place"
+              ? { rows: "in-place" as const }
+              : {}),
           },
         );
       }));
@@ -1482,9 +1510,16 @@ const runToday = async (
  * Starts the sampling profiler of the process where `SCALE_CPU_PROFILE`
  * names a file, and returns what stops it and writes the profile there.
  */
-const profiled = async (): Promise<() => Promise<void>> => {
+const profiled = (): Promise<() => Promise<void>> => {
   const file = Deno.env.get("SCALE_CPU_PROFILE");
-  if (file === undefined) return () => Promise.resolve();
+  if (file === undefined || Deno.env.get("SCALE_PROFILE_STEP") !== undefined) {
+    return Promise.resolve(() => Promise.resolve());
+  }
+  return startProfile(file);
+};
+
+/** Starts the sampling profiler and returns what writes its profile. */
+const startProfile = async (file: string): Promise<() => Promise<void>> => {
   const session = new inspector.Session();
   session.connect();
   const post = (method: string, params?: object) =>
