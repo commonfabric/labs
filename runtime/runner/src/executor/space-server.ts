@@ -6790,6 +6790,10 @@ export class SpaceServer implements TransactionSealDestination {
           stats.demand.ownedDefaultSeeds += 1;
         } catch (error) {
           if (!this.#active || this.#runtime !== runtime) return;
+          // What the seeding passed over before it failed is still owed:
+          // the pair reaching one of those cells must bring the seed back,
+          // and the piece's own key need not change for that.
+          this.#notePassedOver(rootId, passedOver);
           logger.warn("demand-seed-failed", () => [
             `seeding the defaults the piece at ${rootId} owes a demander failed`,
             error,

@@ -852,6 +852,55 @@ describe("SpaceServer", () => {
         expect(draftReached).toEqual([false, true]);
       });
 
+      it("seeds a viewer's piece again once the viewer's demand reaches a cell that a seeding which then threw had passed over", async () => {
+        // The seeding passes the draft over and then fails. What it passed
+        // over is still owed: when the viewer's view reaches the draft, the
+        // piece's key has not changed, so only the passed-over record brings
+        // the seed back.
+        const piece = "of:arms-thrown-piece";
+        const draft = "of:arms-thrown-draft";
+        const fixture = await openFixture([piece]);
+        fixture.loadable = true;
+        fixture.commit({ [piece]: { value: {}, patternIdentity: pointer } });
+        const draftReached: boolean[] = [];
+        let failing = true;
+        fixture.hooks.onSeed = (_id, options) => {
+          draftReached.push(
+            options?.reached?.({
+              space,
+              id: draft,
+              path: [],
+              scope: "session",
+              type: "application/json",
+            } as NormalizedFullLink) ?? false,
+          );
+          return failing
+            ? Promise.reject(new Error("injected seed failure"))
+            : Promise.resolve(true);
+        };
+        const seedFailures = logged("demand-seed-failed", "warn");
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+        expect(draftReached).toEqual([false]);
+        expect(logged("demand-seed-failed", "warn")).toBe(seedFailures + 1);
+
+        failing = false;
+        fixture.setDemand([piece, {
+          id: draft,
+          principal: owner.did(),
+          sessionId: "viewer",
+          scope: "session",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+        ]);
+        expect(draftReached).toEqual([false, true]);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(1);
+      });
+
       it("asks again for a viewer whose seeding after its demand reached a passed-over cell was incomplete, beside a viewer who arrives", async () => {
         const piece = "of:arms-retry-piece";
         const draft = "of:arms-retry-draft";
