@@ -141,4 +141,19 @@ describe("a member that a handler of a compiled piece makes", () => {
     };
     expect(await given("long", 12)).toBe(await given("short", 3));
   });
+
+  it("has no more labels named for one more member where the list is longer", async () => {
+    // The `lift` asks for the label of each position it read of every
+    // member, and the members before consume the labels they consumed.
+
+    const resolved = async (tag: string, length: number) => {
+      const titles = Array.from({ length }, (_, index) => `t${index}`);
+      const { piece, result } = await startedWith(tag, titles);
+      const before = piece.transactions.counts.labelsResolved;
+      result.key("add").send({ title: "last" } as never);
+      await settled();
+      return piece.transactions.counts.labelsResolved - before;
+    };
+    expect(await resolved("long ids", 12)).toBe(await resolved("short ids", 3));
+  });
 });

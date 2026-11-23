@@ -145,6 +145,11 @@ export type RuntimeCounts = {
    * position a change of the array's members wrote.
    */
   rowLinks: number;
+  /**
+   * The labels the runtime's table of labels was asked to name: one for
+   * each distinct label that a position asked for consumes.
+   */
+  labelsResolved: number;
 };
 
 /**
@@ -322,6 +327,7 @@ export class RuntimeTransactions implements TransactionHooks {
     recordBytes: 0,
     labelEntriesChanged: 0,
     rowLinks: 0,
+    labelsResolved: 0,
   };
   /** Whether `RuntimeCounts.recordBytes` is counted. */
   readonly #countRecordBytes: boolean;
@@ -491,6 +497,7 @@ export class RuntimeTransactions implements TransactionHooks {
       // holds.
       this.#subscription = {
         next: (notification) => {
+          if (notification.type === "reset") this.#labelIds.clear();
           if (
             notification.type === "reset" ||
             notification.space !== this.#space
@@ -507,6 +514,7 @@ export class RuntimeTransactions implements TransactionHooks {
           for (const { address, before, after } of notification.changes) {
             const doc = this.#byEntity.get(address.id);
             if (doc === undefined) continue;
+            this.#labelIds.delete(doc);
             if (this.#entries.has(doc)) {
               this.#touched.add(doc);
               if (!own) labelsByOther = true;
@@ -1032,8 +1040,31 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     const executorDoc = doc;
     ({ doc, path } = this.#placeOf(executorDoc, path));
-    return this.#labelIn(this.#metadataOf(doc), path, observes);
+    // The adapter hears of no commit of another space than its own.
+    if (this.#spaces.has(doc)) {
+      return this.#labelIn(this.#metadataOf(doc), path, observes);
+    }
+    let known = this.#labelIds.get(doc);
+    if (known === undefined) {
+      known = new Map();
+      this.#labelIds.set(doc, known);
+    }
+    const text = `${observes}\n${JSON.stringify(path)}`;
+    let id = known.get(text);
+    if (id === undefined) {
+      id = this.#labelIn(this.#metadataOf(doc), path, observes);
+      known.set(text, id);
+    }
+    return id;
   }
+
+  /**
+   * The identifier `labelOf` found for each position of a document the
+   * storage holds, by the class and the path, until a commit changes the
+   * document. A `lift` over a whole list asks for the positions it read of
+   * every member each time it runs.
+   */
+  readonly #labelIds = new Map<string, Map<string, string>>();
 
   /**
    * The identifier `labelOf` found for a read of the value at or above an
@@ -1121,13 +1152,27 @@ export class RuntimeTransactions implements TransactionHooks {
     const held = known?.get(kind);
     if (held !== undefined) return held;
     const label = this.#labelAt(metadata, path, observes);
-    const { id } = table.intern({
-      confidentiality: [...label?.confidentiality ?? []],
-      integrity: [...label?.integrity ?? []],
-    });
+    // The table names a label by a hash of its content. The same label is
+    // consumed at most positions, so its identifier is kept by its text.
+    const text = JSON.stringify([
+      label?.confidentiality ?? [],
+      label?.integrity ?? [],
+    ]);
+    let id = this.#internedByText.get(text);
+    if (id === undefined) {
+      this.#counts.labelsResolved += 1;
+      id = table.intern({
+        confidentiality: [...label?.confidentiality ?? []],
+        integrity: [...label?.integrity ?? []],
+      }).id;
+      this.#internedByText.set(text, id);
+    }
     known?.set(kind, id);
     return id;
   }
+
+  /** The identifier the runtime's table gave each label, by its text. */
+  readonly #internedByText = new Map<string, string>();
 
   /**
    * For stored labels whose entries are all at the root of their document:
