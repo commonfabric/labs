@@ -25,8 +25,9 @@
  * - `read`: the messages of the result are read, and the step says how
  *   many the room holds and the text of the last.
  *
- * `manager` and `home` are started, and the step says which members the
- * result has and which cones ended in an error state.
+ * `manager` and `home` are started, and the step says how many members the
+ * result has and which cones ended in an error state. `home` then takes
+ * one event, which adds a space to the list it keeps (`interaction`).
  *
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
@@ -111,7 +112,7 @@ const withoutWritePolicies = (schema: unknown): unknown => {
   if (typeof schema !== "object" || schema === null) return schema;
   return Object.fromEntries(
     Object.entries(schema).filter(([name]) =>
-      name !== "writePolicyAnyOf" && name !== "addIntegrity"
+      !["writePolicyAnyOf", "addIntegrity", "writeAuthorizedBy"].includes(name)
     )
       .map(([name, member]) => [name, withoutWritePolicies(member)]),
   );
@@ -148,6 +149,9 @@ const emitted = async (): Promise<Artifact[]> => {
 const builtinsOf = (user: string, space: string): Record<string, unknown> => {
   let events = 0;
   return {
+    // The key of the result cell of an instance, where it is read as a
+    // key and not bound in the parameter of a pattern.
+    SELF: "$SELF",
     FabricBytes,
     FabricDurationNsec,
     FabricEpochNsec,
@@ -174,6 +178,13 @@ const builtinsOf = (user: string, space: string): Record<string, unknown> => {
 /** What one arm gives a run: an instance, and how to bring it up to date. */
 type Started = {
   instance: Instance;
+  /**
+   * The counters of the adapter of the runtime's transactions that the
+   * Topics harness reports: positions read, writes staged, write records
+   * given, transactions committed, and the time the piece spent in its own handlers and its
+   * derivation. Absent for the executor in memory.
+   */
+  adapter?: () => Record<string, number>;
   /** Sends an event to the stream of a binding and waits for the piece. */
   send: (binding: number, event: unknown) => Promise<boolean>;
   stop: () => Promise<void>;
@@ -292,6 +303,17 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       return after.events > before.events &&
         after.eventsRefused === before.eventsRefused;
     },
+    adapter: () => {
+      const { reads, writes, recordsGiven, committed } =
+        piece.transactions.counts;
+      return {
+        reads,
+        writes,
+        recordsGiven,
+        commits: committed,
+        ownMs: piece.counts.ownMs,
+      };
+    },
     stop: async () => {
       piece.stop();
       await runtime.dispose();
@@ -330,7 +352,15 @@ for (
 ) {
   const base = { arm, pattern: name, size };
   let began = performance.now();
-  const { instance, send, stop } = await start(artifact, artifacts);
+  const started: Started = await start(artifact, artifacts);
+  const { instance, send, stop } = started;
+  /** What the adapter counted since `before`. */
+  const adapted = (before: Record<string, number> | undefined) => {
+    const now = started.adapter?.();
+    return now === undefined || before === undefined ? {} : Object.fromEntries(
+      Object.entries(now).map(([name, count]) => [name, count - before[name]]),
+    );
+  };
   const result = instance.result() as Record<string, unknown>;
   print({
     ...base,
@@ -344,7 +374,33 @@ for (
     }),
     members: Object.keys(result ?? {}).length,
     failed: [...new Set(instance.failed.map(({ cone }) => cone))],
+    failures: [...new Set(instance.failed.map(({ message }) => message))],
   });
+  if (which === "home") {
+    // One interaction: a space is added to the list Home keeps.
+    const plan = artifact.plan as { bindings: { name: unknown }[] };
+    const binding = plan.bindings.findIndex((held) =>
+      held.name === "addSpaceHandler"
+    );
+    const before = { ...instance.counts };
+    const adapter = started.adapter?.();
+    began = performance.now();
+    const committed = await send(binding, {
+      name: "notes",
+      did: "did:key:z6MkaddedByTheRun",
+    });
+    const ms = performance.now() - began;
+    const { spaces } = instance.result() as { spaces?: unknown[] };
+    print({
+      ...base,
+      step: "interaction",
+      ms,
+      committed,
+      ...counted(instance, before),
+      ...adapted(adapter),
+      spaces,
+    });
+  }
   if (which === "room") {
     const plan = artifact.plan as { bindings: { name: unknown }[] };
     const binding = plan.bindings.findIndex((held) =>
@@ -358,6 +414,7 @@ for (
     print({ ...base, step: "seed", ms: performance.now() - began, refused });
     for (let index = 0; index < 3; index++) {
       const before = { ...instance.counts };
+      const adapter = started.adapter?.();
       began = performance.now();
       const committed = await send(binding, { body: `timed ${index}` });
       print({
@@ -366,6 +423,7 @@ for (
         ms: performance.now() - began,
         committed,
         ...counted(instance, before),
+        ...adapted(adapter),
       });
     }
     began = performance.now();
