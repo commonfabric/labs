@@ -110,3 +110,53 @@ fn a_writer_policy_is_a_writer_claim_in_a_schema() {
         ] })
     );
 }
+
+#[test]
+fn a_ui_contract_that_names_no_integrity_requires_that_of_its_pattern() {
+    // SM §11: `TrustedActionUiContract<T, Action, Pattern>` declares the
+    // contract `TrustedActionWrite` declares for the same action and
+    // pattern, so a handler whose state type restates the contract of a
+    // position declares the contract the position has.
+    let source = SOURCE
+        .replace("type TrustedActionWrite,", "type TrustedActionUiContract, type TrustedActionWrite,")
+        .replace(
+            "type Lone = ",
+            "type Restated = TrustedActionUiContract<string, typeof SEND, typeof SURFACE>;\ntype Lone = ",
+        )
+        .replace("lone: Lone; trusted", "restated: Restated; lone: Lone; trusted")
+        .replace(
+            "const lone = new Writable<Lone>(\"\");",
+            "const restated = new Writable<Restated>(\"\");\n  const lone = new Writable<Lone>(\"\");",
+        )
+        .replace("return { lone,", "return { restated, lone,");
+    let analysis = analysis(&source);
+    assert_eq!(
+        result_ifc(&analysis, "restated")["uiContract"],
+        result_ifc(&analysis, "trusted")["uiContract"]
+    );
+}
+
+#[test]
+fn a_handler_no_writer_policy_names_has_no_identity() {
+    // Today's transformer gives a binding the identity a writer claim is
+    // checked by only where some claim of the program names the binding
+    // (`ModuleScopeFunctionHardeningTransformer`). A handler no policy
+    // names is then a writer no claim admits, on both paths alike.
+    let source = SOURCE
+        .replace(
+            "type Lone = ",
+            "const plain = handler<{ text: string }, { note: Writable<string> }>((event, { note }) => { note.set(event.text); });\ntype Lone = ",
+        )
+        .replace(
+            "edit: Stream<{ text: string }> }>",
+            "edit: Stream<{ text: string }>; plain: Stream<{ text: string }> }>",
+        )
+        .replace(
+            "edit: edit({ note: either }) }",
+            "edit: edit({ note: either }), plain: plain({ note: lone }) }",
+        );
+    let analysis = analysis(&source);
+    assert_eq!(code_of(&analysis, "plain"), Value::Null);
+    assert_eq!(code_of(&analysis, "send")["binding"], json!(["send"]));
+    assert_eq!(code_of(&analysis, "edit")["binding"], json!(["edit"]));
+}

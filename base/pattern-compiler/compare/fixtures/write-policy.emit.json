@@ -1,6 +1,6 @@
 [
   {
-    "module": "write-policy.tsx",
+    "module": "compare/fixtures/write-policy.tsx",
     "patterns": [
       {
         "code": {
@@ -20,8 +20,8 @@
           "modules": [
             {
               "module": 0,
-              "path": "write-policy.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst record = $rt.data(handler(\n  (event, { note }) => {\n    note.set(event.text);\n  },\n));\nconst overwrite = $rt.data(handler(\n  (event, { note }) => {\n    note.set(event.text);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:a37f3e21a29fabb6c719ce932e4fdd1a8d4effc103267a8ca34fbf516ee2fbe4\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ note: $h.slot(2), record: $h.stream(0), overwrite: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { note }) => {\n    note.set(event.text);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { note }) => {\n    note.set(event.text);\n  })($e, $s));"
+              "path": "compare/fixtures/write-policy.tsx",
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst record = $rt.data(handler(\n  (event, { note }) => {\n    note.set(event.text);\n  },\n));\nconst overwrite = $rt.data(handler(\n  (event, { note }) => {\n    note.set(event.text);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:cef74535af61e7d3b3932e22a3969e4c9ab4e55d965273fc2882c1544287385f\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ note: $h.slot(2), record: $h.stream(0), overwrite: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { note }) => {\n    note.set(event.text);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { note }) => {\n    note.set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -90,7 +90,7 @@
                 "binding": [
                   "record"
                 ],
-                "module": "sha256:0089d7dd17fa3fb2d6e2df20bba0b72a4ae7581255493ca961aafe011fdfb2c1"
+                "module": "sha256:383fec1ef4d28d48dc8589ed142cf53eabdf40c658b45bb8ec4e71d5ce000629"
               },
               "computed": [],
               "envelopes": [],
@@ -146,12 +146,6 @@
             },
             {
               "calls": [],
-              "code": {
-                "binding": [
-                  "overwrite"
-                ],
-                "module": "sha256:0089d7dd17fa3fb2d6e2df20bba0b72a4ae7581255493ca961aafe011fdfb2c1"
-              },
               "computed": [],
               "envelopes": [],
               "handles": [],
@@ -211,7 +205,7 @@
           "cones": [
             {
               "at": {
-                "file": "write-policy.tsx",
+                "file": "compare/fixtures/write-policy.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -231,8 +225,8 @@
                 {
                   "body": {
                     "binding": "record",
-                    "identity": "sha256:0089d7dd17fa3fb2d6e2df20bba0b72a4ae7581255493ca961aafe011fdfb2c1",
-                    "module": "write-policy.tsx"
+                    "identity": "sha256:383fec1ef4d28d48dc8589ed142cf53eabdf40c658b45bb8ec4e71d5ce000629",
+                    "module": "compare/fixtures/write-policy.tsx"
                   }
                 }
               ],
@@ -259,7 +253,7 @@
             }
           ],
           "patterns": [
-            "sha256:a37f3e21a29fabb6c719ce932e4fdd1a8d4effc103267a8ca34fbf516ee2fbe4"
+            "sha256:cef74535af61e7d3b3932e22a3969e4c9ab4e55d965273fc2882c1544287385f"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/0",
@@ -354,8 +348,8 @@
                   "ifc": {
                     "writeAuthorizedBy": {
                       "__ctWriterIdentityOf": {
-                        "file": "write-policy.tsx",
-                        "moduleIdentity": "sha256:0089d7dd17fa3fb2d6e2df20bba0b72a4ae7581255493ca961aafe011fdfb2c1",
+                        "file": "compare/fixtures/write-policy.tsx",
+                        "moduleIdentity": "sha256:383fec1ef4d28d48dc8589ed142cf53eabdf40c658b45bb8ec4e71d5ce000629",
                         "path": [
                           "record"
                         ]
@@ -415,8 +409,8 @@
               "ifc": {
                 "writeAuthorizedBy": {
                   "__ctWriterIdentityOf": {
-                    "file": "write-policy.tsx",
-                    "moduleIdentity": "sha256:0089d7dd17fa3fb2d6e2df20bba0b72a4ae7581255493ca961aafe011fdfb2c1",
+                    "file": "compare/fixtures/write-policy.tsx",
+                    "moduleIdentity": "sha256:383fec1ef4d28d48dc8589ed142cf53eabdf40c658b45bb8ec4e71d5ce000629",
                     "path": [
                       "record"
                     ]

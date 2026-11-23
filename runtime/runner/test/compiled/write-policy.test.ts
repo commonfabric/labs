@@ -102,7 +102,7 @@ describe("a write policy of a compiled piece", () => {
     expect(piece.instance.result()).toMatchObject({ note: "written" });
   });
 
-  it("refuses the write of a handler it does not name, with the message of the policy", async () => {
+  it("refuses the write of a handler no policy names as a writer with no identity, as today's path does", async () => {
     const { piece, result } = await start(
       "notes",
       await artifactOf("write-policy.emit.json"),
@@ -114,15 +114,18 @@ describe("a write policy of a compiled piece", () => {
 
     expect(piece.refusals.length).toBeGreaterThan(0);
     for (const refusal of piece.refusals) {
-      expect(refusal).toContain("writeAuthorizedBy failed at /");
+      expect(refusal).toContain(
+        "writeAuthorizedBy requires a trusted verified binding identity at /",
+      );
     }
     expect(piece.instance.result()).toMatchObject({ note: "" });
   });
 
   it("refuses the write of a handler of another compiled pattern that has the binding name and the module path of the handler it names", async () => {
     // `fixtures/write-policy-forged/write-policy.tsx` declares a handler
-    // `record` in a module of the same path. Its pattern is given the cell
-    // `note` of the first piece, and its handler writes it.
+    // `record` in a module of the same path, and a policy of that module
+    // names it. Its pattern is given the cell `note` of the first piece,
+    // and its handler writes it.
 
     const first = await start(
       "notes",

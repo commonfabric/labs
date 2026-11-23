@@ -1,6 +1,6 @@
 [
   {
-    "module": "principal-derived.tsx",
+    "module": "compare/fixtures/principal-derived.tsx",
     "patterns": [
       {
         "code": {
@@ -16,8 +16,8 @@
           "modules": [
             {
               "module": 0,
-              "path": "principal-derived.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst set = $rt.data(handler(\n  (event, { text }) => {\n    text.set(event.text);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:9a3496fa60a0af69f699dd8e1b54526a7874f7033402bce749528961b8ea7e35\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toUpperCase())));\nreturn $rt.thunk(($h) => (({ shouted: $h.output(0), set: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { text }) => {\n    text.set(event.text);\n  })($e, $s));"
+              "path": "compare/fixtures/principal-derived.tsx",
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst set = $rt.data(handler(\n  (event, { text }) => {\n    text.set(event.text);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:db9c696e360fe51337f92133683d364d5fad662133a5356c6a466ff0c79be487\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toUpperCase())));\nreturn $rt.thunk(($h) => (({ shouted: $h.output(0), set: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { text }) => {\n    text.set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -72,7 +72,7 @@
                 "binding": [
                   "set"
                 ],
-                "module": "sha256:1a373ed1ee08c918d8f1ddd3e25515a197dffe787f6c3fe3b5c42f44b2242e75"
+                "module": "sha256:8e8c69cd448c385717501ff1c48e674d6e453c968af5294bf00093e788517078"
               },
               "computed": [],
               "envelopes": [],
@@ -133,7 +133,7 @@
           "cones": [
             {
               "at": {
-                "file": "principal-derived.tsx",
+                "file": "compare/fixtures/principal-derived.tsx",
                 "start": 780
               },
               "bodies": [],
@@ -153,8 +153,8 @@
                 {
                   "body": {
                     "binding": "set",
-                    "identity": "sha256:1a373ed1ee08c918d8f1ddd3e25515a197dffe787f6c3fe3b5c42f44b2242e75",
-                    "module": "principal-derived.tsx"
+                    "identity": "sha256:8e8c69cd448c385717501ff1c48e674d6e453c968af5294bf00093e788517078",
+                    "module": "compare/fixtures/principal-derived.tsx"
                   }
                 }
               ],
@@ -189,7 +189,7 @@
             }
           ],
           "patterns": [
-            "sha256:9a3496fa60a0af69f699dd8e1b54526a7874f7033402bce749528961b8ea7e35"
+            "sha256:db9c696e360fe51337f92133683d364d5fad662133a5356c6a466ff0c79be487"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/0",
@@ -276,8 +276,8 @@
                     ],
                     "writeAuthorizedBy": {
                       "__ctWriterIdentityOf": {
-                        "file": "principal-derived.tsx",
-                        "moduleIdentity": "sha256:1a373ed1ee08c918d8f1ddd3e25515a197dffe787f6c3fe3b5c42f44b2242e75",
+                        "file": "compare/fixtures/principal-derived.tsx",
+                        "moduleIdentity": "sha256:8e8c69cd448c385717501ff1c48e674d6e453c968af5294bf00093e788517078",
                         "path": [
                           "set"
                         ]

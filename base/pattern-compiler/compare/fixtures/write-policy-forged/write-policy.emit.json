@@ -1,6 +1,6 @@
 [
   {
-    "module": "write-policy.tsx",
+    "module": "compare/fixtures/write-policy-forged/write-policy.tsx",
     "patterns": [
       {
         "code": {
@@ -16,8 +16,8 @@
           "modules": [
             {
               "module": 0,
-              "path": "write-policy.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst record = $rt.data(handler(\n  (event, { note }) => {\n    note.set(`forged: ${event.text}`);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:5373ac35f16a9f52f3d75b50442b787f1bd3786d466eaeee886cefd3bc25181e\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { note }) => {\n    note.set(`forged: ${event.text}`);\n  })($e, $s));"
+              "path": "compare/fixtures/write-policy-forged/write-policy.tsx",
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst record = $rt.data(handler(\n  (event, { note }) => {\n    note.set(`forged: ${event.text}`);\n  },\n));\n\nconst $default = $rt.data((pattern(\"sha256:d8718d8d8c679c313c76e6ea5949deb35e66c897b30b116124320ff4238289c0\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ own: $h.slot(3), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { note }) => {\n    note.set(`forged: ${event.text}`);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -28,7 +28,7 @@
           "values": [],
           "valuesWithoutOutput": []
         },
-        "line": 15,
+        "line": 25,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -64,7 +64,7 @@
                 "binding": [
                   "record"
                 ],
-                "module": "sha256:2a41f43f507714e864b804a55d3325c8c27df6365f09fdf445df769f480eb8bf"
+                "module": "sha256:d123c4f26dcdc36b5803530a55dcc2c927192e4959f7da4797865407a8d2954e"
               },
               "computed": [],
               "envelopes": [],
@@ -122,14 +122,58 @@
           "children": [],
           "closures": [],
           "collections": [],
-          "cones": [],
-          "constraints": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/write-policy-forged/write-policy.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [
+            {
+              "anyOf": [
+                {
+                  "body": {
+                    "binding": "record",
+                    "identity": "sha256:d123c4f26dcdc36b5803530a55dcc2c927192e4959f7da4797865407a8d2954e",
+                    "module": "compare/fixtures/write-policy-forged/write-policy.tsx"
+                  }
+                }
+              ],
+              "kind": "writer"
+            }
+          ],
           "dynamicReads": [],
           "edges": [],
           "operations": [],
-          "outputs": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [
+                0
+              ],
+              "kept": true,
+              "path": [
+                "own"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            }
+          ],
           "patterns": [
-            "sha256:5373ac35f16a9f52f3d75b50442b787f1bd3786d466eaeee886cefd3bc25181e"
+            "sha256:d8718d8d8c679c313c76e6ea5949deb35e66c897b30b116124320ff4238289c0"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -166,9 +210,24 @@
                 "kind": "argument"
               },
               "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
             }
           ],
-          "stateCells": [],
+          "stateCells": [
+            {
+              "name": "own",
+              "schema": "unhashed:schema/5",
+              "scope": "space",
+              "within": []
+            }
+          ],
           "templates": [],
           "version": 1
         },
@@ -194,6 +253,20 @@
             "id": "unhashed:schema/1",
             "schema": {
               "properties": {
+                "own": {
+                  "ifc": {
+                    "writeAuthorizedBy": {
+                      "__ctWriterIdentityOf": {
+                        "file": "compare/fixtures/write-policy-forged/write-policy.tsx",
+                        "moduleIdentity": "sha256:d123c4f26dcdc36b5803530a55dcc2c927192e4959f7da4797865407a8d2954e",
+                        "path": [
+                          "record"
+                        ]
+                      }
+                    }
+                  },
+                  "type": "string"
+                },
                 "record": {
                   "asCell": [
                     "stream"
@@ -210,6 +283,7 @@
                 }
               },
               "required": [
+                "own",
                 "record"
               ],
               "type": "object"
@@ -242,6 +316,24 @@
                 "text"
               ],
               "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "default": "",
+              "ifc": {
+                "writeAuthorizedBy": {
+                  "__ctWriterIdentityOf": {
+                    "file": "compare/fixtures/write-policy-forged/write-policy.tsx",
+                    "moduleIdentity": "sha256:d123c4f26dcdc36b5803530a55dcc2c927192e4959f7da4797865407a8d2954e",
+                    "path": [
+                      "record"
+                    ]
+                  }
+                }
+              },
+              "type": "string"
             }
           }
         ],

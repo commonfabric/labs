@@ -1,6 +1,6 @@
 [
   {
-    "module": "principal-integrity.tsx",
+    "module": "compare/fixtures/principal-integrity.tsx",
     "patterns": [
       {
         "code": {
@@ -16,8 +16,8 @@
           "modules": [
             {
               "module": 0,
-              "path": "principal-integrity.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst sign = $rt.data(handler(\n  (event, { signed }) => {\n    signed.set(event.text);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:533a17ea70d04b43d222c6f790a6e08b1ea9f5f362079414206c63ace3ae6868\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ signed: $h.slot(2), sign: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { signed }) => {\n    signed.set(event.text);\n  })($e, $s));"
+              "path": "compare/fixtures/principal-integrity.tsx",
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst sign = $rt.data(handler(\n  (event, { signed }) => {\n    signed.set(event.text);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:19b855171bbb00e0b00b588a91d4dcab3641175f9785aa8fac40fc88d7236d38\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ signed: $h.slot(2), sign: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { signed }) => {\n    signed.set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -63,7 +63,7 @@
                 "binding": [
                   "sign"
                 ],
-                "module": "sha256:5411af02e7867376389a2d502ce92fd376aa1fec7052ec245bc14067457c4593"
+                "module": "sha256:b0ad67db709afc301ef41c537ea5e3a269ca9943e9ff329280eca1f749ddfe23"
               },
               "computed": [],
               "envelopes": [],
@@ -124,7 +124,7 @@
           "cones": [
             {
               "at": {
-                "file": "principal-integrity.tsx",
+                "file": "compare/fixtures/principal-integrity.tsx",
                 "start": 0
               },
               "bodies": [],
@@ -144,8 +144,8 @@
                 {
                   "body": {
                     "binding": "sign",
-                    "identity": "sha256:5411af02e7867376389a2d502ce92fd376aa1fec7052ec245bc14067457c4593",
-                    "module": "principal-integrity.tsx"
+                    "identity": "sha256:b0ad67db709afc301ef41c537ea5e3a269ca9943e9ff329280eca1f749ddfe23",
+                    "module": "compare/fixtures/principal-integrity.tsx"
                   }
                 }
               ],
@@ -172,7 +172,7 @@
             }
           ],
           "patterns": [
-            "sha256:533a17ea70d04b43d222c6f790a6e08b1ea9f5f362079414206c63ace3ae6868"
+            "sha256:19b855171bbb00e0b00b588a91d4dcab3641175f9785aa8fac40fc88d7236d38"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/0",
@@ -251,8 +251,8 @@
                     ],
                     "writeAuthorizedBy": {
                       "__ctWriterIdentityOf": {
-                        "file": "principal-integrity.tsx",
-                        "moduleIdentity": "sha256:5411af02e7867376389a2d502ce92fd376aa1fec7052ec245bc14067457c4593",
+                        "file": "compare/fixtures/principal-integrity.tsx",
+                        "moduleIdentity": "sha256:b0ad67db709afc301ef41c537ea5e3a269ca9943e9ff329280eca1f749ddfe23",
                         "path": [
                           "sign"
                         ]
@@ -313,8 +313,8 @@
                 ],
                 "writeAuthorizedBy": {
                   "__ctWriterIdentityOf": {
-                    "file": "principal-integrity.tsx",
-                    "moduleIdentity": "sha256:5411af02e7867376389a2d502ce92fd376aa1fec7052ec245bc14067457c4593",
+                    "file": "compare/fixtures/principal-integrity.tsx",
+                    "moduleIdentity": "sha256:b0ad67db709afc301ef41c537ea5e3a269ca9943e9ff329280eca1f749ddfe23",
                     "path": [
                       "sign"
                     ]
