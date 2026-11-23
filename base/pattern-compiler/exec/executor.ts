@@ -1233,6 +1233,11 @@ export type Counts = {
   evaluations: number;
   /** Of those, the evaluations of a cone instance of an element body. */
   elementEvaluations: number;
+  /**
+   * The rows that a resumed instance took as the storage holds them, with
+   * no body evaluated, when it formed the table of their collection.
+   */
+  rowsLeftStored: number;
   /** Of those, the assemblies of a collection, which no cone computes. */
   assemblies: number;
   /**
@@ -3258,6 +3263,7 @@ export class Instance {
     segmentsFormed: 0,
     evaluations: 0,
     elementEvaluations: 0,
+    rowsLeftStored: 0,
     assemblies: 0,
     slotsNotListed: 0,
     readsWithoutSlot: 0,
@@ -7055,6 +7061,7 @@ export class Instance {
     units.held(held.path, keys);
     const bindings = boundInElement(this.artifact, collection);
     if (bindings.length > 0) units.bound(bindings, keys);
+    this.counts.rowsLeftStored += keys.length - due.size;
     this.#seeds.set(name, { collection, path: held.path, on, targets });
     return value;
   }
