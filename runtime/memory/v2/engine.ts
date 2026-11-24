@@ -230,6 +230,12 @@ const NEW_DB_PRAGMAS = `
   PRAGMA page_size = 32768;
 `;
 
+/** The default branch every store holds, which the schema seeds. */
+const SEED_DEFAULT_BRANCH = `
+INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
+VALUES ('', 0, 0, 'active');
+`;
+
 // The schema, like the migrations below, opens with an immediate transaction:
 // it takes the write lock up front and waits on the busy timeout for it. A
 // deferred transaction reads the schema first and writes after, and fails at
@@ -429,9 +435,7 @@ CREATE TABLE IF NOT EXISTS branch (
   deleted_at     TEXT,
   FOREIGN KEY (parent_branch) REFERENCES branch(name)
 );
-INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
-VALUES ('', 0, 0, 'active');
-
+${SEED_DEFAULT_BRANCH}
 -- Unused: the single-deriver lease lives in the memory server's memory
 -- (docs/specs/server-side-execution/serving-loop.md §2). Nothing reads or
 -- writes this table. TODO(seefeld): Drop it once no deployed process writes
@@ -2632,6 +2636,48 @@ const dropCurrencyRecordsBeforeDecides = (database: Database): void => {
   }).immediate();
 };
 
+/**
+ * Brings a store's tables to the current schema: drops the layouts the schema
+ * replaces, creates whatever it lacks, and migrates what remains.
+ */
+const prepareSchema = (database: Database): void => {
+  dropUnslicedCurrencyTables(database);
+  dropCurrencyRecordsBeforeDecides(database);
+  database.exec(INIT);
+  migrateScopedEntityTables(database);
+  migrateHeadCurrentOp(database);
+  migrateCommitClass(database);
+  migrateCommitHolder(database);
+  migrateCommitWaveCarriage(database);
+  migrateCommitDerivedThrough(database);
+  migrateCommitDelegation(database);
+  migrateExecutionOutboxEventCarriage(database);
+  migrateExecutionOutboxPayloadEncoding(database);
+  migrateSchedulerObservationTablesToBasis(database);
+  migrateIntegratedOperationIds(database);
+};
+
+/**
+ * The in-memory database holding the current schema and no rows, which
+ * `open()` copies into every in-memory store with SQLite's backup API before
+ * seeding the store's default branch. It depends on nothing but this module's
+ * schema and is never written once prepared, so each isolate keeps one for as
+ * long as it runs.
+ */
+let memorySchema: Database | undefined;
+
+/** Returns `memorySchema`, preparing it on first use. */
+const memorySchemaTemplate = (): Database => {
+  if (memorySchema === undefined) {
+    const database = new Database(":memory:");
+    database.exec(NEW_DB_PRAGMAS);
+    prepareSchema(database);
+    database.exec("DELETE FROM branch");
+    memorySchema = database;
+  }
+  return memorySchema;
+};
+
 export const open = async (
   {
     url,
@@ -2659,23 +2705,18 @@ export const open = async (
     documentCacheBudgetBytes,
     documentCacheMaxEntries,
   });
-  const database = await new Database(toDatabaseAddress(url), { create: true });
+  const inFile = url.protocol === "file:";
+  const database = await new Database(inFile ? url : ":memory:", {
+    create: true,
+  });
   database.exec(NEW_DB_PRAGMAS);
   database.exec(PRAGMAS);
-  dropUnslicedCurrencyTables(database);
-  dropCurrencyRecordsBeforeDecides(database);
-  database.exec(INIT);
-  migrateScopedEntityTables(database);
-  migrateHeadCurrentOp(database);
-  migrateCommitClass(database);
-  migrateCommitHolder(database);
-  migrateCommitWaveCarriage(database);
-  migrateCommitDerivedThrough(database);
-  migrateCommitDelegation(database);
-  migrateExecutionOutboxEventCarriage(database);
-  migrateExecutionOutboxPayloadEncoding(database);
-  migrateSchedulerObservationTablesToBasis(database);
-  migrateIntegratedOperationIds(database);
+  if (inFile) {
+    prepareSchema(database);
+  } else {
+    memorySchemaTemplate().backup(database);
+    database.exec(SEED_DEFAULT_BRANCH);
+  }
   const prepared = preparedOnFirstUse(database);
   return {
     url,
@@ -11178,8 +11219,4 @@ const commitMetadataRefsRequired = (database: Database): boolean => {
   const byName = new Map(rows.map((row) => [row.name, row.notnull] as const));
   return byName.get("invocation_ref") === 1 ||
     byName.get("authorization_ref") === 1;
-};
-
-const toDatabaseAddress = (url: URL): URL | string => {
-  return url.protocol === "file:" ? url : ":memory:";
 };
