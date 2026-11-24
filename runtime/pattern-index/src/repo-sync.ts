@@ -49,6 +49,14 @@ export type PlannedEntry =
 
     /** The publish request, without its repository source. */
     request: PatternIndexPublishRequest;
+
+    /**
+     * The paths this entry's file had before it moved within the repository,
+     * nearest first. A path with no lineage of its own continues the
+     * lineage of the first of these the index holds and the repository no
+     * longer selects.
+     */
+    formerPaths?: readonly string[];
   }
   | { path: string; status: "undescribed" }
   | { path: string; status: "failed"; reason: string };
@@ -197,6 +205,13 @@ export const planProblem = (plan: unknown): string | undefined => {
     ) {
       return `${where} has no publish request`;
     }
+    if (
+      entry.formerPaths !== undefined &&
+      !(Array.isArray(entry.formerPaths) &&
+        entry.formerPaths.every((path) => typeof path === "string"))
+    ) {
+      return `${where} has former paths that are not a list of paths`;
+    }
   }
   return undefined;
 };
@@ -216,10 +231,15 @@ export type PublishClient = Pick<
   "listRepoHeads" | "publishPattern" | "withdrawRepoPaths"
 >;
 
-/** Publishes one compiled entry whose head is `head`, or that has none. */
+/**
+ * Publishes one compiled entry whose head is `head`, or that has none. An
+ * entry with no head that moved from `movedFrom` names that path's head as
+ * its predecessor, so the index moves the lineage rather than starting one.
+ */
 const publishEntry = async (
   entry: Extract<PlannedEntry, { status: "compiled" }>,
   head: PatternIndexRepoHead | undefined,
+  movedFrom: PatternIndexRepoHead | undefined,
   options: PublishPlanOptions,
   client: PublishClient,
 ): Promise<EntryOutcome> => {
@@ -233,6 +253,9 @@ const publishEntry = async (
   }
   const response = await client.publishPattern({
     ...entry.request,
+    ...(head === undefined && movedFrom !== undefined
+      ? { priorPatternId: movedFrom.patternId }
+      : {}),
     source: {
       repository: options.repository,
       path: entry.path,
@@ -294,6 +317,21 @@ export const publishPlan = async (
     repository: options.repository,
   });
   const headOf = new Map(heads.map((head) => [head.path, head]));
+  const selected = new Set(plan.selected);
+  // A former path's lineage moves to one entry at most: the first that
+  // claims it.
+  const claimed = new Set<string>();
+  const movedFrom = (
+    entry: Extract<PlannedEntry, { status: "compiled" }>,
+  ): PatternIndexRepoHead | undefined => {
+    if (headOf.has(entry.path)) return undefined;
+    const former = (entry.formerPaths ?? []).find((path) =>
+      headOf.has(path) && !selected.has(path) && !claimed.has(path)
+    );
+    if (former === undefined) return undefined;
+    claimed.add(former);
+    return headOf.get(former);
+  };
   const outcomes: EntryOutcome[] = [];
   for (const entry of plan.entries) {
     if (entry.status !== "compiled") {
@@ -302,7 +340,13 @@ export const publishPlan = async (
     }
     try {
       outcomes.push(
-        await publishEntry(entry, headOf.get(entry.path), options, client),
+        await publishEntry(
+          entry,
+          headOf.get(entry.path),
+          movedFrom(entry),
+          options,
+          client,
+        ),
       );
     } catch (error) {
       const limit = programSizeLimit(error);
@@ -313,7 +357,6 @@ export const publishPlan = async (
       );
     }
   }
-  const selected = new Set(plan.selected);
   const entryPaths = new Set(plan.entries.map((entry) => entry.path));
   const gone = heads.map((head) => head.path).filter((path) =>
     !selected.has(path)

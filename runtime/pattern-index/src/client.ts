@@ -1019,7 +1019,9 @@ export interface PatternIndexPublishRequest {
    * The repository file this pattern is the newest version of, sent by a
    * repository sync. The index keeps one lineage per repository and path,
    * so it sets the predecessor itself, and `publishPattern` refuses one sent
-   * with `priorPatternId`, `lineageId` or `slot`.
+   * with `lineageId` or `slot`. A `priorPatternId` beside it is the head of
+   * the path this file moved from in the same repository: the index moves
+   * that lineage to the new path, history and all.
    */
   source?: PatternIndexRepoSource;
 }
@@ -1642,14 +1644,14 @@ export class PatternIndexClient {
   async publishPattern(
     request: PatternIndexPublishRequest,
   ): Promise<PatternIndexPublishResponse> {
-    // The index places a synced version in its path's lineage itself.
+    // The index places a synced version in its path's lineage itself; a
+    // predecessor only says which path's lineage a moved file continues.
     if (
       request.source !== undefined &&
-      (request.priorPatternId !== undefined ||
-        request.lineageId !== undefined || request.slot !== undefined)
+      (request.lineageId !== undefined || request.slot !== undefined)
     ) {
       throw new Error(
-        "a publish with a repository source names no predecessor, lineage or slot",
+        "a publish with a repository source names no lineage or slot",
       );
     }
     const schemas = {

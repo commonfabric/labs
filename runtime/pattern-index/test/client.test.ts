@@ -1123,7 +1123,28 @@ describe("PatternIndexClient", () => {
     });
     expect(JSON.parse(requests[0].body).source).toEqual(source);
   });
-  it("throws, sending nothing, for a publish with a repository source and a predecessor", async () => {
+  it("sends a repository source with the predecessor of a moved file", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patternId: "pat-1", created: true }),
+    ]);
+    await client.publishPattern({
+      patternId: "pat-1",
+      description: "Doubles",
+      hashtags: [],
+      program: { main: "/a.tsx", files: [{ name: "/a.tsx", contents: "" }] },
+      source: {
+        repository: "acme/patterns",
+        path: "patterns/a/main.tsx",
+        commit: "c0ffee",
+        sourceHash: "abc",
+      },
+      priorPatternId: "pat-0",
+    });
+    const body = JSON.parse(requests[0].body);
+    expect(body.source.path).toBe("patterns/a/main.tsx");
+    expect(body.priorPatternId).toBe("pat-0");
+  });
+  it("throws, sending nothing, for a publish with a repository source and a slot", async () => {
     const { client, requests } = createClient([]);
     await expect(client.publishPattern({
       patternId: "pat-1",
@@ -1136,8 +1157,8 @@ describe("PatternIndexClient", () => {
         commit: "c0ffee",
         sourceHash: "abc",
       },
-      priorPatternId: "pat-0",
-    })).rejects.toThrow("names no predecessor");
+      slot: "cf-path:a",
+    })).rejects.toThrow("names no lineage or slot");
     expect(requests).toEqual([]);
   });
   it("snapshots its chain, and refuses one longer than the index accepts", async () => {

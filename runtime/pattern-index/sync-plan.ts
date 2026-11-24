@@ -8,7 +8,11 @@
  *     --allow-ffi --allow-run=git runtime/pattern-index/sync-plan.ts \
  *     --repo-root <dir> --program-root <dir> --include '<glob>' \
  *     [--include ...] [--exclude '<glob>' ...] --out <plan.json> \
- *     [--summary <file>]
+ *     [--summary <file>] [--follow-labs-pattern-moves]
+ *
+ * `--follow-labs-pattern-moves` is for the Labs repository alone: it reads
+ * the moves Labs records for its patterns (`pattern-key-moves.ts`), keyed
+ * below the program root, so a moved file continues its old path's lineage.
  *
  * It holds no credential and contacts no index, so it is also the dry run.
  * It compiles in a runtime with in-memory storage, writing nothing to any
@@ -24,11 +28,15 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { resolve } from "@std/path";
 import { Identity } from "@commonfabric/identity";
-import { experimentalOptionsFromEnv, Runtime } from "@commonfabric/runner";
+import {
+  experimentalOptionsFromEnv,
+  formerPatternKey,
+  Runtime,
+} from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { compileProgram } from "./src/publish.ts";
-import { planRepo } from "./src/repo-plan.ts";
+import { formerPathsByKey, planRepo } from "./src/repo-plan.ts";
 import type { RepoSyncPlan } from "./src/repo-sync.ts";
 
 /** The repository's tracked files, relative to its root. */
@@ -77,6 +85,7 @@ const main = async (): Promise<number> => {
       "out",
       "summary",
     ],
+    boolean: ["follow-labs-pattern-moves"],
     collect: ["include", "exclude"],
   });
   const programRoot = flags["program-root"];
@@ -105,6 +114,9 @@ const main = async (): Promise<number> => {
         programRoot,
         include: flags.include,
         exclude: flags.exclude,
+        ...(flags["follow-labs-pattern-moves"]
+          ? { formerPaths: formerPathsByKey(programRoot, formerPatternKey) }
+          : {}),
       },
       {
         trackedFiles: () => gitTrackedFiles(repoRoot),

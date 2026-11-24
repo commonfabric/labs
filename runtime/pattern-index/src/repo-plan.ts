@@ -44,6 +44,12 @@ export interface RepoEntryOptions {
 
   /** Globs, relative to `repoRoot`, removing files `include` named. */
   exclude: readonly string[];
+
+  /**
+   * The paths an entry's file had before it moved, nearest first, all
+   * relative to `repoRoot`; none when the repository records no moves.
+   */
+  formerPaths?: (path: string) => readonly string[];
 }
 
 /** What the plan phase reaches the world through. */
@@ -187,7 +193,40 @@ const planEntry = async (
     resultSchema: compiled.resultSchema,
     standalone: isStandaloneEntry(path),
   });
-  return { path, status: "compiled", sourceHash, request };
+  const formerPaths = options.formerPaths?.(path) ?? [];
+  return {
+    path,
+    status: "compiled",
+    sourceHash,
+    request,
+    ...(formerPaths.length > 0 ? { formerPaths } : {}),
+  };
+};
+
+/**
+ * The former paths of a file under `programRoot`, nearest first, from a
+ * table of moves keyed as `programRoot`-relative paths: `formerKey` answers
+ * the key a pattern had before its latest move, or the key itself when it
+ * never moved. Following it back walks every move the table records.
+ */
+export const formerPathsByKey = (
+  programRoot: string,
+  formerKey: (key: string) => string,
+): (path: string) => readonly string[] => {
+  const prefix = `${programRoot.replace(/\/+$/, "")}/`;
+  return (path) => {
+    if (!path.startsWith(prefix)) return [];
+    const paths: string[] = [];
+    const seen = new Set<string>();
+    let key = path.slice(prefix.length);
+    for (;;) {
+      seen.add(key);
+      const former = formerKey(key);
+      if (seen.has(former)) return paths;
+      paths.push(prefix + former);
+      key = former;
+    }
+  };
 };
 
 /**

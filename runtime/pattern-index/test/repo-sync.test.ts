@@ -8,6 +8,7 @@ import {
 } from "../src/client.ts";
 import {
   findEntries,
+  formerPathsByKey,
   type PlanDeps,
   planRepo,
   type RepoEntryOptions,
@@ -373,6 +374,66 @@ describe("repo-sync", () => {
       expect(
         planProblem(plan({ path: "a", status: "compiled", sourceHash: "h" })),
       ).toBe("entries[0] has no publish request");
+      expect(
+        planProblem(plan({
+          path: "a",
+          status: "compiled",
+          sourceHash: "h",
+          request: { patternId: "id" },
+          formerPaths: "b",
+        })),
+      ).toBe("entries[0] has former paths that are not a list of paths");
+    });
+  });
+
+  describe("formerPathsByKey()", () => {
+    // Two moves of one file, and a key that maps to itself.
+    const moves: Record<string, string> = {
+      "apps/notes/main.tsx": "apps/notes/notes.tsx",
+      "apps/notes/notes.tsx": "notes.tsx",
+    };
+    const formerKey = (key: string) => moves[key] ?? key;
+
+    it("returns every path a file had, nearest first", () => {
+      expect(
+        formerPathsByKey("patterns", formerKey)("patterns/apps/notes/main.tsx"),
+      ).toEqual(["patterns/apps/notes/notes.tsx", "patterns/notes.tsx"]);
+    });
+
+    it("returns none for a file that never moved or lies outside the program root", () => {
+      const former = formerPathsByKey("patterns/", formerKey);
+      expect(former("patterns/apps/other/main.tsx")).toEqual([]);
+      expect(former("elsewhere/apps/notes/main.tsx")).toEqual([]);
+    });
+
+    it("stops at a key it already passed", () => {
+      const cycle: Record<string, string> = {
+        "a.tsx": "b.tsx",
+        "b.tsx": "a.tsx",
+      };
+      expect(
+        formerPathsByKey("p", (key) => cycle[key] ?? key)("p/a.tsx"),
+      ).toEqual(["p/b.tsx"]);
+    });
+
+    it("is what the plan records for each compiled entry", async () => {
+      const plan = await planRepo(
+        { ...OPTIONS, formerPaths: formerPathsByKey("patterns", formerKey) },
+        planDeps({
+          "patterns/apps/notes/main.tsx": DESCRIBED,
+          "patterns/b.tsx": DESCRIBED,
+        }),
+      );
+      expect(plan.entries.map((entry) => [
+        entry.path,
+        entry.status === "compiled" ? entry.formerPaths : undefined,
+      ])).toEqual([
+        ["patterns/apps/notes/main.tsx", [
+          "patterns/apps/notes/notes.tsx",
+          "patterns/notes.tsx",
+        ]],
+        ["patterns/b.tsx", undefined],
+      ]);
     });
   });
 
@@ -396,6 +457,60 @@ describe("repo-sync", () => {
         sourceHash: "hash:p/a.tsx",
       });
       expect(published[0].priorPatternId).toBeUndefined();
+    });
+
+    it("names the head of the path a new entry moved from as its predecessor", async () => {
+      const { client, published } = fakeIndex([head("p/old.tsx")]);
+      await publishPlan(
+        {
+          entries: [{
+            ...compiled("p/new/main.tsx"),
+            formerPaths: ["p/gone.tsx", "p/old.tsx"],
+          }],
+          selected: ["p/new/main.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(published[0].source?.path).toBe("p/new/main.tsx");
+      expect(published[0].priorPatternId).toBe("head:p/old.tsx");
+    });
+
+    it("names no predecessor for an entry with its own head, or whose former path is still selected or already claimed", async () => {
+      const { client, published } = fakeIndex([
+        head("p/own.tsx"),
+        head("p/kept.tsx"),
+        head("p/old.tsx"),
+      ]);
+      await publishPlan(
+        {
+          entries: [
+            { ...compiled("p/own.tsx"), formerPaths: ["p/old.tsx"] },
+            { ...compiled("p/a/main.tsx"), formerPaths: ["p/kept.tsx"] },
+            { ...compiled("p/b/main.tsx"), formerPaths: ["p/old.tsx"] },
+            { ...compiled("p/c/main.tsx"), formerPaths: ["p/old.tsx"] },
+          ],
+          selected: [
+            "p/own.tsx",
+            "p/kept.tsx",
+            "p/a/main.tsx",
+            "p/b/main.tsx",
+            "p/c/main.tsx",
+          ],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(
+        published.map((
+          request,
+        ) => [request.source?.path, request.priorPatternId]),
+      ).toEqual([
+        ["p/own.tsx", undefined],
+        ["p/a/main.tsx", undefined],
+        ["p/b/main.tsx", "head:p/old.tsx"],
+        ["p/c/main.tsx", undefined],
+      ]);
     });
 
     it("publishes nothing for an entry whose hash and id match its head", async () => {
