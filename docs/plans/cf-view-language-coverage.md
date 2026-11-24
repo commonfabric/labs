@@ -706,7 +706,7 @@ method's label names its receiver's type, as in `func (*Item) Render`.
 Declarations inside a function body are not structure. A comment that Go's
 tools read as a directive, such as a `//go:build` constraint, is colored as a
 directive rather than a comment, as are the comments between `import "C"` and
-the declaration before it, which cgo compiles as C.
+the declaration before it, which include the preamble that cgo compiles as C.
 
 A coverage check over the 2,954 files found every file reconstructed exactly,
 and fewer than one in a million characters other than white space without a

@@ -72,11 +72,16 @@ The code measured is the commit before four later changes to it: the pattern
 that colors comment directives tests a different regular expression, an
 embedded field's structure label is cut at its tag rather than by searching for
 the tag's text, the module file scanner reads its tokens differently, and a
-pattern colors a cgo preamble as code. The first three change no work a
-highlight, a parse, or an edit does. For the fourth, 40 alternating runs in one
-process on the probe's source, with and without that pattern, put the complete
-highlight's median at 32.55 and 33.21 ms and the re-color's at 18.17 and 18.08
-ms.
+pattern colors as code the comments between `import "C"` and the declaration
+before it, which include a cgo preamble. The first three change no work a
+highlight, a parse, or an edit does. For the fourth, the adjacent retained
+[comparison](cf-view-go-2026-11-preamble.ts) timed 40 alternating runs in one
+process on the probe's source, with and without that pattern, at a one-minute
+load average of 15.5. With the pattern, the complete highlight's median was
+34.18 ms of wall-clock time and 38.52 ms of processor time, against 33.93 and
+38.28 without it; the re-color's was 18.31 and 23.45 ms, against 18.67 and
+23.76. Its [results](cf-view-go-2026-11-preamble-results.json) hold every
+sample.
 
 ## Timings
 
