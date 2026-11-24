@@ -417,10 +417,19 @@ describe("backgroundparse", () => {
       expect(runs).toEqual([4, 4, 2, "rest"]);
     });
 
+    it("throws for a budget that holds nothing", () => {
+      expect(() => answersFor(parsed, 0)).toThrow(
+        "An answer budget of 0 holds nothing.",
+      );
+      expect(() => answersFor(parsed, 1.5)).toThrow(
+        "An answer budget of 1.5 holds nothing.",
+      );
+    });
+
     it("returns a failure whole", () => {
       const failed: ParseOutcome = { kind: "failed", index: 0, failure: "No." };
 
-      expect(answersFor(failed, 0)).toEqual([
+      expect(answersFor(failed, 1)).toEqual([
         { kind: "outcome", outcome: failed },
       ]);
     });

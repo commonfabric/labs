@@ -222,13 +222,17 @@ export function parseWorkerReceiver(
  * or, when its result holds more than `budget` items, in parts, as {@link
  * ParseWorkerAnswer} says.
  *
- * @throws {Error} When a document's structure holds a node twice, or its flat
- * structure holds a node its structure does not.
+ * @throws {Error} When `budget` is not a positive whole number, or when a
+ * document's structure holds a node twice, or its flat structure holds a node
+ * its structure does not.
  */
 export function answersFor(
   outcome: ParseOutcome,
   budget: number,
 ): ParseWorkerAnswer[] {
+  if (!Number.isInteger(budget) || budget < 1) {
+    throw new Error(`An answer budget of ${budget} holds nothing.`);
+  }
   const whole: ParseWorkerAnswer[] = [{ kind: "outcome", outcome }];
   if (outcome.kind === "failed") return whole;
   const { index, result } = outcome;
