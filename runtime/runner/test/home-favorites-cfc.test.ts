@@ -7,8 +7,7 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import type { Cell } from "../src/cell.ts";
-import { isCfcLabelReference } from "../src/cfc/label-documents.ts";
-import type { StoredCfcMetadata } from "../src/cfc/types.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
@@ -169,16 +168,16 @@ describe("home-favorites-cfc", () => {
   const listClauses = (result: Cell<{ favorites?: unknown[] }>): unknown[] => {
     const link = result.key("favorites").resolveAsCell()
       .getAsNormalizedFullLink();
-    const stored = runtime.edit().readOrThrow({ ...link, path: [] }) as
-      | { cfc?: StoredCfcMetadata }
-      | undefined;
-    return (stored?.cfc?.labelMap.entries ?? [])
-      .filter((entry) => entry.path[0] !== "cfc")
-      .flatMap((entry) =>
-        isCfcLabelReference(entry.label)
-          ? []
-          : entry.label.confidentiality ?? []
-      );
+    const tx = runtime.edit();
+    try {
+      // Resolves the label documents a content-addressed envelope refers to.
+      const metadata = readStoredCfcMetadata(tx, { ...link, path: [] });
+      return (metadata?.labelMap.entries ?? [])
+        .filter((entry) => entry.path[0] !== "cfc")
+        .flatMap((entry) => entry.label.confidentiality ?? []);
+    } finally {
+      tx.abort();
+    }
   };
 
   describe("removeFavorite", () => {
