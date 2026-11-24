@@ -573,6 +573,12 @@ SELECT entity, entity_scope_key, derived FROM currency_read
 WHERE branch = :branch AND slice = :slice AND piece = :piece
   AND entity_space = :space
 `),
+  selectLocalRead: engine.prepare(`
+SELECT derived FROM currency_read
+WHERE branch = :branch AND slice = :slice AND piece = :piece
+  AND entity_space = :space AND entity = :entity
+  AND entity_scope_key = :entity_scope_key
+`),
   selectForeignReads: engine.prepare(`
 SELECT entity_space, entity, entity_scope_key FROM currency_read
 WHERE branch = :branch AND slice = :slice AND piece = :piece
@@ -1083,19 +1089,82 @@ const upstreamReadsOf = (
 };
 
 /**
+ * For each slice `hasStaleInput()` last found waiting on an input of this
+ * store, the read it was found waiting on, by engine and by `refKey()`.
+ *
+ * A slice that reads what many pieces write is asked about once for each of
+ * those pieces that is stored clean, and goes on waiting on the same read
+ * through nearly all of them. Asking about that read first makes each of
+ * those answers one row's work, where walking the slice's reads to it again
+ * makes storing the records of a board the square of its size.
+ *
+ * An entry is a place to look first and nothing more: the read is looked up
+ * and judged again each time, so an entry that outlived the slice's rows, or
+ * a transaction that rolled back, costs one lookup and is dropped.
+ */
+const waitingReads = new WeakMap<
+  Engine,
+  Map<string, { entity: string; scopeKey: string }>
+>();
+
+/**
  * Whether an input of `ref` is one the index cannot call current, with each
  * slice in `assumed` taken as clean. It answers from what `staleInputsOf()`
  * gathers, and stops at the first input that decides it: a slice is asked on
  * every record stored and on every walk downstream, and one that waits on
- * something it read goes on waiting whatever its other reads say.
+ * something it read goes on waiting whatever its other reads say. The read
+ * it stopped at the last time is asked about first (`waitingReads`).
  */
 const hasStaleInput = (
   context: Context,
   ref: SliceRef,
   assumed?: ReadonlyMap<string, SliceRef>,
 ): boolean => {
-  if (readsStaleImport(context, ref)) return true;
   const { branch, space, statements } = context;
+
+  /** Whether `ref` waits on its read of the instance `(entity, scopeKey)`. */
+  const waitsOn = (
+    entity: string,
+    scopeKey: string,
+    derived: boolean,
+  ): boolean => {
+    // The piece's own result document is its pattern pointer, which no
+    // computation decides.
+    if (entity === ref.piece) return false;
+    const found = staleInstance(
+      context,
+      { id: entity, scopeKey, derived },
+      ref,
+    );
+    return found.unrecorded || found.unvouched ||
+      found.producers.some((producer) =>
+        assumed?.has(refKey(producer)) !== true
+      );
+  };
+
+  let waiting = waitingReads.get(context.engine);
+  if (waiting === undefined) {
+    waiting = new Map();
+    waitingReads.set(context.engine, waiting);
+  }
+  const key = refKey(ref);
+  const last = waiting.get(key);
+  if (last !== undefined) {
+    const row = statements.selectLocalRead.get({
+      branch,
+      space,
+      slice: ref.slice,
+      piece: ref.piece,
+      entity: last.entity,
+      entity_scope_key: last.scopeKey,
+    }) as { derived: number } | undefined;
+    if (
+      row !== undefined &&
+      waitsOn(last.entity, last.scopeKey, row.derived === 1)
+    ) return true;
+    waiting.delete(key);
+  }
+  if (readsStaleImport(context, ref)) return true;
   const reads = statements.selectLocalReads.all({
     branch,
     space,
@@ -1103,19 +1172,9 @@ const hasStaleInput = (
     piece: ref.piece,
   }) as Array<{ entity: string; entity_scope_key: string; derived: number }>;
   for (const { entity, entity_scope_key, derived } of reads) {
-    // The piece's own result document is its pattern pointer, which no
-    // computation decides.
-    if (entity === ref.piece) continue;
-    const found = staleInstance(context, {
-      id: entity,
-      scopeKey: entity_scope_key,
-      derived: derived === 1,
-    }, ref);
-    if (found.unrecorded || found.unvouched) return true;
-    const waits = found.producers.some((producer) =>
-      assumed?.has(refKey(producer)) !== true
-    );
-    if (waits) return true;
+    if (!waitsOn(entity, entity_scope_key, derived === 1)) continue;
+    waiting.set(key, { entity, scopeKey: entity_scope_key });
+    return true;
   }
   return false;
 };

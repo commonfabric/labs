@@ -779,6 +779,65 @@ describe("currency-index", () => {
       expect(markOf("of:pieceC")).toBe(1);
     });
 
+    describe("with a reader of two marked producers, asked about once for each record stored", () => {
+      const pieceB = record("of:pieceB", {
+        reads: [input("of:a")],
+        produces: ["computed:b"],
+      });
+      const pieceY = record("of:pieceY", {
+        reads: [input("of:x")],
+        produces: ["computed:y"],
+      });
+
+      /**
+       * Records both producers and the reader, changes both producers'
+       * inputs, and stores the first producer clean, which leaves the reader
+       * waiting on the second. Returns the seq of the change.
+       */
+      const leaveWaitingOnSecond = (): number => {
+        const asOf = write("of:a", "of:x", "computed:b", "computed:y");
+        store(asOf, [
+          pieceB,
+          pieceY,
+          record("of:pieceC", {
+            reads: [derived("computed:b"), derived("computed:y")],
+          }),
+        ]);
+        const changed = write("of:a", "of:x");
+        advance();
+        store(changed, [pieceB]);
+        return changed;
+      };
+
+      it("leaves the reader marked `1` when the first producer is stored clean again", () => {
+        const changed = leaveWaitingOnSecond();
+
+        store(changed, [pieceB]);
+
+        expect(markOf("of:pieceC")).toBe(1);
+      });
+
+      it("clears the reader once the producer it waited on is stored clean", () => {
+        const changed = leaveWaitingOnSecond();
+        store(changed, [pieceB]);
+
+        store(changed, [pieceY]);
+
+        expect(markOf("of:pieceC")).toBe(0);
+      });
+
+      it("stores the reader clean once its record no longer reads the producer it waited on", () => {
+        const changed = leaveWaitingOnSecond();
+
+        store(changed, [
+          record("of:pieceC", { reads: [derived("computed:b")] }),
+        ]);
+
+        expect(markOf("of:pieceC")).toBe(0);
+        expect(markOf("of:pieceY")).toBe(2);
+      });
+    });
+
     it("settles together two pieces of one batch that read each other's writes", () => {
       const asOf = write("computed:b", "computed:c");
 
