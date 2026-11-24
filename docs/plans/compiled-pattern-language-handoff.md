@@ -24,7 +24,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-runner-m3` | `compiled-pattern-m3` | The trunk of the build: milestones 3 to 6 merged, the store with frozen values, a resume by units | #10140 |
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | none while the merge attempt is checked out in `compiled-pattern-m5`; check it out there when that round ends | The merged branch: the trunk head, the carried fixes, the runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes, write integrity | none |
-| `merge-attempt/serving-m6` | `compiled-pattern-m5` | The attempt to merge the serving branch into the merged branch; one test fails | none |
+| `merge-attempt/serving-m6` | `compiled-pattern-m5` | The merged branch with the serving branch merged into it; every gate passes | none |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
 | `claude/compiled-pattern-topics-runs` | `compiled-pattern-topics-runs` | The measured Topics boards; the serving branch is merged into it for measurements (local) | none |
@@ -41,17 +41,21 @@ The work after it is on two branches:
 
 1. `claude/compiled-pattern-sandbox-m5` is the merged branch. It holds the
    trunk head `7b2a492b82`, the carry branch, scopes and write integrity
-   (head `121959d0fa`, notes 892, 980 and 981), and every gate passes
+   (at `121959d0fa`, notes 892, 980 and 981; now fast-forwarded to the
+   head of item 2), and every gate passes
    there. A piece that has named a document of a scope resumes whole, with
    no row left as stored, and writes no list of readers (P354, note 892); a
    piece with no scoped document is woken by units as on the trunk. A piece
    with a `wish` has scoped state, so under the serving loop with resume 71
    corpus pieces are found current where the trunk finds 80.
-2. `claude/compiled-pattern-serving-m6` is the one branch not merged. The
-   attempt is the branch `merge-attempt/serving-m6` (head `00d56b203e`, notes
-   982 to 1002), cut from the merged branch. One test of the serving branch fails
-   there, for a defect of the trunk that the merge exposed and did not
-   create (below).
+2. `claude/compiled-pattern-serving-m6` is merged on the branch
+   `merge-attempt/serving-m6` (head `31d73441f8`, notes 982 to 1010), cut
+   from the merged branch. Every gate passes there, `test/compiled/` in
+   full on both storages, since the labels of a compiled piece are written
+   through the content-addressed path (Z95, P452). The merged branch
+   `claude/compiled-pattern-sandbox-m5` is fast-forwarded to it, so both
+   names hold every branch of the build. Moving the trunk of #10140 to it
+   is the owner's decision.
 
 The merged branch becomes the trunk once the serving branch is in. For a
 merge: resolve the textual conflicts, then check the places where both
@@ -67,31 +71,34 @@ at a wake and a restore that dropped another principal's memo entry; a wake
 by units that left no row of a list stored in documents), so a merge is not
 finished when the conflicts are gone.
 
-**What blocks the last merge, and what it showed** (notes 982 to 1002 on
-`merge-attempt/serving-m6`, head `00d56b203e`). The gates pass there except
-one case of `test/compiled/`, the first item below.
+**What the last merge showed, and what is open on it** (notes 982 to 1010
+on `merge-attempt/serving-m6`, head `31d73441f8`).
 
-- *A commit whose label table would expand past 16 MB is sent with its
-  labels inline and refused as too large. This is a defect of today's
-  runtime.* A document written with no plan record stores the join of what
-  the transaction read, once per written path. `compressLabelMetadata` in
-  `runtime/memory/v2/label-metadata-table.ts` stores an equal label once,
-  but returns the message uncompressed when the references would expand
-  past `MAX_LABEL_METADATA_EXPANSION_BYTES`, and the server then refuses
-  the inline message at `MAX_UNTRUSTED_MESSAGE_SLOTS`. A compiled piece
-  started over 201 items, each under its own clause, hits it: 1,177 of the
-  commit's 1,195 label entries are the same 30 KB join. On today's path a
-  transaction that reads 200 documents under distinct clauses commits 256
-  written documents and is refused at 600 (test kept outside the
-  repository, `work/r17-merge/today-wide-join.test.ts`). With the
-  experimental option `cfcContentAddressedLabels` on, every case passes on
-  both paths; the option waits on every deployed reader understanding
-  version-2 envelopes. The owner ruled on 2026-11-24 (Z95) that a
-  compiled piece commits through that path, with today's path left at its
-  default, and that compatibility with runtimes from before version-2
-  envelopes is not a concern; that is being built on this branch. Separately, a start
+- *Closed by Z95 (P452): a commit whose label table would expand past
+  16 MB was sent with its labels inline and refused as too large.* This is
+  a defect of today's runtime that a compiled piece reaches first: a
+  document written with no plan record stores the join of what the
+  transaction read, once per written path, and `compressLabelMetadata` in
+  `runtime/memory/v2/label-metadata-table.ts` returns the message
+  uncompressed when the references would expand past
+  `MAX_LABEL_METADATA_EXPANSION_BYTES`; the server then refuses it at
+  `MAX_UNTRUSTED_MESSAGE_SLOTS`. On today's path a transaction that reads
+  200 documents under distinct clauses commits 256 written documents and is
+  refused at 600 (test kept outside the repository,
+  `work/r17-merge/today-wide-join.test.ts`; not yet a pull request against
+  `main`). Every transaction of a compiled piece now sets the
+  content-addressed label path (`setCfcContentAddressedLabels`): a label
+  longer than `CFC_LABEL_INLINE_LIMIT` (128 bytes) is stored once as a
+  `cid:` label document and referenced. The largest commit of a start over
+  201 items, each under its own clause, went from 1,421,245 slots and
+  34.7 MB, refused, to 22,224 slots and 452 KB; all commits of that start
+  from 35.3 MB to 1.09 MB. An older runtime cannot read those documents,
+  which the owner accepted ("don't worry about backwards compatibility").
+  Tests: `content-addressed-labels.test.ts` (a client and a second piece
+  read the labels equal to a run in version 1; today's path still writes
+  version 1), and the 201-item cases. Open: a start still
   writes one label entry per written path of its lists of readers (884 at
-  200 items), so its size follows rows times clauses read; what label such
+  200 items), so the count of entries follows rows times parts; what label such
   a document owes is deferred question 1 of round thirteen.
 - *Chunks of a list are not to be the default* (recommendation by Z91; no
   decision taken, the default is unchanged). With links in place, in one
@@ -114,8 +121,13 @@ one case of `test/compiled/`, the first item below.
   `Instance.#putScoped` now splices the run of positions that differs. A
   FabriChat send at 100 messages gives 188 records (688 to 698 before, 189
   on the serving branch). Open: a scoped output still holds all rows in one
-  document (about 175 KB more per send at 100 messages); the plan to store
-  it per row, as today's runtime does, is note 985.
+  document, so bytes and time of a send follow the room. FabriChat's
+  `messageRights` (a `map` over the array of message references with a
+  `PerSession` output) at 10, 100 and 1,000 messages: scope instances of
+  79 to 90 KB, 575 to 587 KB and 5.54 MB; 59 to 61, 148 and 148 records per
+  send; 101 to 110 KB, 525 to 532 KB and 3.86 MB changed per send; 68 to
+  72 ms, 160 to 170 ms and 1.39 to 1.60 s per send. The plan to store it
+  per row is note 985, and per row and scope key note 1007.
 - *Fixed (P451, which the owner agreed with on 2026-11-24, Z94; notes 990
   to 1002): a view that read one value of a scope was stored whole, once
   per scope key.* The board's view reads `hasProfile`, which reads the
@@ -133,17 +145,28 @@ one case of `test/compiled/`, the first item below.
   evaluations at 100, 1,000 and 2,000 topics, 2.6 to 6.3 ms in the piece,
   which is what the serving branch alone gives; the scope instances are
   448 bytes at every size; a FabriChat send at 100 messages gives 148
-  records (188 before). Not yet applied, and ruled by the owner to be
-  covered as well (Z94): inside an element body, to a bare `{name}`, and
-  inside an authored `computed` or `lift` body; a continuation of round
-  nineteen is building them. Open:
-  - `system/profile-embed` now fails 4 of 5 events in every run, with four
-    writer-fit refusals on its draft documents (before, 1 run of 3 did).
-    Its handler copies the profile's user-scoped name and bio into drafts
-    of the space, and its state now holds references to scoped places. Not
-    decided: whether the refusal is the label the copy owes, so that the
-    earlier outcome was an under-label, or whether the scoped place stores
-    a larger label than the value had (CFC question 5 of round nineteen).
+  records (188 before). The owner ruled (Z94) that the other cases are
+  covered as well. A bare `{name}` and an authored `computed` or `lift`
+  body were already covered by the change: the crate planned them as
+  cones of their own, and only `Host.output` had classed the tree as
+  scoped (tests `scoped-bare.tsx` and `scoped-computed.tsx` at 10 and 100
+  items; a `lift` over a scoped argument checked by plan inspection only).
+  Not built: the read inside the body of a per-element construct (a `map`
+  over an array of references, over an array of plain values in place,
+  and over the result of another per-element construct); the plan is note
+  1007. It holds a scaling finding: with `Instance.#pullScoped` as built,
+  per-row scoped places would exist for every scope key the piece has
+  seen and every run would visit all of them, rows times keys, so the plan
+  needs places pulled only where their inputs changed for the acting key,
+  and then places made on a reader's demand. Open:
+  - `system/profile-embed` fails 4 of 5 events in every run, with writer-fit
+    refusals on two documents outside the piece's store: the handler's
+    copy of the profile's user-scoped name and bio carries the profile's
+    and the acting principal's `User` clauses, which the targets' writer
+    policy admits in neither. The scoped places store the same clauses the
+    value had before P451, and the same refusal occurred before P451 in
+    one run of two, so this is the label the copy owes and not a defect of
+    P451 (note 1006; a CFC question). Today's path was not run on it.
   - No test checks the stored labels of the positions around a scoped
     value under clauses that differ between principals.
   - Note 892's rule stands: a piece with scoped documents resumes whole.
@@ -158,10 +181,17 @@ one case of `test/compiled/`, the first item below.
   deriving until the transaction of the run that made the first derivation
   ends. Today's runtime has no counterpart of this mechanism; it is a
   consequence of deriving once per session (note 892's open item), and one
-  refusal per create remains: each session's run derives the part of the
-  space too, so two runs write the created topic's documents. Which
-  document is refused, and whether the refusals follow the number of
-  sessions, is not measured. Test `made-session.test.ts`.
+  refusal per create remains, and the work of a create follows the
+  sessions (note 1005; counts at 100 and 1,000 topics alike): with 3, 5
+  and 9 sessions of one principal a create takes 13 to 16, 25 to 30 and 50
+  to 88 derivations, 197 to 229, 393 to 457 and 665 to 1,122 records, and
+  1, 3 and 3 refusals; with 9 sessions of 7 principals, 96 to 105
+  derivations and 1,111 to 1,271 records. From 5 sessions on, each refusal
+  names the board's result document: the first session's run writes it,
+  and the other runs read it stale and are refused. Each session's run
+  derives the part of the space too; deriving that part once per pass and
+  then each scope's part over committed documents is the fix, not built.
+  Test `made-session.test.ts`.
 - *Not built: a session no client holds any more is still derived at
   every change.* The piece derives for every scope key it has seen. On
   today's path a document of a session is derived because a client's
