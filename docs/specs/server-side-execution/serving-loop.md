@@ -466,7 +466,12 @@ the pieces upstream, as it does where no index is kept. The loop counts the
 root under the reason `stale-upstream` (§7), demands no instance for it,
 holds W for nothing, and leaves a piece that runs and is stale upstream as it
 is; the record of the started piece is stored marked, so the store serves no
-root that rests on it. The rest of this paragraph is what a `start-upstream`
+root that rests on it. A `skip` loop carries no demand at all (§3b), so a run
+withdrawn for a scoped instance its writer has not produced for the run's
+viewer (§3d) demands nothing either: as where no index is kept, the writer
+produces the instance only for a demand of its own, and until it does the
+run stays withdrawn and the viewer reads what the store holds of the run's
+output. The rest of this paragraph is what a `start-upstream`
 loop does, and a `record` loop for a piece that runs. Under `start-upstream`
 the root is neither loaded nor started, and stays
 among the roots awaiting a first load; under `record` it is loaded, and each
@@ -1378,8 +1383,11 @@ executing:
   demanding in the loop's space for a run in the `space` slice, a user's
   pairs for one in that user's slice, and the one pair for one in a
   session's slice. It finds the reads in the records it takes, so a loop
-  that keeps no index carries nothing. The set is replaced when it changes
-  and withdrawn at a park. The memory server admits a row only for a live
+  that keeps no index carries nothing. A loop in the `skip` mode (§1)
+  carries nothing either: its pieces derive from what the source holds,
+  and its judgment holds a slice that read an instance there stale until
+  the source's index proves the instance current. The set is replaced when
+  it changes and withdrawn at a park. The memory server admits a row only for a live
   client session on it that names an actor. Where that actor holds READ on
   the space carried into, by the check a named scoped read passes
   (protocol.md §2), the row is the actor's pair's. Where the actor does
@@ -2996,7 +3004,8 @@ the loop was woken to judge a root it had left unloaded, or a piece that
 runs and is stale upstream, because the index changed from outside the loop
 or a slice's record expired; `carried` the
 rows of demand the loops offer to carry into other spaces now, and
-`carriedRefused` the rows a space they were sent to refused (§3b);
+`carriedRefused` the rows a space they were sent to refused (§3b), both
+zero under `skip`;
 `heldUpstream` the roots a `start-upstream` loop left unloaded because what
 the store held of them was stale only upstream, once each time a root is
 first held, and `upstreamAbandoned` the pieces, each one whose slices hold a
