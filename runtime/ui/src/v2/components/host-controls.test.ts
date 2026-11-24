@@ -189,6 +189,20 @@ describe("a control whose host is the control", () => {
         if (control.state) expect(state(element)).not.toBe(before);
       });
 
+      it("answers no key a control inside it already handled", async () => {
+        const { element, clicks } = await mounted();
+        const inner = document.createElement("span");
+        inner.addEventListener("keydown", (event) => event.preventDefault());
+        element.append(inner);
+        const before = state(element);
+
+        press(inner, control.key);
+        await element.updateComplete;
+
+        expect(clicks()).toBe(0);
+        expect(state(element)).toBe(before);
+      });
+
       it("answers no key once out of the document", async () => {
         const { element, clicks } = await mounted();
         const before = state(element);

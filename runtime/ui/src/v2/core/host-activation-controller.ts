@@ -104,6 +104,9 @@ export class HostActivationController implements ReactiveController {
   };
 
   #onKeydown = (event: KeyboardEvent): void => {
+    // A key something inside already handled (a nested control) is spent:
+    // acting on it again would activate twice for one press.
+    if (event.defaultPrevented) return;
     if (!this.#host.isConnected || this.#options.isDisabled()) return;
     const key = event.key === "Spacebar" ? " " : event.key;
     if (!this.#options.keys.includes(key)) return;
