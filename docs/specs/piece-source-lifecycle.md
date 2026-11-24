@@ -860,6 +860,18 @@ can change after the link is stored. The retained-handle rule relies on
 producer enforcement at access and commit time for payload and flow-policy
 constraints rather than re-proving their subset relation during the update.
 
+A committed link to a document that carries no contract of its own, such as an
+element pushed onto an input array, is held to the piece's prior input contract
+at the link's path: the candidate's contract there must accept everything that
+contract admits. One case is judged under the piece-evolution policy instead, as
+the same value written inline in the input is. The link sits at a position the
+candidate reads as a value, and the document is in the input document's own
+space and scope, is present in the validating transaction, and holds no link of
+its own. Stored-argument validation reads such a document in full, so a stored
+value the candidate cannot read still refuses the update. A handle, a document
+in another space or scope, and a document that holds a link keep the proof
+without the policy.
+
 Whether an automatic origin update runs these comparisons turns on one
 question: did anything gate the release that produced the candidate?
 

@@ -2482,30 +2482,18 @@ function proveRebuiltContracts(
   );
 }
 
-/**
- * Prove a preserved handle's payload flow, in both directions it can move.
- * `pieceEvolution` says the source is the piece's own prior input contract,
- * and reaches the read direction alone: a write back through the handle is
- * the candidate's value, which the document's prior contract must hold as it
- * stands.
- */
+/** Prove a preserved handle's payload flow, in both directions it can move. */
 function provePreservedContracts(
   sourceContracts: readonly PathSchemaContract[],
   targetContracts: readonly PathSchemaContract[],
   targetOuter: OuterCellShape,
   displayPath: string,
-  pieceEvolution: boolean,
 ): void {
   const label = `input link at ${displayPath}`;
   if (
     targetOuter.kind !== "writeonly" && targetOuter.kind !== "stream"
   ) {
-    assertContractSubset(
-      sourceContracts,
-      targetContracts,
-      label,
-      pieceEvolution,
-    );
+    assertContractSubset(sourceContracts, targetContracts, label);
   }
   if (cellKindCanWrite(targetOuter.kind)) {
     // A writable handle can send values back to the producer, so the
@@ -2519,6 +2507,26 @@ function provePreservedContracts(
       label,
     );
   }
+}
+
+/**
+ * Whether what `linkedCell` holds is input that setup's validation of the
+ * stored input reads in full: a value present in this transaction, in the
+ * input document's own space and scope, holding no link of its own. Setup
+ * validates such a value against the candidate and refuses one the candidate
+ * cannot read, which is what keeps the piece-evolution policy sound for it.
+ * Setup does not read a value in another space or scope, and a value behind a
+ * further link may be another piece's.
+ */
+function holdsOwnPlainInput(
+  linkedCell: Cell<unknown>,
+  baseCell: Cell<unknown>,
+): boolean {
+  const target = linkedCell.getAsNormalizedFullLink();
+  const base = baseCell.getAsNormalizedFullLink();
+  if (target.space !== base.space || target.scope !== base.scope) return false;
+  const stored = linkedCell.getRaw();
+  return stored !== undefined && suppliedLinks(stored).length === 0;
 }
 
 /**
@@ -2616,9 +2624,10 @@ export function assertSuppliedLinkSchemasCompatible(
      * producer's policy without requiring that policy on the consumer schema.
      * The same proof admits a committed link to a metadata-less document
      * whose contract is unchanged, without the new-link proof. Where that
-     * contract changed, a committed link to such a document is proved under
-     * the piece-evolution policy, as the same value written inline in the
-     * input is: the document is the piece's own input one hop away.
+     * contract changed, a committed link at a position read as a value, to
+     * such a document holding plain input in the piece's own space and
+     * scope, is proved under the piece-evolution policy, as the same value
+     * written inline in the input is (`holdsOwnPlainInput`).
      */
     priorArgumentSchema?: JSONSchema;
 
@@ -2706,15 +2715,19 @@ export function assertSuppliedLinkSchemasCompatible(
     }
     // A metadata-less document is held to the piece's prior input contract,
     // so the proof below compares that contract with the candidate's at this
-    // path. Where the link is also the one already committed, the document is
-    // the piece's own input one hop away, and the update judges it as it
-    // judges the same value written inline: under the piece-evolution policy.
-    // A link staged by this update, or one a caller rebuilds, is a new
-    // binding and keeps the proof without it.
+    // path. Where the link is also the one already committed, at a position
+    // the candidate reads as a value, and what it reaches is the piece's own
+    // plain input one hop away, the update judges that input as it judges
+    // the same value written inline: under the piece-evolution policy. A link
+    // staged by this update, or one a caller rebuilds, is a new binding and
+    // keeps the proof without it, as does a handle and anything setup's
+    // validation of the stored input does not read in full.
     const pieceEvolution = heldToPriorContract &&
+      targetOuter === undefined &&
       options.linksPreservedVerbatim === true &&
       options.destinationIsStream !== true &&
-      linkMatchesCommittedState(suppliedLink, baseCell, basePath);
+      linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
+      holdsOwnPlainInput(linkedCell, baseCell);
     if (preservedOuter === undefined) {
       // When the contract is also unchanged, the proof can only refuse what
       // new-link default insertion refuses, and a link carried over byte for
@@ -2762,7 +2775,6 @@ export function assertSuppliedLinkSchemasCompatible(
         localized.targetContracts,
         preservedOuter,
         displayPath,
-        pieceEvolution,
       );
     }
   }

@@ -128,8 +128,8 @@ export interface SchemaSubsetOptions {
    * producer's contract and a reader's. The piece-evolution policy then
    * applies to the proof as {@link assertPatternSchemasBackwardCompatible}
    * applies it to the whole input, and stays sound the same way: setup
-   * validates the stored input against the candidate, reading through each
-   * link it can.
+   * validates the stored input against the candidate. A caller sets this only
+   * for input that validation reads in full.
    */
   pieceEvolution?: boolean;
 }
