@@ -78,6 +78,16 @@ expose token material, account identifiers, expiry, or raw responses.
   backend rejects the API `prompt_cache_options` field, so this provider uses
   implicit prompt caching with the stable affinity key; cache-mode controls and
   explicit breakpoints are available only through the compatible API gateway.
+  The backend also rejects a `prompt_cache_breakpoint` on a content block.
+- System messages: the first is `instructions` and each later one opens `input`
+  as a `developer` message of its own. Implicit caching reuses a prompt only
+  through the end of a whole message, and every message of the opening developer
+  block ends at such a boundary, while the ends of earlier user messages do not.
+  So a request that shares its first system messages with an earlier one under
+  the same affinity key reads them from the cache, and text the two share inside
+  one message counts only when the whole message is shared. A batch run's result
+  schema is the last of its system messages for that reason: it is commonly
+  different in every run, while the prompt before it is the same.
 - Tool continuation retains both the public call id and provider function-item
   id, so the corresponding `function_call_output` remains paired after resume.
 - The first transport is SSE. WebSockets, endpoint probing, and client-id
