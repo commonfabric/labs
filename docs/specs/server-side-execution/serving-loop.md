@@ -803,9 +803,10 @@ the lease:
   moves tells a run doing work from one in a loop of its own. Only the
   outermost of runs started inside one another is marked. The worker numbers
   an action the first time it runs it, and a served handler's run for an
-  event afresh for each run, and posts what a number stands for (the space,
-  the action's module or pattern name, and for a handler's run the event's
-  stream entry) once, before the run's body starts. The post reaches the main
+  event afresh for each run, and posts what a number stands for once, before
+  the run's body starts: the space, the scheduler's id for the action (the key
+  §7's `actions` lists it under), its module or pattern name and its piece
+  where known, and for a handler's run the event's stream entry. The post reaches the main
   thread without the worker's thread yielding, so it arrives while the run
   holds the thread, and a post per run, which would make every run a message
   the watchdog counts, is not made. Each of the watchdog's checks reads the

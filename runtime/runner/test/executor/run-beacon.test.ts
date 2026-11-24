@@ -84,7 +84,9 @@ describe("run-beacon", () => {
           }
 
           expect(postedBeforeBody).toEqual([1, 1]);
-          expect(reported).toEqual([{ run: 1, space, action: "total" }]);
+          expect(reported).toEqual([
+            { run: 1, space, action: "id-1", name: "total" },
+          ]);
         });
 
         it("numbers each run of a served handler for an event afresh, and posts the event with it", () => {
@@ -100,8 +102,8 @@ describe("run-beacon", () => {
 
           expect(runs).toEqual([1, 2]);
           expect(reported).toEqual([
-            { run: 1, space, action: "bump", event },
-            { run: 2, space, action: "bump", event },
+            { run: 1, space, action: "id-1", name: "bump", event },
+            { run: 2, space, action: "id-1", name: "bump", event },
           ]);
         });
 
@@ -118,24 +120,33 @@ describe("run-beacon", () => {
 
           expect(inner).toEqual({ epoch: 1, run: 1, reads: 0 });
           expect(afterInner).toEqual({ epoch: 1, run: 1, reads: 0 });
-          expect(reported.map(({ action }) => action)).toEqual(["outer"]);
+          expect(reported.map(({ name }) => name)).toEqual(["outer"]);
           expect(readRunBeacon(buffer)).toBeUndefined();
         });
 
-        it("names an action by its module or pattern name, and by its id where it carries neither", () => {
+        it("names an action by the scheduler's id, with its module or pattern name and its piece where it carries them", () => {
           const marks = beacon.forSpace(space);
           marks.hold(namedAction("by-module"), "id-1", () => {});
           marks.hold(
-            Object.assign(() => {}, { pattern: { name: "by-pattern" } }),
+            Object.assign(() => {}, {
+              pattern: { name: "by-pattern" },
+              schedulerObservationIdentity: { pieceRootId: "of:piece" },
+            }) as Action,
             "id-2",
             () => {},
           );
           marks.hold(() => {}, "id-3", () => {});
 
-          expect(reported.map(({ action }) => action)).toEqual([
-            "by-module",
-            "by-pattern",
-            "id-3",
+          expect(reported).toEqual([
+            { run: 1, space, action: "id-1", name: "by-module" },
+            {
+              run: 2,
+              space,
+              action: "id-2",
+              name: "by-pattern",
+              piece: "of:piece",
+            },
+            { run: 3, space, action: "id-3" },
           ]);
         });
 
@@ -144,7 +155,7 @@ describe("run-beacon", () => {
           beacon.forSpace(other).hold(namedAction("total"), "id-1", () => {});
 
           expect(reported).toEqual([
-            { run: 1, space: other, action: "total" },
+            { run: 1, space: other, action: "id-1", name: "total" },
           ]);
         });
       });
@@ -220,7 +231,8 @@ describe("run-beacon", () => {
       await runtime.idle();
 
       expect(during).toEqual([{ epoch: 1, run: 1, reads: 0 }]);
-      expect(reported).toEqual([{ run: 1, space, action: "reader" }]);
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toMatchObject({ run: 1, space, name: "reader" });
       expect(readRunBeacon(buffer)).toBeUndefined();
     });
 

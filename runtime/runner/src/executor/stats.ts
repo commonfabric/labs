@@ -884,12 +884,15 @@ export type ServingLoopStats = {
       spaces: string[];
 
       /**
-       * The space whose runtime runs it, the action's name, and the event of
-       * a served handler's run; absent until the worker's notice naming the
-       * run has arrived.
+       * The space whose runtime runs it, the scheduler's id for the action
+       * (the key of its row in `actions`), the action's module or pattern
+       * name and its piece where known, and the event of a served handler's
+       * run; absent until the worker's notice naming the run has arrived.
        */
       space?: string;
       action?: string;
+      name?: string;
+      piece?: string;
       eventId?: string;
 
       /** How many of the watchdog's checks in a row have found the run. */

@@ -26,7 +26,11 @@
 import type { MemorySpace } from "../storage/interface.ts";
 import { countReadsInto } from "../read-stats.ts";
 import { getSchedulerActionName } from "../scheduler/diagnostics.ts";
-import type { Action, EventHandler } from "../scheduler/types.ts";
+import type {
+  Action,
+  EventHandler,
+  TelemetryAnnotations,
+} from "../scheduler/types.ts";
 
 /** Index of the slot counting run starts and ends. */
 const EPOCH = 0;
@@ -61,10 +65,16 @@ export type RunIdentity = {
   readonly space: MemorySpace;
 
   /**
-   * The action's name: its module or pattern name, or the scheduler's id for
-   * an action that carries neither.
+   * The scheduler's id for the action, which the serving loop's action costs
+   * (`action-costs.ts`) key the action's row by.
    */
   readonly action: string;
+
+  /** The action's module or pattern name, where it carries one. */
+  readonly name?: string;
+
+  /** The root of the piece the action belongs to, where it is known. */
+  readonly piece?: string;
 
   /** For a served handler's run, the event it handles. */
   readonly event?: RunEvent;
@@ -86,7 +96,7 @@ export type RunBeaconReading = {
 export type SpaceRunBeacon = {
   /**
    * Runs `body`, the body of a run of `action`, marking the beacon while it
-   * holds the thread. `actionId` names the action where it carries no name.
+   * holds the thread. `actionId` is the scheduler's id for the action.
    * `event` is the stream entry a served handler's run handles.
    */
   readonly hold: <T>(
@@ -215,10 +225,15 @@ export class RunBeacon {
     if (run === undefined) {
       run = ++this.#last;
       if (event === undefined) this.#numbers.set(action, run);
+      const name = getSchedulerActionName(action);
+      const piece = (action as Partial<TelemetryAnnotations>)
+        .schedulerObservationIdentity?.pieceRootId;
       this.#report({
         run,
         space,
-        action: getSchedulerActionName(action) || actionId,
+        action: actionId,
+        ...(name === undefined ? {} : { name }),
+        ...(piece === undefined ? {} : { piece }),
         ...(event === undefined ? {} : { event }),
       });
     }

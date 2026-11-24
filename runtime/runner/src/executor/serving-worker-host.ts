@@ -716,6 +716,8 @@ export class ServingWorkerPool {
           ...(identity === undefined ? {} : {
             space: identity.space,
             action: identity.action,
+            ...(identity.name === undefined ? {} : { name: identity.name }),
+            ...(identity.piece === undefined ? {} : { piece: identity.piece }),
             ...(identity.event === undefined
               ? {}
               : { eventId: identity.event.eventId }),
@@ -1740,7 +1742,10 @@ export class ServingWorkerPool {
         : undefined;
       message += run === undefined
         ? `, in run ${reading.run}, which the worker had not named`
-        : `, in a run of \`${run.action}\` in space ${run.space}` +
+        : `, in a run of \`${run.name ?? run.action}\` (action ` +
+          `\`${run.action}\`${
+            run.piece === undefined ? "" : `, piece ${run.piece}`
+          }) in space ${run.space}` +
           (run.event === undefined ? "" : ` for event ${run.event.eventId}`) +
           (checks === undefined ? "" : ` that ${checks} checks in a row found`);
     }
