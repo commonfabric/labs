@@ -115,11 +115,13 @@ here.
 
 Benchmark results are not gated, and neither is CI wall time. The counts CI
 gates on include the measured-set coverage gate (`tasks/coverage-gate.ts`, a step
-of `Status`) and the read limits of the headless lunch-poll render fixtures
-([below](#headless-render-read-limits), tests of the `pattern-unit` suite).
-Neither of them ingests benchmark results, so a bench
-regression shows up as trend drift on the dashboard rather than as a failing
-check.
+of `Status`), the read limits of the headless lunch-poll render fixtures
+([below](#headless-render-read-limits), tests of the `pattern-unit` suite), and
+the limit on how many documents one Topics topic's row in its board's
+collection is read from, held as the board doubles
+(`patterns/apps/topics/collection-budget.test.tsx`, also in `pattern-unit`).
+None of them ingests benchmark results, so a bench regression shows up as trend
+drift on the dashboard rather than as a failing check.
 
 The dashboard (https://dashboard.saga-castor.ts.net/, on the tailnet) serves
 the numbers behind its benchmark tiles and `/bench` page as JSON, read from

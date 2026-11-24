@@ -294,25 +294,25 @@ addPiece.send({ piece: ann });
 **Topics — a multi-user tracker over #topic pieces** (durable units of shared
 attention; CT-1878): title, living body document, flat chronological comment
 thread, typed links out. Deliberately minimal — no statuses, labels, or
-assignees. The board holds its topics in an indexed collection
-(`docs/features/indexed-collections.md`) rather than a list: `addTopic` adds the
-topic it creates, the runtime mirrors each topic's title, body, number, activity
-and author into a SQLite table, and every listing is a query over it — the
-cards, the count, the mention universe, and the `topics` and `index` outputs,
-whose rows are the topics themselves as references. `addTopic` returns the piece
-it created, so a caller addresses a new topic straight from the create. The
-board owns a member namespace through `product/collection-naming/naming.ts`:
-`addTopic` allocates the next decimal number and passes it into the topic it
-creates, in the same transaction as the add; each topic stores that number and
-publishes it as `shortName`, reading nothing of its board to report it; and
-`backfillNames` adds what the board held as a list to the collection and numbers
-it. Topics reference each other by CELL: the collection mirrors what each topic
-points at into two relation tables, and each topic asks them which topics
-mention it. Demonstrates: an indexed collection as a board's only membership,
-queries that return members as references, a join over a relation table by the
-asking piece's own reference, profile-native browser authorship on a shared
-piece, mergeable comment appends, session-scoped drafts, `multiUserTest`
-coverage.
+assignees. The board holds its topics in an
+[indexed collection](../docs/features/indexed-collections.md) rather than a
+list: `addTopic` adds the topic it creates, the runtime mirrors each topic's
+title, body, number, activity and author into a SQLite table, and every listing
+is a query over it — the cards, the count, the mention universe, and the
+`topics` and `index` outputs, whose rows are the topics themselves as
+references. `addTopic` returns the piece it created, so a caller addresses a new
+topic straight from the create. The board owns a member namespace through
+`product/collection-naming/naming.ts`: `addTopic` allocates the next decimal
+number and passes it into the topic it creates, in the same transaction as the
+add; each topic stores that number and publishes it as `shortName`, reading
+nothing of its board to report it; and `backfillNames` adds what the board held
+as a list to the collection and numbers it. Topics reference each other by CELL:
+the collection mirrors what each topic points at into two relation tables, and
+each topic asks them which topics mention it. Demonstrates: an indexed
+collection as a board's only membership, queries that return members as
+references, a join over a relation table by the asking piece's own reference,
+profile-native browser authorship on a shared piece, mergeable comment appends,
+session-scoped drafts, `multiUserTest` coverage.
 
 **Keywords:** topics, issues, tracker, discussion, thread, comments, multi-user,
 profile, mergeable, index, discovery, indexed collection, SQLite, query,
@@ -377,14 +377,14 @@ interface TopicsOutput {
 
 ## `apps/topics/topic.tsx`
 
-A single #topic piece: the durable object the tracker's list holds. Body edits
-go through an explicit Edit→Save toggle (one whole-value `set` per save keeps
-the concurrent-edit window small); comments and links are mergeable appends.
-Stores the number its board calls it by as its own input and publishes it as
-`shortName`, rendering it as a badge beside the title. A topic nobody has
-numbered stores none and publishes none. `recordName` is how a number reaches a
-topic the board did not pass one to at create. Use from `apps/topics/main.tsx`
-via `navigateTo()`, or standalone.
+A single #topic piece, a member of its board's indexed collection, which it asks
+for the topics that mention it. Body edits go through an explicit Edit→Save
+toggle (one whole-value `set` per save keeps the concurrent-edit window small);
+comments and links are mergeable appends. Stores the number its board calls it
+by as its own input and publishes it as `shortName`, rendering it as a badge
+beside the title. A topic nobody has numbered stores none and publishes none.
+`recordName` is how a number reaches a topic the board did not pass one to at
+create. Use from `apps/topics/main.tsx` via `navigateTo()`, or standalone.
 
 **Keywords:** topic, detail, thread, comment, links, body, navigateTo,
 shortName, member name, badge

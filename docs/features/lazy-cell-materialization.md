@@ -138,7 +138,6 @@ eager read".
 The first four share one reason: deciding a fallback by evaluating a present
 subtree registers every read below it, and a pattern's optional inputs are
 declared with defaults, so that rule would make every such input read eagerly.
-The Topics test named above is what holds the line.
 
 ## Returning "nothing is there" still owes a read
 

@@ -486,10 +486,10 @@ export async function seedTopicBoard(
         await resolveLoaded(named),
       );
       // Each citation is a REFERENCE, recorded through the topic's own verb.
-      // Writing `See also fid1:…` into the body used to make an edge; nothing
-      // reads prose for addresses now, so a seeded board built that way would
-      // carry the sentences and none of the graph — and every benchmark over it
-      // would quietly measure a board with no crossrefs at all.
+      // Nothing reads prose for addresses, so a board seeded with
+      // `See also fid1:…` sentences would carry the sentences and none of the
+      // graph, and every benchmark over it would measure a board with no
+      // references at all.
       const targets = crossrefTargets(index, shape);
       for (const target of targets) {
         await created.result.set({ topic: pieces[target].getCell() }, [
@@ -497,20 +497,23 @@ export async function seedTopicBoard(
         ]);
       }
       // What a topic publishes — its summary, and the mentions the board's
-      // pivot joins over — is derived by a running topic: a reader that opens
-      // another topic reads this one's published result and runs nothing of
-      // it. One read of the topic's result derives all of it, once per topic
-      // rather than once per write. The result includes the topic's
-      // backlinks, which read the board's crossref table, so this read still
-      // grows with the board.
+      // collection mirrors into its relation tables — is derived by a running
+      // topic: a reader that opens another topic reads this one's published
+      // result and runs nothing of it. So each topic is read once here,
+      // rather than once per write.
       if (served) {
-        // The two values a topic computes, read once so that the serving
-        // runtime derives them: who filed it, and what it points at. A topic
-        // filed through the board's page is read by that page, and the
-        // Topics tooling reads the topic it created to confirm it landed.
+        // Only the two values a topic computes, read once so that the
+        // serving runtime derives them: who filed it, and what it points at,
+        // which is what reaches the collection's `topics_mentions` table.
+        // The rest of the result, the backlinks the topic asks the collection
+        // for among it, is not read. A topic filed through the board's page
+        // is read by that page, and the Topics tooling reads the topic it
+        // created to confirm it landed.
         await created.result.get(["createdBy"]);
         await created.result.get(["mentions"]);
       } else {
+        // The whole result, which also runs the topic's backlink query
+        // against the board's collection.
         await created.result.get();
       }
       pieces.push(created);

@@ -1,9 +1,10 @@
 /**
  * Browser-tier measurement of one operation on a Topics board, for
- * `docs/plans/topics-computation-cost.md`: reactive-body reads for the board's
- * pivot and for each topic's backlink lift, scheduler graph size, and timing
- * split between the main thread and the
- * worker as far as the shell's timing records that split.
+ * `docs/plans/topics-computation-cost.md`: reactive-body reads for the lifts
+ * {@link TOPICS_LIFTS} names, the board's card derivation
+ * (`cardRowsByActivity`) and each topic's derivation of who filed it
+ * (`createdByOf`), scheduler graph size, and timing split between the main
+ * thread and the worker as far as the shell's timing records that split.
  *
  * `measureTopicsReads()` turns telemetry and body read accounting on around the
  * operation, so its elapsed time carries their overhead.
