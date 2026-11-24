@@ -32,6 +32,7 @@ import {
   AGENT_CONNECTOR_WRITER_ID,
   agentOwnerSchema,
   agentPrincipalSchema,
+  cellHasOwnerConfidentiality,
   cellHasOwnerProtection,
   pushStableCellGraph,
   readStableCellGraphValue,
@@ -1175,21 +1176,14 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
       localWorkspace: "/private/owner/worktree",
     });
     const healthLink = target.cells.health.getAsNormalizedFullLink();
-    const inspect = runtime.edit();
-    const stored = inspect.readOrThrow({
-      space: healthLink.space,
-      id: healthLink.id,
-      path: [],
-      ...(healthLink.scope !== undefined && { scope: healthLink.scope }),
-    }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
     assertEquals(
-      stored.cfc?.labelMap?.entries?.some((entry) =>
-        JSON.stringify(entry).includes("confidentiality") &&
-        JSON.stringify(entry).includes(owner.did())
+      cellHasOwnerConfidentiality(
+        runtime.readTx(),
+        target.cells.health,
+        owner.did(),
       ),
       true,
     );
-    inspect.abort();
 
     const attack = runtime.edit();
     setCfcTrustSnapshot(attack, {

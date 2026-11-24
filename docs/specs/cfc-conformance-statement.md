@@ -473,7 +473,7 @@ document is ensured; equality is computed after the cross-space transform of
 
 **Deviations.**
 
-- With `cfcContentAddressedLabels` on (off by default), a stored version-1
+- With `cfcContentAddressedLabels` on, its default, a stored version-1
   envelope with unchanged labels is rewritten once in version 2;
   [`content-addressed-cfc-labels.md`](content-addressed-cfc-labels.md) under
   "Idempotence and the merge loop" and `SC-11` state this as the one

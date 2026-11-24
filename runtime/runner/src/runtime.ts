@@ -843,7 +843,7 @@ export interface RuntimeOptions {
   cfcDecomposedEnvelopes?: CfcDecomposedEnvelopes;
 
   /**
-   * Defaults to `false`. When true, the envelope persist path stores
+   * Defaults to `true`. When true, the envelope persist path stores
    * version-2 envelopes: each label above the inline limit is a reference
    * to a content-addressed label document shared by every envelope that
    * carries the label (`docs/specs/content-addressed-cfc-labels.md`). Off
