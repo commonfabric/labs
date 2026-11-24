@@ -13,16 +13,24 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   defineIndexedCollections,
   type IndexedCollectionDefinition,
+  indexedCollectionDescriptorOf,
   type IndexedCollectionOptions,
+  type IndexedKindDescriptor,
+  indexedKindOf,
 } from "../src/builtins/indexed-collection/definition.ts";
 import {
   maintenanceRevisionCell,
   memberKeyOf,
+  type MemberRows,
+  projectMember,
 } from "../src/builtins/indexed-collection/maintenance.ts";
 import { type Cell, createCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
-import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  IReadActivity,
+} from "../src/storage/interface.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -451,6 +459,104 @@ describe("indexed-collection", () => {
       await redeclare({ columns: { title: "text", rank: "integer" } });
 
       expect(await rev()).toBe(before);
+    });
+  });
+
+  describe("projectMember()", () => {
+    /** Reads the declaration of the kind `topics` through `tx`. */
+    function topics(tx: IExtendedStorageTransaction): IndexedKindDescriptor {
+      const declared = indexedCollectionDescriptorOf(
+        runtime.getCell(space, "collection", undefined, tx).getRaw(),
+      )!;
+      return indexedKindOf(declared, "topics").descriptor;
+    }
+
+    /** Reads the rows of the topic `name` through `tx`. */
+    function project(
+      name: string,
+      tx: IExtendedStorageTransaction,
+      descriptor = topics(tx),
+    ): MemberRows {
+      return projectMember(tx, "topics", descriptor, topic(name, tx));
+    }
+
+    /** The read log of `tx`, which a V2 transaction keeps as an array. */
+    function readLog(tx: IExtendedStorageTransaction): IReadActivity[] {
+      return tx.tx.getReadActivities!() as IReadActivity[];
+    }
+
+    /** Writes the topic `name` through `tx`. */
+    function write(name: string, tx: IExtendedStorageTransaction): void {
+      topic(name, tx).set({ title: name, body: "", rank: 0, mentions: [] });
+    }
+
+    it("visits only the read-log entries its own reads appended", async () => {
+      // The entries are counted through a proxy standing in for the log, so
+      // the count is of what the function looked at, whatever time it took.
+
+      await declare({ columns: { title: "text" } });
+      const tx = runtime.edit();
+      for (const name of ["a", "b", "c"]) write(name, tx);
+      const descriptor = topics(tx);
+      const log = readLog(tx);
+      let visited = 0;
+      const counting = new Proxy(log, {
+        get(target, key, receiver) {
+          if (typeof key === "string" && /^\d+$/.test(key)) visited++;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      tx.tx.getReadActivities = () => counting;
+
+      const appended: number[] = [];
+      const visits: number[] = [];
+      for (const name of ["a", "b", "c"]) {
+        const before = log.length;
+        visited = 0;
+        project(name, tx, descriptor);
+        appended.push(log.length - before);
+        visits.push(visited);
+      }
+
+      expect(appended.every((count) => count > 0)).toBe(true);
+      expect(visits).toEqual(appended);
+      tx.abort();
+      await runtime.idle();
+    });
+
+    it("leaves out of `deps` a document read before the member was", async () => {
+      await declare({ columns: { title: "text" } });
+      const tx = runtime.edit();
+      write("a", tx);
+      write("b", tx);
+      topic("a", tx).get();
+
+      const { deps } = project("b", tx);
+
+      expect(deps).toContain(topic("b").getAsNormalizedFullLink().id);
+      expect(deps).not.toContain(topic("a").getAsNormalizedFullLink().id);
+      tx.abort();
+      await runtime.idle();
+    });
+
+    it("returns the same `deps` from a read log that is not an array", async () => {
+      await declare({ columns: { title: "text" } });
+      const tx = runtime.edit();
+      write("a", tx);
+      write("b", tx);
+      topic("a", tx).get();
+      const expected = project("b", tx).deps;
+      const log = readLog(tx);
+      tx.tx.getReadActivities = function* () {
+        yield* log;
+      };
+
+      const { deps } = project("b", tx);
+
+      expect(deps).not.toContain(topic("a").getAsNormalizedFullLink().id);
+      expect(deps).toEqual(expected);
+      tx.abort();
+      await runtime.idle();
     });
   });
 

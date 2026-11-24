@@ -20,6 +20,7 @@ import {
 import { createSigilLinkFromParsedLink, isCellLink } from "../../link-utils.ts";
 import type {
   IExtendedStorageTransaction,
+  IReadActivity,
   MemorySpace,
 } from "../../storage/interface.ts";
 import {
@@ -157,9 +158,7 @@ export function projectMember(
     bound.getAsNormalizedFullLink().id,
     resolved.getAsNormalizedFullLink().id,
   ]);
-  let position = 0;
-  for (const read of tx.tx.getReadActivities?.() ?? []) {
-    if (position++ < firstRead) continue;
+  for (const read of readsFrom(tx, firstRead)) {
     if (read.scope === "user" || read.scope === "session") {
       throw new TypeError(
         `an indexed collection cannot mirror a value stored per ${read.scope}`,
@@ -445,11 +444,37 @@ function toColumnValue(value: unknown): IndexedColumnValue {
   return null;
 }
 
-/** Number of reads `tx` has journaled so far. */
+/**
+ * Number of reads `tx` has journaled so far. A log kept as an array is asked
+ * for its length. A member is read once per `add()`, and a handler may add
+ * thousands of members in one transaction, so counting the entries one by one
+ * would cost each member the reads of every member before it.
+ */
 function countReads(tx: IExtendedStorageTransaction): number {
+  const log = tx.tx.getReadActivities?.() ?? [];
+  if (Array.isArray(log)) return log.length;
   let count = 0;
-  for (const _read of tx.tx.getReadActivities?.() ?? []) count++;
+  for (const _read of log) count++;
   return count;
+}
+
+/**
+ * The reads `tx` has journaled from position `first` on. On a log kept as an
+ * array, none of the entries before `first` is visited.
+ */
+function* readsFrom(
+  tx: IExtendedStorageTransaction,
+  first: number,
+): Iterable<IReadActivity> {
+  const log = tx.tx.getReadActivities?.() ?? [];
+  if (Array.isArray(log)) {
+    for (let at = first; at < log.length; at++) yield log[at];
+    return;
+  }
+  let position = 0;
+  for (const read of log) {
+    if (position++ >= first) yield read;
+  }
 }
 
 function sameList(a: readonly unknown[], b: readonly unknown[]): boolean {
