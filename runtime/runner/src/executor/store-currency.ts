@@ -42,7 +42,9 @@ export const CURRENCY_INDEX_MODES = [
  *   and does nothing else on the judgment: a root that is stale only through
  *   what is upstream of it is loaded as a refused one is, so its piece
  *   derives from what the store holds of the pieces upstream, and nothing
- *   upstream is started for it or for a piece that runs.
+ *   upstream is started for it or for a piece that runs. It carries no
+ *   demand, into another space or its own, as a loop that keeps no index
+ *   carries none.
  * - `start-upstream` does what `skip` does, and where a root or a running
  *   piece is stale only through what is upstream of it, starts the pieces
  *   upstream and holds the root unloaded meanwhile.
@@ -281,6 +283,15 @@ export class StoreCurrency {
   /** Whether a root the store can serve is left unloaded. */
   get skips(): boolean {
     return this.#mode !== "record";
+  }
+
+  /**
+   * Whether the loop carries demand (serving-loop.md §3b): into the spaces
+   * its runs read, and into its own space for what keeps something stale
+   * upstream or what a withdrawn run waits on. Every mode but `skip`.
+   */
+  get carriesDemand(): boolean {
+    return this.#mode !== "skip";
   }
 
   /** Whether any root is left unloaded on a judgment. */

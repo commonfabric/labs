@@ -2535,12 +2535,14 @@ the per-epic implementation notes).
   read another space the same memory server holds: that space is asked
   what changed before the judgment, and tells the reading space of its next
   change, which has a loop that left such a root unstarted judge it again.
-  A loop that keeps the index also carries demand into the spaces its
-  started pieces' runs read, for the actors those runs were made for, where
-  that space's index does not prove the instance current: `currency.carried`
-  counts the rows offered now, and `currency.carriedRefused` the rows a
-  space refused, as it does an actor's own instance where the actor may not
-  read the space.
+  A loop in the `record` or `start-upstream` mode also carries demand into
+  the spaces its started pieces' runs read, for the actors those runs were
+  made for, where that space's index does not prove the instance current:
+  `currency.carried` counts the rows offered now, and
+  `currency.carriedRefused` the rows a space refused, as it does an actor's
+  own instance where the actor may not read the space. Into its own space it
+  carries, the same way, the instances a run was withdrawn for until the
+  piece that writes them has produced them for the run's viewer.
   `skip` acts on the judgment of what is current: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a
@@ -2550,7 +2552,11 @@ the per-epic implementation notes).
   for (`currency.expiryWakes`), or a session's demand reaches an instance
   the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
-  That is all `skip` does. A root that is stale only through what is
+  That is all `skip` does, and it carries no demand, into another space or
+  its own, as a loop with no index carries none: both counts stay zero. A
+  piece in another space that a run here read, and a piece here that a run
+  was withdrawn for, start only for a demand of their own. A root that is
+  stale only through what is
   upstream of it, in its own space, is not made current by starting its
   piece, and `skip` starts its piece all the same, as it starts any root the
   judgment refuses: the piece derives from what the store holds of the
@@ -2579,7 +2585,7 @@ the per-epic implementation notes).
   `SERVER_EXECUTION_CURRENCY_INDEX=off`
   restores a start for every demanded piece, and `record` keeps the index
   and starts every piece.
-- **Status on 2026-11-23.** Implemented, and `skip` by default on toolshed,
+- **Status on 2026-11-24.** Implemented, and `skip` by default on toolshed,
   under an epoch every build shares. `start-upstream` is opt-in.
   The index and its marks are covered in
   `runtime/memory/test/v2-currency-index.test.ts`, what passes between two
@@ -2589,7 +2595,8 @@ the per-epic implementation notes).
   `runtime/runner/test/executor/space-server-currency.test.ts` and
   `space-server-currency-wish.test.ts` beside it, and what each of `skip`
   and `start-upstream` does with a root stale only upstream in
-  `space-server-currency-upstream.test.ts`. Measured on a
+  `space-server-currency-upstream.test.ts`, and the demand each mode carries
+  into another space in `space-server-carried-demand.test.ts`. Measured on a
   synthetic Topics board under a serving worker and on a counter in the
   browser
   ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md)).

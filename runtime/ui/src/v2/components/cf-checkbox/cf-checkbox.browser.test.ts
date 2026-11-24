@@ -154,3 +154,118 @@ Deno.test("Tab passes over a disabled checkbox, and Space leaves it alone", asyn
   await pressKey(" ");
   expect(writesSent(cell)).toEqual([]);
 });
+
+type CheckboxChange = { checked: boolean; indeterminate: boolean };
+
+/** Records the detail of every `cf-change` the checkbox fires. */
+function changesOf(control: CFCheckbox): CheckboxChange[] {
+  const changes: CheckboxChange[] = [];
+  control.addEventListener("cf-change", (event) => {
+    if (!(event instanceof CustomEvent)) throw new Error("not a CustomEvent");
+    changes.push(event.detail);
+  });
+  return changes;
+}
+
+/** What the unbound checkbox shows: its property, ARIA state, and box. */
+async function shown(control: CFCheckbox) {
+  await control.updateComplete;
+  const box = control.shadowRoot?.querySelector(".checkbox");
+  return {
+    checked: control.checked,
+    ariaChecked: control.getAttribute("aria-checked"),
+    boxChecked: box?.classList.contains("checked"),
+    boxIndeterminate: box?.classList.contains("indeterminate"),
+  };
+}
+
+const UNCHECKED = {
+  checked: false,
+  ariaChecked: "false",
+  boxChecked: false,
+  boxIndeterminate: false,
+};
+const CHECKED = {
+  checked: true,
+  ariaChecked: "true",
+  boxChecked: true,
+  boxIndeterminate: false,
+};
+
+Deno.test("Space toggles an unbound checkbox, and Enter does not", async () => {
+  using page = await mounted();
+  const changes = changesOf(page.control);
+  await pressKey("Tab");
+  await pressKey(" ");
+  expect(await shown(page.control)).toEqual(CHECKED);
+  expect(changes).toEqual([{ checked: true, indeterminate: false }]);
+  await pressKey("Enter");
+  expect(await shown(page.control)).toEqual(CHECKED);
+  expect(changes).toHaveLength(1);
+  await pressKey(" ");
+  expect(await shown(page.control)).toEqual(UNCHECKED);
+  expect(changes).toEqual([
+    { checked: true, indeterminate: false },
+    { checked: false, indeterminate: false },
+  ]);
+});
+
+Deno.test("a click toggles an unbound checkbox", async () => {
+  using page = await mounted();
+  const changes = changesOf(page.control);
+  page.control.click();
+  expect(await shown(page.control)).toEqual(CHECKED);
+  page.control.click();
+  expect(await shown(page.control)).toEqual(UNCHECKED);
+  expect(changes).toEqual([
+    { checked: true, indeterminate: false },
+    { checked: false, indeterminate: false },
+  ]);
+});
+
+Deno.test("two clicks in one task leave an unbound checkbox unchecked", async () => {
+  using page = await mounted();
+  const changes = changesOf(page.control);
+  page.control.click();
+  page.control.click();
+  expect(await shown(page.control)).toEqual(UNCHECKED);
+  expect(changes).toEqual([
+    { checked: true, indeterminate: false },
+    { checked: false, indeterminate: false },
+  ]);
+});
+
+Deno.test("a click on an indeterminate checkbox bound to a cell reports it settled", async () => {
+  using page = await mounted();
+  const cell = createMockCellHandle(false);
+  page.control.checked = cell;
+  page.control.indeterminate = true;
+  await page.control.updateComplete;
+  const changes = changesOf(page.control);
+  page.control.click();
+  expect(writesSent(cell).map((write) => write.value)).toEqual([true]);
+  expect(page.control.indeterminate).toBe(false);
+  expect(changes.length).toBeGreaterThan(0);
+  expect(changes.every((change) => !change.indeterminate)).toBe(true);
+});
+
+Deno.test("a click on an indeterminate unbound checkbox checks it", async () => {
+  using page = await mounted();
+  page.control.indeterminate = true;
+  expect((await shown(page.control)).ariaChecked).toBe("mixed");
+  const changes = changesOf(page.control);
+  page.control.click();
+  expect(await shown(page.control)).toEqual(CHECKED);
+  expect(page.control.indeterminate).toBe(false);
+  expect(changes).toEqual([{ checked: true, indeterminate: false }]);
+});
+
+Deno.test("a disabled unbound checkbox ignores clicks and Space", async () => {
+  using page = await mounted({ disabled: true });
+  const changes = changesOf(page.control);
+  page.control.click();
+  page.control.focus();
+  await pressKey(" ");
+  expect(await shown(page.control)).toEqual(UNCHECKED);
+  expect(changes).toEqual([]);
+});
