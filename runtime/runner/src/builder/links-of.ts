@@ -35,12 +35,14 @@ const linkListSchema = internSchema({
  * which runs again once it arrives.
  *
  * Each cell carries the schema its link stores, and a cell at an element
- * holding a value carries none, so a read through a cell reads the value it
- * names and a cell written into another list stores the link this list
- * holds. The `unknown` the list is read under stays off the cells: written
- * as a link, it would declare the target opaque, and a read that decides by
- * the link's own schema, as a conditional does, would find a reference where
- * the value is (`docs/specs/link-schema-precedence.md`, "The read entry").
+ * holding a value carries none, so a cell written into another list stores
+ * the link this list holds, and a read through a cell reads the value it
+ * names, except where the link stores `{ type: "unknown" }`: that cell reads
+ * as a reference. The `unknown` the list is read under stays off the cells:
+ * written as a link, it would declare the target opaque, and a read that
+ * decides by the link's own schema, as a conditional does, would find a
+ * reference where the value is (`docs/specs/link-schema-precedence.md`, "The
+ * read entry").
  *
  * @throws If called outside a handler or a reactive computation, with a
  *   `target` that is neither a cell nor `undefined`, or when reading the list
