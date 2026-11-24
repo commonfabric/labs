@@ -1118,6 +1118,13 @@ export interface PatternIndexPublishResponse {
   standaloneFloor?: string;
 
   /**
+   * For a repository sync that sent `source.movedFrom`: the path whose
+   * lineage the index moved here, as it stores it. Absent when no lineage
+   * moved, including from deployments that predate moves.
+   */
+  movedFrom?: string;
+
+  /**
    * The version recorded, or the head that already had this source. Absent
    * from deployments that predate private versions.
    */

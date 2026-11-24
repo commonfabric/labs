@@ -119,7 +119,14 @@ const fakeIndex = (heads: PatternIndexRepoHead[] = []) => {
     listRepoHeads: () => Promise.resolve({ heads }),
     publishPattern: (request) => {
       published.push(request);
-      return Promise.resolve({ patternId: request.patternId, created: true });
+      return Promise.resolve({
+        patternId: request.patternId,
+        created: true,
+        // A move the index made names the old path back.
+        ...(request.source?.movedFrom === undefined
+          ? {}
+          : { movedFrom: request.source.movedFrom }),
+      });
     },
     withdrawRepoPaths: (request) => {
       withdrawals.push(request.paths);
@@ -510,6 +517,29 @@ describe("repo-sync", () => {
       // The moved lineage is at its new path now; only the deleted file's
       // is withdrawn.
       expect(withdrawals).toEqual([["p/deleted.tsx"]]);
+    });
+
+    it("returns a move the index does not confirm as failed", async () => {
+      const { client } = fakeIndex([head("p/old.tsx")]);
+      // An index that predates moves drops `source.movedFrom` silently.
+      client.publishPattern = (request) =>
+        Promise.resolve({ patternId: request.patternId, created: true });
+      const report = await publishPlan(
+        {
+          entries: [{
+            ...compiled("p/new/main.tsx"),
+            formerPaths: ["p/old.tsx"],
+          }],
+          selected: ["p/new/main.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries).toEqual([{
+        path: "p/new/main.tsx",
+        status: "failed",
+        reason: "the index did not say it moved the lineage of p/old.tsx here",
+      }]);
     });
 
     it("returns a move the index refuses as failed", async () => {

@@ -270,6 +270,16 @@ const publishEntry = async (
   if (response.ignored?.includes("source")) {
     throw new Error("the index ignored the repository source");
   }
+  // A move the index confirms names the old path back. Without that, a new
+  // lineage was started here, which no later sync can move.
+  if (
+    head === undefined && movedFrom !== undefined &&
+    response.movedFrom === undefined
+  ) {
+    throw new Error(
+      `the index did not say it moved the lineage of ${movedFrom.path} here`,
+    );
+  }
   const status = response.unchanged === true
     ? "unchanged"
     // The same source is already public under another publisher, so the
