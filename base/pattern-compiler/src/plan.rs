@@ -2573,11 +2573,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     }
                                 },
                             };
-                            let member = self.eval(&property.value, &format!("@{name}"));
+                            let member = self.eval_placed(&property.value, &format!("@{name}"));
                             fields.insert(name, member);
                         }
                         ObjectPropertyKind::SpreadProperty(spread) => {
-                            let place = self.eval(&spread.argument, hint);
+                            let place = self.eval_placed(&spread.argument, hint);
                             let declared = match &place {
                                 Place::Slot(..) | Place::Value(..) => {
                                     self.declared_members(&spread.argument)
@@ -2909,14 +2909,16 @@ impl<'a> Emitter<'_, '_, 'a> {
 
     /// Whether an expression written at a position of a constructed value
     /// is planned as a value of its own, in a cone of its own (P451): an
-    /// operator expression, written outside every element body, in the
-    /// cone of a value that is being built, that reads a name whose place
-    /// is of a scope narrower than the space. The cone around it then
-    /// places the value without reading it, and stays of the space, as
-    /// today's runtime makes such an expression a node of its own whose
-    /// result cell alone is of the scope.
+    /// operator expression, in the cone of a value that is being built,
+    /// that reads a name whose place is of a scope narrower than the
+    /// space. The cone around it then places the value without reading it,
+    /// and stays of the space, as today's runtime makes such an expression
+    /// a node of its own whose result cell alone is of the scope. In the
+    /// body of a per-element construct the cone has one instance per
+    /// element key, as the element's own cone has (P454), so a row that
+    /// places the value stays a row of the space.
     fn hoisted_scope(&self, expression: &Expression<'a>) -> bool {
-        if self.hoisting || self.cone.is_none() || !self.within.is_empty() {
+        if self.hoisting || self.cone.is_none() {
             return false;
         }
         if !matches!(

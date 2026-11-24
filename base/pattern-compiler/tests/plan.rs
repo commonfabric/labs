@@ -5414,9 +5414,9 @@ export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
 /// cone of the tree uses it without listing a slot of the scope: here the
 /// condition of a branch and an attribute that read a value computed from
 /// state of the scope `user`, beside a `map` over an array of references.
-/// The same expressions in the body of the `map` stay in the cone of the
-/// element, and an expression that reads nothing of a scope stays in the
-/// cone of the tree.
+/// The same expression in the body of the `map` is a cone of its own as
+/// well, one per element key (P454), and an expression that reads nothing
+/// of a scope stays in the cone of the tree.
 #[test]
 fn an_expression_of_a_view_that_reads_a_value_of_a_scope_is_a_value_of_its_own() {
     let analysis = program(
@@ -5439,22 +5439,103 @@ export const P = pattern<{ items: Writable<Item[]>; count: number }>(({ items, c
     );
     let plan = plan_of(&analysis, "P");
     let cones = plan["cones"].as_array().expect("cones");
-    let entries: Vec<&str> = cones
+    let entries: Vec<(&str, bool)> = cones
         .iter()
-        .map(|cone| cone["entry"].as_str().expect("an entry"))
+        .map(|cone| {
+            (
+                cone["entry"].as_str().expect("an entry"),
+                !cone["within"].as_array().expect("within").is_empty(),
+            )
+        })
         .collect();
-    assert_eq!(entries, ["named", "child", "disabled", "map", "$UI"]);
+    assert_eq!(
+        entries,
+        [
+            ("named", false),
+            ("child", false),
+            ("disabled", false),
+            ("child", true),
+            ("map", true),
+            ("$UI", false)
+        ]
+    );
+    let slots = plan["slots"].as_array().expect("slots");
+    let reads_state = |cone: &Value| -> bool {
+        cone["slots"]
+            .as_array()
+            .expect("the slots of a cone")
+            .iter()
+            .map(|slot| &slots[slot.as_u64().expect("a slot") as usize])
+            .any(|slot| slot["root"]["kind"] == "state")
+    };
     let tree = cones
         .iter()
         .find(|cone| cone["entry"] == "$UI")
         .expect("the tree");
-    let slots = plan["slots"].as_array().expect("slots");
-    let states: Vec<&Value> = tree["slots"]
-        .as_array()
-        .expect("the slots of the tree")
+    assert!(!reads_state(tree));
+    // The cone of the expression holds the selection, and the element's
+    // cone places its value and selects nothing.
+    let selecting: Vec<bool> = cones
         .iter()
-        .map(|slot| &slots[slot.as_u64().expect("a slot") as usize])
-        .filter(|slot| slot["root"]["kind"] == "state")
+        .filter(|cone| !cone["within"].as_array().expect("within").is_empty())
+        .map(|cone| !cone["selectors"].as_array().expect("selectors").is_empty())
         .collect();
-    assert_eq!(states, Vec::<&Value>::new());
+    assert_eq!(selecting, [true, false]);
+}
+
+/// P454: in the body of a per-element construct, an operator expression
+/// that reads a value of a scope narrower than the space is a cone of its
+/// own per element key where it is the value of a member of the record the
+/// callback returns, and where it is spread into that record; a member
+/// that reads nothing of a scope stays in the cone of the element. The
+/// same for a `map` over an array of references, over an array of plain
+/// values in place, and over the result of a `filter`.
+#[test]
+fn an_expression_of_a_row_that_reads_a_value_of_a_scope_is_a_value_of_its_own() {
+    let analysis = program(
+        r#"import { Writable, computed, pattern } from "commonfabric";
+interface Item { title: string; hidden: boolean }
+interface Rights { canEdit: boolean; canDelete: boolean }
+const NONE: Rights = { canEdit: false, canDelete: false };
+export const P = pattern<{ items: Writable<Item[]>; names: string[] }>(({ items, names }) => {
+  const reader = new Writable.perSession<string>("");
+  const named = computed(() => reader.get().length > 0);
+  const references = items.map((item) => ({
+    title: item.title,
+    shown: named ? item.title + "!" : item.title,
+  }));
+  const plain = names.map((name) => ({
+    name,
+    ...(named ? { canEdit: name === "a", canDelete: true } : NONE),
+  }));
+  const kept = items
+    .filter((item) => !item.hidden)
+    .map((item) => ({ title: item.title, shown: named ? "!" : "" }));
+  return { references, plain, kept };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let cones = plan["cones"].as_array().expect("cones");
+    let collections = plan["collections"].as_array().expect("collections");
+    let maps: Vec<usize> = collections
+        .iter()
+        .enumerate()
+        .filter(|(_, collection)| collection["construct"] == "map")
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(maps.len(), 3);
+    for collection in maps {
+        let within: Vec<&Value> = cones
+            .iter()
+            .filter(|cone| cone["within"] == json!([{ "element": collection }]))
+            .collect();
+        // The element's cone and the cone of the expression.
+        assert_eq!(within.len(), 2, "the cones of collection {collection}");
+        let selecting = within
+            .iter()
+            .filter(|cone| !cone["selectors"].as_array().expect("selectors").is_empty())
+            .count();
+        assert_eq!(selecting, 1, "the cone that selects, of {collection}");
+    }
 }

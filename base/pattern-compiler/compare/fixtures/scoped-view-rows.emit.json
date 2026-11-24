@@ -23,7 +23,7 @@
             {
               "module": 0,
               "path": "scoped-view-rows.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst rename = $rt.data(handler((event, { items }) => {\n  items.key(event.at).key(\"title\").set(event.title);\n}));\nconst call = $rt.data(handler(\n  (event, { nickname }) => {\n    nickname.set(event.name);\n  },\n));\n\nconst $default = $rt.data((pattern(\"sha256:74bf7cc79c8e20b43b740a43b242213b066bd93f3c8f9358847be2d47de0a340\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).length > (0))));\n$rt.value(4, ($h) => (($h.select(0, $h.v($h.output(0))) ? $rt.h(\"b\", {  }, [$h.slot(1)]) : $rt.h(\"i\", {  }, [\"nobody\"]))));\n$rt.value(5, ($h) => ((!$h.v($h.output(0)))));\n{\n$rt.element(0, ($h) => ($rt.h(\"b\", {  }, [($h.select(1, $h.v($h.output(0))) ? ($h.v($h.slot(3)) + (\"!\")) : $h.slot(3))])));\n}\n$rt.value(10, ($h) => ($rt.h(\"div\", {  }, [$h.output(1), $rt.h(\"cf-button\", { \"disabled\": $h.output(3) }, [\"Start\"]), $h.output(4)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(7), rename: $h.stream(0), call: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { items }) => {\n  items.key(event.at).key(\"title\").set(event.title);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((event, { nickname }) => {\n    nickname.set(event.name);\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst rename = $rt.data(handler((event, { items }) => {\n  items.key(event.at).key(\"title\").set(event.title);\n}));\nconst call = $rt.data(handler(\n  (event, { nickname }) => {\n    nickname.set(event.name);\n  },\n));\n\nconst $default = $rt.data((pattern(\"sha256:74bf7cc79c8e20b43b740a43b242213b066bd93f3c8f9358847be2d47de0a340\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).length > (0))));\n$rt.value(4, ($h) => (($h.select(0, $h.v($h.output(0))) ? $rt.h(\"b\", {  }, [$h.slot(1)]) : $rt.h(\"i\", {  }, [\"nobody\"]))));\n$rt.value(5, ($h) => ((!$h.v($h.output(0)))));\n{\n$rt.value(7, ($h) => (($h.select(1, $h.v($h.output(0))) ? ($h.v($h.slot(3)) + (\"!\")) : $h.slot(3))));\n$rt.element(0, ($h) => ($rt.h(\"b\", {  }, [$h.output(4)])));\n}\n$rt.value(10, ($h) => ($rt.h(\"div\", {  }, [$h.output(1), $rt.h(\"cf-button\", { \"disabled\": $h.output(3) }, [\"Start\"]), $h.output(5)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(8), rename: $h.stream(0), call: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { items }) => {\n  items.key(event.at).key(\"title\").set(event.title);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((event, { nickname }) => {\n    nickname.set(event.name);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -60,20 +60,22 @@
               "cone": 3
             },
             {
-              "cone": 3
-            },
-            {
-              "cone": 3
-            },
-            {
-              "collection": 0,
               "cone": 3,
+              "function": true,
               "output": 4
             },
             {
+              "cone": 4
+            },
+            {
+              "collection": 0,
               "cone": 4,
+              "output": 5
+            },
+            {
+              "cone": 5,
               "function": true,
-              "output": 7
+              "output": 8
             }
           ],
           "valuesWithoutOutput": []
@@ -296,10 +298,10 @@
             {
               "at": {
                 "file": "scoped-view-rows.tsx",
-                "start": 1246
+                "start": 1260
               },
               "bodies": [],
-              "entry": "map",
+              "entry": "child",
               "picks": [],
               "selectors": [
                 1
@@ -307,6 +309,23 @@
               "slots": [
                 3
               ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "scoped-view-rows.tsx",
+                "start": 1246
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
               "within": [
                 {
                   "element": 0
@@ -357,7 +376,7 @@
             },
             {
               "from": 1,
-              "to": 4,
+              "to": 5,
               "via": {
                 "kind": "output",
                 "output": 1
@@ -365,7 +384,7 @@
             },
             {
               "from": 2,
-              "to": 4,
+              "to": 5,
               "via": {
                 "kind": "output",
                 "output": 3
@@ -377,6 +396,14 @@
               "via": {
                 "kind": "output",
                 "output": 4
+              }
+            },
+            {
+              "from": 4,
+              "to": 5,
+              "via": {
+                "kind": "output",
+                "output": 5
               }
             }
           ],
@@ -449,39 +476,11 @@
               }
             },
             {
-              "collection": 0,
               "cone": 3,
               "constraints": [],
-              "interim": "map",
+              "interim": "child",
               "kept": false,
               "path": [],
-              "template": {
-                "op": "slot",
-                "slot": 2
-              }
-            },
-            {
-              "cone": 3,
-              "constraints": [],
-              "interim": "map",
-              "kept": false,
-              "path": [
-                "*"
-              ],
-              "template": {
-                "op": "const"
-              }
-            },
-            {
-              "cone": 3,
-              "constraints": [],
-              "interim": "map",
-              "kept": false,
-              "path": [
-                "*",
-                "children",
-                "0"
-              ],
               "template": {
                 "branches": [
                   {
@@ -513,7 +512,46 @@
               }
             },
             {
+              "collection": 0,
               "cone": 4,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "output",
+                "output": 4
+              }
+            },
+            {
+              "cone": 5,
               "constraints": [],
               "kept": true,
               "path": [
@@ -524,7 +562,7 @@
               }
             },
             {
-              "cone": 4,
+              "cone": 5,
               "constraints": [],
               "kept": true,
               "path": [
@@ -538,7 +576,7 @@
               }
             },
             {
-              "cone": 4,
+              "cone": 5,
               "constraints": [],
               "kept": true,
               "path": [
@@ -554,7 +592,7 @@
               }
             },
             {
-              "cone": 4,
+              "cone": 5,
               "constraints": [],
               "kept": true,
               "path": [
@@ -570,7 +608,7 @@
               }
             },
             {
-              "cone": 4,
+              "cone": 5,
               "constraints": [],
               "kept": true,
               "path": [
@@ -580,7 +618,7 @@
               ],
               "template": {
                 "op": "output",
-                "output": 4
+                "output": 5
               }
             }
           ],
