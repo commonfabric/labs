@@ -90,11 +90,12 @@ still stores an entry as a part when it has a required input with no default.
 
 A lineage belongs to a path. When the globs stop selecting a path (the file is
 deleted, moved, or newly excluded), its lineage is withdrawn: unlisted, and
-still readable by id. A path that comes back resumes the same lineage. In the
-Labs repository, `follow-labs-pattern-moves: "true"` makes a file moved by Labs'
-record of moves (`runtime/runner/src/pattern-key-moves.ts`) continue its old
-path's lineage, history included: the sync names the old path's newest version
-as the moved file's predecessor.
+still readable by id. A path that comes back resumes the same lineage. A
+repository that records how its patterns moved in
+`runtime/runner/src/pattern-key-moves.ts`, as Labs does, keeps a moved file's
+lineage, history included: the sync names the old path's newest version as the
+moved file's predecessor. The table is read from the repository being synced,
+keyed below `program-root`; a repository without one has no moves to follow.
 
 ## What a run does
 

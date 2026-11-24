@@ -8,11 +8,13 @@
  *     --allow-ffi --allow-run=git runtime/pattern-index/sync-plan.ts \
  *     --repo-root <dir> --program-root <dir> --include '<glob>' \
  *     [--include ...] [--exclude '<glob>' ...] --out <plan.json> \
- *     [--summary <file>] [--follow-labs-pattern-moves]
+ *     [--summary <file>]
  *
- * `--follow-labs-pattern-moves` is for the Labs repository alone: it reads
- * the moves Labs records for its patterns (`pattern-key-moves.ts`), keyed
- * below the program root, so a moved file continues its old path's lineage.
+ * A repository that records how its patterns moved, as Labs does in
+ * {@link MOVES_TABLE}, has each entry's former paths in the plan, so a
+ * moved file continues its old path's lineage. The table is the
+ * repository's own copy, keyed below the program root; a repository
+ * without one has no moves to follow.
  *
  * It holds no credential and contacts no index, so it is also the dry run.
  * It compiles in a runtime with in-memory storage, writing nothing to any
@@ -26,13 +28,9 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { resolve } from "@std/path";
+import { join, resolve, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
-import {
-  experimentalOptionsFromEnv,
-  formerPatternKey,
-  Runtime,
-} from "@commonfabric/runner";
+import { experimentalOptionsFromEnv, Runtime } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { compileProgram } from "./src/publish.ts";
@@ -54,6 +52,31 @@ const gitTrackedFiles = async (repoRoot: string): Promise<string[]> => {
   return new TextDecoder().decode(stdout).split("\0").filter((path) =>
     path !== ""
   );
+};
+
+/** Where a repository records how its patterns moved, from its root. */
+const MOVES_TABLE = "runtime/runner/src/pattern-key-moves.ts";
+
+/**
+ * The repository's own `formerPatternKey`, or `undefined` when it keeps no
+ * table of moves. Read from the repository rather than this Labs, which a
+ * vendoring repository runs from but whose moves are not its own.
+ */
+const repositoryFormerKey = async (
+  repoRoot: string,
+): Promise<((key: string) => string) | undefined> => {
+  const path = join(repoRoot, MOVES_TABLE);
+  try {
+    await Deno.stat(path);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return undefined;
+    throw error;
+  }
+  const table = await import(toFileUrl(path).href);
+  if (typeof table.formerPatternKey !== "function") {
+    throw new Error(`${MOVES_TABLE} exports no formerPatternKey`);
+  }
+  return table.formerPatternKey;
 };
 
 /** What a plan holds, for the job summary. */
@@ -85,7 +108,6 @@ const main = async (): Promise<number> => {
       "out",
       "summary",
     ],
-    boolean: ["follow-labs-pattern-moves"],
     collect: ["include", "exclude"],
   });
   const programRoot = flags["program-root"];
@@ -99,6 +121,7 @@ const main = async (): Promise<number> => {
     return 2;
   }
   const repoRoot = resolve(flags["repo-root"] ?? ".");
+  const formerKey = await repositoryFormerKey(repoRoot);
   const signer = await Identity.generate();
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -114,9 +137,9 @@ const main = async (): Promise<number> => {
         programRoot,
         include: flags.include,
         exclude: flags.exclude,
-        ...(flags["follow-labs-pattern-moves"]
-          ? { formerPaths: formerPathsByKey(programRoot, formerPatternKey) }
-          : {}),
+        ...(formerKey === undefined
+          ? {}
+          : { formerPaths: formerPathsByKey(programRoot, formerKey) }),
       },
       {
         trackedFiles: () => gitTrackedFiles(repoRoot),

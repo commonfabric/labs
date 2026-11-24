@@ -35,6 +35,11 @@ export default pattern<{ value: number }>(() => ({ missing }));
   "patterns/dev/scratch.tsx": `/** Excluded. */
 export default 1;
 `,
+  // The repository's own record of moves: the counter was once the tally.
+  "runtime/runner/src/pattern-key-moves.ts":
+    `export const formerPatternKey = (key: string): string =>
+  key === "counter/main.tsx" ? "tally/main.tsx" : key;
+`,
 };
 
 /** Runs `git` in `cwd`, failing the test when it fails. */
@@ -129,6 +134,7 @@ describe("sync-plan", () => {
     if (counter.status !== "compiled") throw new Error("not compiled");
     expect(counter.request.description).toBe("Counts clicks.");
     expect(counter.request.hashtags).toEqual(["demo"]);
+    expect(counter.formerPaths).toEqual(["patterns/tally/main.tsx"]);
     expect(await Deno.readTextFile(`${repo}/summary.md`)).toContain(
       "3 entries: 1 compiled, 1 without a description, 1 failed.",
     );

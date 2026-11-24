@@ -27,12 +27,6 @@ inputs:
       names are written against. Every file an entry imports must lie inside
       it, and it must lie inside the repository.
     default: ""
-  follow-labs-pattern-moves:
-    description: >-
-      plan: true only for the Labs repository itself. A pattern file that
-      moved by Labs' record of moves (`pattern-key-moves.ts`) continues its
-      old path's lineage instead of starting a new one.
-    default: "false"
   labs-path:
     description: >-
       A Labs checkout to run from, relative to the repository root: for a
@@ -114,7 +108,6 @@ runs:
         INCLUDE: ${{ inputs.include }}
         EXCLUDE: ${{ inputs.exclude }}
         PROGRAM_ROOT: ${{ inputs.program-root }}
-        FOLLOW_MOVES: ${{ inputs.follow-labs-pattern-moves }}
         PLAN: ${{ runner.temp }}/pattern-index-plan/plan.json
       run: |
         if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
@@ -123,9 +116,6 @@ runs:
         fi
         args=(--repo-root "$GITHUB_WORKSPACE" --program-root "$PROGRAM_ROOT"
           --out "$PLAN" --summary "$GITHUB_STEP_SUMMARY")
-        if [ "$FOLLOW_MOVES" = "true" ]; then
-          args+=(--follow-labs-pattern-moves)
-        fi
         while IFS= read -r glob; do
           [ -n "$glob" ] && args+=(--include "$glob")
         done <<< "$INCLUDE"

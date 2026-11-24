@@ -42,8 +42,6 @@ jobs:
         with:
           step: plan
           program-root: patterns
-          # A pattern moved by pattern-key-moves.ts keeps its index history.
-          follow-labs-pattern-moves: "true"
           include: |
             patterns/**
           # Development fixtures, regression scaffolding and personal variants
