@@ -757,7 +757,9 @@ treatment in its static shadow-root stylesheet. It dims the subtree using the
 inherited `--cf-render-pending-opacity` and `--cf-render-pending-filter`
 component properties, so a theme host can refine the presentation without
 runtime style injection or inline-style mutation. Nested pending sources receive
-one visual treatment per rendered branch. A retained text node protects its
+one visual treatment per rendered branch. Direct text in a boxless branch
+uses the pending opacity on the theme's text color without moving the text node.
+A retained text node protects its
 authored parent element, keeping a control with a pending direct text label
 inert. The parent remains pending until every text and element source
 protecting it recovers or is removed. Text rendered directly into the host
@@ -811,6 +813,8 @@ must never observe the old `T` as the result for new inputs.
 `pending` and `syncing` are serializable so they can cross cells and replicas,
 but they are not terminal cache hits. On resume, the producer reconciles a
 persisted transient marker against its request and synchronization state.
+The ability to decode such a marker does not make a replica's load status
+durable: a refused computation waiting for a linked document writes no result.
 `error` remains stable until inputs change or the operation is retried.
 
 `generateObject<T>()` validates successful provider output strictly against

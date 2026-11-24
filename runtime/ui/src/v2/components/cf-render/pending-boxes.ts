@@ -2,6 +2,7 @@
 
 const PENDING = '[data-cf-pending="true"]';
 const BOX_ATTRIBUTE = "data-cf-pending-box";
+const TEXT_HIGHLIGHT = "cf-render-pending-text";
 
 /**
  * Tracks first light-DOM boxes beneath the renderer's semantic pending marks.
@@ -15,6 +16,33 @@ export function watchPendingBoxes(container: HTMLElement): {
   const view = container.ownerDocument.defaultView;
   if (!view) throw new Error("Pending presentation requires a document window");
   let owned = new Set<Element>();
+  // Text directly inside display: contents has no element box to dim. Keep
+  // the renderer's text nodes in place: it reuses them for later patches.
+  const ranges = new Map<Text, Range>();
+  const highlightText = (nodes: Set<Text>): void => {
+    const registry = view.CSS?.highlights;
+    if (!registry) return;
+    let highlight = registry.get(TEXT_HIGHLIGHT);
+    for (const [node, range] of ranges) {
+      if (nodes.has(node)) continue;
+      highlight?.delete(range);
+      ranges.delete(node);
+    }
+    for (const node of nodes) {
+      if (!highlight) {
+        highlight = new view.Highlight();
+        registry.set(TEXT_HIGHLIGHT, highlight);
+      }
+      let range = ranges.get(node);
+      if (!range) {
+        range = node.ownerDocument.createRange();
+        ranges.set(node, range);
+        highlight.add(range);
+      }
+      range.selectNode(node);
+    }
+    if (highlight?.size === 0) registry.delete(TEXT_HIGHLIGHT);
+  };
   let hasPending = false;
   let disposed = false;
 
@@ -24,6 +52,7 @@ export function watchPendingBoxes(container: HTMLElement): {
     if (container.matches(PENDING)) roots.unshift(container);
     hasPending = roots.length > 0;
     const next = new Set<Element>();
+    const text = new Set<Text>();
     const visit = (element: Element): void => {
       const display = view.getComputedStyle(element).display;
       if (display === "none") return;
@@ -31,7 +60,12 @@ export function watchPendingBoxes(container: HTMLElement): {
         next.add(element);
         return;
       }
-      for (const child of element.children) visit(child);
+      for (const child of element.childNodes) {
+        if (child instanceof view.Element) visit(child);
+        else if (child instanceof view.Text && child.length > 0) {
+          text.add(child);
+        }
+      }
     };
     for (const root of roots) {
       const ancestor = root.parentElement?.closest(PENDING);
@@ -45,6 +79,7 @@ export function watchPendingBoxes(container: HTMLElement): {
       if (!owned.has(element)) element.setAttribute(BOX_ATTRIBUTE, "");
     }
     owned = next;
+    highlightText(text);
   };
 
   const addsPending = (node: Node): boolean =>
@@ -102,6 +137,7 @@ export function watchPendingBoxes(container: HTMLElement): {
       view.removeEventListener("resize", refreshPending);
       for (const element of owned) element.removeAttribute(BOX_ATTRIBUTE);
       owned.clear();
+      highlightText(new Set());
     },
   };
 }

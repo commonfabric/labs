@@ -53,6 +53,46 @@ function mutateAndWait(target: Node, mutate: () => void): Promise<void> {
   });
 }
 
+Deno.test("pending fragments dim bare text without moving it or treating boxed text twice", async () => {
+  const { host, container } = await mountRender();
+  const peer = await mountRender();
+  try {
+    const fragment = pending(document.createElement("cf-fragment"));
+    host.style.setProperty("--cf-theme-color-text", "red");
+    host.style.setProperty("--cf-render-pending-opacity", "0.4");
+    const bare = document.createTextNode("retained");
+    const box = document.createElement("span");
+    box.textContent = "boxed";
+    fragment.append(bare, box);
+    const other = pending(document.createElement("cf-fragment"));
+    other.textContent = "other renderer";
+    await mutateAndWait(container, () => container.append(fragment));
+    await mutateAndWait(peer.container, () => peer.container.append(other));
+    const ranges = () =>
+      [...CSS.highlights.get("cf-render-pending-text") ?? []]
+        .map((range) => range.toString()).sort();
+    expect(ranges()).toEqual(["other renderer", "retained"]);
+    expect(bare.parentNode).toBe(fragment);
+    expect(
+      getComputedStyle(fragment, "::highlight(cf-render-pending-text)").color,
+    )
+      .toBe("color(srgb 1 0 0 / 0.4)");
+    expectTreatment(box, "0.4", "grayscale(0.8)");
+    await mutateAndWait(container, () => bare.data = "updated");
+    expect(ranges()).toEqual(["other renderer", "updated"]);
+    await mutateAndWait(
+      container,
+      () => fragment.removeAttribute("data-cf-pending"),
+    );
+    expect(ranges()).toEqual(["other renderer"]);
+    peer.host.remove();
+    expect(ranges()).toEqual([]);
+  } finally {
+    host.remove();
+    peer.host.remove();
+  }
+});
+
 Deno.test("nested pending boxes receive one treatment and transfer it on recovery", async () => {
   const { host, container } = await mountRender();
   try {

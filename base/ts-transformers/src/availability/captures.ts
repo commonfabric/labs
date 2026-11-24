@@ -381,6 +381,23 @@ export function collectObservedAvailabilityInputPaths(
   }
 
   const target = unwrapObservedInputExpression(expression, context);
+  const projection = parseAvailabilityCaptureExpression(target, context);
+  if (projection && projection.path.length > 0) {
+    const observed = resolveAvailabilityObservation(
+      projection.rootIdentifier,
+      context,
+    );
+    if (observed) {
+      // The selected member, not the whole observed object, supplies the
+      // successful value at this input path.
+      return [
+        availabilityOverrideForObservation(path, {
+          ...observed,
+          source: expression,
+        }, context),
+      ];
+    }
+  }
   if (ts.isObjectLiteralExpression(target)) {
     const entries: AvailabilityCaptureOverride[] = [];
     for (const property of target.properties) {

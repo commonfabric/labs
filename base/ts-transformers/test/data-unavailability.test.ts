@@ -4,6 +4,7 @@ import { StaticCache } from "@commonfabric/static";
 import ts from "typescript";
 
 import { transformSource, validateSource } from "./utils.ts";
+import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { collect, literalToValue, parseModule } from "./transformed-ast.ts";
 
 const diagnosticTypes = (
@@ -13,6 +14,29 @@ const diagnosticTypes = (
 const commonfabricTypes = await StaticCache.fromFileSystem().getText(
   "types/commonfabric.d.ts",
 );
+
+for (const reactive of [true, false]) {
+  Deno.test(`delete checks the origin of a ${reactive ? "reactive" : "plain"} destructured binding`, async () => {
+    const source = `
+    import { computed, pattern } from "commonfabric";
+    export default pattern(() => {
+      type Child = { field?: number };
+      const initial: { nested: { child: Child } } = { nested: { child: { field: 1 } } };
+      const source = ${reactive ? "computed(() => initial)" : "initial"};
+      const { nested: { child } } = source;
+      delete child.field;
+      return { child };
+    });
+  `;
+    const { diagnostics } = await validateSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
+    expect(diagnostics.filter((d) =>
+      d.type === "pattern-context:assignment" &&
+      d.message.includes("Deleting a property")
+    )).toHaveLength(reactive ? 1 : 0);
+  });
+}
 
 for (
   const operation of ["delete value.field", "value.field = 2", "value.field++"]
@@ -2189,6 +2213,33 @@ Deno.test("applied input and colliding capture guards retain distinct policies",
   });
 });
 
+Deno.test("guarded lift input preserves its sibling's written confidentiality label", async () => {
+  const output = await transformSource(
+    `
+    import { type AsyncResult, type Confidential, hasError, lift, pattern } from "commonfabric";
+    type Secret = Confidential<any, ["private"]>;
+    export default pattern((root: { entries: { request: AsyncResult<string>; secret: Secret; [key: number]: Secret }; fallback: string; index: number }) => ({
+      value: lift((data: { request: AsyncResult<string>; secret: Secret; [key: number]: Secret }) =>
+        hasError(data.request) ? root.fallback : [data.secret, data[root.index]])(root.entries),
+    }));
+  `,
+    { types: COMMONFABRIC_TYPES, typeCheck: true },
+  );
+  const lift = collect(parseModule(output), ts.isCallExpression).find((call) =>
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.name.text === "lift"
+  );
+  assert(lift);
+  expect(literalToValue(lift.arguments[1]!)).toMatchObject({
+    properties: {
+      entries: {
+        properties: { secret: { ifc: { confidentiality: ["private"] } } },
+        additionalProperties: { ifc: { confidentiality: ["private"] } },
+      },
+    },
+  });
+});
+
 for (const index of ["[key: string]", "readonly [key: number]"]) {
   Deno.test(`availability overrides retain explicit lift ${index} schemas`, async () => {
     const output = await transformSource(
@@ -2410,6 +2461,52 @@ Deno.test("an observed computed capture survives aliasing and hoisting with alig
     { path: ["alias"], reasons: ["error"] },
   ]);
   assertStringIncludes(output, "=> hasError(alias)");
+});
+
+Deno.test("applied lifts observe the projected member at its input path", async () => {
+  const output = await transformSource(
+    `
+    import { lift, observeAvailability, pattern } from "commonfabric";
+    export default pattern((input: { data: { repo: string; count: number } }) => {
+      const observed = observeAvailability(input.data, "error") as typeof input.data;
+      const copy = lift(({ title, count }) => [title, count])({
+        title: observed.repo,
+        count: observed["count"],
+      });
+      return { copy };
+    });
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes } },
+  );
+  const root = parseModule(output);
+  const lift = collect(root, ts.isCallExpression).find((call) =>
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.name.text === "lift" &&
+    call.arguments.length === 4
+  );
+  assert(lift);
+  expect(literalToValue(lift.arguments[3]!)).toMatchObject({
+    unavailableInputPolicy: [
+      { path: ["input", "title"], reasons: ["error"] },
+      { path: ["input", "count"], reasons: ["error"] },
+    ],
+  });
+  const types = collect(lift.typeArguments![0]!, ts.isPropertySignature)
+    .map((
+      property,
+    ) => [property.name.getText(root), property.type?.getText(root)]);
+  expect(types).toContainEqual(["title", "string | __cfHelpers.HasError"]);
+  expect(types).toContainEqual(["count", "number | __cfHelpers.HasError"]);
+  expect(literalToValue(lift.arguments[1]!)).toMatchObject({
+    properties: {
+      input: {
+        properties: {
+          title: { anyOf: [{ type: "string" }, { type: "FabricUnavailable" }] },
+          count: { anyOf: [{ type: "number" }, { type: "FabricUnavailable" }] },
+        },
+      },
+    },
+  });
 });
 
 Deno.test("an observed lift input is widened at its outer boundary", async () => {

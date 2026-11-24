@@ -215,6 +215,27 @@ export class PatternContextValidationTransformer
     reportModuleScopeMutableBindings(context);
     const checker = context.checker;
     const analyze = context.getDataFlowAnalyzer();
+    const opaqueRootsByScope = new Map<ts.Node, Set<ts.Symbol>>();
+
+    const deletesReactiveBinding = (root: ts.Identifier): boolean => {
+      if (isLocalOpaqueOriginBindingReference(root, context)) return true;
+      const symbol = checker.getSymbolAtLocation(root);
+      const declaration = symbol?.valueDeclaration;
+      if (!symbol || !declaration) return false;
+      const scope = ts.findAncestor(
+        declaration,
+        (node) =>
+          ts.isSourceFile(node) ||
+          (ts.isBlock(node) && ts.isFunctionLike(node.parent)),
+      );
+      if (!scope) return false;
+      let roots = opaqueRootsByScope.get(scope);
+      if (!roots) {
+        roots = collectLocalOpaqueRootSymbols(scope, context);
+        opaqueRootsByScope.set(scope, roots);
+      }
+      return roots.has(symbol);
+    };
 
     const visit = (node: ts.Node): ts.Node => {
       if (ts.isDeleteExpression(node)) {
@@ -223,8 +244,8 @@ export class PatternContextValidationTransformer
           context,
         );
         if (
-          access.rootIdentifier && access.path.length > 0 &&
-          isLocalOpaqueOriginBindingReference(access.rootIdentifier, context)
+          access.rootIdentifier && (access.path.length > 0 || access.dynamic) &&
+          deletesReactiveBinding(access.rootIdentifier)
         ) {
           context.reportDiagnosticOnce({
             type: "pattern-context:assignment",

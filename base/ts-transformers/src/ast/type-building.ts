@@ -1959,22 +1959,32 @@ export function applyAvailabilityOverridesToTypeNode(
   if (printedType && ts.isTypeLiteralNode(base)) {
     // A printed object is indivisible. Build fresh member roots from their
     // semantic types before adding an exact-path availability union.
+    const printMember = (type: ts.Type, annotation?: ts.TypeNode) => {
+      const printed = typeToTypeNodeWithRegistry(
+        type,
+        context,
+        context.state.typeRegistry,
+      );
+      // A written annotation can carry a confidentiality label even when the
+      // checker prints the member as plain any.
+      if (annotation && (type.flags & ts.TypeFlags.Any) !== 0) {
+        context.state.recordSchemaHint(printed, { spelledBy: annotation });
+      }
+      return printed;
+    };
     base = context.factory.createTypeLiteralNode(
       [
-        ...printedType.getProperties().map((property) =>
-          context.factory.createPropertySignature(
+        ...printedType.getProperties().map((property) => {
+          const type = context.checker.getTypeOfSymbol(property);
+          return context.factory.createPropertySignature(
             undefined,
             createPropertyName(property.name, context.factory),
             isOptionalSymbol(property)
               ? context.factory.createToken(ts.SyntaxKind.QuestionToken)
               : undefined,
-            typeToTypeNodeWithRegistry(
-              context.checker.getTypeOfSymbol(property),
-              context,
-              context.state.typeRegistry,
-            ),
-          )
-        ),
+            printMember(type, declaredTypeNode(property)),
+          );
+        }),
         ...context.checker.getIndexInfosOfType(printedType).map((index) =>
           context.factory.createIndexSignature(
             index.isReadonly
@@ -1991,11 +2001,7 @@ export function applyAvailabilityOverridesToTypeNode(
                 context.state.typeRegistry,
               ),
             )],
-            typeToTypeNodeWithRegistry(
-              index.type,
-              context,
-              context.state.typeRegistry,
-            ),
+            printMember(index.type, index.declaration?.type),
           )
         ),
       ],

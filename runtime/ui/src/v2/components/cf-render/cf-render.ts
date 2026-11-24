@@ -184,6 +184,15 @@ export class CFRender extends BaseElement {
       filter: var(--cf-render-pending-filter, grayscale(0.8)) !important;
     }
 
+    ::highlight(cf-render-pending-text) {
+      color: color-mix(
+        in srgb,
+        var(--cf-theme-color-text, CanvasText) calc(100% *
+        var(--cf-render-pending-opacity, 0.55)),
+        transparent
+      );
+    }
+
     .piece-menu-highlight {
       z-index: 1;
       pointer-events: none;

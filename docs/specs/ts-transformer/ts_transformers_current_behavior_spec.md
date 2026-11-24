@@ -580,8 +580,12 @@ marker variants; sibling members keep their authored types
 (`type-building.ts`; `type-building-coverage.test.ts`).
 An explicit lift keeps input overrides separate from closure-capture overrides,
 including when the applied input and an outer capture share the authored name
-`input`. Rebuilding a printed input object preserves its semantic index
-signatures and their value schemas. Array-binding elisions preserve source
+`input`. A static property or element selected from an observed value carries
+the observation's reasons at its own input path; its success type is the
+selected member, not the containing object. Rebuilding a printed input object
+preserves its index signatures and the confidentiality labels its property
+and index declarations write, including labels around `any`.
+Array-binding elisions preserve source
 positions in guard policies; a rest binding after an elision retains that same
 source offset (`data-unavailability.test.ts`).
 A `.get()` whose result is not resolved to a specific member path retains the
@@ -993,6 +997,9 @@ Diagnostics emitted in all modes:
     enforce the target-language matrix's "statement-boundary imperative
     constructs" Unsupported row and have been live since the boundary PR
     (#3154).
+  - deleting a property of a locally created reactive value reports
+    `pattern-context:assignment`, including through a destructured binding.
+    Deleting a property of a plain local object is not a reactive assignment.
 - **Error** `module-scope:let-declaration` / `module-scope:var-declaration`
   - a `let` or `var` statement directly at module scope, exported or not
     (`reportModuleScopeMutableBindings`). Module state is `const`. The module
