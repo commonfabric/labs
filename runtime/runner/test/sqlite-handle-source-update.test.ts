@@ -6,15 +6,21 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import type { Cell } from "../src/cell.ts";
+import { stripEntityUriScheme } from "../src/entity-kind.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { setResultCell } from "../src/result-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 /**
  * A piece with a database of notes and a verb that writes a note; `tagged`
@@ -115,24 +121,32 @@ export default pattern<Record<string, never>, {
 type Piece = Cell<Record<string, unknown>>;
 
 describe("sqlite-handle-source-update", () => {
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
-  let runtime: Runtime;
+  let signer: Identity;
   let space: `did:${string}:${string}`;
+  let server: MemoryV2Server.Server;
+  let runtime: Runtime;
+
+  /** A runtime of its own over the shared server. */
+  const connect = () =>
+    new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
+    });
 
   beforeEach(async () => {
     // The storage provider names a database file from the handle's id, so a
     // fixed space would find the rows an earlier run left.
-    const signer = await Identity.fromPassphrase(
+    signer = await Identity.fromPassphrase(
       `sqlite-handle-source-update-${crypto.randomUUID()}`,
     );
     space = signer.did();
-    storageManager = StorageManager.emulate({ as: signer });
-    runtime = new Runtime({ apiUrl: new URL(import.meta.url), storageManager });
+    server = newSharedServer();
+    runtime = connect();
   });
 
   afterEach(async () => {
-    await runtime?.dispose();
-    await storageManager?.close();
+    await runtime.dispose();
+    await server.close();
   });
 
   /** Starts a piece running `program` and returns its result cell. */
@@ -192,7 +206,10 @@ describe("sqlite-handle-source-update", () => {
     db: SqliteDbRef,
     sql: string,
   ): Promise<Record<string, unknown>[]> {
-    const result = await storageManager.open(space).sqliteQuery!(db, sql);
+    const result = await runtime.storageManager.open(space).sqliteQuery!(
+      db,
+      sql,
+    );
     return result.rows as Record<string, unknown>[];
   }
 
@@ -235,6 +252,58 @@ describe("sqlite-handle-source-update", () => {
       expect(await rows(after, "SELECT title FROM topics")).toEqual([
         { title: "first" },
       ]);
+    });
+  });
+
+  describe("a piece whose output spot links to a handle of its own", () => {
+    it("keeps that handle and its rows in a runtime that has not loaded them", async () => {
+      // The piece is set up without running its node, so the handle the node
+      // mints holds nothing, and the node's output spot links to a handle the
+      // piece holds under another cause, as a piece can. A second runtime,
+      // which has read none of it, makes the update.
+
+      const pattern = await runtime.patternManager.compilePattern(
+        databaseProgram(false),
+        { space },
+      );
+      const setUp = runtime.getCell<Record<string, unknown>>(space, "piece");
+      await runtime.setup(undefined, pattern, {}, setUp);
+      await settle(setUp);
+      const spot = runtime.getCellFromLink(
+        parseLink(setUp.getRaw()?.db, setUp)!,
+      );
+      const earlier = runtime.getCell(space, "earlier-handle");
+      const held: SqliteDbRef = {
+        id: stripEntityUriScheme(earlier.getAsNormalizedFullLink().id),
+        tables: { notes: table({ id: "integer primary key", body: "text" }) },
+        scope: "space",
+      };
+      const plant = runtime.edit();
+      earlier.withTx(plant).setRawUntyped(fabricFromConvertibleJsValue(held));
+      setResultCell(earlier.withTx(plant), setUp);
+      spot.withTx(plant).setRawUntyped(earlier.getAsLink());
+      plant.recordSqliteWrite!(space, {
+        op: "sqlite",
+        db: held,
+        sql: "INSERT INTO notes (body) VALUES (?)",
+        params: ["first"],
+      });
+      expect((await plant.commit().settled).error).toBeUndefined();
+      await runtime.dispose();
+      runtime = connect();
+      const piece = runtime.getCell<Record<string, unknown>>(space, "piece");
+      await piece.sync();
+
+      await update(piece, databaseProgram(true));
+
+      const after = handleOf(piece);
+      expect(after.id).toBe(held.id);
+      await send(piece, { body: "second" });
+      expect(await rows(after, "SELECT body, tag FROM notes ORDER BY id"))
+        .toEqual([
+          { body: "first", tag: null },
+          { body: "second", tag: null },
+        ]);
     });
   });
 });
