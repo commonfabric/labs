@@ -28,6 +28,7 @@ import { identity } from "@/lib/identity.ts";
 interface RouterConfig {
   deployment: string;
   hostname: string;
+  /** Port to bind; zero asks the system to assign one. */
   port: number;
   certificate: string;
   key: string;
@@ -62,7 +63,7 @@ function load(path: string): RouterConfig {
   );
   requireRouted(
     value.version === 1 && Number.isSafeInteger(value.port) &&
-      typeof value.port === "number" && value.port > 0 && value.port <= 65535,
+      typeof value.port === "number" && value.port >= 0 && value.port <= 65535,
   );
   for (
     const field of [
@@ -345,6 +346,7 @@ export class MemoryRouterPolicy {
 
   /**
    * Starts only the private Memory link/data endpoints, with no HTTP routes.
+   * Returns the bound port, including when configured with port zero.
    * `repeat` schedules the check that fences the host's contexts when this
    * toolshed's ownership changes.
    */
@@ -378,6 +380,7 @@ export class MemoryRouterPolicy {
         host.fenceOwnership();
       }, 500);
       return {
+        port: listener.port,
         close: async () => {
           stopFencing();
           try {

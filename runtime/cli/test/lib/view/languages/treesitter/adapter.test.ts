@@ -7,9 +7,11 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { join, toFileUrl } from "@std/path";
 
 import {
   createHighlighter,
+  finishGrammarLoads,
   highlightLines,
   onGrammarLoad,
   parseDocument,
@@ -58,6 +60,50 @@ describe("adapter", () => {
 
       expect(reads).toBe(1);
       expect(verbatim(highlightLines(counted, "x = 1"))).toBe("x = 1");
+    });
+
+    it("compiles a grammar file that two grammars share once", async () => {
+      // The second grammar loads after the file is gone, from the first's
+      // compilation.
+      const directory = await Deno.makeTempDir();
+      const copy = join(directory, "shared.wasm");
+      await Deno.copyFile(new URL(pythonGrammar.wasmUrl()), copy);
+      const wasmUrl = () => toFileUrl(copy).href;
+      try {
+        await prepareGrammar({
+          ...pythonGrammar,
+          id: "python-shared-a",
+          wasmUrl,
+        });
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+      const second = { ...pythonGrammar, id: "python-shared-b", wasmUrl };
+      await prepareGrammar(second);
+
+      expect(classesOf(highlightLines(second, "x = 1"), "1")).toEqual([
+        "number",
+      ]);
+    });
+
+    it("reads a shared grammar file again after a failed read", async () => {
+      const directory = await Deno.makeTempDir();
+      const copy = join(directory, "late.wasm");
+      const wasmUrl = () => toFileUrl(copy).href;
+      try {
+        await expect(
+          prepareGrammar({ ...pythonGrammar, id: "python-late-a", wasmUrl }),
+        ).rejects.toThrow(/the python-late-a grammar could not be read/);
+        await Deno.copyFile(new URL(pythonGrammar.wasmUrl()), copy);
+        const second = { ...pythonGrammar, id: "python-late-b", wasmUrl };
+        await prepareGrammar(second);
+
+        expect(classesOf(highlightLines(second, "x = 1"), "1")).toEqual([
+          "number",
+        ]);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
     });
 
     it("names the grammar when its parser cannot be read", async () => {
@@ -144,6 +190,41 @@ describe("adapter", () => {
       } finally {
         stop();
       }
+    });
+  });
+
+  describe("finishGrammarLoads()", () => {
+    it("waits for a load that a parse started, and then finds none", async () => {
+      const pending: TreeSitterGrammar = {
+        ...pythonGrammar,
+        id: "python-finished-after-use",
+      };
+
+      expect(classesOf(highlightLines(pending, "x = 1"), "x = 1"))
+        .toEqual(["plain"]);
+      expect(await finishGrammarLoads()).toBe(true);
+
+      expect(classesOf(highlightLines(pending, "x = 1"), "1"))
+        .toEqual(["number"]);
+      expect(await finishGrammarLoads()).toBe(false);
+    });
+
+    it("rejects with a started load's failure once, without starting it again", async () => {
+      const missing: TreeSitterGrammar = {
+        ...pythonGrammar,
+        id: "python-unreadable-after-use",
+        wasmUrl: () => new URL("./no-such-grammar.wasm", import.meta.url).href,
+      };
+
+      highlightLines(missing, "x = 1");
+      await expect(finishGrammarLoads()).rejects.toThrow(
+        /the python-unreadable-after-use grammar could not be read from/,
+      );
+
+      expect(await finishGrammarLoads()).toBe(false);
+      expect(classesOf(highlightLines(missing, "x = 1"), "x = 1"))
+        .toEqual(["plain"]);
+      expect(await finishGrammarLoads()).toBe(false);
     });
   });
 

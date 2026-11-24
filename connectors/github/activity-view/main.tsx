@@ -217,11 +217,9 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   const commitsData = fetchJson<CommitResponse | undefined>({
     url: fallbackApiUrl,
   });
-  const commits = computed(() =>
-    hasError(commitsData) ? [] : resultOf(commitsData)
-  );
   const fallbackPrompt = computed(() => {
-    const commitList = commits ?? [];
+    if (!fallbackApiUrl || hasError(commitsData)) return "";
+    const commitList = resultOf(commitsData) ?? [];
     if (commitList.length === 0) return "";
     const messages = commitList
       .slice(0, 10)
@@ -234,12 +232,6 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
       "You are a concise technical writer. Summarize the recent development activity based on these commit messages. Focus on themes and notable changes. Keep it to 2-3 sentences.",
     prompt: fallbackPrompt,
   });
-  const summaryText = computed(() =>
-    hasError(summary) ? "" : resultOf(summary)
-  );
-  const summaryPending = computed(() =>
-    hasError(summary) ? false : isPending(summary) || isSyncing(summary)
-  );
 
   const repoName = computed(() => {
     const { owner, repo } = parsed;
@@ -657,24 +649,46 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
                 />
               </div>
 
-              {summaryPending
-                ? (
-                  <div style="margin-bottom: 16px;">
-                    <cf-loader showElapsed /> Generating summary...
-                  </div>
-                )
-                : summaryText
-                ? (
-                  <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
-                    <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
-                      Activity Summary
-                    </h3>
-                    <p style="margin: 0; line-height: 1.5;">{summaryText}</p>
-                  </div>
-                )
-                : null}
+              {computed(() => {
+                if (!fallbackPrompt) return null;
+                if (hasError(summary)) {
+                  return (
+                    <p role="alert">
+                      Could not summarize commits: {summary.message}
+                    </p>
+                  );
+                }
+                if (isPending(summary) || isSyncing(summary)) {
+                  return (
+                    <div style="margin-bottom: 16px;">
+                      <cf-loader showElapsed /> Generating summary...
+                    </div>
+                  );
+                }
+                const text = resultOf(summary);
+                return text
+                  ? (
+                    <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
+                      <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
+                        Activity Summary
+                      </h3>
+                      <p style="margin: 0; line-height: 1.5;">{text}</p>
+                    </div>
+                  )
+                  : null;
+              })}
 
-              {computed(() => renderGithubCommits(commits))}
+              {computed(() => {
+                if (!fallbackApiUrl) return renderGithubCommits(undefined);
+                if (hasError(commitsData)) {
+                  return (
+                    <p role="alert">
+                      Could not load commits: {commitsData.message}
+                    </p>
+                  );
+                }
+                return renderGithubCommits(resultOf(commitsData));
+              })}
             </div>
           )}
       </>

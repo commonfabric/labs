@@ -17,6 +17,7 @@ import {
   ciGanttOptions,
   ciGanttProgressResponse,
   ciHistoryDays,
+  ciHistorySource,
   type CiHistorySample,
   type CiHistorySource,
   type CiJobFetchProgress,
@@ -49,8 +50,8 @@ import { CiGanttDetailStore, ganttDetailDirectory } from "./ci-gantt-detail.ts";
 import {
   CI_RUNS_MAX,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "./config.ts";
 import {
@@ -60,6 +61,7 @@ import {
 import { github } from "./lib.ts";
 import { GitHubRateLimitBudgetError } from "./github-rate-limit.ts";
 import { PERFORMANCE_VIEW_STYLES, progressPanel } from "./performance-views.ts";
+import { runList } from "./test/run-list.ts";
 
 // Existing collector tests exercise history and persistence behavior against
 // precise request stubs. The rate-budget implementation has its own tests.
@@ -138,14 +140,14 @@ function workflowRun(
 function runListPage(
   url: string,
   runs: readonly WorkflowRun[],
-): { workflow_runs: WorkflowRun[] } {
+): { total_count: number; workflow_runs: WorkflowRun[] } {
   const query = new URL(url, "https://api.github.com/").searchParams;
   // The lists filtered to main or to pull requests, which name the runs that
   // may have been run again, name none here.
   for (const filter of ["branch", "event"]) {
     if (query.has(filter)) {
       assertEquals([...query.keys()].sort(), [filter, "page", "per_page"]);
-      return { workflow_runs: [] };
+      return { total_count: 0, workflow_runs: [] };
     }
   }
   assertEquals([...query.keys()].sort(), ["page", "per_page"]);
@@ -154,7 +156,10 @@ function runListPage(
   );
   const size = Number(query.get("per_page"));
   const start = (Number(query.get("page")) - 1) * size;
-  return { workflow_runs: runs.slice(start, start + size) };
+  return {
+    total_count: runs.length,
+    workflow_runs: runs.slice(start, start + size),
+  };
 }
 
 function historySamples(): CiHistorySample[] {
@@ -555,24 +560,32 @@ Deno.test("CI job history duration sort puts the longest latest value first", ()
   );
 });
 
-Deno.test("CI job history page can select the loom workflow", () => {
+Deno.test("CI job history reads `cfs` and the repository's former name, `loom`, as cfs, and anything else as labs", () => {
+  assertEquals(ciHistorySource("cfs"), CI_HISTORY_SOURCES.cfs);
+  assertEquals(ciHistorySource("loom"), CI_HISTORY_SOURCES.cfs);
+  for (const value of ["labs", "loom-scripts", "weaver", null]) {
+    assertEquals(ciHistorySource(value), CI_HISTORY_SOURCES.labs);
+  }
+});
+
+Deno.test("CI job history page can select the cfs workflow", () => {
   const html = ciJobHistoryPage(
     buildCiJobHistory(historySamples()),
     "job",
     undefined,
     {
-      source: CI_HISTORY_SOURCES.loom,
+      source: CI_HISTORY_SOURCES.cfs,
       days: 14,
     },
   );
 
-  assertStringIncludes(html, `${LOOM_REPO} · ${LOOM_CI_WORKFLOW}`);
-  assertStringIncludes(html, '<option value="loom" selected>loom</option>');
+  assertStringIncludes(html, `${CFS_REPO} · ${CFS_CI_WORKFLOW}`);
+  assertStringIncludes(html, '<option value="cfs" selected>cfs</option>');
   assertStringIncludes(html, 'value="14"');
   assertStringIncludes(html, "selected 14-day trend");
   assertStringIncludes(
     html,
-    'href="/bench?view=gantt&amp;repo=loom&amp;days=14&amp;sort=job&amp;stat=p99">CI run Gantt</a>',
+    'href="/bench?view=gantt&amp;repo=cfs&amp;days=14&amp;sort=job&amp;stat=p99">CI run Gantt</a>',
   );
 });
 
@@ -654,7 +667,7 @@ Deno.test("CI job history page exposes live collection progress without disablin
 Deno.test("CI job history page reports workflow discovery requests", () => {
   const progress: CiJobFetchProgress = {
     id: "loom-discovery",
-    source: "loom",
+    source: "cfs",
     days: 45,
     phase: "discovering",
     discoveryRequestsMade: 3,
@@ -675,7 +688,7 @@ Deno.test("CI job history page reports workflow discovery requests", () => {
     updatedAt: NOW,
   };
   const html = ciJobHistoryPage(null, "job", undefined, {
-    source: CI_HISTORY_SOURCES.loom,
+    source: CI_HISTORY_SOURCES.cfs,
     days: 45,
     progress,
   });
@@ -700,7 +713,7 @@ Deno.test("CI fetch progress panel retains a completed collection warning", () =
   const html = progressPanel(
     {
     id: "gantt-cached-warning",
-    source: "loom",
+    source: "cfs",
     days: 45,
     phase: "complete",
     discoveryRequestsMade: 1,
@@ -849,7 +862,7 @@ Deno.test("CI job history update check uses the selected repository and window",
   const cached = buildCiJobHistory(historySamples());
   const progress: CiJobFetchProgress = {
     id: "loom-9-check",
-    source: "loom",
+    source: "cfs",
     days: 9,
     phase: "discovering",
     discoveryRequestsMade: 0,
@@ -890,7 +903,7 @@ Deno.test("CI job history update check uses the selected repository and window",
   );
   const state = await response.json();
 
-  assertEquals(selected?.source, CI_HISTORY_SOURCES.loom);
+  assertEquals(selected?.source, CI_HISTORY_SOURCES.cfs);
   assertEquals(selected?.days, 9);
   assertEquals(state.progress, progress);
   assertEquals(state.lastRequestError, null);
@@ -1347,7 +1360,7 @@ Deno.test("a chart is served even when its detail cannot be pruned", async () =>
     <T>(path: string) =>
       Promise.resolve(
         path.includes("/runs?")
-          ? { workflow_runs: [run] } as T
+          ? runList([run]) as T
           : { jobs: [apiJob("Check", 30)] } as T,
       ),
     new UnprunableDetailStore(ganttDetailDirectory(file)),
@@ -1418,7 +1431,7 @@ Deno.test("pruning keeps the detail of every attempt the run index holds", async
     <T>(path: string) =>
       Promise.resolve(
         path.includes("/runs?")
-          ? { workflow_runs: [workflowRun(retained[0], now - HOUR)] } as T
+          ? runList([workflowRun(retained[0], now - HOUR)]) as T
           : { jobs: [apiJob("Check", 30)] } as T,
       ),
     detail,
@@ -1483,7 +1496,7 @@ Deno.test("CI Gantt collects an attempt whose detail cannot be read", async () =
     store,
     <T>(path: string) => {
       if (path.includes("/runs?")) {
-        return Promise.resolve({ workflow_runs: [run] } as T);
+        return Promise.resolve(runList([run]) as T);
       }
       jobRequests++;
       return Promise.resolve({ jobs: [apiJob("Recovered", 30)] } as T);
@@ -1912,9 +1925,7 @@ Deno.test("CI job history reports progress and persists wider-window responses a
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [recentRun, oldRun],
-      }));
+      return Promise.resolve(Response.json(runList([recentRun, oldRun])));
     }
     const runId = Number(
       url.match(/\/actions\/runs\/(\d+)\/attempts\/1\/jobs/)?.[1],
@@ -2060,9 +2071,7 @@ Deno.test("CI job history reloads a short page when a wider collection populated
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [addedRun, firstRun],
-      }));
+      return Promise.resolve(Response.json(runList([addedRun, firstRun])));
     }
     const runId = Number(
       url.match(/\/actions\/runs\/(\d+)\/attempts\/1\/jobs/)?.[1],
@@ -2128,9 +2137,7 @@ Deno.test("CI job history rebuilds a fresh short range after a wider range repai
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [repairedRun, stableRun],
-      }));
+      return Promise.resolve(Response.json(runList([repairedRun, stableRun])));
     }
     const runId = Number(
       url.match(/\/actions\/runs\/(\d+)\/attempts\/1\/jobs/)?.[1],
@@ -2206,9 +2213,7 @@ Deno.test("CI job history joins a wider repair before taking the short-range fre
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [repairedRun, stableRun],
-      }));
+      return Promise.resolve(Response.json(runList([repairedRun, stableRun])));
     }
     const runId = Number(
       url.match(/\/actions\/runs\/(\d+)\/attempts\/1\/jobs/)?.[1],
@@ -2274,7 +2279,7 @@ Deno.test("CI job history joins a wider repair before taking the short-range fre
   }
 });
 
-Deno.test("CI job history keeps labs fresh while loom has a pending cache write", async () => {
+Deno.test("CI job history keeps labs fresh while cfs has a pending cache write", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-job-history-source-cache-test-",
   });
@@ -2310,7 +2315,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
   const collector = new CiJobHistoryCollector(store);
   const labsRun = workflowRun(8_926, Date.now() - DAY);
   const loomRun = workflowRun(8_927, Date.now() - DAY, {
-    html_url: `https://github.com/${LOOM_REPO}/actions/runs/8927`,
+    html_url: `https://github.com/${CFS_REPO}/actions/runs/8927`,
   });
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
@@ -2318,14 +2323,14 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     const url = String(input);
     calls.push(url);
     if (url.includes(`/repos/${REPO}/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({ workflow_runs: [labsRun] }));
+      return Promise.resolve(Response.json(runList([labsRun])));
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/workflows/${LOOM_CI_WORKFLOW}/runs?`,
+        `/repos/${CFS_REPO}/actions/workflows/${CFS_CI_WORKFLOW}/runs?`,
       )
     ) {
-      return Promise.resolve(Response.json({ workflow_runs: [loomRun] }));
+      return Promise.resolve(Response.json(runList([loomRun])));
     }
     if (
       url.includes(
@@ -2336,7 +2341,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/runs/${loomRun.id}/attempts/1/jobs`,
+        `/repos/${CFS_REPO}/actions/runs/${loomRun.id}/attempts/1/jobs`,
       )
     ) {
       return Promise.resolve(Response.json({ jobs: [apiJob("Loom", 70)] }));
@@ -2355,7 +2360,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
 
     const loom = collector.startRefresh(
       staticGitHubCredential("source-token"),
-      CI_HISTORY_SOURCES.loom,
+      CI_HISTORY_SOURCES.cfs,
       7,
     );
     pending.push(loom.result);
@@ -2415,7 +2420,7 @@ Deno.test("CI job history persists a shared job response once across active wind
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({ workflow_runs: [run] }));
+      return Promise.resolve(Response.json(runList([run])));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
       jobCalls++;
@@ -2510,7 +2515,7 @@ Deno.test("CI job history joins persistence when a range starts after the respon
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({ workflow_runs: [run] }));
+      return Promise.resolve(Response.json(runList([run])));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
       jobCalls++;
@@ -2674,7 +2679,7 @@ Deno.test("CI job history reloads completed attempts from its server cache", asy
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
       runCalls++;
-      return Promise.resolve(Response.json({ workflow_runs: [run] }));
+      return Promise.resolve(Response.json(runList([run])));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
       jobCalls++;
@@ -2736,7 +2741,7 @@ Deno.test("CI job history reuses a fresh completed collection after a dashboard 
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
       runCalls++;
-      return Promise.resolve(Response.json({ workflow_runs: [run] }));
+      return Promise.resolve(Response.json(runList([run])));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
       jobCalls++;
@@ -2860,7 +2865,7 @@ Deno.test("CI job history does not rebuild a matching persisted manifest", async
     const url = String(input);
     return Promise.resolve(
       url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)
-        ? Response.json({ workflow_runs: [run] })
+        ? Response.json(runList([run]))
         : Response.json({ jobs: [apiJob("Check", 90)] }),
     );
   };
@@ -2890,7 +2895,7 @@ Deno.test("CI job history does not bless a preserved legacy sample", async () =>
     const url = String(input);
     return Promise.resolve(
       url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)
-        ? Response.json({ workflow_runs: [first] })
+        ? Response.json(runList([first]))
         : Response.json({ jobs: [apiJob("Check", 90)] }),
     );
   };
@@ -2961,7 +2966,7 @@ Deno.test("CI job history does not bless a preserved manifestless sample", async
     const url = String(input);
     return Promise.resolve(
       url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)
-        ? Response.json({ workflow_runs: [first] })
+        ? Response.json(runList([first]))
         : Response.json({ jobs: [apiJob("Check", 90)] }),
     );
   };
@@ -3031,9 +3036,9 @@ Deno.test("CI job history preserves an all-failed refresh warning and retries af
     const url = String(input);
     calls++;
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [{ ...run, run_attempt: failing ? 2 : 1 }],
-      }));
+      return Promise.resolve(Response.json(
+        runList([{ ...run, run_attempt: failing ? 2 : 1 }]),
+      ));
     }
     if (url.includes(`/actions/runs/${run.id}/`)) {
       return failing
@@ -3109,9 +3114,9 @@ Deno.test("CI job history preserves current sampling provenance after an all-fai
     const url = String(input);
     calls++;
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [{ ...run, run_attempt: failing ? 2 : 1 }],
-      }));
+      return Promise.resolve(Response.json(
+        runList([{ ...run, run_attempt: failing ? 2 : 1 }]),
+      ));
     }
     if (url.includes(`/actions/runs/${run.id}/`)) {
       if (failing) {
@@ -3187,7 +3192,7 @@ Deno.test("CI job history does not mark a rate-limited collection fresh", async 
     store,
     <T = unknown>(path: string): Promise<T> => {
       if (path.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-        return Promise.resolve({ workflow_runs: [run] } as T);
+        return Promise.resolve(runList([run]) as T);
       }
       return Promise.resolve({ jobs: [apiJob("Check", 90)] } as T);
     },
@@ -3202,7 +3207,7 @@ Deno.test("CI job history does not mark a rate-limited collection fresh", async 
     store,
     <T = unknown>(path: string): Promise<T> => {
       if (path.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-        return Promise.resolve({ workflow_runs: [rerun] } as T);
+        return Promise.resolve(runList([rerun]) as T);
       }
       return Promise.reject(
         new GitHubRateLimitBudgetError(
@@ -3248,7 +3253,7 @@ Deno.test("CI job history does not mark a rate-limited collection fresh", async 
       <T = unknown>(path: string): Promise<T> => {
         if (path.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
           discoveryCalls++;
-          return Promise.resolve({ workflow_runs: [rerun] } as T);
+          return Promise.resolve(runList([rerun]) as T);
         }
         return Promise.reject(
           new GitHubRateLimitBudgetError("rate limit still reserved"),
@@ -3278,7 +3283,7 @@ Deno.test("CI job history can replace an in-process future refresh", async () =>
     store,
     <T = unknown>(path: string): Promise<T> => {
       if (path.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-        return Promise.resolve({ workflow_runs: [run] } as T);
+        return Promise.resolve(runList([run]) as T);
       }
       return Promise.resolve({ jobs: [apiJob("Check", 90)] } as T);
     },
@@ -3344,7 +3349,7 @@ Deno.test("CI Gantt reuses and reloads the CI history job cache", async () => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
       runCalls++;
-      return Promise.resolve(Response.json({ workflow_runs: [run] }));
+      return Promise.resolve(Response.json(runList([run])));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
       jobCalls++;
@@ -4635,7 +4640,7 @@ Deno.test("CI Gantt reports shared discovery and job-fetch progress", async () =
       ["discovering", 1, 0, 1],
     );
 
-    releaseWorkflow({ workflow_runs: [run] });
+    releaseWorkflow(runList([run]));
     await jobsStarted;
     assertEquals(
       [
@@ -4682,7 +4687,7 @@ Deno.test("CI Gantt reports shared discovery and job-fetch progress", async () =
       ["complete", 1, 1, 0],
     );
   } finally {
-    releaseWorkflow({ workflow_runs: [] });
+    releaseWorkflow(runList([]));
     releaseJobs({ jobs: [] });
     if (firstResult) await Promise.allSettled([firstResult]);
     await Deno.remove(directory, { recursive: true });
@@ -4700,7 +4705,7 @@ Deno.test("CI Gantt reuses a run cached while collection is starting", async () 
     store,
     <T>(path: string) => {
       if (path.includes("/runs?")) {
-        return Promise.resolve({ workflow_runs: [run] } as T);
+        return Promise.resolve(runList([run]) as T);
       }
       if (path.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
         jobRequests++;
@@ -4784,7 +4789,7 @@ Deno.test("CI Gantt progress endpoint streams collection failures", async () => 
     const response = ciGanttProgressResponse(
       new Request("http://dashboard/bench/gantt-progress"),
       new URL(
-        "http://dashboard/bench/gantt-progress?repo=loom&limit=12&mainOnly=1&allConclusions=1",
+        "http://dashboard/bench/gantt-progress?repo=cfs&limit=12&mainOnly=1&allConclusions=1",
       ),
       collector,
       undefined,
@@ -4792,7 +4797,7 @@ Deno.test("CI Gantt progress endpoint streams collection failures", async () => 
     assertEquals(response.headers.get("content-type"), "text/event-stream");
     const events = await response.text();
     assertStringIncludes(events, "event: progress");
-    assertStringIncludes(events, '"source":"loom"');
+    assertStringIncludes(events, '"source":"cfs"');
     assertStringIncludes(events, '"phase":"error"');
     assertStringIncludes(events, '"error":"set GH_TOKEN"');
   } finally {
@@ -4980,7 +4985,7 @@ Deno.test("CI Gantt preserves a specific job error when no run can be rendered",
     new CiJobHistoryStore(`${directory}/history.json`),
     <T>(path: string) => {
       if (path.includes("/runs?")) {
-        return Promise.resolve({ workflow_runs: [run] } as T);
+        return Promise.resolve(runList([run]) as T);
       }
       if (path.includes("/jobs")) {
         return Promise.reject(new Error("job network unreachable"));
@@ -5084,7 +5089,7 @@ Deno.test("CI Gantt includes failed main pushes when all conclusions are selecte
     const url = new URL(String(input));
     if (url.pathname.includes(`/actions/workflows/${CI_WORKFLOW}/runs`)) {
       runQueries.push(url);
-      return Promise.resolve(Response.json({ workflow_runs: [failed] }));
+      return Promise.resolve(Response.json(runList([failed])));
     }
     if (
       url.pathname.includes(`/actions/runs/${failed.id}/attempts/1/jobs`)
@@ -5379,7 +5384,7 @@ Deno.test("CI job history reports a cache write failure and retries without refe
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({ workflow_runs: [run] }));
+      return Promise.resolve(Response.json(runList([run])));
     }
     if (url.includes(`/actions/runs/${run.id}/attempts/1/jobs`)) {
       jobCalls++;
@@ -5457,10 +5462,10 @@ Deno.test("CI job history reports a cache write failure and retries without refe
   }
 });
 
-Deno.test("CI job history reads loom when that repository is selected", async () => {
+Deno.test("CI job history reads cfs when that repository is selected", async () => {
   const test = await temporaryCollector();
   const run = workflowRun(9_151, NOW, {
-    html_url: `https://github.com/${LOOM_REPO}/actions/runs/9151`,
+    html_url: `https://github.com/${CFS_REPO}/actions/runs/9151`,
   });
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
@@ -5469,14 +5474,14 @@ Deno.test("CI job history reads loom when that repository is selected", async ()
     calls.push(url);
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/workflows/${LOOM_CI_WORKFLOW}/runs?`,
+        `/repos/${CFS_REPO}/actions/workflows/${CFS_CI_WORKFLOW}/runs?`,
       )
     ) {
-      return Promise.resolve(Response.json({ workflow_runs: [run] }));
+      return Promise.resolve(Response.json(runList([run])));
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/runs/${run.id}/attempts/1/jobs`,
+        `/repos/${CFS_REPO}/actions/runs/${run.id}/attempts/1/jobs`,
       )
     ) {
       return Promise.resolve(Response.json({ jobs: [apiJob("Tests", 75)] }));
@@ -5488,10 +5493,10 @@ Deno.test("CI job history reads loom when that repository is selected", async ()
     const snapshot = await test.collector.collect(
       staticGitHubCredential("loom-token"),
       NOW,
-      CI_HISTORY_SOURCES.loom,
+      CI_HISTORY_SOURCES.cfs,
     );
     assertEquals(snapshot.jobs[0].name, "Tests");
-    assert(calls.every((call) => call.includes(`/repos/${LOOM_REPO}/`)));
+    assert(calls.every((call) => call.includes(`/repos/${CFS_REPO}/`)));
   } finally {
     globalThis.fetch = originalFetch;
     await test.cleanup();
@@ -5698,7 +5703,7 @@ Deno.test("CI Gantt leaves out runs past the history window on the last page it 
   globalThis.fetch = (input) => {
     const url = new URL(String(input));
     if (url.pathname.includes(`/actions/workflows/${CI_WORKFLOW}/runs`)) {
-      return Promise.resolve(Response.json({ workflow_runs: [recent, old] }));
+      return Promise.resolve(Response.json(runList([recent, old])));
     }
     if (url.pathname.includes("/jobs")) {
       return Promise.resolve(Response.json({ jobs: [apiJob("Check", 90)] }));
@@ -5816,11 +5821,9 @@ Deno.test("CI job history refreshes the complete latest job set after a subset r
   globalThis.fetch = (input) => {
     const url = String(input);
     if (url.includes(`/actions/workflows/${CI_WORKFLOW}/runs?`)) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [
-          workflowRun(runId, NOW, { run_attempt: attempt }),
-        ],
-      }));
+      return Promise.resolve(Response.json(
+        runList([workflowRun(runId, NOW, { run_attempt: attempt })]),
+      ));
     }
     const attempted = url.match(/\/actions\/runs\/\d+\/attempts\/(\d+)\/jobs/);
     if (attempted) {
@@ -6296,7 +6299,7 @@ Deno.test("CI job history removes progress listeners that throw", async () => {
       calls++;
       if (calls > 1) throw new Error("update listener failed");
     }));
-    resolveRuns({ workflow_runs: [] });
+    resolveRuns(runList([]));
     await refresh.result;
     assertEquals(calls, 2);
   } finally {
@@ -6416,7 +6419,7 @@ Deno.test("the production CI Gantt wrapper writes the file it is given", async (
     <T>(path: string) =>
       Promise.resolve(
         path.includes("/runs?")
-          ? { workflow_runs: [run] } as T
+          ? runList([run]) as T
           : { jobs: [apiJob("Check", 30)] } as T,
       ),
   );
@@ -6503,7 +6506,7 @@ Deno.test("CI Gantt reuses recent discovery and reports discovery failure withou
     <T>(path: string) => {
       if (path.includes("/runs?")) {
         workflowRequests++;
-        return Promise.resolve({ workflow_runs: [run] } as T);
+        return Promise.resolve(runList([run]) as T);
       }
       return Promise.resolve({ jobs: [apiJob("Check", 30)] } as T);
     },
@@ -6633,7 +6636,7 @@ Deno.test("CI job history joins an active refresh for the same window", async ()
     assert(first.progress);
     assertEquals(second.progress?.id, first.progress.id);
     assertEquals(second.result, first.result);
-    resolveRuns({ workflow_runs: [] });
+    resolveRuns(runList([]));
     await second.result;
   } finally {
     await Deno.remove(directory, { recursive: true });
@@ -6666,7 +6669,7 @@ Deno.test("CI job history restores its prior manifest when the manifest write fa
     <T>(path: string) =>
       Promise.resolve(
         (path.includes("/runs?")
-          ? { workflow_runs: [run] }
+          ? runList([run])
           : { jobs: [apiJob("Check", 30)] }) as T,
       ),
   );
@@ -6692,7 +6695,7 @@ Deno.test("CI job history rejects a missing persisted refresh manifest", async (
   store.refresh = (() => undefined) as typeof store.refresh;
   const collector = new RateLimitedCiJobHistoryCollector(
     store,
-    <T>() => Promise.resolve({ workflow_runs: [] } as T),
+    <T>() => Promise.resolve(runList([]) as T),
   );
   try {
     await assertRejects(
@@ -6719,7 +6722,7 @@ Deno.test("CI job history reloads when concurrent persistence changes its manife
   }) as typeof store.refresh;
   const collector = new RateLimitedCiJobHistoryCollector(
     store,
-    <T>() => Promise.resolve({ workflow_runs: [] } as T),
+    <T>() => Promise.resolve(runList([]) as T),
   );
   try {
     assertEquals((await collector.startRefresh(staticGitHubCredential("token")).result).runCount, 0);
@@ -6735,7 +6738,7 @@ Deno.test("CI job history completes when a persisted manifest is immediately inv
   store.freshRefresh = (() => undefined) as typeof store.freshRefresh;
   const collector = new RateLimitedCiJobHistoryCollector(
     store,
-    <T>() => Promise.resolve({ workflow_runs: [] } as T),
+    <T>() => Promise.resolve(runList([]) as T),
   );
   try {
     assertEquals((await collector.startRefresh(staticGitHubCredential("token")).result).runCount, 0);
@@ -6766,7 +6769,7 @@ Deno.test("CI job history progress responses close completed streams", async () 
   const directory = await Deno.makeTempDir({ prefix: "ci-job-history-test-" });
   const collector = new RateLimitedCiJobHistoryCollector(
     new CiJobHistoryStore(`${directory}/history.json`),
-    <T>() => Promise.resolve({ workflow_runs: [] } as T),
+    <T>() => Promise.resolve(runList([]) as T),
   );
   try {
     assertEquals(

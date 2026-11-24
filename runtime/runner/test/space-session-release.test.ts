@@ -445,6 +445,19 @@ describe("space-session-release", () => {
       expect(isOpen(space)).toBe(false);
     });
 
+    it("keeps a space whose history a seq observer follows", async () => {
+      const { space, id } = await spaceWith(1);
+      await load(space, id);
+      const stop = readerStorage.open(space).subscribeServerSeq!(() => {});
+
+      await releaseTwice();
+
+      expect(isOpen(space)).toBe(true);
+      stop();
+      await releaseTwice();
+      expect(isOpen(space)).toBe(false);
+    });
+
     it("keeps a space whose session the server refused", async () => {
       const refusing = refusingManager();
       try {

@@ -17,6 +17,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
+import { setLLMUrl } from "@commonfabric/llm";
 import { setPatternEnvironment } from "../builder/env.ts";
 import { startHeapSampling, writeThreadHeapProfile } from "../heap-profile.ts";
 import { threadId } from "@node/worker_threads";
@@ -107,6 +108,9 @@ export function serveFromPort(
     // realm's, so it is set here to what the process that started the worker
     // serves patterns from, as that process sets its own.
     setPatternEnvironment({ apiUrl: new URL(init.apiUrl) });
+    // LLM calls from this worker go to the toolshed, not `location` (a file:
+    // URL in a Deno worker), as the browser runtime sets in runtime-processor.
+    setLLMUrl(init.apiUrl);
     const identity = await Identity.fromKeyPair(
       keyPairFromRealmValue(init.serviceKeyPair, "the serving worker's key"),
     );

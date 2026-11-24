@@ -46,6 +46,30 @@ Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only f
   expect(() => enabled("on")).toThrow();
 });
 
+Deno.test("a leftover MEMORY_MARKED_SPLICES is ignored, whatever its spelling", () => {
+  // The setting is gone: a deployment that still sets it, as an override
+  // file written while it existed does, starts as one that does not.
+  for (const value of ["true", "false", "on"]) {
+    const parsed = EnvSchema.parse({ MEMORY_MARKED_SPLICES: value });
+    assertEquals("MEMORY_MARKED_SPLICES" in parsed, false);
+  }
+});
+
+Deno.test("MEMORY_RETIRE_BARE_DID_LABELS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(
+      v === undefined ? {} : { MEMORY_RETIRE_BARE_DID_LABELS: v },
+    ).MEMORY_RETIRE_BARE_DID_LABELS;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
 Deno.test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
   const enabled = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_STORE_READS_DIGEST: v })

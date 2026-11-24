@@ -141,12 +141,13 @@ export const mergeableOpRead: Metadata = {
 /**
  * Marks the reads the write machinery makes of the region it is about to
  * write: the stream-marker probe that chooses between an event send and a
- * stored write, the diff's read of each destination path, and the append's
- * destination snapshot that supplies storage positions. Each answer
- * decides how and whether to write, never what is written, and where a
- * stored link sends the write somewhere else the walk reads that slot again
- * without this marker. CFC flow-label derivation excludes these from the
- * transaction's join (spec §18.6.2,
+ * stored write, the diff's read of each destination path, and the
+ * destination snapshot an append or an add-unique takes, which supplies
+ * storage positions and, for an add-unique, which candidates are already
+ * present. Each answer decides how and whether to write, never what is
+ * written, and where a stored link sends the write somewhere else the walk
+ * reads that slot again without this marker. CFC flow-label derivation
+ * excludes these from the transaction's join (spec §18.6.2,
  * `docs/specs/cfc-write-destination-reads.md`). Scheduling, conflict
  * detection and the attempted-write record are unaffected, and the same
  * stream-marker probe made outside the write path carries no marker.
@@ -337,6 +338,31 @@ export function markServedDerivationTx(tx: object): void {
 export function isServedDerivationTx(tx: object): boolean {
   for (const layer of transactionLayers(tx)) {
     if (servedDerivationTxs.has(layer)) return true;
+  }
+  return false;
+}
+
+const servedWaveRunTxs = new WeakSet<object>();
+
+/**
+ * Marks a transaction a serving loop runs in a wave: a derivation, an event
+ * handler, or bookkeeping. Its array changes go index by index
+ * (`V2StorageTransaction.#arraySpliceGate()`), for two reasons. The wave
+ * batch its commit is sealed into carries no read set the store checks, so a
+ * marked splice in it would be refused, and the wave with it. And the wave
+ * judges each patch of an event handler's commit against the later writes of
+ * the session that fired the event, dropping the ones those writes overwrote
+ * (serving-loop.md §3d), which it cannot do to part of a splice that both
+ * replaces an element and inserts beside it.
+ */
+export function markServedWaveRunTx(tx: object): void {
+  for (const layer of transactionLayers(tx)) servedWaveRunTxs.add(layer);
+}
+
+/** Whether `tx` is one a serving loop runs in a wave. */
+export function isServedWaveRunTx(tx: object): boolean {
+  for (const layer of transactionLayers(tx)) {
+    if (servedWaveRunTxs.has(layer)) return true;
   }
   return false;
 }

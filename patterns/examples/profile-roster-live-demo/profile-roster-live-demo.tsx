@@ -4,7 +4,6 @@ import {
   Default,
   equals,
   handler,
-  hasError,
   NAME,
   pattern,
   type PerSpace,
@@ -16,6 +15,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import { optionalWishText } from "../../system/common-fabric/optional-wish-text.ts";
 
 /**
  * LIVE multi-user profile roster demo (CT-1648/CT-1650 end-to-end check).
@@ -121,10 +121,14 @@ export default pattern<ProfileRosterLiveInput, ProfileRosterLiveOutput>(
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
 
-    const myName = hasError(profileNameWish.result)
-      ? ""
-      : resultOf(profileNameWish.result);
-    const myProfile = resultOf(profileWish.result);
+    const myName = optionalWishText({
+      response: profileNameWish.result,
+      errorCode: profileNameWish.errorCode,
+    });
+    // Select the wish's live reference; the roster stores the profile itself.
+    const myProfile = profileWish.errorCode === "no-match"
+      ? undefined
+      : resultOf(profileWish.result);
 
     const participants = roster.participants;
     const participantCount = participants.length;

@@ -40,6 +40,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  type PictureBlob,
   type ProfileFace,
   profileFace,
   type ProfileFaceFields,
@@ -50,8 +51,10 @@ import {
 interface Person {
   name: string;
   // Optional picture snapshot, sourced from the person's shared profile when
-  // they "join with your profile". Display-only — `name` stays the natural
-  // key, so the money/balance logic is unaffected.
+  // they "join with your profile": a blob in `pictureBlob`, or bytes in
+  // `picture`, never both. Display-only — `name` stays the natural key, so the
+  // money/balance logic is unaffected.
+  pictureBlob?: PictureBlob;
   picture?: FabricBytes;
   // Avatar text (an image URL, `data:` URL or glyph), copied instead when the
   // person's profile has no picture, and shown when there is no picture.
@@ -68,6 +71,7 @@ interface Expense {
 
 interface Balance {
   name: string;
+  pictureBlob?: PictureBlob;
   picture?: FabricBytes;
   avatar?: string;
   paid: number;
@@ -167,16 +171,20 @@ export const joinWithProfile = handler<
   const look = face ?? {};
   const cur = people.get();
   const idx = cur.findIndex((p) => p.name === n);
+  const hasPicture = idx >= 0 &&
+    (cur[idx].pictureBlob !== undefined || cur[idx].picture !== undefined);
   if (idx < 0) {
     people.push({ name: n, ...look });
-  } else if (look.picture && !cur[idx].picture) {
+  } else if (look.pictureBlob && !hasPicture) {
     // Backfill the picture snapshot if this name was added by hand earlier.
     // Write through the element's cell — replacing the array slot with a
     // fresh object literal would re-mint the person's entity identity and
     // orphan previously-held references (selection cells, expense rows read
     // earlier). See patterns/product/primitives/editable-list.tsx.
+    people.key(idx).key("pictureBlob").set(look.pictureBlob);
+  } else if (look.picture && !hasPicture) {
     people.key(idx).key("picture").set(look.picture);
-  } else if (look.avatar && !cur[idx].picture && !cur[idx].avatar) {
+  } else if (look.avatar && !hasPicture && !cur[idx].avatar) {
     people.key(idx).key("avatar").set(look.avatar);
   }
   myName.set(n);
@@ -259,6 +267,7 @@ export default pattern<State, Output>(({ people, expenses, myName }) => {
       const share = (shareCents.get(p.name) ?? 0) / 100;
       return {
         name: p.name,
+        ...(p.pictureBlob !== undefined && { pictureBlob: p.pictureBlob }),
         ...(p.picture !== undefined && { picture: p.picture }),
         avatar: p.avatar ?? "",
         paid,
@@ -366,6 +375,7 @@ export default pattern<State, Output>(({ people, expenses, myName }) => {
               {people.map((person) => (
                 <cf-hstack gap="1" align="center">
                   <cf-avatar
+                    blob={person.pictureBlob}
                     bytes={person.picture}
                     src={person.avatar}
                     name={person.name}
@@ -630,6 +640,7 @@ export default pattern<State, Output>(({ people, expenses, myName }) => {
                 >
                   <cf-hstack gap="2" align="center">
                     <cf-avatar
+                      blob={b.pictureBlob}
                       bytes={b.picture}
                       src={b.avatar}
                       name={b.name}

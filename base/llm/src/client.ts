@@ -62,7 +62,12 @@ export function initialLLMUrl(
   location: Pick<Location, "protocol" | "host"> | undefined,
   apiUrl: string | undefined,
 ): string {
-  if (location) {
+  // A Deno worker also has a location, but it is its module's file: URL, and
+  // a POST there fails, so only an http(s) location names the toolshed.
+  if (
+    location &&
+    (location.protocol === "http:" || location.protocol === "https:")
+  ) {
     return location.protocol + "//" + location.host + "/api/ai/llm";
   }
   if (apiUrl && URL.canParse(apiUrl)) {
@@ -86,6 +91,9 @@ let llmApiUrl = initialLLMUrl(globalThis.location, readEnv("API_URL"));
 export const setLLMUrl = (toolshedUrl: string) => {
   llmApiUrl = new URL("/api/ai/llm", toolshedUrl).toString();
 };
+
+/** The endpoint LLM calls without a per-space endpoint are sent to. */
+export const getLLMUrl = (): string => llmApiUrl;
 
 //
 // Mock Mode for Testing

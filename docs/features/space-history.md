@@ -129,11 +129,11 @@ private as the space: whoever can read the space can read its branches.
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | Memory engine  | `listCommits()` and `restoreBranch()` in `runtime/memory/v2/history.ts`; `createBranch()` and `deleteBranch()`                   |
 | Memory wire    | `branch.create`, `branch.delete`, `branch.list`, `history.list`, `branch.restore`; `SessionDescriptor.branch` and `forkBranch`   |
-| Runner storage | `Options.branches` and `Options.forkBranch` on the storage manager; `listHistory()` and the branch methods on a space's provider |
+| Runner storage | `Options.branches` and `Options.forkBranch` on the storage manager; `listHistory()`, `subscribeServerSeq()` and the branch methods on a space's provider |
 | Runner         | `historySteps()` in `runtime/runner/src/history-steps.ts`, which groups commits into steps                                       |
-| Runtime client | `spaceHistory()`, `createSpaceBranch()`, `deleteSpaceBranch()`, `restoreSpace()`; `InitializationData.branches`                  |
-| `lib-shell`    | `RuntimeInternals.spaceHistory()`, `forkSpace()`, `restoreSpace()`; `SpaceFork`                                                  |
-| Shell          | The history panel (`XHistoryView`) and the `open-history`, `close-history` and `restore-history` commands                        |
+| Runtime client | `spaceHistory()`, `watchSpaceHistory()` and the `spaceseqadvanced` event, `createSpaceBranch()`, `deleteSpaceBranch()`, `restoreSpace()`; `InitializationData.branches` |
+| `lib-shell`    | `RuntimeInternals.spaceHistory()`, `watchSpaceHistory()`, `forkSpace()`, `restoreSpace()`, `restorePiecePattern()`; `SpaceFork`; `withPatternChanges()` |
+| Shell          | The history panel (`XHistoryView`) and the `open-history`, `close-history`, `restore-history` and `restore-pattern` commands     |
 
 A session is opened on a branch, and the server reads and writes that branch
 for everything the session sends without naming one. That is what lets the
@@ -166,6 +166,27 @@ other space it opened as its storage closes. A runtime whose embedder
 supplied its connection has no worker of its own to stand a second beside,
 and cannot fork.
 
+`RuntimeInternals.spaceHistory()` gives each step the pattern changes its
+pieces recorded: the source revisions of every piece the space lists and of
+each piece the caller names beside them, which the panel uses for the piece
+in view, as a piece's own source history holds them
+([`../specs/piece-source-lifecycle.md`](../specs/piece-source-lifecycle.md)),
+each with the operation that made it, the pattern the piece pointed at
+afterwards, where that pattern came from, and whether the piece is on that
+revision now. A source revision records the time it was made and no `seq`, so
+`withPatternChanges()` in `runtime/lib-shell/src/space-history.ts` places it
+by time: on the first step that began at or after the revision was made, when
+that step began within a minute of it. A step's time is kept to the second,
+so a step counts as beginning after a revision made up to a second later. The revision's time is read from the
+clock of the runtime that changed the source and a step's from the memory
+server's, so clocks that disagree can place a change on a neighboring step. A
+revision made during a stretch of history the listing does not cover is left
+out, and one made within a minute before the oldest step listed is shown on
+that step until the older step it belongs to is listed. `RuntimeInternals.restorePiecePattern()` puts a piece back on one of
+those revisions through the same source restore the piece menu's "Origin and
+history" uses, which changes the pattern the piece runs and leaves the
+space's data as it is.
+
 The branches a runtime opens are part of its security context: a document
 attaching to a runtime asserts them, so a page cannot join a fork's runtime
 believing it is the space's.
@@ -176,9 +197,33 @@ believing it is the space's.
 space (`showHistoryView` in the shell's display toggles). The panel lists the
 space's steps, newest first, each with what began it, its `seq`, its time and
 the principal that made it, and marks a step that is not settled as in
-progress. The list is read when the
-panel opens and again after returning from a fork; it does not follow the
-space live.
+progress. The list is read when the panel opens, after returning from a fork
+and after a pattern version is restored, and again each time the space moves
+on past its newest step while no fork is open. The older steps already listed
+stay listed beneath the new ones where the newest stretch reaches back to
+them; where the space moved on by more than a stretch, the new stretch
+replaces the list, and "Show older steps" lists the steps between. The
+space's pieces are listed again, and the pattern changes are placed from the
+piece sources the panel last read, reading only those of pieces listed since.
+
+The panel learns that the space moved on from the newest `seq` of it that the
+runtime has heard of, which a space's memory session keeps
+(`SpaceSession.subscribeServerSeq()`) and the worker reports to a page that
+asks (`RuntimeClient.watchSpaceHistory()`). That seq moves when the server
+accepts a commit this runtime made and when it pushes a commit to a document
+this runtime watches, so a commit to a document nothing in the shell watches,
+such as one to another user's piece that is not in view, is listed once
+something the runtime watches changes or the panel lists again for another
+reason.
+
+A step during which a piece's pattern changed lists each change beneath it:
+the piece, what the change was, as the piece menu's "Origin and history"
+names it, and the kind of origin the pattern came from. A change the piece
+has since moved on from offers "Restore this pattern version", which puts
+that piece back on that version of its pattern and keeps the space's data as
+it is now. Where the runtime warns that the stored data may not fit the older
+pattern, the panel shows the warning and offers "Restore it anyway". Both
+actions are disabled while a fork is open.
 
 Choosing a step forks the space there. While a fork is open, the root element
 hands the fork's runtime to everything it renders in place of its own, so the
@@ -217,8 +262,9 @@ branches itself before it compacts that space
   `06-branching.md` section 6.7. Restore is the case of that merge in which
   the source wins every document, and its commit records the same `merge`
   metadata a merge would.
-- **History of one piece.** The panel lists the space's steps. A step does not
-  say which piece it touched.
+- **History of one piece.** The panel lists the space's steps. A step names
+  the pieces whose pattern changed during it, and does not say which pieces'
+  data it touched.
 - **A fork across spaces as of the step.** Another space a fork reaches is
   forked at its present state rather than at the point of its history that
   matches the viewed step.

@@ -287,7 +287,10 @@ function storedOutputChain(
   // the walk ends by the read at the narrowest scope.
   while (true) {
     const stored = tx.readValueOrThrow(at, {
-      meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+      meta: Object.freeze({
+        ...ignoreReadForScheduling,
+        ...internalVerifierRead,
+      }),
     });
     const link = isCellLink(stored) ? parseLink(stored, at) : undefined;
     if (
@@ -557,7 +560,10 @@ function sendValueToBindingInner<T>(
         // (`ignoreReadForScheduling`) and CFC taint (`internalVerifierRead`),
         // and compared with the `Fabric`-aware `valueEqualByWalk`.
         const current = tx.readValueOrThrow(bindingLink, {
-          meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+          meta: Object.freeze({
+            ...ignoreReadForScheduling,
+            ...internalVerifierRead,
+          }),
         });
         if (!valueEqualByWalk(current, newValue)) {
           tx.writeValueOrThrow(bindingLink, newValue);

@@ -600,6 +600,9 @@ export class ServingWorkerPool {
           sessionId,
         );
       },
+      currencyChanged: (space) => {
+        this.#servingWorkerOf(space)?.bridge.observer.currencyChanged(space);
+      },
       sessionChanged: (event) => {
         if (replaying && event.kind === "opened") replayed.add(event.space);
         this.#servingWorkerOf(event.space)?.bridge.observer.sessionChanged(

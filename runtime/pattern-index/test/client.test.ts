@@ -216,6 +216,28 @@ describe("PatternIndexClient", () => {
     expect(pattern.program).toBeUndefined();
   });
 
+  it("asks getPattern by a pattern link with the ref alone, and answers what it names", async () => {
+    const link = {
+      ref: "a-xyz@beta",
+      channel: "beta",
+      number: 3,
+      stable: false,
+    };
+    const { client, requests } = createClient([
+      jsonResponse({
+        patternId: "pat-3",
+        createdAt: "2026-08-01T00:00:00.000Z",
+        description: "Totals an expense list",
+        hashtags: [],
+        dependencies: [],
+        link,
+      }),
+    ]);
+    const pattern = await client.getPattern({ ref: "a-xyz@beta" });
+    expect(JSON.parse(requests[0].body)).toEqual({ ref: "a-xyz@beta" });
+    expect(pattern.link).toEqual(link);
+  });
+
   it("posts listPatterns with no fields and answers with the scored listing", async () => {
     const { client, requests } = createClient([
       jsonResponse({
@@ -760,6 +782,11 @@ describe("PatternIndexClient", () => {
         fn: "shareVersion",
         call: (c) => c.shareVersion({ versionId: "ver-1" }),
         body: { versionId: "ver-1" },
+      },
+      {
+        fn: "shareVersion",
+        call: (c) => c.shareVersion({ versionId: "ver-1", channel: "beta" }),
+        body: { versionId: "ver-1", channel: "beta" },
       },
       {
         fn: "publishLineage",

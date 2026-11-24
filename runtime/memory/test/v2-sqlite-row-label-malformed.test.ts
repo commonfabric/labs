@@ -315,7 +315,13 @@ describe("row-label", () => {
           {},
           ctx,
         ),
-      ).toEqual({ confidentiality: ["did:key:owner"], integrity: ["c"] });
+      ).toEqual({
+        confidentiality: [{
+          type: "https://commonfabric.org/cfc/atom/User",
+          subject: "did:key:owner",
+        }],
+        integrity: ["c"],
+      });
     });
 
     it("throws the regex engine's error for a source that does not compile", () => {

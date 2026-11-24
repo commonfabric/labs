@@ -210,7 +210,7 @@ wish({ query: "#profileSpace" }) // default profile's space cell
 
 No target answers with a profile's picture or avatar text. A stored picture may
 not be its owner's: earlier releases let anyone set one through `setPicture`,
-and bytes can be stored without a label. So a pattern reads the face from the
+and a value can be stored without a label. So a pattern reads the face from the
 profile `#profile` resolves, with `profileFace()` from
 `patterns/system/profile-face/profile-face.ts`, which shows a picture or
 avatar text only when the profile's owner wrote it

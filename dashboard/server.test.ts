@@ -32,8 +32,8 @@ import {
 } from "./server.ts";
 import {
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   PORT,
   REPO,
 } from "./config.ts";
@@ -970,7 +970,7 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     sourceTile("ci", [labsSource]),
     sourceTile("labs ci trust", [labsSource]),
     sourceTile("dau", [loomSource]),
-    sourceTile("loom ci trust", [loomSource]),
+    sourceTile("cfs ci trust", [loomSource]),
     sourceTile("recent commits", [labsSource, loomSource], true),
   ];
 
@@ -1001,7 +1001,7 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     loom.resolve([sourceRun(2, "loom new")]);
     const second = updateFromEvent(await secondMessage);
     assertStringIncludes(tileHtml("dau", second.gridHtml), "loom new");
-    assertStringIncludes(tileHtml("loom ci trust", second.gridHtml), "loom new");
+    assertStringIncludes(tileHtml("cfs ci trust", second.gridHtml), "loom new");
     assertStringIncludes(second.wideHtml, "labs new, loom new");
     assert(!second.wideHtml.includes("pending"));
     assertEquals(messages.length, 2, "the second source produces the second broadcast");
@@ -2047,13 +2047,13 @@ boardTest("sse: a repository's page is live and follows the tiles' views", async
 });
 
 boardTest("routes: a tile's drill-down path wins over the page; anything else is the page", async () => {
-  const gantt = await handle(req("/bench?view=gantt&repo=loom"));
+  const gantt = await handle(req("/bench?view=gantt&repo=cfs"));
   assertEquals(gantt.status, 200);
   assertEquals(gantt.headers.get(VERSION_HEADER), SERVING_VERSION);
   assertEquals(gantt.headers.get("content-type"), "text/html; charset=utf-8");
   const html = await gantt.text();
   assertStringIncludes(html, "<title>CI run Gantt</title>");
-  assertStringIncludes(html, `${LOOM_REPO} · ${LOOM_CI_WORKFLOW}`);
+  assertStringIncludes(html, `${CFS_REPO} · ${CFS_CI_WORKFLOW}`);
 
   const sha = "c".repeat(40);
   const commitGantt = await handle(

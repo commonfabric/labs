@@ -237,6 +237,10 @@ currency. The existing overlay and retirement rules below still apply.
   or wrong shape that fails the schema produces a native error of kind
   `schemaMismatch`; a failed linked-document load produces a native error
   of kind `sync` with its cause. Either diagnostic replaces a stale result.
+  When a space refuses this reader and its load completes without delivering
+  the document, the document is absent for that reader; the refused run does
+  not keep retrying. If a replacement replica needs a previously delivered
+  document again, it is in transit until that replica’s load settles.
 
   **The serving-side re-trigger, explicit (RULED 2026-08-21 — the
   option-3 ruling on the demand-closure fork):**

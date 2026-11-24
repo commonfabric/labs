@@ -21,7 +21,7 @@ function checkbox(
   properties: Partial<
     Pick<
       CFCheckbox,
-      "checked" | "disabled" | "indeterminate" | "required" | "name" | "value"
+      "checked" | "disabled" | "indeterminate" | "required"
     >
   > = {},
 ): Promise<CFCheckbox> {
@@ -49,13 +49,6 @@ function written(cell: CellHandle<boolean>): unknown[] {
 function box(element: CFCheckbox): Element {
   const found = element.shadowRoot!.querySelector(".checkbox");
   if (!found) throw new Error("cf-checkbox rendered no box");
-  return found;
-}
-
-/** The native input `element` renders for form submission. */
-function input(element: CFCheckbox): HTMLInputElement {
-  const found = element.shadowRoot!.querySelector("input");
-  if (!found) throw new Error("cf-checkbox rendered no input");
   return found;
 }
 
@@ -133,8 +126,6 @@ describe("CFCheckbox", () => {
     expect(element.disabled).toBe(false);
     expect(element.indeterminate).toBe(false);
     expect(element.required).toBe(false);
-    expect(element.name).toBe("");
-    expect(element.value).toBe("on");
   });
 
   it("should expose aria-disabled and tabIndex when updated (enabled)", () => {
@@ -174,19 +165,18 @@ describe("CFCheckbox", () => {
   });
 
   describe("render()", () => {
-    it("renders a checked box and a checked input for a checked value", async () => {
+    it("renders a checked box for a checked value", async () => {
       const element = await checkbox({ checked: true });
 
       expect(box(element).classList.contains("checked")).toBe(true);
-      expect(input(element).checked).toBe(true);
       expect(element.getAttribute("aria-checked")).toBe("true");
     });
 
-    it("renders an unchecked box and input for an unchecked value", async () => {
+    it("renders an unchecked box for an unchecked value, with no native input of its own", async () => {
       const element = await checkbox();
 
+      expect(element.shadowRoot!.querySelector("input")).toBeNull();
       expect(box(element).classList.contains("checked")).toBe(false);
-      expect(input(element).checked).toBe(false);
       expect(element.getAttribute("aria-checked")).toBe("false");
     });
 
@@ -198,24 +188,10 @@ describe("CFCheckbox", () => {
       expect(element.getAttribute("aria-checked")).toBe("mixed");
     });
 
-    it("renders a disabled box and input when disabled", async () => {
+    it("renders a disabled box when disabled", async () => {
       const element = await checkbox({ disabled: true });
 
       expect(box(element).classList.contains("disabled")).toBe(true);
-      expect(input(element).disabled).toBe(true);
-    });
-
-    it("gives the input the name and value to submit", async () => {
-      const element = await checkbox({ name: "terms", value: "yes" });
-
-      expect(input(element).getAttribute("name")).toBe("terms");
-      expect(input(element).getAttribute("value")).toBe("yes");
-    });
-
-    it("gives the input no name when the checkbox has none", async () => {
-      const element = await checkbox();
-
-      expect(input(element).hasAttribute("name")).toBe(false);
     });
   });
 

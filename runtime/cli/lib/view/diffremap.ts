@@ -29,23 +29,19 @@ export function remapStructure(ctx: HunkStructureContext): StructureNode[] {
     sourceOmitsUtf8Bom: ctx.sourceOmitsUtf8Bom,
     definitions: ctx.definitions,
   };
-  const out: StructureNode[] = [];
-  for (const root of ctx.doc.structure) {
-    for (const node of remapNode(root, 2, null, remapCtx)) out.push(node);
-  }
-  return out;
+  return remapNodes(ctx.doc.structure, remapCtx);
 }
 
 export interface RemapCtx {
   /** Source line (file or fragment) → diff line, for visible lines. */
   newToDiff: Map<number, number>;
 
-  diffLineStarts: number[];
+  diffLineStarts: readonly number[];
   diffColumnOf: ColumnOf;
-  rawLines: string[];
+  rawLines: readonly string[];
 
   /** Line starts of the source text the nodes were parsed from. */
-  sourceLineStarts: number[];
+  sourceLineStarts: readonly number[];
 
   sourceOmitsUtf8Bom: boolean;
   definitions: Map<string, Definition[]>;
@@ -76,121 +72,126 @@ function isLiteralShape(node: StructureNode): boolean {
 }
 
 /**
- * Remap a workspace-file structure node into diff coordinates, clamped to the
- * file lines this hunk actually shows. Children recurse. A node whose clamped
- * range coincides with its parent's is folded away — but its CHILDREN are
- * hoisted into the parent, so a hunk interior to deeply nested code still
- * exposes the innermost distinct nodes (and Tab never lands on two
- * identical-looking ones). Returns [] when no line of the node is visible.
+ * Remaps workspace-file structure nodes into diff coordinates, each clamped to
+ * the file lines this hunk actually shows; a node none of whose lines are
+ * visible is dropped. A node whose clamped range coincides with its parent's
+ * is folded away, but its children are hoisted into the parent, so a hunk
+ * interior to deeply nested code still exposes the innermost distinct nodes
+ * (and Tab never lands on two identical-looking ones). It keeps its own stack
+ * of deferred steps, so any depth of nesting remaps, and it registers names in
+ * the order a walk down the tree reaches them.
  */
-export function remapNode(
-  node: StructureNode,
-  depth: number,
-  parentRange: { start: number; end: number } | null,
+function remapNodes(
+  roots: readonly StructureNode[],
   ctx: RemapCtx,
 ): StructureNode[] {
-  // A diff's structure stays focused on declarations and the like; the generic
-  // expression and comment nodes that fill the full-AST tree are skipped, but
-  // their meaningful descendants are hoisted into this node's place. Object and
-  // array literals and their entries are kept, though — an object literal in a
-  // diff (an options bag, a returned record) is worth navigating entry by entry.
-  if (
-    (node.kind === "node" || node.kind === "comment") && !isLiteralShape(node)
-  ) {
-    const hoisted: StructureNode[] = [];
-    for (const child of node.children) {
-      for (const mapped of remapNode(child, depth, parentRange, ctx)) {
-        hoisted.push(mapped);
+  const out: StructureNode[] = [];
+  const pending: (() => void)[] = [];
+  type Range = { start: number; end: number };
+  const queue = (
+    nodes: readonly StructureNode[],
+    depth: number,
+    parentRange: Range | null,
+    into: StructureNode[],
+  ) => {
+    for (let at = nodes.length - 1; at >= 0; at--) {
+      pending.push(() => remap(nodes[at], depth, parentRange, into));
+    }
+  };
+  const remap = (
+    node: StructureNode,
+    depth: number,
+    parentRange: Range | null,
+    into: StructureNode[],
+  ) => {
+    // A diff's structure stays focused on declarations and the like; the
+    // generic expression and comment nodes that fill the full-AST tree are
+    // skipped, but their meaningful descendants are hoisted into this node's
+    // place. Object and array literals and their entries are kept, though — an
+    // object literal in a diff (an options bag, a returned record) is worth
+    // navigating entry by entry.
+    if (
+      (node.kind === "node" || node.kind === "comment") &&
+      !isLiteralShape(node)
+    ) {
+      queue(node.children, depth, parentRange, into);
+      return;
+    }
+
+    let firstVisible = -1;
+    let lastVisible = -1;
+    for (let n = node.startLine; n <= node.endLine; n++) {
+      if (ctx.newToDiff.has(n)) {
+        if (firstVisible < 0) firstVisible = n;
+        lastVisible = n;
       }
     }
-    return hoisted;
-  }
+    if (firstVisible < 0) return;
 
-  let firstVisible = -1;
-  let lastVisible = -1;
-  for (let n = node.startLine; n <= node.endLine; n++) {
-    if (ctx.newToDiff.has(n)) {
-      if (firstVisible < 0) firstVisible = n;
-      lastVisible = n;
+    const startDiffLine = ctx.newToDiff.get(firstVisible)!;
+    const endDiffLine = ctx.newToDiff.get(lastVisible)!;
+    // A clamped boundary covers the whole source portion of the shown line.
+    const startOffset = diffOffsetOf(
+      firstVisible,
+      Math.max(node.startOffset, ctx.sourceLineStarts[firstVisible]),
+      ctx,
+    );
+    const endOffset = diffOffsetOf(lastVisible, node.endOffset, ctx);
+    const register = () =>
+      registerDefinition(
+        node,
+        startDiffLine,
+        endDiffLine,
+        startOffset,
+        endOffset,
+        ctx,
+      );
+
+    // Coincidence fold: a node filling its parent's visible range IS the
+    // parent as far as the diff shows. Hoist its mapped children in its place
+    // (same depth, same parent range) and register its name against the
+    // surviving range so `t` lookups still resolve.
+    if (
+      parentRange && parentRange.start === startOffset &&
+      parentRange.end === endOffset
+    ) {
+      register();
+      queue(node.children, depth, parentRange, into);
+      return;
     }
-  }
-  if (firstVisible < 0) return [];
 
-  const startDiffLine = ctx.newToDiff.get(firstVisible)!;
-  const endDiffLine = ctx.newToDiff.get(lastVisible)!;
-  // A clamped boundary covers the whole source portion of the shown line.
-  const startOffset = diffOffsetOf(
-    firstVisible,
-    Math.max(node.startOffset, ctx.sourceLineStarts[firstVisible]),
-    ctx,
-  );
-  const endOffset = diffOffsetOf(lastVisible, node.endOffset, ctx);
-  const startCol = ctx.diffColumnOf(startDiffLine, startOffset);
-  const endCol = ctx.diffColumnOf(endDiffLine, endOffset);
-
-  // Coincidence fold: a node filling its parent's visible range IS the parent
-  // as far as the diff shows. Hoist its mapped children in its place (same
-  // depth, same parent range) and register its name against the surviving
-  // range so `t` lookups still resolve.
-  if (
-    parentRange && parentRange.start === startOffset &&
-    parentRange.end === endOffset
-  ) {
-    registerDefinition(
-      node,
-      startDiffLine,
-      endDiffLine,
+    const children: StructureNode[] = [];
+    into.push({
+      kind: node.kind,
+      label: node.label,
+      name: node.name,
+      nameOffset: remapNameOffset(node, ctx),
+      startLine: startDiffLine,
+      endLine: endDiffLine,
+      startCol: ctx.diffColumnOf(startDiffLine, startOffset),
+      endCol: ctx.diffColumnOf(endDiffLine, endOffset),
       startOffset,
       endOffset,
-      ctx,
-    );
-    const hoisted: StructureNode[] = [];
-    for (const child of node.children) {
-      for (const mapped of remapNode(child, depth, parentRange, ctx)) {
-        hoisted.push(mapped);
-      }
-    }
-    return hoisted;
-  }
-
-  const nameOffset = remapNameOffset(node, ctx);
-  const children: StructureNode[] = [];
-  for (const child of node.children) {
-    const remapped = remapNode(
-      child,
+      depth,
+      children,
+      meta: node.meta,
+      astKinds: node.astKinds,
+      generatedOrigin: node.generatedOrigin,
+    });
+    // The node's name registers after the names inside it.
+    pending.push(register);
+    queue(
+      node.children,
       depth + 1,
       { start: startOffset, end: endOffset },
-      ctx,
+      children,
     );
-    for (const remappedNode of remapped) children.push(remappedNode);
-  }
-
-  const mapped: StructureNode = {
-    kind: node.kind,
-    label: node.label,
-    name: node.name,
-    nameOffset,
-    startLine: startDiffLine,
-    endLine: endDiffLine,
-    startCol,
-    endCol,
-    startOffset,
-    endOffset,
-    depth,
-    children,
-    meta: node.meta,
-    astKinds: node.astKinds,
-    generatedOrigin: node.generatedOrigin,
   };
-  registerDefinition(
-    node,
-    startDiffLine,
-    endDiffLine,
-    startOffset,
-    endOffset,
-    ctx,
-  );
-  return [mapped];
+  queue(roots, 2, null, out);
+  for (let step = pending.pop(); step !== undefined; step = pending.pop()) {
+    step();
+  }
+  return out;
 }
 
 function registerDefinition(

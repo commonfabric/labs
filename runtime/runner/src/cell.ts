@@ -44,6 +44,7 @@ import {
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
 import {
+  isSqliteDbRef,
   type ScopeKeyIdentity,
   type SqliteDbRef,
   type SqliteParamsWire,
@@ -99,6 +100,21 @@ import {
 } from "./builder/types.ts";
 import type { AggregateOperation } from "./builtins/aggregate.ts";
 import { listResultSchema } from "./builtins/list-result-schema.ts";
+import {
+  type IndexedCollectionDescriptor,
+  indexedCollectionDescriptorOf,
+  indexedKindOf,
+} from "./builtins/indexed-collection/definition.ts";
+import {
+  addMemberRows,
+  deleteMemberRows,
+  type IndexedCollectionWriter,
+  maintenanceRevisionCell,
+  memberKeysOf,
+  type MemberRows,
+  nextMaintenanceRevision,
+  projectMember,
+} from "./builtins/indexed-collection/maintenance.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
 import { sqliteQueryNodeFactory } from "./builtins/sqlite/query-node.ts";
 import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
@@ -145,7 +161,11 @@ import {
   portableSnapshotLinks,
   resolveImmutableValueLinks,
 } from "./data-uri.ts";
-import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
+import {
+  actingForEmission,
+  waveRunContextOf,
+  waveSettlementOf,
+} from "./executor/wave.ts";
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { areLinksSame } from "./link-equality.ts";
 import {
@@ -405,7 +425,10 @@ const storedSchemaForWritePolicyInput = (
     type: "application/json",
     path: [],
   }, {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   });
   if (!isObjectOrArray(stored) || stored.value === undefined) {
     return undefined;
@@ -594,11 +617,11 @@ const arrayItemPolicyInput = (
   // too.
   const held = tx.readValueOrThrow(parent, {
     nonRecursive: true,
-    meta: {
+    meta: Object.freeze({
       ...ignoreReadForScheduling,
       ...internalVerifierRead,
       ...excludeReadFromConflict,
-    },
+    }),
   });
   if (
     !Array.isArray(held) &&
@@ -1407,6 +1430,26 @@ export function createCell<T>(
     cfcLabelView,
   ) as unknown as Cell<T>; // Cast to set brand
 }
+
+/**
+ * Returns the write half of the database handle cell at `link`, bound to
+ * `tx`: its `exec()` records a SQLite write onto that transaction.
+ */
+export function createSqliteWriter(
+  runtime: Runtime,
+  link: NormalizedFullLink,
+  tx: IExtendedStorageTransaction,
+): IndexedCollectionWriter {
+  const writer = new CellImpl(runtime, tx, link, false, undefined, "sqlite");
+  maintenanceWriters.add(writer);
+  return writer;
+}
+
+/**
+ * The handles `createSqliteWriter()` made. Their writes are maintenance's,
+ * marked in the collection's maintenance revision rather than on its handle.
+ */
+const maintenanceWriters = new WeakSet<object>();
 
 /**
  * Mark a cell handle as covered by a document-level sync barrier owned by the
@@ -2394,10 +2437,121 @@ export class CellImpl<T extends FabricValue>
     // object-in-array and would split the handle's inline rule term lists
     // back into per-element linked docs — the split sqliteDatabase stores the
     // handle raw specifically to avoid (a second runtime can't load those).
+    if (maintenanceWriters.has(this)) {
+      // Maintenance writes beside the handlers that add to the collection,
+      // and every one of those reads this handle. Its writes are marked in
+      // a document of their own, so that none of them costs a handler its
+      // commit.
+      maintenanceRevisionCell(this.#runtime, this.space, handle.id, this.#tx)
+        .set(nextMaintenanceRevision());
+      return;
+    }
+    // A collection that names a guard has each of its writers write it too,
+    // here, in the transaction that carries the database write. The guard is
+    // an ordinary cell of the pattern's, so whatever writer policy the
+    // pattern declared on it decides this write, and a refusal takes the
+    // database write with it.
+    const guard = (handle as { guard?: unknown }).guard;
+    if (isCellLink(guard)) {
+      const cell = this.#runtime.getCellFromLink(
+        guard as Parameters<Runtime["getCellFromLink"]>[0],
+        undefined,
+        this.#tx,
+      ) as Cell<number>;
+      // A count, and a fresh one where the cell holds anything else: the
+      // write is what the guard is for, not the value.
+      const count: unknown = cell.get();
+      cell.set(typeof count === "number" ? count + 1 : 1);
+    }
     const rev = ((handle as { rev?: unknown }).rev as number | undefined) ?? 0;
     (this.withTx(this.#tx) as unknown as Cell<{ rev: number }>).key("rev").set(
       rev + 1,
     );
+  }
+
+  /**
+   * Adds a member to this indexed collection: mirrors its declared fields
+   * into the tables of `kind`, in this cell's transaction. Adding a member
+   * the collection already holds refreshes its rows. Throws outside a
+   * transaction, on a receiver that is not an indexed collection, on a kind
+   * it does not declare, and on a member that is not a cell of the
+   * collection's own space.
+   */
+  add(kind: string, member: unknown): void {
+    const collection = this.#indexedCollectionDescriptor();
+    if (collection === undefined || !this.#tx) {
+      throw new TypeError(
+        "`.add()` is only available on an indexed collection, within a " +
+          "transaction (e.g. inside a handler)",
+      );
+    }
+    const { descriptor } = indexedKindOf(collection, String(kind));
+    const cell = asBoundCell(member);
+    if (cell === undefined) {
+      throw new TypeError("an indexed collection holds cells only");
+    }
+    // The collection hears of writes in its own space, so a member elsewhere
+    // would be mirrored once and never followed.
+    if (cell.getAsNormalizedFullLink().space !== this.space) {
+      throw new TypeError(
+        "an indexed collection holds cells of its own space only",
+      );
+    }
+    const rows = projectMember(this.#tx, kind, descriptor, cell);
+    addMemberRows(this, descriptor, rows);
+    // A piece the calling handler has just made is set up only if something
+    // the handler writes refers to it, and a row is not such a write. The
+    // handle is written by every `exec()` already, so it carries the
+    // reference, of the member added last.
+    (this.withTx(this.#tx) as unknown as Cell<{ latest: unknown }>).key(
+      "latest",
+    ).set(cell);
+    const bound = cell.withTx(this.#tx);
+    this.#registerIndexedCollection([
+      bound.getAsNormalizedFullLink().id,
+      bound.resolveAsCell().getAsNormalizedFullLink().id,
+    ], rows);
+  }
+
+  /**
+   * Helper for the indexed-collection methods, which returns this cell's
+   * collection descriptor, or `undefined` when its value is not the handle
+   * of one.
+   */
+  #indexedCollectionDescriptor(): IndexedCollectionDescriptor | undefined {
+    return indexedCollectionDescriptorOf(this.getRaw({ lastNode: "value" }));
+  }
+
+  /**
+   * Helper for the indexed-collection methods, which makes the collection
+   * known to the runtime's maintainer once this transaction's writes are
+   * durable, and has it re-read the members whose own documents are
+   * `members`. A member added in the transaction that creates it can hold
+   * fields this transaction has not written yet, and the commit carrying them
+   * can reach the maintainer before the member's rows exist to be found.
+   */
+  #registerIndexedCollection(
+    members: readonly string[] = [],
+    added?: MemberRows,
+  ): void {
+    const handle = this.resolveAsCell().getAsNormalizedFullLink();
+    const value: unknown = this.getRaw({ lastNode: "value" });
+    if (!isSqliteDbRef(value)) return;
+    const id = value.id;
+    const maintainer = this.#runtime.indexedCollections;
+    const durable = () => {
+      maintainer.register(handle, id);
+      if (added !== undefined) maintainer.noteAdded(handle.space, id, added);
+      maintainer.noteWrites(handle.space, members);
+    };
+    this.#tx!.addCommitCallback((settledTx, result) => {
+      if (result.error) return;
+      const settlement = waveSettlementOf(settledTx);
+      if (settlement === undefined) return durable();
+      void settlement.then((verdict) => {
+        if (!verdict.error) durable();
+      });
+    });
   }
 
   set(newValue: AnyCellWrapping<T> | T): Cell<T> {
@@ -2455,10 +2609,13 @@ export class CellImpl<T extends FabricValue>
     // each addressed from `resolvedToValueLink`, which the unmarked
     // resolution above produced.
     if (
-      this.isStream(resolvedToValueLink, {
-        ...ignoreReadForScheduling,
-        ...writeDestinationRead,
-      })
+      this.isStream(
+        resolvedToValueLink,
+        Object.freeze({
+          ...ignoreReadForScheduling,
+          ...writeDestinationRead,
+        }),
+      )
     ) {
       // Stream behavior
 
@@ -2874,11 +3031,11 @@ export class CellImpl<T extends FabricValue>
             // carries is no input of this run (CFC §18.6.2, write-destination
             // reads; `docs/specs/cfc-write-destination-reads.md`).
             const currentEntries = this.#tx.readValueOrThrow(entriesLink, {
-              meta: {
+              meta: Object.freeze({
                 ...ignoreReadForScheduling,
                 ...mergeableOpRead,
                 ...writeDestinationRead,
-              },
+              }),
             });
             const emittedEntry = {
               eventId: emittedId,
@@ -3385,7 +3542,7 @@ export class CellImpl<T extends FabricValue>
     // exposing content or length to the caller. It joins neither observed
     // labels nor conflict preconditions; explicit handler reads retain both.
     const currentValue = this.#tx.readValueOrThrow(resolvedLink, {
-      meta: { ...mergeableOpRead, ...writeDestinationRead },
+      meta: Object.freeze({ ...mergeableOpRead, ...writeDestinationRead }),
     });
     const cause = this.#frame?.cause;
 
@@ -3481,8 +3638,14 @@ export class CellImpl<T extends FabricValue>
       resolvedLink,
       resolvedLink.schema ?? this.schema,
     );
+    // The destination snapshot decides only whether each candidate is
+    // appended, and where, as `push()`'s does: what is written is the
+    // caller's candidates, and nothing returns to the caller. So it joins
+    // neither observed labels nor conflict preconditions. Resolving an
+    // existing element's link to compare it reads that element's document
+    // as an ordinary observation, and explicit handler reads retain theirs.
     let currentValue = this.#tx.readValueOrThrow(resolvedLink, {
-      meta: mergeableOpRead,
+      meta: Object.freeze({ ...mergeableOpRead, ...writeDestinationRead }),
     });
     const cause = this.#frame?.cause;
     const stored = Array.isArray(currentValue);
@@ -3821,10 +3984,25 @@ export class CellImpl<T extends FabricValue>
 
   remove(
     ref: T extends (infer U)[] ? (U | AnyCell<U>) : never,
+    memberOfKind?: unknown,
   ): void {
     type ElemT = T extends (infer U)[] ? U : never;
     const got = this.get();
     if (!Array.isArray(got)) {
+      // On an indexed collection, `remove()` takes a member out of it, named
+      // as `add()` names one: `ref` is the kind, and `memberOfKind` the
+      // member. The signature a pattern compiles against, which requires
+      // both, is `IndexedCollections.remove()`.
+      const collection = this.#indexedCollectionDescriptor();
+      const member = asBoundCell(memberOfKind);
+      if (collection !== undefined && member !== undefined && this.#tx) {
+        const { kind, descriptor } = indexedKindOf(collection, String(ref));
+        for (const key of memberKeysOf(member.withTx(this.#tx))) {
+          deleteMemberRows(this, kind, descriptor, key);
+        }
+        this.#registerIndexedCollection();
+        return;
+      }
       throw new Error("Can't remove from non-array value");
     }
     const array = got as ElemT[];
@@ -4484,7 +4662,10 @@ export class CellImpl<T extends FabricValue>
     // with this cell's own value).
     if (onlyIfDifferent) {
       const current = this.#tx.readValueOrThrow(this.#link, {
-        meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+        meta: Object.freeze({
+          ...ignoreReadForScheduling,
+          ...internalVerifierRead,
+        }),
       });
       if (valueEqual(current, inlined)) return;
     }
@@ -4523,7 +4704,10 @@ export class CellImpl<T extends FabricValue>
       "writeRedirect",
     );
     const value = this.#tx.readValueOrThrow(writeLink, {
-      meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
+      meta: Object.freeze({
+        ...markReadAsAttemptedWrite,
+        ...allowMutableTransactionRead,
+      }),
     });
     if (value === undefined) {
       throw new Error("Cannot apply a CFC schema to an absent value");
@@ -4537,7 +4721,10 @@ export class CellImpl<T extends FabricValue>
 
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined {
     const metaReadOptions = {
-      meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+      meta: Object.freeze({
+        ...ignoreReadForScheduling,
+        ...internalVerifierRead,
+      }),
     };
     const linkObj = this.getMetaRaw("argument", metaReadOptions);
     if (linkObj === undefined) return undefined;

@@ -1278,6 +1278,15 @@ describe("initialLLMUrl()", () => {
     );
   });
 
+  it("passes over a location that is not a page, such as a worker's file: URL", () => {
+    expect(
+      initialLLMUrl(
+        { protocol: "file:", host: "" },
+        "http://api.example",
+      ),
+    ).toBe("http://api.example/api/ai/llm");
+  });
+
   it("returns a host-relative endpoint without a page or a usable API URL", () => {
     for (const apiUrl of [undefined, "", "not a url"]) {
       expect(initialLLMUrl(undefined, apiUrl)).toBe("//api/ai/llm");

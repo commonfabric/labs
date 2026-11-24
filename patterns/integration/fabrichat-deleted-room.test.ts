@@ -22,6 +22,7 @@ import {
   waitForSettledText,
   waitForText,
 } from "./cfc-browser-helpers.ts";
+import { directRoomLabel } from "./fabrichat-room-fixture.ts";
 import { initializePiecesController } from "./pieces-controller.ts";
 
 const { API_URL, FRONTEND_URL } = env;
@@ -100,7 +101,7 @@ describe("fabrichat-deleted-room", () => {
         await waitForSettledText(
           page,
           "#fabrichat-rooms",
-          `With ${counterpart}`,
+          directRoomLabel(counterpart),
         );
       }
 

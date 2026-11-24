@@ -14,8 +14,8 @@ import {
   CI_RUNS_MAX,
   CI_RUNS_MAX_AGE_DAYS,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "./config.ts";
 import type { GitHubRun } from "./github-runs.ts";
@@ -106,7 +106,10 @@ async function withGithub(
     } else if (isPage(url)) {
       const size = Number(url.searchParams.get("per_page"));
       const start = (Number(url.searchParams.get("page")) - 1) * size;
-      answer = { workflow_runs: all.slice(start, start + size) };
+      answer = {
+        total_count: all.length,
+        workflow_runs: all.slice(start, start + size),
+      };
     } else {
       answer = { workflow_runs: github.filtered?.(url) ?? [] };
     }
@@ -165,25 +168,25 @@ Deno.test("runs(): a second read within the TTL is served from the cache, not re
 
 Deno.test("runsFor: each repo and workflow is cached separately", async () => {
   await withGithub({
-    lists: { [REPO]: [run({ id: 11 })], [LOOM_REPO]: [run({ id: 77 })] },
+    lists: { [REPO]: [run({ id: 11 })], [CFS_REPO]: [run({ id: 77 })] },
   }, async (ctx, requests) => {
     const labs = await ctx.runsFor(runSource(REPO, CI_WORKFLOW, "main"));
     const loom = await ctx.runsFor(
-      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+      runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"),
     );
     // A second repo must not be handed the first repo's cached runs.
     assertEquals(labs.map((r) => r.id), [11]);
     assertEquals(loom.map((r) => r.id), [77]);
-    assertEquals(loom[0].repo, LOOM_REPO);
+    assertEquals(loom[0].repo, CFS_REPO);
     assert(
       pages(requests).some((url) =>
         url.pathname ===
-          `/repos/${LOOM_REPO}/actions/workflows/${LOOM_CI_WORKFLOW}/runs`
+          `/repos/${CFS_REPO}/actions/workflows/${CFS_CI_WORKFLOW}/runs`
       ),
       requests.join(" "),
     );
     const made = requests.length;
-    await ctx.runsFor(runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"));
+    await ctx.runsFor(runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"));
     assertEquals(requests.length, made);
   });
 });
@@ -284,7 +287,9 @@ Deno.test("runs(): a response without workflow_runs reads as no runs", async () 
   Deno.env.set("GH_TOKEN", "test-token");
   globalThis.fetch = (() =>
     Promise.resolve(
-      new Response("{}", { headers: { "content-type": "application/json" } }),
+      new Response('{"total_count":0}', {
+        headers: { "content-type": "application/json" },
+      }),
     )) as typeof fetch;
   try {
     assertEquals(await makeCtx().runs(), []);
@@ -461,10 +466,10 @@ Deno.test("runsFor: a run on main carries what its repo's green branch says of i
   const current = "c".repeat(40);
   const former = "d".repeat(40);
   const recently = new Date(Date.now() - 3_600_000).toISOString();
-  const loom = new GreenBranch(LOOM_REPO, "main-green");
+  const loom = new GreenBranch(CFS_REPO, "main-green");
   await withGithub({
     lists: {
-      [LOOM_REPO]: [
+      [CFS_REPO]: [
         run({ id: TOP, head_sha: current }),
         run({ id: TOP - 1, head_sha: former }),
         run({ id: TOP - 2, head_sha: "e".repeat(40) }),
@@ -477,14 +482,14 @@ Deno.test("runsFor: a run on main carries what its repo's green branch says of i
       ],
     },
     activity: {
-      [LOOM_REPO]: [
+      [CFS_REPO]: [
         { id: 902, after: current, timestamp: recently },
         { id: 901, after: former, timestamp: recently },
       ],
     },
   }, async (ctx, requests) => {
     const main = await ctx.runsFor(
-      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+      runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"),
     );
     assertEquals(main.map((r) => r.green), [
       { branch: "main-green", current: true },
@@ -492,7 +497,7 @@ Deno.test("runsFor: a run on main carries what its repo's green branch says of i
       undefined,
     ]);
     const pulls = await ctx.runsFor(
-      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "pull requests"),
+      runSource(CFS_REPO, CFS_CI_WORKFLOW, "pull requests"),
     );
     assertEquals(pulls.map((r) => r.green), [undefined]);
     // Only the main source reads the branch, and labs has none.
@@ -501,9 +506,9 @@ Deno.test("runsFor: a run on main carries what its repo's green branch says of i
       requests.filter((url) => url.pathname.endsWith("/activity")).map((url) =>
         url.pathname
       ),
-      [`/repos/${LOOM_REPO}/activity`],
+      [`/repos/${CFS_REPO}/activity`],
     );
-  }, (repo) => repo === LOOM_REPO ? loom : undefined);
+  }, (repo) => repo === CFS_REPO ? loom : undefined);
 });
 
 Deno.test("changesRunSource: a delivered run of the source's workflow, in its scope, changes it", () => {
@@ -523,16 +528,16 @@ Deno.test("changesRunSource: a delivered run of the source's workflow, in its sc
   const pull = delivered({ event: "pull_request", head_branch: "feature" });
   assert(changesRunSource(pulls, pull));
   assert(!changesRunSource(main, pull));
-  assert(!changesRunSource(main, delivered({}, LOOM_REPO)));
-  assert(!changesRunSource(main, delivered({}, REPO, LOOM_CI_WORKFLOW)));
+  assert(!changesRunSource(main, delivered({}, CFS_REPO)));
+  assert(!changesRunSource(main, delivered({}, REPO, CFS_CI_WORKFLOW)));
   assert(changesRunSource(main, delivered({}, REPO.toUpperCase())));
 });
 
 Deno.test("changesRunSource: a push to the green branch changes the repository's main runs, and no other push does", () => {
-  const green = new GreenBranch(LOOM_REPO, "main-green", new GitHubWebhooks());
-  const greenOf = (repo: string) => repo === LOOM_REPO ? green : undefined;
-  const main = runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main");
-  const pushed = (ref: string, repo = LOOM_REPO) => ({
+  const green = new GreenBranch(CFS_REPO, "main-green", new GitHubWebhooks());
+  const greenOf = (repo: string) => repo === CFS_REPO ? green : undefined;
+  const main = runSource(CFS_REPO, CFS_CI_WORKFLOW, "main");
+  const pushed = (ref: string, repo = CFS_REPO) => ({
     event: "push",
     payload: pushPayload(repo, ref),
   });
@@ -541,7 +546,7 @@ Deno.test("changesRunSource: a push to the green branch changes the repository's
   assert(!changesRunSource(main, pushed("refs/heads/main"), greenOf));
   assert(
     !changesRunSource(
-      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "pull requests"),
+      runSource(CFS_REPO, CFS_CI_WORKFLOW, "pull requests"),
       pushed("refs/heads/main-green"),
       greenOf,
     ),

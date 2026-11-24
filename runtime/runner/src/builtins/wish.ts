@@ -284,7 +284,11 @@ const FACE_FIELD_TARGETS: ReadonlySet<string> = new Set([
   "#profilePicture",
   "#profileAvatar",
 ]);
-const FACE_FIELDS: ReadonlySet<string> = new Set(["picture", "avatar"]);
+const FACE_FIELDS: ReadonlySet<string> = new Set([
+  "pictureBlob",
+  "picture",
+  "avatar",
+]);
 
 /**
  * Parses the wish target `target`, with `extraPath` (a wish's `path`)
@@ -1407,6 +1411,18 @@ function acquireIntervalNowTimer(
   let timer = timers.get(key);
   if (!timer) {
     const cell = intervalNowCell(runtime, space, intervalMs, tx);
+    // The cell is out of date once the interval passes, whether or not a
+    // runtime is there to write the tick, so a record of what read it proves
+    // a stored output derived from it current only until the tick after the
+    // one the cell holds.
+    runtime.scheduler.noteClockDocument(
+      cell.getAsNormalizedFullLink(),
+      intervalMs,
+      () => {
+        const tick = cell.withTx().sample() as number | null | undefined;
+        return typeof tick === "number" ? tick : undefined;
+      },
+    );
     timer = {
       cell,
       intervalMs,

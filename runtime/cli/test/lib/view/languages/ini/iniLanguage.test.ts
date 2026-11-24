@@ -96,6 +96,16 @@ describe("iniLanguage", () => {
         .id,
     ).toBe("plain-text");
     expect(languageForSource("ini.txt", "[defaults]\n").id).toBe("plain-text");
+    expect(languageForSource("images/certs/server.conf", "[req]\nx = y").id)
+      .toBe("ini");
+    expect(
+      languageForSource("toolshed.service.d.conf", "[Service]\nMemoryMax=4G")
+        .id,
+    ).not.toBe("ini");
+    expect(languageForSource("my.conf", "; db\r\n[mysqld]\r\n").id)
+      .toBe("ini");
+    expect(languageForSource("a.conf", "[1, 2]").id).toBe("plain-text");
+    expect(languageForFile("images/certs/server.conf").id).toBe("plain-text");
     expect(languageForSource("a.cfg", "\f; note\r\n\f[a]\n").id).toBe("ini");
   });
 

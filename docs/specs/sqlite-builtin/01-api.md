@@ -219,6 +219,18 @@ because a declarative diff can't tell a rename from a drop+add. A post-V1 opt-in
 older on-disk versions while still erroring by default. (See
 [08-open-questions.md](./08-open-questions.md) Q9.)
 
+A table can declare secondary indexes in the third argument of `table()`:
+`table(columns, rule, { indexes: [["ts"], ["author_cf_link", "ts"]] })`. Each
+entry lists column names in key order. The database creates each one with
+`CREATE INDEX IF NOT EXISTS` when it creates the table, so adding an index to
+an existing table is additive like adding a table. An index naming a column
+the table does not declare is refused when `table()` is called, and again
+where the statement is generated.
+
+`indexedCollections()` declares a database whose tables the runtime derives
+and keeps current with a set of member cells; see
+[indexed collections](../../features/indexed-collections.md).
+
 ## `db.query<Row>(sql, options?)` — reactive read
 
 ```ts

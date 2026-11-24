@@ -24,6 +24,7 @@ function typeStub(offset: number, type: string): Semantics {
     definitionOf: () => [],
     fileLines: () => null,
     prewarm: () => {},
+    dispose: () => {},
   };
 }
 
@@ -478,6 +479,7 @@ const useIt = beta;`;
   const stub: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: () => null,
     definitionOf: (o) => {
       askedOffset = o;
@@ -742,6 +744,7 @@ ${calls};`;
   const sem: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: () => null,
     definitionOf: () => {
       definitionCalls++;

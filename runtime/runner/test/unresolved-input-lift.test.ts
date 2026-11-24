@@ -1,35 +1,13 @@
-// The RULED unresolved-input lift semantics (OW51, owner ruling
-// 2026-08-21, option (a) — ow51-build-report.md §0):
-//
-//   "server-side should match the current client behavior exactly. also
-//    note that with the lazy proxy based evaluation a lift can throw a
-//    specific error and mark a tx aborted with that reason and that
-//    should also be handled just like an unresolved input, i.e. being
-//    retriggered when any of the reads so far change (just like a
-//    regular call), and the output being `undefined`."
-//
-// The semantics under pin, stated once: a lift read whose LINK CHAIN
-// dead-ends at a HOP TARGET the replica cannot serve (the doc is not
-// there — not yet arrived, or genuinely never written) is an UNRESOLVED
-// INPUT: the run is disposed as a non-event — output `undefined`, no
-// action failure — with the reads so far registered, so the run
-// re-triggers when any of them change (the arriving doc included). A
-// dead-end at the handle's OWN root doc is NOT this shape: a fresh
-// cell's doc does not exist until its first write, and the pervasive
-// `cell.get() ?? fallback` idiom relies on reading `undefined` there
-// (the schema default arm handles declared defaults). The line is the
-// FOLLOWED HOP: a link that points into a doc we cannot serve is
-// pending; a handle whose own doc is absent is absent.
-//
-// OW51's production shape (default-app: note.tsx's `pendingEdit.get()`
-// mid-callback returning `undefined` where the schema says
-// `string|null`, crashing `splitDefinitions` on BOTH the browser client
-// and the toolshed's serving runtime — ow51-undefined-read-report.md)
-// is exactly the hop-target dead-end: the lift's input chain crosses
-// the piece's result/process doc while it is still materializing.
+/**
+ * A lift does not run on a missing link target. While its read is in transit
+ * the runtime makes no output write. A confirmed missing target produces a
+ * schema mismatch without calling the body, and a later write to that
+ * target wakes the lift. A stored null, by contrast, reaches the body.
+ */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { hasSchemaMismatch } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -63,7 +41,7 @@ const SPLITTING_LIFT_PATTERN = [
 
 const TARGET_SCHEMA = { type: ["string", "null"] } as never;
 
-describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
+describe("unresolved lift inputs", () => {
   let server: MemoryV2Server.Server;
   let readerManager: EmulatedStorageManager;
   let readerRuntime: Runtime;
@@ -139,7 +117,7 @@ describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
     return { argument, result };
   };
 
-  it("a hop-target dead-end DISPOSES the run (output undefined, no action failure) and the run re-triggers when the doc arrives", async () => {
+  it("reports a confirmed missing link target and heals when another replica writes it", async () => {
     // The reader itself seeds the ARGUMENT doc with `ref` = a LINK to a
     // target doc NOBODY has written: reading `ref` through the link is
     // a FOLLOWED HOP into a doc no replica can serve yet.
@@ -166,12 +144,8 @@ describe("unresolved-input lift semantics (RULED 2026-08-21)", () => {
     const cancel = result.sink(() => {});
     await readerRuntime.idle();
 
-    // THE RULED DISPOSITION: the run could not proceed on the data
-    // available — a non-event, not a fault. Output `undefined`, and no
-    // action failure was surfaced (pre-fix this is the OW51 TypeError:
-    // `body.split` on the undefined that flowed into the body).
     expect(actionFailures).toEqual([]);
-    expect(result.key("out").get()).toBeUndefined();
+    expect(hasSchemaMismatch(result.key("out").get())).toBe(true);
 
     // The doc ARRIVES: a separate writer runtime creates the target.
     // The registered reads re-trigger the disposed run — "retriggered

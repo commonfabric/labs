@@ -23,7 +23,15 @@ import {
   webSocketRoute,
 } from "@commonfabric/runner/executor/routed-plane";
 import { servingLoopDiagnostics } from "@commonfabric/runner/executor/serving-loop-diagnostics";
-import { DEFAULT_FLUSH_DEADLINE_MS } from "@commonfabric/runner/executor/space-server";
+import {
+  DEFAULT_CURRENCY_EPOCH,
+  DEFAULT_FLUSH_DEADLINE_MS,
+} from "@commonfabric/runner/executor/space-server";
+import {
+  CURRENCY_INDEX_MODES,
+  type CurrencyIndexMode,
+  currencyIndexModeOf,
+} from "@commonfabric/runner/executor/store-currency";
 import {
   SERVING_RUNTIME_EXPERIMENTAL,
   servingRuntimeFactory,
@@ -86,6 +94,14 @@ let route: RoutedPlane | undefined;
  * space). An operator-tunable posture, not a spec constant. */
 export const DEFAULT_MAX_OUTSTANDING_EFFECTS = 16;
 
+/**
+ * The mode a toolshed keeps the currency index in where
+ * `SERVER_EXECUTION_CURRENCY_INDEX` names none (serving-loop.md §1): a piece
+ * its record proves current is left unstarted, and nothing is started
+ * upstream of a stale one.
+ */
+export const DEFAULT_CURRENCY_INDEX: CurrencyIndexMode = "skip";
+
 /** The longest delay `setTimeout()` honors, in milliseconds. */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -99,6 +115,8 @@ export type ServerExecutionEnvPolicy = {
   storeReadThrough?: boolean;
   overlapWaveCommit?: boolean;
   parkedRuntimeRetentionMs?: number;
+  currencyIndex?: CurrencyIndexMode;
+  currencyEpoch?: string;
 };
 
 /**
@@ -124,7 +142,14 @@ export type ServerExecutionEnvPolicy = {
  *   (`SpaceServerPolicy.parkedRuntimeRetentionMs`,
  *   SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS) stays the host's
  *   built-in default unless overridden; the literal `0` keeps none, and
- *   a value past the longest delay a timer honors reads as unset.
+ *   a value past the longest delay a timer honors reads as unset;
+ * - the currency index (`SpaceServerPolicy.currencyIndex`,
+ *   SERVER_EXECUTION_CURRENCY_INDEX) defaults to `defaultCurrencyIndex`,
+ *   and to none where that is not given; the literal `off` keeps none,
+ *   the name of a mode (`CURRENCY_INDEX_MODES`) selects it, and anything
+ *   else warns and keeps the default. Its epoch (`SpaceServerPolicy.currencyEpoch`) is
+ *   SERVER_EXECUTION_CURRENCY_EPOCH as written, or else
+ *   `DEFAULT_CURRENCY_EPOCH`, which no build or process decides.
  *
  * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
  * ("abc", "-1", "1.5") falls back to the default and warns, instead of
@@ -136,6 +161,7 @@ export type ServerExecutionEnvPolicy = {
 export function serverExecutionPolicyFromEnv(
   envGet: EnvReader,
   warn: (message: string) => void = (message) => console.warn(message),
+  defaultCurrencyIndex?: CurrencyIndexMode,
 ): ServerExecutionEnvPolicy {
   /** A strictly non-negative decimal integer, or undefined for anything
    * else (garbage, sign, fraction, exponent — `parseInt` would accept
@@ -236,6 +262,27 @@ export function serverExecutionPolicyFromEnv(
         "the overlapped wave commit stays OFF",
     );
   }
+  const currencyRaw = readRaw("SERVER_EXECUTION_CURRENCY_INDEX");
+  let currencyIndex = defaultCurrencyIndex;
+  const currencyNamed = currencyIndexModeOf(currencyRaw);
+  if (currencyNamed !== undefined) {
+    currencyIndex = currencyNamed;
+  } else if (currencyRaw === "off") {
+    currencyIndex = undefined;
+  } else if (currencyRaw !== undefined) {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_CURRENCY_INDEX=" +
+        `${JSON.stringify(currencyRaw)} (expected ${
+          CURRENCY_INDEX_MODES.map((mode) => `"${mode}"`).join(", ")
+        } or "off"); the currency index stays ${
+          defaultCurrencyIndex === undefined
+            ? "OFF"
+            : `"${defaultCurrencyIndex}"`
+        }`,
+    );
+  }
+  const currencyEpoch = readRaw("SERVER_EXECUTION_CURRENCY_EPOCH") ??
+    DEFAULT_CURRENCY_EPOCH;
   return {
     ...(flushDeadlineMs !== undefined ? { flushDeadlineMs } : {}),
     ...(flushDeadlineMaxMs !== undefined ? { flushDeadlineMaxMs } : {}),
@@ -246,7 +293,36 @@ export function serverExecutionPolicyFromEnv(
     ...(parkedRuntimeRetentionMs !== undefined
       ? { parkedRuntimeRetentionMs }
       : {}),
+    ...(currencyIndex !== undefined ? { currencyIndex } : {}),
+    ...(currencyIndex !== undefined ? { currencyEpoch } : {}),
   };
+}
+
+/** What each currency index mode has a serving loop do, for the log. */
+const CURRENCY_INDEX_EFFECT: Record<CurrencyIndexMode, string> = {
+  record: "records and judges, and starts every demanded piece",
+  skip: "leaves unstarted a piece its record proves current, and starts " +
+    "nothing upstream of a stale one",
+  "start-upstream": "leaves unstarted a piece its record proves current, " +
+    "and starts the pieces upstream of one that is stale only through them",
+};
+
+/**
+ * The line a starting serving host logs of the currency index mode in
+ * force, `mode`, or of keeping no index where it is `undefined`.
+ */
+function currencyIndexReport(mode: CurrencyIndexMode | undefined): string {
+  const byDefault = `default is "${DEFAULT_CURRENCY_INDEX}"`;
+  if (mode === undefined) {
+    return "Server-execution v2: currency index OFF by " +
+      "SERVER_EXECUTION_CURRENCY_INDEX=off (every demanded piece starts; " +
+      `${byDefault})`;
+  }
+  return `Server-execution v2: currency index "${mode}" ` +
+    (mode === DEFAULT_CURRENCY_INDEX
+      ? "(the default)"
+      : `by SERVER_EXECUTION_CURRENCY_INDEX (${byDefault})`) +
+    `: ${CURRENCY_INDEX_EFFECT[mode]}`;
 }
 
 /**
@@ -586,7 +662,23 @@ export function startServerExecutionHost(options: {
         "production default is ON)",
     );
   }
-  const policy = serverExecutionPolicyFromEnv(envGet);
+  const policy = serverExecutionPolicyFromEnv(
+    envGet,
+    undefined,
+    DEFAULT_CURRENCY_INDEX,
+  );
+  console.log(currencyIndexReport(policy.currencyIndex));
+  if (
+    policy.currencyEpoch !== undefined &&
+    policy.currencyEpoch !== DEFAULT_CURRENCY_EPOCH
+  ) {
+    console.log(
+      "Server-execution v2: currency index trusts the records of epoch " +
+        `${JSON.stringify(policy.currencyEpoch)} alone, by ` +
+        "SERVER_EXECUTION_CURRENCY_EPOCH (default is " +
+        `${JSON.stringify(DEFAULT_CURRENCY_EPOCH)})`,
+    );
+  }
   if (policy.storeReadThrough !== true) {
     console.log(
       "Server-execution v2: store read-through OFF by " +

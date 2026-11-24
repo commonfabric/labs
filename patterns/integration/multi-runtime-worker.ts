@@ -64,6 +64,7 @@ import {
   type CfcWriteFloorMode,
   hostGestureProvenance,
   markRendererTrustedEvent,
+  readStoredCfcMetadata,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
 import {
@@ -1256,6 +1257,29 @@ const handlers: Record<
       value: res.ok?.value,
       error: res.error?.message,
     };
+  },
+
+  /**
+   * The label-map entries stored for the document at an explicit storage
+   * address, each label resolved: one the envelope holds by reference reads
+   * as the content of its `cid:` label document, the same as one held
+   * inline. None when the document stores no envelope.
+   */
+  async storedLabelEntries({ id, space, scope }) {
+    const tx = controller().runtime.edit();
+    let entries;
+    try {
+      entries = readStoredCfcMetadata(tx, {
+        space: space as never,
+        id: id as string,
+        ...(scope !== undefined ? { scope: scope as never } : {}),
+      })?.labelMap.entries ?? [];
+    } catch (error) {
+      tx.abort();
+      throw error;
+    }
+    await tx.commit().settled;
+    return entries as unknown as FabricValue;
   },
 
   /**

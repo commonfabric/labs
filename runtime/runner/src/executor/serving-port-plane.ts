@@ -309,7 +309,7 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>> {
+  ): Promise<ReadonlyArray<Engine.SessionOverwrite>> {
     return this.#reads.sessionOverwritePathsSince(
       space,
       doc,
@@ -501,6 +501,60 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
+  advanceCurrency(
+    space: string,
+  ): ReturnType<HostMemoryServer["advanceCurrency"]> {
+    return this.#endpoint.request("server.advanceCurrency", { space });
+  }
+
+  /** @inheritDoc */
+  storeCurrencyRecords(
+    space: string,
+    batch: Parameters<HostMemoryServer["storeCurrencyRecords"]>[1],
+  ): ReturnType<HostMemoryServer["storeCurrencyRecords"]> {
+    return this.#endpoint.request("server.storeCurrencyRecords", {
+      space,
+      batch,
+    });
+  }
+
+  /** @inheritDoc */
+  judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: {
+      excludePrincipal?: string;
+      epoch: string;
+      running?: readonly string[];
+    },
+  ): ReturnType<HostMemoryServer["judgeCurrencyRoots"]> {
+    return this.#endpoint.request("server.judgeCurrencyRoots", {
+      space,
+      roots: [...roots],
+      excludePrincipal: options.excludePrincipal,
+      epoch: options.epoch,
+      running: options.running === undefined ? undefined : [
+        ...options.running,
+      ],
+    });
+  }
+
+  /** @inheritDoc */
+  setCarriedDemand(
+    space: string,
+    reader: string,
+    rows: Parameters<HostMemoryServer["setCarriedDemand"]>[2],
+    options: { excludePrincipal?: string } = {},
+  ): ReturnType<HostMemoryServer["setCarriedDemand"]> {
+    return this.#endpoint.request("server.setCarriedDemand", {
+      space,
+      reader,
+      rows: [...rows],
+      excludePrincipal: options.excludePrincipal,
+    });
+  }
+
+  /** @inheritDoc */
   foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,
@@ -664,6 +718,9 @@ export class ServingPlane {
     endpoint.onNotice("observer.viewsChanged", ({ space, sessionId }) => {
       this.#viewInterests.noteChanged(space);
       this.#observer?.viewsChanged?.(space, sessionId);
+    });
+    endpoint.onNotice("observer.currencyChanged", ({ space }) => {
+      this.#observer?.currencyChanged?.(space);
     });
     endpoint.onNotice("observer.sessionChanged", ({ event }) => {
       this.#sessions.apply(event);

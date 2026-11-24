@@ -84,17 +84,20 @@ const logger = getLogger("runner.map", { enabled: true, level: "warn" });
  *
  * The goal is to keep the output array current without recomputing too much.
  *
- * Elements are tracked by identity, not position: each slot's link is
- * resolved without reading the element (`listSlotResolutions`), and the
- * link it ends on, with how many times that link has already appeared in
- * the list, is the element's key (`listElementKeys`). So:
+ * Elements are tracked by identity, not position: the link each slot holds,
+ * read from the list without reading anything it reaches (`listSlotLinks`),
+ * with how many times that link has already appeared in the list, is the
+ * element's key (`listElementKeys`). So:
  *
- * - A slot holding a link keys by the entity the link resolves to. The key
- *   survives a move to another position, and the child is reused there.
+ * - A slot holding a link keys by that link. The key survives a move to
+ *   another position, and the child is reused there. Two slots that reach
+ *   one document by different links are two elements, and a link whose
+ *   target moves keeps its child, which reads through the link.
  * - A slot holding an inline value keys by its place in the list, since the
  *   value has no entity of its own. A value that shifts position gets a
  *   new run (acceptable trade-off).
- * - A slot whose links run in a cycle keys by its place as well.
+ * - A slot whose link leads back into its own place keys by its place as
+ *   well.
  *
  * @param list - A doc containing an array of values to map over.
  * @param op - A pattern to apply to each value.
@@ -243,7 +246,7 @@ function createMapInstance(
         });
         // The list is read as the reconcile reads it, its membership
         // declared onward onto the container. Only the raw list is
-        // needed here, so the slots are not resolved.
+        // needed here, not its slots' links (`listSlotLinks`).
         const { rawList: raw } = listMembershipRead(
           settleTx,
           inputsCell,

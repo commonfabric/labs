@@ -28,6 +28,51 @@ describe("engine-side exec", () => {
     db.close();
   });
 
+  it("adds a column an existing table's declaration has gained", () => {
+    runWrite(db, "INSERT INTO messages (body, ts) VALUES (?, ?)", ["hi", 1]);
+    ensureTables(db, {
+      messages: table({
+        id: "integer primary key",
+        author_cf_link: cfLink(),
+        body: "text",
+        ts: "integer",
+        pinned: "integer default 0",
+      }),
+    });
+
+    expect(runQuery(db, "SELECT body, pinned FROM messages")).toEqual([
+      { body: "hi", pinned: 0 },
+    ]);
+  });
+
+  it("throws on a gained column an existing table cannot take", () => {
+    expect(() =>
+      ensureTables(db, {
+        messages: table({
+          id: "integer primary key",
+          author_cf_link: cfLink(),
+          body: "text",
+          ts: "integer",
+          slug: "text not null",
+        }),
+      })
+    ).toThrow("cannot be added");
+  });
+
+  it("creates the indexes a table declares", () => {
+    ensureTables(db, {
+      edges: table({ source: "text", target: "text" }, undefined, {
+        indexes: [["target"]],
+      }),
+    });
+    const plan = db.prepare(
+      "EXPLAIN QUERY PLAN SELECT source FROM edges WHERE target = ?",
+    ).all("x") as { detail: string }[];
+    expect(plan.map((row) => row.detail).join(" ")).toContain(
+      "edges__idx(target)",
+    );
+  });
+
   it("creates declared tables (additive)", () => {
     // The table exists iff querying it succeeds (sqlite_master is blocked by the
     // guard, which is correct — patterns must not introspect the schema catalog).

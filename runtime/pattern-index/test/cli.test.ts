@@ -2,7 +2,10 @@ import { deployedPieceRef } from "../src/client.ts";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
-import { fromBase64url } from "@commonfabric/bytes/base64url";
+import {
+  fromBase64url,
+  toUnpaddedBase64url,
+} from "@commonfabric/bytes/base64url";
 import { checkIndexChain, issueIndexChain } from "../src/membership.ts";
 import { PatternIndexStore } from "../src/store.ts";
 import { encodeDelegationChains, Identity } from "@commonfabric/identity";
@@ -260,11 +263,11 @@ describe("cli", () => {
         [{ op: "feedback", verdict: "up" }, "patternId is required"],
         [
           { op: "getPattern", includeSource: true },
-          "op must be search, feedback, source, whoami, admit, join, view, getSharing or setSharing",
+          "op must be search, feedback, source, whoami, admit, join, chain, view, getSharing or setSharing",
         ],
         [
           null,
-          "op must be search, feedback, source, whoami, admit, join, view, getSharing or setSharing",
+          "op must be search, feedback, source, whoami, admit, join, chain, view, getSharing or setSharing",
         ],
         ["{", "request body is not JSON"],
       ]
@@ -711,6 +714,110 @@ describe("cli", () => {
     });
 
     expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
+  });
+
+  it("hands over the chain the kept root issued, which joins another machine holding the key", async () => {
+    const stores = `${directory}/stores`;
+    const store = new PatternIndexStore(join(stores, new URL(baseUrl).host));
+    const root = await store.createRootKey();
+    await store.recordMembership({
+      handle: "p-1",
+      role: "user",
+      root: root.did(),
+    });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      { op: "chain" },
+      `${directory}/identity.key`,
+      stores,
+    );
+
+    const answer = JSON.parse(output.stdout);
+    expect(answer.ok).toBe(true);
+    expect(calls).toEqual([]);
+    reply = () => Response.json({ handle: "p-1", role: "user" });
+    const elsewhere = `${directory}/elsewhere`;
+    const joined = await callHelper(
+      directory,
+      baseUrl,
+      { op: "join", chain: answer.value.chain },
+      `${directory}/identity.key`,
+      elsewhere,
+    );
+    expect(JSON.parse(joined.stdout)).toMatchObject({
+      ok: true,
+      value: { handle: "p-1", root: root.did(), rootKeptHere: false },
+    });
+    expect(calls[0].body.proofs).toEqual(
+      (await store.chainFor(did as `did:key:${string}`))!.map((link) =>
+        toUnpaddedBase64url(link)
+      ),
+    );
+  });
+
+  it("refuses a chain where it holds no membership, or where the identity is the root", async () => {
+    const stores = `${directory}/stores`;
+    const none = await callHelper(
+      directory,
+      baseUrl,
+      { op: "chain" },
+      `${directory}/identity.key`,
+      stores,
+    );
+    expect(JSON.parse(none.stdout)).toMatchObject({ ok: false, status: 404 });
+
+    const store = new PatternIndexStore(join(stores, new URL(baseUrl).host));
+    await store.recordMembership({
+      handle: "p-1",
+      role: "user",
+      root: did as `did:key:${string}`,
+    });
+    const own = await callHelper(
+      directory,
+      baseUrl,
+      { op: "chain" },
+      `${directory}/identity.key`,
+      stores,
+    );
+    expect(JSON.parse(own.stdout)).toMatchObject({ ok: false, status: 409 });
+
+    // A chain held from some other root is never handed over as this member's.
+    const elsewhere = new PatternIndexStore(
+      join(`${directory}/other`, new URL(baseUrl).host),
+    );
+    await elsewhere.recordMembership({
+      handle: "p-2",
+      role: "user",
+      root: (await Identity.fromPassphrase("member root")).did(),
+    });
+    await elsewhere.recordChain(
+      did as `did:key:${string}`,
+      await issueIndexChain({
+        issuer: await Identity.fromPassphrase("another root"),
+        to: did as `did:key:${string}`,
+        held: [],
+      }),
+    );
+    const foreign = await callHelper(
+      directory,
+      baseUrl,
+      { op: "chain" },
+      `${directory}/identity.key`,
+      `${directory}/other`,
+    );
+    expect(JSON.parse(foreign.stdout)).toMatchObject({
+      ok: false,
+      status: 409,
+    });
+
+    const unstored = await callHelper(directory, baseUrl, { op: "chain" });
+    expect(JSON.parse(unstored.stdout)).toMatchObject({
+      ok: false,
+      status: 400,
+    });
     expect(calls).toEqual([]);
   });
 

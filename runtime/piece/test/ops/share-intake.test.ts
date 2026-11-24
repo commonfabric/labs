@@ -35,8 +35,9 @@ const someoneElse = (await Identity.fromPassphrase("share intake other")).did();
 const HOST = "https://home.example";
 
 // A Home pattern reduced to what the intake reads and the streams it sends,
-// whose `registerSharedSpace` and `chatManager.accept` record each event they
-// are sent.
+// whose `registerSharedSpace`, `chatManager.accept` and `chatManager.joinRoom`
+// record each event they are sent. Its `joinRoom` records the notice an event
+// names in the catalog's `notices`, as the chat manager's does.
 const program: RuntimeProgram = {
   main: "/home.tsx",
   files: [{
@@ -49,6 +50,7 @@ type Pointer = { piece?: Cell<{ name?: string }> };
 type Catalog = {
   entries: Record<string, unknown>;
   offers: Record<string, unknown>;
+  notices?: Record<string, number>;
 };
 
 type Registration = {
@@ -64,6 +66,10 @@ type Result =
   | { status: "conflict"; reason: string; space?: string; registration?: string };
 
 type Acceptance = { room?: Cell<unknown>; keepArchived?: boolean };
+
+type Notice = { from: string; id: string; sharedAt: number };
+
+type Joining = { room?: Cell<unknown>; notice?: Notice };
 
 // Returns a conflict for a registration titled \`Conflicting\`, as Home's own
 // handler does for a space already registered under another kind,
@@ -103,6 +109,25 @@ const accept = handler<
   });
 });
 
+// While \`refusing\` is set it throws, as \`registerSharedSpace\` does.
+const joinRoom = handler<
+  Joining,
+  {
+    joined: Writable<{ space?: string | undefined; notice?: Notice | undefined }[]>;
+    catalog: Writable<Catalog>;
+    refusing: Writable<boolean>;
+  }
+>((event, { joined, catalog, refusing }) => {
+  if (refusing.get()) throw new Error("Home cannot join this now");
+  joined.push({ space: spaceOf(event.room), notice: event.notice });
+  const notice = event.notice;
+  if (notice === undefined) return;
+  catalog.key("notices").set({
+    ...(catalog.get().notices ?? {}),
+    [JSON.stringify([notice.from, notice.id])]: notice.sharedAt,
+  });
+});
+
 export default pattern(() => {
   const privateInbox = new Writable<Pointer>({}).for("privateInbox");
   const retainedPrivateInboxes = new Writable<Cell<{ name?: string }>[]>([])
@@ -114,6 +139,9 @@ export default pattern(() => {
   const accepted = new Writable<{ space?: string | undefined; keepArchived?: boolean | undefined }[]>(
     [],
   ).for("accepted");
+  const joined = new Writable<{ space?: string | undefined; notice?: Notice | undefined }[]>(
+    [],
+  ).for("joined");
   return {
     privateInbox,
     retainedPrivateInboxes,
@@ -122,7 +150,11 @@ export default pattern(() => {
     refusing,
     registerSharedSpace: registerSharedSpace({ registered, refusing }),
     accepted,
-    chatManager: { accept: accept({ accepted }) },
+    joined,
+    chatManager: {
+      accept: accept({ accepted }),
+      joinRoom: joinRoom({ joined, catalog: sharedSpaceCatalog, refusing }),
+    },
   };
 });`,
   }],
@@ -361,6 +393,70 @@ describe("share-intake", () => {
       receivedAt: 1_700_000_000_000,
       ...fields,
     };
+  }
+
+  /**
+   * A notice from the sender that the room in `space` changed its title,
+   * shared at `sharedAt`, with `fields` replacing its own.
+   */
+  function noticeOf(
+    space: MemorySpace,
+    sharedAt: number,
+    fields: Row = {},
+  ): Row {
+    return offerOf(space, `changed:${space}`, {
+      title: "",
+      changes: { title: true },
+      sharedAt,
+      receivedAt: sharedAt,
+      ...fields,
+    });
+  }
+
+  /**
+   * Has Home's catalog list each of `rooms`, by space, as a room in the state
+   * given, with the notice marks `notices` holds.
+   */
+  async function listInCatalog(
+    rooms: Record<string, string>,
+    notices: Record<string, number> = {},
+  ): Promise<void> {
+    await setHome("sharedSpaceCatalog", {
+      entries: Object.fromEntries(
+        Object.entries(rooms).map(([space, state]) => [space, {
+          space,
+          host: HOST,
+          kind: "fabrichat-room",
+          state,
+          revision: "1:x",
+        }]),
+      ),
+      offers: {},
+      notices,
+    });
+  }
+
+  /** The catalog's key for the notice of the room in `space` from the sender. */
+  function noticeKey(space: MemorySpace): string {
+    return JSON.stringify([sender, `changed:${space}`]);
+  }
+
+  /**
+   * What Home's `chatManager.joinRoom` has been sent, once the intake's
+   * handling and the joins it sent have settled.
+   */
+  async function joinedNow(intake: ShareIntake): Promise<Row[]> {
+    await intake.idle();
+    await runtime.idle();
+    return (await home.key("joined" as never).asSchema(registeredSchema)
+      .pull() ?? []) as Row[];
+  }
+
+  /** Replaces the offers the private inbox holds with `rows`. */
+  async function replaceRows(rows: Row[]): Promise<void> {
+    await runtime.editWithRetry((tx) =>
+      inbox.withTx(tx).key("offers" as never).set(rows as never)
+    );
   }
 
   /** Appends `rows` to the offers `target` holds, the private inbox by default. */
@@ -1527,6 +1623,325 @@ describe("share-intake", () => {
       );
 
       expect(registeredIds(registered)).toEqual(["barrier"]);
+    });
+  });
+
+  describe("a notice that a room changed", () => {
+    /** When the notices in these cases were shared. */
+    const SHARED_AT = 1_700_000_001_000;
+
+    it("has Home's chat manager join its room, naming the notice, and is not registered, when the catalog lists the room as saved", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      const intake = start();
+      await deliver([noticeOf(space, SHARED_AT)]);
+
+      expect(await joinedNow(intake)).toEqual([{
+        space,
+        notice: { from: sender, id: `changed:${space}`, sharedAt: SHARED_AT },
+      }]);
+      expect(await registeredNow()).toEqual([]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, `changed:${space}`),
+      ).toEqual(["sent"]);
+    });
+
+    it("is acted on though Home's catalog holds a receipt for its sender and `id`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const id = `changed:${space}`;
+      await setHome("sharedSpaceCatalog", {
+        entries: {
+          [space]: {
+            space,
+            host: HOST,
+            kind: "fabrichat-room",
+            state: "saved",
+            revision: "1:x",
+          },
+        },
+        offers: {
+          [JSON.stringify([sender, id])]: {
+            from: sender,
+            id,
+            space,
+            host: HOST,
+            kind: "fabrichat-room",
+          },
+        },
+      });
+      const intake = start();
+      await deliver([noticeOf(space, SHARED_AT)]);
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        space,
+      ]);
+    });
+
+    it("is acted on again when its row is replaced by one shared later", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      const intake = start();
+      await deliver([noticeOf(space, SHARED_AT)]);
+      await joinedNow(intake);
+      await replaceRows([noticeOf(space, SHARED_AT + 1)]);
+
+      expect(
+        (await joinedNow(intake)).map((each) =>
+          (each.notice as Row | undefined)?.sharedAt
+        ),
+      ).toEqual([SHARED_AT, SHARED_AT + 1]);
+    });
+
+    it("is not acted on, nor its space followed, when the catalog marks its `sharedAt` handled, while one the catalog does not mark is", async () => {
+      // As an intake started after the first notice was handled finds the
+      // two: the catalog's mark, not anything the intake held, is what says
+      // a notice was handled.
+
+      const handled = await offeredSpace({ [sender]: "WRITE" });
+      const unhandled = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog(
+        { [handled]: "saved", [unhandled]: "saved" },
+        { [noticeKey(handled)]: SHARED_AT },
+      );
+      await deliver([
+        noticeOf(handled, SHARED_AT),
+        noticeOf(unhandled, SHARED_AT),
+      ]);
+      const intake = start();
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        unhandled,
+      ]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, `changed:${handled}`),
+      ).toEqual(["notice-handled"]);
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(0);
+    });
+
+    it("is acted on when the catalog marks another `sharedAt` handled, a later one included", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog(
+        { [space]: "saved" },
+        { [noticeKey(space)]: SHARED_AT + 1_000 },
+      );
+      await deliver([noticeOf(space, SHARED_AT)]);
+      const intake = start();
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        space,
+      ]);
+    });
+
+    it("is acted on when its inbox next changes after Home's handling of its join failed", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      await refuseRegistrations(true);
+      const intake = start();
+      await deliver([noticeOf(space, SHARED_AT)]);
+      expect(await joinedNow(intake)).toEqual([]);
+      await refuseRegistrations(false);
+      const other = await offeredSpace({ [sender]: "WRITE" });
+      await deliver([offerOf(other, "after the failed join")]);
+      await registeredThrough("after the failed join");
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        space,
+      ]);
+    });
+
+    it("is left undecided while Home's catalog cannot be read, and acted on when its inbox next changes once it can be", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      let readable = false;
+      // Home, but for a catalog whose every read fails until `readable`.
+      const unreadable = {
+        key: (name: string) =>
+          name === "sharedSpaceCatalog" && !readable
+            ? {
+              asSchema: () => ({
+                pull: () => Promise.reject(new Error("catalog unreadable")),
+              }),
+            }
+            : home.key(name as never),
+      };
+      const intake = startShareIntakeOf(
+        runtime,
+        unreadable as never,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await deliver([noticeOf(space, SHARED_AT)]);
+      expect(await joinedNow(intake)).toEqual([]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, `changed:${space}`),
+      ).toEqual([]);
+      readable = true;
+      const other = await offeredSpace({ [sender]: "WRITE" });
+      await deliver([offerOf(other, "once the catalog reads")]);
+      await registeredThrough("once the catalog reads");
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        space,
+      ]);
+    });
+
+    it("is sent once for two rows holding the same sender, `id` and `sharedAt`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      const intake = start();
+      await deliver([
+        noticeOf(space, SHARED_AT),
+        noticeOf(space, SHARED_AT, { ownerOrigin: "" }),
+      ]);
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        space,
+      ]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, `changed:${space}`)
+          .sort(),
+      ).toEqual(["notice-handled", "sent"]);
+    });
+
+    describe("is ignored", () => {
+      // Each notice is delivered ahead of an offer that passes, whose
+      // registration says the notice was decided, since the intake decides an
+      // inbox's rows in order.
+
+      /**
+       * Delivers `notice`, of a room the catalog lists as `rooms` says, ahead
+       * of an offer that passes, and returns what Home's chat manager was
+       * sent to join and what the intake decided about the notice, once the
+       * offer is registered.
+       */
+      async function ignoring(
+        notice: Row,
+        rooms: Record<string, string>,
+      ): Promise<
+        { joined: Row[]; registered: unknown[]; decisions: string[] }
+      > {
+        await listInCatalog(rooms);
+        const intake = start();
+        const registered = await deliverThenBarrier(notice);
+        return {
+          joined: await joinedNow(intake),
+          registered: registeredIds(registered),
+          decisions: intake.accessForTestingOnly.decisionsFor(
+            sender,
+            notice.id as string,
+          ),
+        };
+      }
+
+      /** What {@link ignoring} returns for a notice the intake ignores. */
+      const IGNORED = {
+        joined: [],
+        registered: ["barrier"],
+        decisions: ["notice-ignored"],
+      };
+
+      it("when the catalog does not list its room", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(await ignoring(noticeOf(space, SHARED_AT), {})).toEqual(IGNORED);
+      });
+
+      it("when the catalog lists its room as archived", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(
+          await ignoring(noticeOf(space, SHARED_AT), { [space]: "archived" }),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its `id` is not `changed:` followed by its space", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(
+          await ignoring(
+            noticeOf(space, SHARED_AT, { id: "changed:elsewhere" }),
+            { [space]: "saved" },
+          ),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its `changes` says nothing of the title", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(
+          await ignoring(
+            noticeOf(space, SHARED_AT, { changes: { members: true } }),
+            { [space]: "saved" },
+          ),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its `changes` is not a record", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(
+          await ignoring(
+            noticeOf(space, SHARED_AT, { changes: "title" }),
+            { [space]: "saved" },
+          ),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its `kind` is not `fabrichat-room`", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(
+          await ignoring(
+            noticeOf(space, SHARED_AT, { kind: "loom" }),
+            { [space]: "saved" },
+          ),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its envelope is malformed", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(
+          await ignoring(
+            noticeOf(space, SHARED_AT, { host: "not an origin" }),
+            { [space]: "saved" },
+          ),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its `host` is not its own origin", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(
+          await ignoring(
+            noticeOf(space, SHARED_AT, { host: "https://elsewhere.example" }),
+            { [space]: "saved" },
+          ),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its sender holds no `WRITE` or `OWNER` entry of its own in its room's space", async () => {
+        const space = await offeredSpace({
+          [someoneElse]: "WRITE",
+          "*": "WRITE",
+        });
+
+        expect(
+          await ignoring(noticeOf(space, SHARED_AT), { [space]: "saved" }),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its room's space fails vetting, without following the space", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" }, {
+          root: "misplaced",
+        });
+
+        expect(
+          await ignoring(noticeOf(space, SHARED_AT), { [space]: "saved" }),
+        ).toEqual(IGNORED);
+        expect(intake?.accessForTestingOnly.followedSpaces).toBe(0);
+      });
     });
   });
 

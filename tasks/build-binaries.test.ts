@@ -235,6 +235,23 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
       join(root, "runtime", "cli", "lib", "multi-user-test-worker.ts"),
     );
     assertEquals(
+      config.cliParseWorkerPath(),
+      join(root, "runtime", "cli", "lib", "view", "parseworker.ts"),
+    );
+    assertEquals(
+      config.cliProgramWorkerPath(),
+      join(
+        root,
+        "runtime",
+        "cli",
+        "lib",
+        "view",
+        "languages",
+        "typescript",
+        "programworker.ts",
+      ),
+    );
+    assertEquals(
       config.toolshedServingWorkerPath(),
       join(root, "runtime", "toolshed", "lib", "serving-worker.ts"),
     );
@@ -247,6 +264,8 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
     assert(
       config.includePaths("toolshed").includes(config.compileWorkerPath()),
     );
+    assert(config.includePaths("cf").includes(config.cliParseWorkerPath()));
+    assert(config.includePaths("cf").includes(config.cliProgramWorkerPath()));
     assertEquals(config.fusePackagePath(), join(root, "runtime", "fuse"));
     assertEquals(config.distDir(), join(root, "dist"));
     assertEquals(config.distPath("cf"), join(root, "dist", "cf"));
@@ -1253,6 +1272,22 @@ Deno.test("unusedGrammarDirectories returns every directory of a grammar's packa
       () => unusedGrammarDirectories([grammar("y", `${root}/loose/y.wasm`)]),
       Error,
       `No package holds the y grammar ${root}/loose/y.wasm`,
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("unusedGrammarDirectories lists a package's directories once for grammars that share it", async () => {
+  const root = await Deno.makeTempDir({ prefix: "grammar-package-" });
+  try {
+    await writeFile(`${root}/pkg/package.json`, "{}");
+    await writeFile(`${root}/pkg/tree-sitter-x.wasm`, "");
+    await writeFile(`${root}/pkg/src/parser.c`, "");
+    const wasmUrl = () => toFileUrl(`${root}/pkg/tree-sitter-x.wasm`).href;
+    assertEquals(
+      unusedGrammarDirectories([{ id: "x", wasmUrl }, { id: "y", wasmUrl }]),
+      [`${root}/pkg/src`],
     );
   } finally {
     await Deno.remove(root, { recursive: true });

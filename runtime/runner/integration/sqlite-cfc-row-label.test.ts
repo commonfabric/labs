@@ -12,7 +12,10 @@
  */
 
 import { hasError } from "@commonfabric/data-model/availability";
+import { equal } from "@std/assert";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 import app from "../../toolshed/app.ts";
 import { cfcLabelViewForDereferenceTraces } from "../src/cfc/label-view.ts";
@@ -63,45 +66,31 @@ async function runTest(base: URL) {
         result.key("seed").withTx(tx).send({})
       );
 
-      // Wait until all three queries settled (q + qSkim with rows, qCount
-      // with an error).
-      const deadline = Date.now() + 30000;
-      let ready = false;
-      while (Date.now() < deadline) {
-        await runtime.idle();
-        await runtime.storageManager.synced();
-        const arr = result.key("q").resolveAsCell().key("rows").getRaw() as
-          | unknown[]
-          | undefined;
-        const skim = result.key("qSkim").resolveAsCell().key("rows").getRaw() as
-          | unknown[]
-          | undefined;
-        const count = result.key("qCount").resolveAsCell().getRaw() as
-          | { reason?: string }
-          | undefined;
-        const cleared = result.key("qClear").resolveAsCell().key("rows")
-          .getRaw() as
-            | unknown[]
-            | undefined;
-        if (
-          Array.isArray(arr) && arr.length === 2 && Array.isArray(skim) &&
-          count?.reason === "error" && Array.isArray(cleared)
-        ) {
-          ready = true;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      if (!ready) {
-        const dump = (k: string) => result.key(k).resolveAsCell().getRaw();
-        throw new Error(
-          "queries never settled; " + JSON.stringify({
-            q: dump("q"),
-            qCount: dump("qCount"),
-            qSkim: dump("qSkim"),
-          }),
-        );
-      }
+      // An empty array can predate both inserts. Wait for each projection's
+      // own evidence that it has seen the seeded rows.
+      await Promise.all([
+        waitForCellValue(
+          runtime,
+          result.key("q").key("rows"),
+          (rows) => Array.isArray(rows) && rows.length === 2,
+          { stuckLabel: "email rows" },
+        ),
+        waitForCellValue(
+          runtime,
+          result.key("qSkim").key("rows"),
+          (rows) => Array.isArray(rows) && rows.length > 0,
+          { stuckLabel: "ceiling-filtered rows" },
+        ),
+        waitForCellValue(runtime, result.key("qCount"), hasError, {
+          stuckLabel: "aggregate query refusal",
+        }),
+        waitForCellValue(
+          runtime,
+          result.key("qClear").key("withheld"),
+          (count) => count === 2,
+          { stuckLabel: "clearance-filtered row count" },
+        ),
+      ]);
 
       // THE POINT: distinct per-row labels, re-derived from row data.
       // Reading row[i] traverses pattern result -> query result -> the row's
@@ -131,6 +120,10 @@ async function runTest(base: URL) {
       const row0 = await rowLabel(0);
       const row1 = await rowLabel(1);
 
+      // `principal()` and `dbOwner()` name readers as the CFC `User{subject}`
+      // atom (spec §15.2), not the bare DID.
+      const user = (subject: string) => ({ type: CFC_ATOM_TYPE.User, subject });
+
       const expectAtoms = (
         got: unknown[],
         want: unknown[],
@@ -138,14 +131,14 @@ async function runTest(base: URL) {
         what: string,
       ) => {
         for (const w of want) {
-          if (!got.some((g) => JSON.stringify(g) === JSON.stringify(w))) {
+          if (!got.some((g) => equal(g, w))) {
             throw new Error(
               `${what}: missing ${JSON.stringify(w)} in ${JSON.stringify(got)}`,
             );
           }
         }
         for (const w of wantAbsent) {
-          if (got.some((g) => JSON.stringify(g) === JSON.stringify(w))) {
+          if (got.some((g) => equal(g, w))) {
             throw new Error(
               `${what}: unexpected ${JSON.stringify(w)} in ${
                 JSON.stringify(got)
@@ -160,8 +153,12 @@ async function runTest(base: URL) {
       // gated authored-by claim minted.
       expectAtoms(
         row0.conf,
-        ["did:mailto:alice@a.example", "did:mailto:bob@example.com", owner],
-        ["did:mailto:carol@c.example", "did:mailto:dave@d.example"],
+        [
+          user("did:mailto:alice@a.example"),
+          user("did:mailto:bob@example.com"),
+          user(owner),
+        ],
+        [user("did:mailto:carol@c.example"), user("did:mailto:dave@d.example")],
         "row 0 confidentiality",
       );
       expectAtoms(
@@ -179,12 +176,15 @@ async function runTest(base: URL) {
       expectAtoms(
         row1.conf,
         [
-          "did:mailto:carol@c.example",
-          "did:mailto:dave@d.example",
-          "did:mailto:erin@e.example",
-          owner,
+          user("did:mailto:carol@c.example"),
+          user("did:mailto:dave@d.example"),
+          user("did:mailto:erin@e.example"),
+          user(owner),
         ],
-        ["did:mailto:alice@a.example", "did:mailto:bob@example.com"],
+        [
+          user("did:mailto:alice@a.example"),
+          user("did:mailto:bob@example.com"),
+        ],
         "row 1 confidentiality",
       );
       expectAtoms(

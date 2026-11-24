@@ -9,10 +9,11 @@ import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
-import { Identity } from "@commonfabric/identity";
+import { Identity, issueDelegation } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { isPlainObject } from "@commonfabric/js-values/types";
 import type { MemorySpace } from "../interface.ts";
 import {
@@ -814,6 +815,81 @@ Deno.test("redeemed Mode A tickets are single use; control renews and releases a
   } finally {
     await f.close();
   }
+});
+
+describe("routed session.open proof chains", () => {
+  // A client opens a space that owns itself by naming its own key and
+  // presenting the space's delegation as `authorization.proofs`; the router
+  // forwards that shape of `authorization`, and so does the data socket.
+  const chainOpen = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    authorization: (proof: FabricBytes) => Record<string, unknown>,
+  ) => {
+    const admit = async (identity: Identity) =>
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(identity),
+        ).bytes,
+      )).status;
+    assertEquals(await admit(f.outsider), 0);
+    const delegation = await issueDelegation(f.principal, {
+      aud: f.outsider.did(),
+      sub: f.space.did(),
+      cmd: "/memory",
+      pol: [],
+    });
+    // The fixture's requests are plain JSON, so the bytes go as the wire
+    // encodes them.
+    const encoded = JSON.parse(
+      encodeMemoryBoundary(
+        authorization(new FabricBytes(delegation.bytes)) as never,
+      ).slice("fvj1:".length),
+    );
+    f.socket.receive(
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "session.open",
+            requestId: "chain",
+            space: f.space.did(),
+            principal: f.outsider.did(),
+            session: {},
+            authorization: encoded,
+          })
+        }`,
+        FRAME_SLOTS,
+      ),
+    );
+  };
+
+  it("opens a session for a key the access list names only through its chain", async () => {
+    const f = await fixture("session-open-proofs");
+    try {
+      expect(f.greeted.flags).toMatchObject({ sessionOpenProofs: true });
+      await chainOpen(f, (proof) => ({ proofs: [proof] }));
+      let answer: Record<string, unknown>;
+      do {
+        answer = decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS)
+          .body;
+      } while (answer.requestId !== "chain");
+      expect(answer.ok).toMatchObject({ sessionId: expect.any(String) });
+      expect(f.socket.readyState).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("closes the data socket on an authorization holding more than proofs", async () => {
+    const f = await fixture("session-open-signed-authorization");
+    try {
+      await chainOpen(f, (proof) => ({ proofs: [proof], signature: "x" }));
+      await f.socket.closed.promise;
+      expect(f.link.readyState).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
 });
 
 describe("routed session reports", () => {

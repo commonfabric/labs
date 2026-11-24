@@ -15,7 +15,7 @@ import { expect } from "@std/expect";
 import { isUnavailable } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -54,6 +54,21 @@ const LIFT_PATTERN = [
   "});",
 ].join("\n");
 
+/**
+ * The first piece, its computation reading a number in the piece's own space
+ * too, so that a change made there runs it while its input is in transit.
+ */
+const TICKED_PATTERN = [
+  "import { computed, pattern, Writable } from 'commonfabric';",
+  "type Ref = Writable<{ name: string }>;",
+  "export default pattern<{ ref: Ref; tick: Writable<number> }, { out: string }>(",
+  "  ({ ref, tick }) => {",
+  "    const out = computed(() => 'out:' + ref.get().name + ':' + tick.get());",
+  "    return { out };",
+  "  },",
+  ");",
+].join("\n");
+
 /** How a case's runtimes read and what the piece is. */
 interface Shape {
   pattern: string;
@@ -62,6 +77,7 @@ interface Shape {
 
 describe("refused-run-keeps-result", () => {
   let server: MemoryV2Server.Server;
+  let sessions: MemoryV2Server.SessionRegistry;
   let opened: { runtime: Runtime; storage: EmulatedStorageManager }[];
   let inputSpaceHeld: PromiseWithResolvers<void> | undefined;
   let shape: Shape;
@@ -85,7 +101,8 @@ describe("refused-run-keeps-result", () => {
     opened = [];
     inputSpaceHeld = undefined;
     shape = { pattern: COMPUTED_PATTERN };
-    server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
+    sessions = new MemoryV2Server.SessionRegistry();
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0, sessions });
     // A session on the input space opens only once the test lets it, so a
     // cold runtime's first run reads its input before the input arrives.
     const openSession = server.openSession.bind(server);
@@ -204,6 +221,36 @@ describe("refused-run-keeps-result", () => {
     await runtime.storageManager.synced();
     await runtime.idle();
   };
+
+  /** Counts loads initiated to establish readiness, apart from link prefetches. */
+  function watchReadinessLoads(
+    storage: EmulatedStorageManager,
+    runtime: Runtime,
+    target: Cell<{ name: string }>,
+    onLoad: () => void,
+    failure?: Promise<never>,
+  ): void {
+    const targetId = target.getAsNormalizedFullLink().id;
+    let checkingReadiness = false;
+    const ensure = runtime.ensureLinkedDocLoaded.bind(runtime);
+    runtime.ensureLinkedDocLoaded = (...args) => {
+      checkingReadiness = true;
+      try {
+        return ensure(...args);
+      } finally {
+        checkingReadiness = false;
+      }
+    };
+    const sync = storage.syncCell.bind(storage);
+    storage.syncCell = (cell, options) => {
+      const link = cell.getAsNormalizedFullLink();
+      if (link.space === inputSpace && link.id === targetId) {
+        if (checkingReadiness) onLoad();
+        if (failure !== undefined) return failure;
+      }
+      return sync(cell, options);
+    };
+  }
 
   function verifyRefusals() {
     it("leaves a result it already holds in place while its input has not arrived, and writes the input's result once it has", async () => {
@@ -351,28 +398,9 @@ describe("refused-run-keeps-result", () => {
       const { cold, coldResult, cancel } = await startCold(
         compiled,
         (storage, runtime) => {
-          const target = ref.getAsNormalizedFullLink();
-          let checkingReadiness = false;
-          const ensure = runtime.ensureLinkedDocLoaded.bind(runtime);
-          runtime.ensureLinkedDocLoaded = (...args) => {
-            checkingReadiness = true;
-            try {
-              return ensure(...args);
-            } finally {
-              checkingReadiness = false;
-            }
-          };
-          const sync = storage.syncCell.bind(storage);
-          storage.syncCell = (cell, options) => {
-            const link = cell.getAsNormalizedFullLink();
-            if (link.space !== inputSpace || link.id !== target.id) {
-              return sync(cell, options);
-            }
-            if (checkingReadiness && ++inputLoads > 1) {
-              secondLoad.resolve("asked again");
-            }
-            return failure.promise;
-          };
+          watchReadinessLoads(storage, runtime, ref, () => {
+            if (++inputLoads > 1) secondLoad.resolve("asked again");
+          }, failure.promise);
         },
       );
       expect(outRuns(cold)).toBe(1);
@@ -403,9 +431,154 @@ describe("refused-run-keeps-result", () => {
       cancelReported();
       cancel();
     });
+    it("reports a terminal refusal once the input's space refuses the reader, without repeatedly requesting it", async () => {
+      // The input space is deleted while the cold runtime waits on it, so the
+      // space refuses the runtime's session and the input never arrives. A
+      // refused space neither delivers the document nor reports it absent, so
+      // a run that kept the result and asked for the load again would do so
+      // for as long as the runtime ran. The case counts the loads the runner
+      // asks for once the space is deleted, as the case above does, and races
+      // a second one against the diagnostic, so a run that keeps asking
+      // fails the case rather than holding it.
+
+      const { warm, compiled, ref, result, outId } = await standUp("abc", true);
+      warm.runner.stop(result);
+      await rename(warm, ref, "def");
+      const before = await storedValues(outId);
+
+      let deleted = false;
+      // The refusal the server gives every command to a deleted space.
+      const refusal: NonNullable<
+        Awaited<ReturnType<MemoryV2Server.Server["deletedSpaceRefusal"]>>
+      > = {
+        name: "AuthorizationError",
+        message: `Space ${inputSpace} is deleted`,
+        deleted: true,
+        permanentEvidence: true,
+        aclRevision: 1,
+      };
+      const deletedSpaceRefusal = server.deletedSpaceRefusal.bind(server);
+      server.deletedSpaceRefusal = (asked) =>
+        deleted && asked === inputSpace
+          ? Promise.resolve(refusal)
+          : deletedSpaceRefusal(asked);
+
+      let loadsSinceDeletion = 0;
+      const secondLoad = Promise.withResolvers<"asked again">();
+      const { cold, coldResult, cancel } = await startCold(
+        compiled,
+        (storage, runtime) => {
+          watchReadinessLoads(storage, runtime, ref, () => {
+            if (deleted && ++loadsSinceDeletion > 1) {
+              secondLoad.resolve("asked again");
+            }
+          });
+        },
+      );
+      expect(outRuns(cold)).toBe(1);
+      expect(coldResult.key("out").get()).toBe("out:abc");
+      const reported = Promise.withResolvers<unknown>();
+      const cancelReported = coldResult.key("out").sink((value) => {
+        if (isUnavailable(value) && value.isError()) reported.resolve(value);
+      });
+
+      deleted = true;
+      inputSpaceHeld!.resolve();
+      const error = await Promise.race([reported.promise, secondLoad.promise]);
+      expect(isUnavailable(error) && error.errorKind).toBe("schemaMismatch");
+      await cold.idle();
+      expect(loadsSinceDeletion).toBeLessThanOrEqual(1);
+      await cold.storageManager.synced();
+      const after = await storedValues(outId);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length)).toHaveLength(1);
+      expect(after.at(-1)).toContain("schemaMismatch");
+      cancelReported();
+      cancel();
+    });
   }
 
   describe("a computed with lazy inputs", verifyRefusals);
+
+  it("keeps a result through a later transit of an input whose kept load delivered it", async () => {
+    // The cold runtime keeps the stored result through its input's transit,
+    // and the load it asks for delivers the input. Its input replica is then
+    // replaced, and a change in the piece's own space runs the computation
+    // while the replacement's load is held open, so the input is in transit
+    // again. A load that delivered its document is not one that settled
+    // without it, so the run keeps the result again, and the store receives
+    // no clearing revision while the replacement loads.
+
+    shape = { pattern: TICKED_PATTERN };
+    const warm = open();
+    const compiled = await warm.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: shape.pattern }],
+    }, { space });
+    const ref = warm.getCell<{ name: string }>(inputSpace, "input");
+    const tick = warm.getCell<number>(space, "tick");
+    // A transaction writes one space, so the input and the number are set
+    // apart.
+    for (const write of [() => ref, () => tick]) {
+      const tx = warm.edit();
+      const cell = write();
+      if (cell === ref) ref.withTx(tx).set({ name: "abc" });
+      else tick.withTx(tx).set(0);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    const result = warm.getCell<Record<string, unknown>>(
+      space,
+      "result",
+      compiled.resultSchema,
+    );
+    {
+      const tx = warm.edit();
+      warm.run(tx, compiled, { ref, tick }, result);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    expect(await result.key("out").pull()).toBe("out:abc:0");
+    await warm.idle();
+    await warm.storageManager.synced();
+    const outId = result.key("out").resolveAsCell().getAsNormalizedFullLink()
+      .id;
+    warm.runner.stop(result);
+    await rename(warm, ref, "def");
+
+    const { cold, coldResult, cancel } = await startCold(compiled);
+    expect(coldResult.key("out").get()).toBe("out:abc:0");
+    await releaseInput(cold);
+    expect(coldResult.key("out").get()).toBe("out:def:0");
+    const before = await storedValues(outId);
+
+    inputSpaceHeld = Promise.withResolvers<void>();
+    const provider = opened.at(-1)!.storage.open(inputSpace) as unknown as {
+      replaceProvisionalReplica(): Promise<void>;
+    };
+    const replaced = provider.replaceProvisionalReplica();
+    {
+      const tx = cold.edit();
+      cold.getCell<number>(space, "tick").withTx(tx).set(1);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await cold.idle();
+    expect(coldResult.key("out").get()).toBe("out:def:0");
+    expect(await storedValues(outId)).toEqual(before);
+
+    // A new route has no session from the previous route. The loopback
+    // server serves both, so remove only that route's detached session.
+    sessions.remove(inputSpace, cold.storageManager.id);
+    inputSpaceHeld.resolve();
+    await replaced;
+    await cold.idle();
+    await cold.storageManager.synced();
+    await cold.idle();
+    expect(coldResult.key("out").get()).toBe("out:def:1");
+    const after = await storedValues(outId);
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(after.slice(before.length)).toHaveLength(1);
+    expect(after.at(-1)).toContain("out:def:1");
+    cancel();
+  });
 
   describe("a lift whose argument is read eagerly", () => {
     // Read eagerly, an argument whose document has not arrived reads as

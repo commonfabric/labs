@@ -151,9 +151,9 @@ describe("pattern", () => {
       expect(rendered).toEqual([{
         value: [
           "about id-mine  id-mine",
-          `  unlisted: run cf pattern share ${
+          `  not shared: run cf pattern share ${
             join(dir, "bins.tsx")
-          } to request a listing`,
+          } to share it on beta, by link`,
         ].join("\n"),
         json: undefined,
       }]);

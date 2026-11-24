@@ -34,6 +34,7 @@ import {
   isPresenceUpdateNotification,
   isSpaceAccessLostNotification,
   isSpaceAccessRestoredNotification,
+  isSpaceSeqAdvancedNotification,
   isTelemetryNotification,
   isVDomBatchNotification,
   NavigateRequestNotification,
@@ -47,6 +48,7 @@ import {
   SerializedDomEvent,
   SpaceAccessLostNotification,
   SpaceAccessRestoredNotification,
+  SpaceSeqAdvancedNotification,
   TelemetryNotification,
   VDomBatchNotification,
   VDomMountResponse,
@@ -166,6 +168,7 @@ export type RuntimeConnectionEvents = {
   spaceaccesslost: [SpaceAccessLostNotification];
   spaceaccessrestored: [SpaceAccessRestoredNotification];
   connectionrestored: [ConnectionRestoredNotification];
+  spaceseqadvanced: [SpaceSeqAdvancedNotification];
   telemetry: [TelemetryNotification];
   vdombatch: [VDomBatchNotification];
   pendingwriteschange: [PendingWritesNotification];
@@ -658,6 +661,8 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("spaceaccessrestored", message);
       } else if (isConnectionRestoredNotification(message)) {
         this.emit("connectionrestored", message);
+      } else if (isSpaceSeqAdvancedNotification(message)) {
+        this.emit("spaceseqadvanced", message);
       } else if (isVDomBatchNotification(message)) {
         this.emit("vdombatch", message);
       } else if (isPendingWritesNotification(message)) {

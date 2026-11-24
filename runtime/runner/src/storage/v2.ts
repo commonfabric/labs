@@ -189,7 +189,6 @@ import {
   IOperationStorageCapability,
   IPreconditionFailedError,
   IPresenceStorageCapability,
-  IReadActivity,
   IRemoteStorageProviderSettings,
   ISpaceReplica,
   IStorageManager,
@@ -227,18 +226,14 @@ import {
   getBlindStructuralTarget,
   isDurableReadTx,
   isInternalVerifierRead,
-  isMergeableOpRead,
-  isReadExcludedFromConflict,
-  isReadIgnoredForCommit,
-  isReadMarkedAsAttemptedWrite,
   notifyCommitRejected,
   recordCoverageWait,
 } from "./reactivity-log.ts";
+import { commitReadActivities } from "./commit-read-activities.ts";
 import { SelectorTracker } from "./selector-tracker.ts";
 import { noteSpaceAccessRefusal } from "./space-access-refusal.ts";
 import * as SubscriptionManager from "./subscription.ts";
 import {
-  getDirectTransactionMergeableOpAddresses,
   getDirectTransactionReadActivities,
   getTransactionWriteAttempts,
 } from "./transaction-inspection.ts";
@@ -271,31 +266,6 @@ export type CfcSchemaDocumentSyncer = (
   space: MemorySpace,
   document: EntityDocument | undefined,
 ) => Promise<Error | undefined>;
-
-const isStrictPrefixPath = (
-  prefix: readonly string[],
-  path: readonly string[],
-): boolean =>
-  prefix.length < path.length &&
-  prefix.every((segment, index) => path[index] === segment);
-
-const isSamePath = (
-  a: readonly string[],
-  b: readonly string[],
-): boolean =>
-  a.length === b.length && a.every((segment, index) => b[index] === segment);
-
-// True when `path` is the immediate `length` child of `arrayPath` — i.e. a read
-// of that array's own element count. A mergeable append / add-unique /
-// remove-by-value changes this count, so such a read is a genuine dependency of
-// the writer, not one of the op's own incidental sub-reads.
-const isArrayLengthChildPath = (
-  arrayPath: readonly string[],
-  path: readonly string[],
-): boolean =>
-  path.length === arrayPath.length + 1 &&
-  path[arrayPath.length] === "length" &&
-  arrayPath.every((segment, index) => path[index] === segment);
 
 export { watchIdForEntry } from "./v2-watch.ts";
 export type { SessionConnection, SessionFactory } from "./v2-remote-session.ts";
@@ -1735,6 +1705,18 @@ const toCommitReadPath = (
 // split-brain: caller sees ConflictError for a write that landed).
 const scalarizeLocalSeq = (localSeq: number | number[]): number =>
   Array.isArray(localSeq) ? maxOf(localSeq) : localSeq;
+
+/**
+ * Whether `connection` is up and advertises `markedSplicesV1` on the
+ * handshake it is up on. While it is down or reconnecting the flags it holds
+ * are the last connection's, and the server the next one reaches may not
+ * advertise the mark.
+ */
+const advertisesMarkedSplices = (
+  connection: SessionConnection | undefined,
+): boolean =>
+  connection?.connectionState === "connected" &&
+  connection.serverFlags?.markedSplicesV1 === true;
 
 const scalarizePendingReadStacks = (commit: ClientCommit): ClientCommit => {
   const hasStack = (reads: { localSeq: number | number[] }[]): boolean =>
@@ -3387,7 +3369,11 @@ export class StorageManager implements IStorageManager {
       if (this.#providers.size === 0) {
         return;
       }
-      await this.#deleteForkBranches();
+      // Each provider's `destroy()` marks it destroyed and aborts its route
+      // before its first await, so a host hint or a session ending during the
+      // close sees a closing provider. Awaiting here only when there is a
+      // fork branch to delete keeps that synchronous for every other manager.
+      if (this.#forkBranch !== undefined) await this.#deleteForkBranches();
       // allSettled: one rejecting teardown must not release the lease (the
       // finally below) while sibling teardowns are still draining frames.
       const outcomes = await Promise.allSettled(
@@ -5288,6 +5274,12 @@ type ProviderOptions = {
   /** Called when the space's memory session is replaced on reconnect. */
   onSessionReplaced?: () => void;
 
+  /**
+   * Called when the newest seq of the space the replica's session has
+   * learned of moves forward; see `SpaceSession.subscribeServerSeq()`.
+   */
+  onServerSeq?: (serverSeq: number) => void;
+
   /** Called when `sessionError()` starts reporting `error`. */
   onSessionError?: (error: Error) => void;
 
@@ -5470,6 +5462,7 @@ class Provider
 
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
+  #serverSeqObservers = new Set<(serverSeq: number) => void>();
   #presenceMemberships = new Set<ProviderPresenceMembership>();
 
   /**
@@ -5506,6 +5499,17 @@ class Provider
           address.scope,
           address.scopeKey,
         ),
+      // Observers belong to the provider, so a replacement replica's session
+      // reports to the same ones.
+      onServerSeq: (serverSeq) => {
+        for (const observer of [...this.#serverSeqObservers]) {
+          try {
+            observer(serverSeq);
+          } catch (cause) {
+            console.error("server-seq subscriber threw:", cause);
+          }
+        }
+      },
       // A released root is not read again on a replacement replica.
       onWatchesReleased: (roots) => {
         for (const root of roots) {
@@ -5572,6 +5576,13 @@ class Provider
   /** See {@link SpaceReplica.presentCount}. */
   presentCount(absences: readonly UnexaminedAbsence[]): number {
     return this.replica.presentCount(absences);
+  }
+
+  /** See {@link SpaceReplica.stillUnexamined}. */
+  stillUnexamined(
+    absences: readonly UnexaminedAbsence[],
+  ): UnexaminedAbsence[] {
+    return this.replica.stillUnexamined(absences);
   }
 
   /** See {@link SpaceReplica.storeReportedAbsent}. */
@@ -5938,7 +5949,9 @@ class Provider
    */
   isUnused(): boolean {
     return !this.#destroyed && this.#operationSubscriptions.size === 0 &&
-      this.#presenceMemberships.size === 0 && this.replica.isUnused();
+      this.#presenceMemberships.size === 0 &&
+      // Someone following the space's history is using it.
+      this.#serverSeqObservers.size === 0 && this.replica.isUnused();
   }
 
   ensureSession(): Promise<void> {
@@ -6020,6 +6033,12 @@ class Provider
     options?: { branch?: BranchName; before?: number; limit?: number },
   ): Promise<CommitSummary[]> {
     return this.#followReplacement((replica) => replica.listHistory(options));
+  }
+
+  /** See `IStorageProvider.subscribeServerSeq`. */
+  subscribeServerSeq(observer: (serverSeq: number) => void): () => void {
+    this.#serverSeqObservers.add(observer);
+    return () => this.#serverSeqObservers.delete(observer);
   }
 
   listBranches(): Promise<BranchInfo[]> {
@@ -6104,6 +6123,7 @@ class Provider
       subscription.cancel?.();
     }
     this.#operationSubscriptions.clear();
+    this.#serverSeqObservers.clear();
     this.#routeAbort.abort(new Error("memory replica closed"));
     this.options.routeState.generation++;
     await this.replica.close();
@@ -6117,6 +6137,7 @@ class Provider
         subscription.cancel?.();
       }
       this.#operationSubscriptions.clear();
+      this.#serverSeqObservers.clear();
       this.#routeAbort.abort(new Error("memory replica closed"));
       this.options.routeState.generation++;
     }
@@ -6804,6 +6825,11 @@ export class SpaceReplica
   readonly #onConnectionState?: ProviderOptions["onConnectionState"];
   #onSessionAnswered?: () => void;
   #cancelTermination: Cancel | undefined;
+  #onServerSeq?: (serverSeq: number) => void;
+  #cancelServerSeq: Cancel | undefined;
+
+  /** The newest seq this replica has reported to `#onServerSeq`. */
+  #reportedServerSeq = 0;
   #onSessionReplaced?: () => void;
   #onSessionError?: (error: Error) => void;
 
@@ -6840,6 +6866,7 @@ export class SpaceReplica
     this.#onAccessChange = options.onAccessChange;
     this.#onConnectionState = options.onConnectionState;
     this.#onSessionAnswered = options.onSessionAnswered;
+    this.#onServerSeq = options.onServerSeq;
     this.#onSessionReplaced = options.onSessionReplaced;
     this.#onSessionError = options.onSessionError;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
@@ -8063,6 +8090,27 @@ export class SpaceReplica
     return this.#sessionClient?.serverFlags?.sqliteCommitRowLabelEval === true;
   }
 
+  /**
+   * Whether the server this replica is connected to advertises
+   * `markedSplicesV1` on the connection that is up now
+   * (`advertisesMarkedSplices()`). `false` until a session exists, and while
+   * its connection is down or reconnecting: a commit built then goes index by
+   * index.
+   *
+   * A commit built marked can reach its first send on another connection.
+   * The session checks it then, and refuses it, unsent, where that
+   * connection does not advertise the mark (memory client
+   * `isMarkedSpliceRefusal()`), which `#pushCommit()` takes as a local
+   * conflict. A resend of one already sent keeps its bytes, so that the store
+   * can answer a resend of a commit it already took (its replay identity).
+   * That resend reaches a server that does not read the mark only after a
+   * rollback past marked splices, which under server execution a deployment
+   * must not make (docs/specs/memory-v2/08-conflict-granularity.md).
+   */
+  markedSplices(): boolean {
+    return advertisesMarkedSplices(this.#sessionClient);
+  }
+
   async registerSqliteDiskSource(
     id: string,
     path: string,
@@ -8108,6 +8156,21 @@ export class SpaceReplica
    */
   crossingsReported(): boolean {
     return this.#sessionClient?.serverFlags?.syncCrossingsV1 === true;
+  }
+
+  /**
+   * Whether a watch through this replica on the space's invitation ledger
+   * revision document sees it move with every change to the ledger: the
+   * session asked for the default branch, where the invitation service moves
+   * it, and its server advertises `spaceInvitesRevision`. A session that asked
+   * to fork a branch is taken to be of it (`SpaceSession.requestedBranch`),
+   * even where the server opened it on the default branch, which errs toward
+   * reading the ledger. `false` until a session exists, and refreshed by each
+   * reconnect handshake.
+   */
+  invitesRevisionWatchable(): boolean {
+    return this.#sessionSession?.requestedBranch === DEFAULT_BRANCH &&
+      this.#sessionClient?.serverFlags?.spaceInvitesRevision === true;
   }
 
   /** Waits for session authentication and watch restoration after reconnect. */
@@ -8634,6 +8697,8 @@ export class SpaceReplica
     this.#cancelConnectionState = undefined;
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
+    this.#cancelServerSeq?.();
+    this.#cancelServerSeq = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -8815,6 +8880,8 @@ export class SpaceReplica
     this.#cancelConnectionState = undefined;
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
+    this.#cancelServerSeq?.();
+    this.#cancelServerSeq = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -11064,6 +11131,32 @@ export class SpaceReplica
         });
         return { ok: {} };
       } catch (error) {
+        if (MemoryV2Client.isMarkedSpliceRefusal(error)) {
+          // The session refused the commit before its first send, as the
+          // connection it would have gone out on does not advertise
+          // `markedSplicesV1`. Nothing reached the store, so it is a local
+          // conflict, with no stale floor: the store never saw this localSeq
+          // and will never report it caught up. The action runs again and
+          // diffs the change for the connection as it is then.
+          const refused = this.#makeLocalRejection(
+            commit,
+            describeFailure(error),
+          );
+          telemetry?.submit({
+            type: "storage.push.error",
+            id: pushOpId,
+            error: refused.name,
+            ...rejectionAttribution(refused, commit),
+          });
+          notifyRejectionSources(refused);
+          return await this.#finalizeRejection(
+            localSeq,
+            operations,
+            source,
+            refused,
+            { pushed: true },
+          );
+        }
         let cause = error;
         if (this.#replacementRead !== undefined) {
           const routeConflict = new Error("memory replica route replaced");
@@ -11390,120 +11483,6 @@ export class SpaceReplica
       record.materialized = undefined;
     }
   }
-
-  /**
-   * Return the raw reads that become commit-time concurrency preconditions.
-   * Reconciliation and commit construction must use the same set: loading a
-   * read that buildReads later drops can spend a retry on an observation the
-   * server would never validate.
-   */
-  #commitReadActivities(
-    source: IStorageTransaction,
-    reads: Iterable<IReadActivity>,
-  ): IReadActivity[] {
-    // A mergeable op resolves against durable state, so it does not depend on
-    // the document's prior value. Reads incidental to the op are excluded,
-    // while a handler's own explicit read remains a real dependency.
-    const mergeableOpPathsByEntity = new Map<
-      string,
-      (readonly string[])[]
-    >();
-    for (const op of getDirectTransactionMergeableOpAddresses(source) ?? []) {
-      if (op.space !== this.#space) continue;
-      const key = `${op.id}\0${normalizeCellScope(op.scope)}`;
-      const paths = mergeableOpPathsByEntity.get(key);
-      if (paths) {
-        paths.push(op.path);
-      } else {
-        mergeableOpPathsByEntity.set(key, [op.path]);
-      }
-    }
-    // A document whose CFC envelope this transaction writes beside a
-    // mergeable op. The envelope is a whole-member replace whose entries name
-    // positions in the array the transaction read, and which carries forward
-    // the entries it read there; the op, by contrast, is placed by the store
-    // against the live array. Both the envelope and the array it was placed
-    // against are therefore dependencies of such a commit: a concurrent
-    // change to either moves an element away from the entry that describes
-    // it, or drops another writer's entries. Those documents keep every read
-    // the narrowing below would otherwise drop, so the commit conflicts and
-    // the writer re-derives its envelope against the list the store holds.
-    const envelopeWritersWithMergeableOps = new Set<string>();
-    if (mergeableOpPathsByEntity.size > 0) {
-      for (const write of getTransactionWriteAttempts(source) ?? []) {
-        if (
-          write.space !== this.#space ||
-          !Differential.isCfcEnvelopePath(write.path)
-        ) {
-          continue;
-        }
-        const key = `${write.id}\0${normalizeCellScope(write.scope)}`;
-        if (mergeableOpPathsByEntity.has(key)) {
-          envelopeWritersWithMergeableOps.add(key);
-        }
-      }
-    }
-
-    const commitReads: IReadActivity[] = [];
-    for (const read of reads) {
-      if (
-        read.space !== this.#space ||
-        (read.type ?? DOCUMENT_MIME) !== DOCUMENT_MIME ||
-        hasInlineCellScheme(read.id) ||
-        // Content-addressed documents cannot change, so their reads carry no
-        // commit-time concurrency precondition.
-        read.id.startsWith("cid:") ||
-        // Blind UI-input write-target reads are replaced by one structural
-        // parent read after buildReads' main loop.
-        isReadIgnoredForCommit(read.meta) ||
-        // Reference-resolution shape reads stay reactive but do not constrain
-        // the commit; recursive reads remain value dependencies.
-        (isReadExcludedFromConflict(read.meta) &&
-          read.nonRecursive === true)
-      ) {
-        continue;
-      }
-
-      const scope = normalizeCellScope(read.scope);
-      const key = `${read.id}\0${scope}`;
-      if (envelopeWritersWithMergeableOps.has(key)) {
-        commitReads.push(read);
-        continue;
-      }
-      // Runtime verifier reads of the CFC label are point-in-time policy
-      // observations, not consumed values.
-      if (
-        isInternalVerifierRead(read.meta) &&
-        Differential.isCfcEnvelopePath(read.path)
-      ) {
-        continue;
-      }
-      const opPaths = mergeableOpPathsByEntity.get(key);
-      // A read of an op array's length is a genuine dependency: the handler
-      // used the element count that a concurrent mergeable op changes.
-      const readsMergeableOpArrayLength = opPaths !== undefined &&
-        opPaths.some((opPath) => isArrayLengthChildPath(opPath, read.path));
-      if (
-        opPaths !== undefined &&
-        !readsMergeableOpArrayLength &&
-        (isMergeableOpRead(read.meta) ||
-          isReadMarkedAsAttemptedWrite(read.meta) ||
-          // A mergeable write reads the CFC envelope as part of the write;
-          // the read leaves the conflict set unless the transaction also
-          // writes the envelope (handled above).
-          Differential.isCfcEnvelopePath(read.path) ||
-          opPaths.some((opPath) =>
-            isStrictPrefixPath(opPath, read.path) ||
-            (read.nonRecursive === true && isSamePath(opPath, read.path))
-          ))
-      ) {
-        continue;
-      }
-      commitReads.push(read);
-    }
-    return commitReads;
-  }
-
   /**
    * The documents `source` read as absent that this replica has never
    * examined, each keyed the way a pending load for it is keyed: an address
@@ -11549,7 +11528,7 @@ export class SpaceReplica
       ownWrites.add(docKey(write.id, this.instanceKey(write.scope, identity)));
     }
     const unexamined = new Map<string, UnexaminedAbsence>();
-    for (const read of this.#commitReadActivities(source, reads)) {
+    for (const read of commitReadActivities(this.#space, source, reads)) {
       const scope = normalizeCellScope(read.scope);
       // A malformed/incomplete served identity cannot name the instance on
       // the wire. Leave its claim for commit admission rather than waiting
@@ -11592,6 +11571,23 @@ export class SpaceReplica
       if ((this.#docs.get(key)?.confirmed.seq ?? 0) > 0) present += 1;
     }
     return present;
+  }
+
+  /**
+   * Those of `absences` this replica still holds no record of: neither a
+   * revision nor an examined absence. `absences` is a list an
+   * {@link unexaminedAbsences} call returned, of this replica or of one it
+   * replaced, keyed as {@link presentCount} keys it.
+   */
+  stillUnexamined(
+    absences: readonly UnexaminedAbsence[],
+  ): UnexaminedAbsence[] {
+    return absences.filter((absence) =>
+      !this.#docs.has(docKey(
+        absence.id,
+        this.instanceKey(absence.scope, undefined, absence.scopeKey),
+      ))
+    );
   }
 
   /**
@@ -11794,7 +11790,9 @@ export class SpaceReplica
       pushCommitRead(pin.id as URI, pin.scope, toCommitReadPath([]), false);
     }
     for (
-      const read of source ? this.#commitReadActivities(source, reads) : []
+      const read of source
+        ? commitReadActivities(this.#space, source, reads)
+        : []
     ) {
       const scope = normalizeCellScope(read.scope);
       pushCommitRead(
@@ -13973,6 +13971,17 @@ export class SpaceReplica
     return false;
   }
 
+  /**
+   * Helper for `#memoizedSessionHandle()`, which reports `serverSeq` to
+   * `#onServerSeq` when it is newer than the one reported last.
+   */
+  #reportServerSeq(serverSeq: number): void {
+    if (this.#onServerSeq === undefined) return;
+    if (!(serverSeq > this.#reportedServerSeq)) return;
+    this.#reportedServerSeq = serverSeq;
+    this.#onServerSeq(serverSeq);
+  }
+
   #memoizedSessionHandle(): Promise<{
     client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
@@ -14021,6 +14030,15 @@ export class SpaceReplica
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
           this.#onSessionAnswered?.();
+          this.#cancelServerSeq?.();
+          this.#cancelServerSeq = this.#onServerSeq === undefined
+            ? undefined
+            : resolved.session.subscribeServerSeq((serverSeq) =>
+              this.#reportServerSeq(serverSeq)
+            );
+          // A session opened anew starts at the seq its open answered, which
+          // it reports to no observer, so the replica reports it here.
+          this.#reportServerSeq(resolved.session.serverSeq);
           this.#cancelTermination?.();
           this.#cancelTermination = resolved.session.subscribeTermination(
             (error) => {

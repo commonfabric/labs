@@ -161,6 +161,8 @@ export class ServingPortBridge {
         }),
       viewsChanged: (space, sessionId) =>
         endpoint.notify("observer.viewsChanged", { space, sessionId }),
+      currencyChanged: (space) =>
+        endpoint.notify("observer.currencyChanged", { space }),
       sessionChanged: (event) =>
         endpoint.notify("observer.sessionChanged", { event }),
     };
@@ -383,6 +385,30 @@ export class ServingPortBridge {
       "server.setViewSelection",
       ({ space, handle, selection }) =>
         server.setViewSelection(space, handle, selection),
+    );
+    endpoint.onRequest(
+      "server.advanceCurrency",
+      ({ space }) => server.advanceCurrency(space),
+    );
+    endpoint.onRequest(
+      "server.storeCurrencyRecords",
+      ({ space, batch }) => server.storeCurrencyRecords(space, batch),
+    );
+    endpoint.onRequest(
+      "server.judgeCurrencyRoots",
+      ({ space, roots, excludePrincipal, epoch, running }) =>
+        server.judgeCurrencyRoots(space, roots, {
+          ...(excludePrincipal !== undefined && { excludePrincipal }),
+          epoch,
+          ...(running !== undefined && { running }),
+        }),
+    );
+    endpoint.onRequest(
+      "server.setCarriedDemand",
+      ({ space, reader, rows, excludePrincipal }) =>
+        server.setCarriedDemand(space, reader, rows, {
+          ...(excludePrincipal !== undefined && { excludePrincipal }),
+        }),
     );
     endpoint.onRequest(
       "server.foreignWriteAuthorityFor",

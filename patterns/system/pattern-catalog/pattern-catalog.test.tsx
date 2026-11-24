@@ -6,19 +6,23 @@
  * to get a pattern is appended only by a trusted tap on `GetItButton`: a
  * forged push and an untrusted send leave the list alone, a second tap while
  * a request is open adds nothing, and a failed request can be tapped again.
- * The host's answer shows on the button. A request names the host and the
- * time of its tap, a host leaves a request naming another host alone, and
- * with no host or no pattern id the button says so and adds nothing. The button names the
- * pattern by the catalog's own title for its id, whatever text a caller
- * passes, and the place it installs onto by the name the caller gives.
+ * The host's answer shows on the button. Each request is labelled with who
+ * tapped, on the request itself, and another pattern cannot clear the list.
+ * A request names the host and the time of its tap, a host leaves a request
+ * naming another host alone, and with no host or no pattern id the button
+ * says so and adds nothing. The button names the pattern by the catalog's own
+ * title for its id, whatever text a caller passes, and the place it installs
+ * onto by the name the caller gives.
  *
  * Run: deno task cf test patterns/system/pattern-catalog/pattern-catalog.test.tsx --verbose
  */
 import {
   action,
   assert,
+  currentPrincipal,
   handler,
   pattern,
+  principalOf,
   TESTS,
   UI,
   Writable,
@@ -40,6 +44,7 @@ import {
   GetItButton,
   type GetItButtonInput,
   type GetItRequest,
+  type GetItRequests,
 } from "./pattern-catalog.tsx";
 import { FakeCatalog } from "./fake-catalog.tsx";
 
@@ -84,11 +89,21 @@ const forgeRequest = handler<void, { getItRequests: Writable<GetItRequest[]> }>(
   },
 );
 
+/** A pattern that tries to clear the requests without the button. */
+const clearRequests = handler<
+  void,
+  { getItRequests: Writable<GetItRequest[]> }
+>((_, { getItRequests }) => {
+  getItRequests.set([]);
+});
+
 export default pattern(() => {
   const entries = new Writable<CatalogEntry[]>(ENTRIES);
   const status = new Writable<CatalogStatus>({ state: "ready" });
   const host = new Writable<string>("fake-host");
-  const catalog = FakeCatalog({ entries, status, host });
+  const getItRequests = new Writable<GetItRequests>([]);
+  const catalog = FakeCatalog({ entries, status, host, getItRequests });
+  const me = new Writable<string>("");
 
   const searched = new Writable<CatalogPage | null>(null);
   const listed = new Writable<CatalogPage | null>(null);
@@ -134,6 +149,7 @@ export default pattern(() => {
     label: "Bill splitter",
   } as GetItButtonInput);
   const forge = forgeRequest({ getItRequests: catalog.getItRequests });
+  const clear = clearRequests({ getItRequests: catalog.getItRequests });
 
   const samProfile: CatalogProfile = new Writable<Record<string, never>>({});
   const anonymous = CatalogByline({
@@ -282,6 +298,18 @@ export default pattern(() => {
         .sort().join() === "gone-1@board-a,split-1@board-a" &&
     new Set(catalog.getItRequests.map((r) => r.requestId)).size === 2
   );
+  const action_note_me = action(() => me.set(currentPrincipal() ?? ""));
+  const assert_each_request_labelled_with_who_tapped = assert(() =>
+    me.get() !== "" &&
+    principalOf(getItRequests.key(0), "authored-by") === me.get() &&
+    principalOf(getItRequests.key(1), "authored-by") === me.get()
+  );
+  const action_clear = action(() => {
+    clear.send();
+  });
+  const assert_clearing_the_list_refused = assert(() =>
+    catalog.getItRequests.length === 2
+  );
   const assert_open_request_shows = assert(() =>
     split.answer?.state === "started" && hasText(split[UI], "Getting it…")
   );
@@ -391,6 +419,10 @@ export default pattern(() => {
       { action: split.getIt, trustedUi: TRUSTED_TAP },
       { action: missing.getIt, trustedUi: TRUSTED_TAP },
       { assertion: assert_tap_appends_one_request },
+      { action: action_note_me },
+      { assertion: assert_each_request_labelled_with_who_tapped },
+      { action: action_clear },
+      { assertion: assert_clearing_the_list_refused },
       { assertion: assert_open_request_shows },
       { action: split.getIt, trustedUi: TRUSTED_TAP },
       { assertion: assert_second_tap_while_open_adds_nothing },

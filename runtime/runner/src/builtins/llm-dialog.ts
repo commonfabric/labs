@@ -1123,7 +1123,10 @@ function readCellValueForObservation(
     "top",
   );
   const value = readTx.readValueOrThrow(link, {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   });
   return value === undefined ? cell.get() ?? cell.getRaw() : value;
 }

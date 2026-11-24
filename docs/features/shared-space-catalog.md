@@ -114,7 +114,14 @@ separate view with no membership control. Archive and restore use
 the revision embedded in the rendered control's event, so a newer peer choice
 causes a conflict notice instead of being replaced. Opening uses ordinary shell
 space navigation and its configured routing; listing does not fetch target
-roots, add routing hints, grant access, or change the navigation list.
+roots, add routing hints, grant access, or change the navigation list. The
+browser's `selectedTab` input is the tab its host has selected, for a host that
+shows it in the tab `SOCIAL_SPACES_TAB` names. While another tab is selected the
+browser derives no row and creates no row instance; the collection view itself
+is still derived from the catalog. Without the input the list is shown. Home
+passes its result's `activeTab`, since a client that draws Home's view demands
+every panel of it, hidden ones included. That cell is space-scoped, so the tab
+one session selects is selected in every session of the space.
 
 ## Identity and routing
 
@@ -219,7 +226,10 @@ Other saved spaces expose conversations through their roots' explicit
 `chatRoom` declarations. FabriChat keeps choices about those individual rooms
 separately from the container's catalog entry. Forgetting such a conversation
 leaves its container saved and suppresses rediscovery through the declaration.
-See [FabriChatManager](../specs/fabrichat/FabriChatManager.md).
+Archiving the container leaves such a conversation out of the chat list, and
+restoring it lists the conversation again unless it was forgotten, with no write
+to either record. See
+[FabriChatManager](../specs/fabrichat/FabriChatManager.md).
 
 FabriChat consumes the manager's flat fields through its room-specific schema.
 Shared-record handlers bind individual streams without materializing a manager
@@ -556,6 +566,27 @@ evidence of that application action, not server-attested sender authentication.
 The catalog stores no invitation bearer, identity key, profile inbox pointer, or
 delivery endpoint. Adopting an inbox or changing its ACL is a separate
 operation.
+
+## Notice marks
+
+The catalog's `notices` records, for each notice that a space changed which
+the person's host has acted on, the `sharedAt` of the last one acted on. It is
+keyed as receipts are, by the pair of the notice's sender DID and its `id`,
+and each value is a nonnegative integer; the catalog holds no `notices` until
+one is marked. A mark under any other key, or holding any other value, makes
+the catalog malformed, as a malformed receipt does. A notice is a row of the person's private inbox, and
+[the private inbox](private-inbox.md#a-notice-that-a-room-changed) says which
+the host acts on and how.
+
+FabriChat's manager writes the mark, through `markSharedSpaceNoticeIn()`, in
+the transaction of the `joinRoom` the host sends for a notice, as that join
+brings the title the catalog lists the room under up to the room's own. It
+writes only the one key, and only where the mark it holds differs. The host
+reads the mark before acting on a notice, and acts on one whose `sharedAt` is
+another than the marked one, so the mark is what keeps a host from reading a
+room again for a notice already acted on. A mark names no entry, and an entry's
+archiving, restoring, or removal leaves the marks as they are. Marks are
+retained as receipts are, at most one per sender and `id`.
 
 ## Repair and retention
 

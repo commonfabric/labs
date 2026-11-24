@@ -99,20 +99,30 @@ export type ProfileSuggestion = {
 
 /**
  * The user's own decision about the picture the profile the surface creates
- * starts with: `picture` holds the one they chose, and an empty choice means
- * they removed it. Until they decide, the slot is `undefined` and the
- * suggested picture stands.
+ * starts with: `picture` holds the bytes of the one they chose, and
+ * `pictureBlob` the blob `<cf-avatar-input>` stored them in, and an empty
+ * choice means they removed it. Until they decide, the slot is `undefined`
+ * and the suggested picture stands.
  */
-export type PictureChoice = { picture?: FabricBytes };
+export type PictureChoice = {
+  picture?: FabricBytes;
+  pictureBlob?: { space: string; id: string };
+};
 
-/** The picture the profile takes: the user's choice, else the suggestion's. */
+/**
+ * The picture the profile takes, as the profile's `setPicture` takes it: the
+ * user's choice, else the suggestion's.
+ */
 function pictureToApply(
   choice: PictureChoice | undefined,
   suggestion: ProfileSuggestion | null | undefined,
-): FabricBytes | undefined {
-  const picture = choice === undefined ? suggestion?.picture : choice.picture;
-  // An empty picture is none: the seed step and `setPicture` take only bytes.
-  return picture?.length ? picture : undefined;
+): PictureChoice | undefined {
+  if (choice !== undefined) {
+    // An empty picture is none: the seed step and `setPicture` take none.
+    return choice.picture?.length ? choice : undefined;
+  }
+  const picture = suggestion?.picture;
+  return picture?.length ? { picture } : undefined;
 }
 
 // Stores the creation name in the new profile's `name` cell, through
@@ -173,8 +183,10 @@ export const seedProfileName = handler<
   // otherwise wait for the next worker.
   pointAtInboxIfUnset(target, privateInbox);
   target.setName.send({ name });
+  // Both forms the choice holds are sent: the profile keeps the blob, and a
+  // profile whose `setPicture` predates blobs keeps the bytes.
   const picture = pictureToApply(pictureChoice?.get(), profileSuggestion);
-  if (picture) target.setPicture?.send({ picture });
+  if (picture) target.setPicture?.send(picture);
 });
 
 // CFC debt: the picture the user chooses here is not gated. Real CFC would
@@ -194,9 +206,9 @@ export type ChoosePictureState = {
 };
 
 // Records the user's picture decision on the create surface: the image they
-// chose (`cf-avatar-input`'s change), or, bound with `remove`, no picture at
-// all. A host's suggestion is left as the host stored it. A change without
-// bytes decides nothing.
+// chose (`cf-avatar-input`'s change, its bytes and the blob it stored them
+// in), or, bound with `remove`, no picture at all. A host's suggestion is left
+// as the host stored it. A change without bytes decides nothing.
 export const choosePicture = handler<
   SetProfilePictureEvent,
   ChoosePictureState
@@ -206,7 +218,12 @@ export const choosePicture = handler<
     return;
   }
   const picture = event?.picture ?? event?.detail?.bytes;
-  if (picture?.length) pictureChoice.set({ picture });
+  const pictureBlob = event?.pictureBlob ?? event?.detail?.blob;
+  if (picture?.length) {
+    pictureChoice.set(
+      pictureBlob === undefined ? { picture } : { picture, pictureBlob },
+    );
+  }
 });
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
@@ -774,9 +791,13 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
       seedName,
     });
     const startingName = computed(() => suggestion?.name ?? defaultName ?? "");
+    // The picture the create would apply, as it would apply it: the blob it
+    // was stored in where there is one, else its bytes.
     const shownPicture = computed(() =>
       pictureToApply(pictureChoice.get(), suggestion)
     );
+    const shownPictureBlob = computed(() => shownPicture?.pictureBlob);
+    const shownPictureBytes = computed(() => shownPicture?.picture);
     const chooseOwnPicture = choosePicture({ pictureChoice });
     const removePicture = choosePicture({ pictureChoice, remove: true });
     return {
@@ -812,7 +833,8 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
             {ifElse(
               shownPicture,
               <cf-avatar
-                bytes={shownPicture}
+                blob={shownPictureBlob}
+                bytes={shownPictureBytes}
                 name={startingName}
                 size="lg"
                 data-ui-region="profile-create-picture-preview"

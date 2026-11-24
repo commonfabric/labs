@@ -344,8 +344,9 @@ list — is the authoritative source. As of this writing it recognizes:
   `fetchJsonUnchecked`, `fetchText`, `fetchBinary` — `fetchProgram`,
   `streamData`, `cellFromUrl`,
   `compileAndRun`, `navigateTo`, and the SQLite builtins `sqliteDatabase` /
-  `sqliteQuery` (`sqliteQuery<Row>` additionally gets dedicated type-argument
-  schema injection)
+  `sqliteQuery` / `indexedCollections`
+  (`sqliteQuery<Row>` additionally gets
+  dedicated type-argument schema injection)
 - `patternTool` — recognized, but explicitly **not** a reactive origin
   (`reactiveOrigin: false`)
 
@@ -2119,9 +2120,9 @@ Primary behaviors:
   (`hasStaticKeyType()`) when it is a literal; a well-known Common Fabric
   key, the set `COMMON_FABRIC_KEY_NAMES` in
   `base/schema-generator/src/typescript/property-name.ts` defines (as of
-  this writing `NAME`, `UI`, `SELF`, `FS`, `VIEWS`); or an expression whose
-  type is a single string or number literal, such as a reference to
-  `const KEY = "k"`. What is emitted follows the kind of key
+  this writing `NAME`, `UI`, `SELF`, `FS`, `VIEWS`, `SUGGESTIONS`); or an
+  expression whose type is a single string or number literal, such as a
+  reference to `const KEY = "k"`. What is emitted follows the kind of key
   (`getStaticKeySegment()`): a literal as its string, a numeric one under its
   decimal name (`groups[1e2]` -> `.key("groups", "100")`); a well-known key as
   its `__cfHelpers` member (`row[NAME]` -> `row.key(__cfHelpers.NAME)`,

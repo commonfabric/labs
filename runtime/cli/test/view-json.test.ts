@@ -61,6 +61,39 @@ Deno.test("json: language metadata selects JSON-shaped names without a JSON suff
   assertEquals(languageForFile("ios/Package.resolved").id, "json");
   assertEquals(languageForFile("Cargo.lock").id, "toml");
   assertEquals(languageForFile("package.resolved").id, "plain-text");
+  assertEquals(
+    languageForFile("android/swift/Package.resolved.android").id,
+    "json",
+  );
+  assertEquals(languageForFile("Package.resolved.").id, "plain-text");
+  assertEquals(
+    languageForFile("Resources/Localizable.xcstrings").id,
+    "json",
+  );
+  assertEquals(languageForFile("dedup.cpuprofile").id, "json");
+  assertEquals(languageForFile("pattern-index/.firebaserc").id, "json");
+  assertEquals(languageForFile("firebaserc").id, "plain-text");
+});
+
+Deno.test("json: shared .conf, .config, and .lock extensions need an opening brace in the source", () => {
+  const object = '{\n  "mode": "jni"\n}\n';
+
+  assertEquals(languageForSource("swift-java.config", object).id, "json");
+  assertEquals(languageForSource("kea-dhcp4.conf", object).id, "json");
+  assertEquals(
+    languageForSource("tests/support/runtime_selection.lock", object).id,
+    "json",
+  );
+  assertEquals(
+    languageForSource("web.config", '<?xml version="1.0"?>\n<a/>').id,
+    "xml",
+  );
+  assertEquals(languageForSource("store/.recompute.lock", "").id, "plain-text");
+  assertEquals(
+    languageForSource("docling-requirements.lock", "aiohttp==3.9.5 \\\n").id,
+    "plain-text",
+  );
+  assertEquals(languageForFile("swift-java.config").id, "plain-text");
 });
 
 Deno.test("json: a shared .cfg extension needs an opening brace in the source", () => {

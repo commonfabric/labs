@@ -19,7 +19,7 @@ interface ChatRoomOutput {
   participants: Cell<ChatProfile>[];
 
   /** Those who joined the room itself, in the order they joined. */
-  roster: Cell<ChatProfile>[];
+  roster?: Cell<ChatProfile>[];
 
   /** The members of the room's space, with their own profiles. */
   members?: PerUser<{
@@ -224,11 +224,13 @@ space.
   added once through
   [`addParticipant`](#addparticipantprofile-cellchatprofile), in the order they
   were added: for a room in a space of its own, its space's participants. It
-  lists no author it doesn't hold, so it is read from what the room stores
-  alone, without reading the room's messages, which is how a chat manager reads
-  who is in each of its user's rooms (see
-  [`ChatIndexEntry`](ChatIndexEntry.md#fields)). Like `participants`, it is a
-  claim, not proof of access.
+  is absent until someone joins, and in a room nobody can join. It lists no
+  author it doesn't hold: it is a link to the roster the room stores, so it is
+  read without reading the room's messages, and a reader, a handler included,
+  reads what is stored whether or not any runtime has derived anything of the
+  room since. That is how a chat manager reads who is in each of its user's
+  rooms (see [`ChatIndexEntry`](ChatIndexEntry.md#fields)). Like
+  `participants`, it is a claim, not proof of access.
 - **`members`** are the room space's members: one for each principal the
   space's access list names, sorted by DID, holding the `principal`, the
   `level` the list grants it, and, as `profiles`, those of the participants'
@@ -349,8 +351,9 @@ and the difference matters to a client:
   the same way.
 
 Some values are derived when they're read, and stored nowhere, so reading them
-needs no instance of anything: `participants`, `roster`, and everything in
-`messages`.
+needs no instance of anything: `participants`, and everything in `messages`.
+`roster` is a link to what the room stores, so reading it needs no instance
+either.
 
 ## Streams
 
@@ -414,7 +417,10 @@ These rules hold for every stream:
   so a room the sender reached by its link, or forgot, becomes one of their
   chats. A message or a reaction marks its `joinRoom` `messageAct`, which
   leaves the title the manager's catalog lists the room under as it is; a
-  retitle's carries no mark. The manager checks membership in its own
+  retitle's carries no mark. A message's also carries its `activity`: the
+  length of the room's message list once the message is recorded, and the
+  message's `sentAt`, which the manager keeps as where the room's
+  conversation stands. The manager checks membership in its own
   Home-space event and leaves an already saved room unchanged. The room reads no private catalog and sends
   nothing for a sender with no manager. It sends `joinRoom` in an event of its
   own, once the write has landed, so the write reads nothing of the manager. A
@@ -663,8 +669,9 @@ with them.
   naming the person and the `profile` when the add has one, under a
   `requestId` composed of the room's space and the add's own. The manager
   offers them the room through their profile's share inbox, or, given only
-  their address, through the profiles its `people` lists for them, and
-  otherwise produces a notice for them. An add with no manager to send to,
+  their address, through the profiles the rosters of the reader's direct room
+  with them and of this room list for them, and otherwise produces a notice
+  for them. An add with no manager to send to,
   because the reader has none or theirs hasn't resolved yet, tells the person
   nothing more.
 - **Refused:** a direct room, whose space keeps its two members; an address

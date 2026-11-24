@@ -35,6 +35,11 @@ import {
   ownedStoreLinks,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
+import { indexedCollectionDescriptorOf } from "./indexed-collection/definition.ts";
+import {
+  maintenanceRevisionCell,
+  memberKeyOf,
+} from "./indexed-collection/maintenance.ts";
 import { resultRowKeys, SQLITE_ROW_SALT } from "./sqlite/row-identity.ts";
 import {
   computeRowLabelRead,
@@ -47,6 +52,7 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
+import { createSigilLinkFromParsedLink, isCellLink } from "../link-utils.ts";
 import { setResultCell } from "../result-utils.ts";
 import { runtimeSecretLink } from "../runtime-secret.ts";
 import { schemaHasIfc } from "../schema-ifc.ts";
@@ -85,7 +91,7 @@ import {
   type FabricValue,
   valueEqual,
 } from "@commonfabric/data-model";
-
+import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
 import { validateRowLabelSpec } from "@commonfabric/memory/sqlite/row-label";
 import {
   columnDeclaresIfc,
@@ -102,6 +108,7 @@ import type { SqliteQueryResult } from "@commonfabric/api";
 import { validateSchemaValue } from "../cfc/schema-sanitization.ts";
 
 import {
+  asBoundCell,
   type Cell,
   convertCellsToLinks,
   createCell,
@@ -131,16 +138,6 @@ const queryError = (error: unknown) =>
 
 /** The sink every sqlite query request is staged under. */
 export const SQLITE_QUERY_SINK = "sqliteQuery";
-
-/**
- * What a query reads whose request carries confidentiality and whose database
- * lies in another space. The rule and nothing more: which atoms did not fit
- * names the principals that introduced them, and that detail faces the
- * operator rather than the pattern.
- */
-export const SQLITE_FOREIGN_SPACE_REFUSAL =
-  "sqlite: a query whose request carries confidentiality cannot read a " +
-  "database in another space";
 
 /** What a query reads whose request was staged and never sent. */
 export const SQLITE_UNSENT_REFUSAL =
@@ -866,8 +863,22 @@ export function sqliteDatabase(
         scope,
       );
       const options = inputsCell.withTx(tx).get() as
-        | { tables?: SqliteDbRef["tables"] }
+        | { tables?: SqliteDbRef["tables"]; index?: unknown }
         | undefined;
+      // The cell a collection has every one of its writers write as well,
+      // carried on the handle as a reference so that whoever holds the handle
+      // writes the same one.
+      const guardInput = inputsCell.withTx(tx).key("guard");
+      const guard = isCellLink(guardInput.getRaw())
+        ? createSigilLinkFromParsedLink(
+          guardInput.resolveAsCell().getAsNormalizedFullLink(),
+        )
+        : undefined;
+      // An indexed collection is a database whose handle also carries the
+      // descriptor its tables were derived from.
+      const index = indexedCollectionDescriptorOf(
+        snapshotQueryResult(options),
+      );
       // `handle` is a builtin RESULT cell (makeResultCell), and result cells
       // are always `of:`-schemed — the computed kind applies only to derived
       // internal cells — so stripping the entity scheme yields the handle's
@@ -939,6 +950,8 @@ export function sqliteDatabase(
             ...(tables !== undefined && { tables }),
             scope,
             ...(owner !== undefined && { owner }),
+            ...(index !== undefined && { index }),
+            ...(guard !== undefined && { guard }),
             // Carry db.exec's write revision forward — dropping it would make
             // this re-derivation look like "new inputs" to every handle hasher.
             ...(typeof prior?.rev === "number" && { rev: prior.rev }),
@@ -956,14 +969,23 @@ export function sqliteDatabase(
         if (result.error) {
           return;
         }
+        const durable = () => {
+          initialized.add(instance);
+          if (index !== undefined) {
+            runtime.indexedCollections.register(
+              handle.getAsNormalizedFullLink(),
+              id,
+            );
+          }
+        };
         const waveSettlement = waveSettlementOf(settledTx);
         if (waveSettlement === undefined) {
-          initialized.add(instance);
+          durable();
           return;
         }
         void waveSettlement.then((waveResult) => {
           if (!waveResult.error) {
-            initialized.add(instance);
+            durable();
           }
         });
       });
@@ -1032,6 +1054,21 @@ export function sqliteQueryMemoDecision(options: {
   return "issue";
 }
 
+/**
+ * Returns `params` with every cell bound to a named `_cf_link` parameter
+ * replaced by the reference an indexed collection stores that cell under.
+ * A cell bound anywhere else is left for the parameter encoder to refuse.
+ */
+function withMemberKeys(params: WireParams): WireParams {
+  if (!isObjectNotArray(params)) return params;
+  return Object.fromEntries(
+    Object.entries(params).map(([name, value]) => {
+      const cell = isCfLinkColumn(name) ? asBoundCell(value) : undefined;
+      return [name, cell === undefined ? value : memberKeyOf(cell)];
+    }),
+  ) as WireParams;
+}
+
 /** sqliteQuery: reactive server-side read. */
 export function sqliteQuery(
   inputsCell: Cell<any>,
@@ -1060,6 +1097,21 @@ export function sqliteQuery(
 
   /** Resolved request targets with an outstanding RPC. */
   const inFlightIssues = new Set<string>();
+
+  /**
+   * The collection revision each request target's last completed request
+   * asked under, for a query over an indexed collection. Held here and not in
+   * the result: the revision moves on every write to the collection, and a
+   * result that recorded it would change for its readers when its rows did
+   * not.
+   */
+  const servedRevisions = new Map<string, string>();
+
+  /** The collection revision each request target's latest run observed. */
+  const wantedRevisions = new Map<string, string>();
+
+  /** The scheduler's handle on this node's action, once it has one. */
+  let registeredAction: Action | undefined;
 
   /** Pending publications, partitioned by result and physical binding instance. */
   const stagings = new Map<
@@ -1282,9 +1334,20 @@ export function sqliteQuery(
       return;
     }
     const linkCols = asCellColumnsFromRowSchema(inputs.rowSchema);
+    // A query over an indexed collection looks its members up by the
+    // reference they are stored under, so a cell bound as a parameter is
+    // bound as that reference.
+    // Only the declaration is read off the handle: the handle also names the
+    // member added last, whose fields are no input of this query.
+    const overCollection = indexedCollectionDescriptorOf({
+      index: snapshotQueryResult((inputs.db as { index?: unknown }).index),
+    }) !== undefined;
     let params: WireParams;
     try {
-      params = encodeSqliteParams(inputs.sql, inputs.params);
+      params = encodeSqliteParams(
+        inputs.sql,
+        overCollection ? withMemberKeys(inputs.params) : inputs.params,
+      );
     } catch (error) {
       result.withTx(tx).set({
         pending: false,
@@ -1312,6 +1375,23 @@ export function sqliteQuery(
     // query returns, when the transaction that read them has finished. The
     // row schema's is the typed alternative, `MaxConfidentiality<Row>`.
     const reactOn = snapshotQueryResult(inputs.reactOn);
+    // A query over an indexed collection follows the collection's write
+    // revision without being told to, and keeps that revision out of the
+    // request's identity: the request is the same question asked again.
+    const refreshToken = !overCollection
+      ? undefined
+      : computeInputHashFromValue({
+        rev: (inputs.db as { rev?: number }).rev ?? 0,
+        // The last write maintenance made, which the handle does not
+        // count.
+        maintained: maintenanceRevisionCell(
+          runtime,
+          databaseSpace,
+          db.id,
+          tx,
+        ).get() ?? null,
+        reactOn: reactOn ?? null,
+      });
     const declaredCeiling = snapshotQueryResult(inputs.maxConfidentiality);
     const rowSchemaCeiling = snapshotQueryResult(
       (inputs.rowSchema as {
@@ -1327,7 +1407,7 @@ export function sqliteQuery(
       db,
       sql: inputs.sql,
       params: params ?? null,
-      reactOn: reactOn ?? null,
+      reactOn: refreshToken === undefined ? (reactOn ?? null) : null,
       ...correlation,
       // The contract a result's labels are written under is part of the
       // identity, so a result stored under another contract cannot stand as
@@ -1383,7 +1463,10 @@ export function sqliteQuery(
       readTx: IExtendedStorageTransaction,
     ): QueryState | undefined =>
       result.withTx(readTx).getRaw({
-        meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+        meta: Object.freeze({
+          ...writeDestinationRead,
+          ...ignoreReadForScheduling,
+        }),
       }) as QueryState | undefined;
     const storedBeforeClaim = storedQueryState(tx);
     // The confidentiality THIS request carries: the transaction's flow join,
@@ -1405,62 +1488,33 @@ export function sqliteQuery(
     // carry, and a value's label does not depend on whether the runtime
     // propagates the join onto writes — prepare's own short-circuit on
     // `flowMode === "off"` is about what it STAMPS, not about what exists.
-    // Keying this on the flow dial would hand a statically labeled parameter
-    // to a foreign space's provider as though it carried nothing.
+    // Keying this on the flow dial would treat a statically labeled
+    // parameter as though it carried nothing.
     let derivedRequestLabel: readonly CfcConfClause[] | undefined;
     const requestConfidentiality = (): readonly CfcConfClause[] =>
       derivedRequestLabel ??= tx.getCfcState().enforcementMode === "disabled"
         ? []
         : deriveFlowJoin(tx).confidentiality;
-    // The bound a sqlite read's egress has, applied where the sink registry
-    // cannot hold it (`cfc/sink-inventory.ts`). A query whose database lies
-    // in another space hands its statement and parameters to whoever holds
-    // THAT space's replicas, who are not the audience this result document's
-    // residency names; a same-space query reaches only the provider that
-    // already holds every byte of that document.
-    //
-    // Ahead of the memo decision, so a labeled request for a foreign
-    // database is refused whether or not an earlier unlabeled one left a
-    // result standing here. A hit sends nothing, so the rule could have been
-    // read as satisfied either way; answering a labeled request out of what
-    // an unlabeled one fetched is the reading that would have to be argued
-    // for, and nobody has argued for it.
-    //
-    // Not gated on the enforcement rung, because it is an egress bound
-    // rather than a writer fit: a sink ceiling refuses a request at every
-    // rung too. A deployment that labels nothing derives an empty join and
-    // never meets it.
-    if (crossSpace && requestConfidentiality().length > 0) {
-      // On the issuing transaction, whose flow join is non-empty by
-      // construction — that is the condition this fires on — so the control
-      // paths this writes carry that join as their derived component. A
-      // pattern rendering "this query was refused" inherits it.
-      //
-      // `nonReactive`, like the claim below: the write machinery's read of
-      // the region it is about to write must not make this action depend on
-      // its own result document.
-      //
-      // No request hash goes with it: recording this one's would make the
-      // next evaluation of the same inputs a memo hit, so a later pass whose
-      // request carries nothing would never ask again. What the pattern
-      // reads is the rule and nothing more — which atoms did not fit names
-      // the principals that introduced them, and that detail faces the
-      // operator.
-      result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
-        pending: false,
-        ...valueChannel(unavailableError(SQLITE_FOREIGN_SPACE_REFUSAL)),
-        error: SQLITE_FOREIGN_SPACE_REFUSAL,
-        ...correlation,
-      });
-      return;
-    }
     const decision = sqliteQueryMemoDecision({
       stored: storedBeforeClaim,
       hash,
       inFlightHere: inFlightIssues.has(effectKey),
       speculativeRun: speculationRunContextOf(tx) !== undefined,
     });
-    if (decision === "hit") {
+    // A settled result asked under an older revision of its collection is
+    // asked again in place: no claim is written, so the result changes only
+    // if the rows do. One request per target is out at a time, since that is
+    // what the outbox admits, so a run that finds one in flight records the
+    // revision it wants and leaves the asking to that request's completion.
+    // A speculative run owns no query, as for any request.
+    if (refreshToken !== undefined) {
+      wantedRevisions.set(effectKey, refreshToken);
+    }
+    const quietRefresh = decision === "hit" && refreshToken !== undefined &&
+      servedRevisions.get(effectKey) !== refreshToken &&
+      !inFlightIssues.has(effectKey) &&
+      speculationRunContextOf(tx) === undefined;
+    if (decision === "hit" && !quietRefresh) {
       // The §4 memo hit (server-execution v2): the committed result records
       // this request hash AND carries a settled result — the stored result
       // is the value, no re-issue. A bare pending claim is never a hit.
@@ -1481,9 +1535,11 @@ export function sqliteQuery(
       requestHash: hash,
       ...correlation,
     };
-    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set(
-      pendingState,
-    );
+    if (!quietRefresh) {
+      result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set(
+        pendingState,
+      );
+    }
 
     const sql = inputs.sql;
     requestStaged = true;
@@ -1511,6 +1567,12 @@ export function sqliteQuery(
       // going to run here, so returning without releasing would leave this
       // request's entry in the node's map for as long as the map lives.
       if (cancelled.signal.aborted) {
+        releaseStaging();
+        return;
+      }
+      // A refresh that never went out left the settled result standing, and
+      // the next run asks again.
+      if (quietRefresh) {
         releaseStaging();
         return;
       }
@@ -1579,8 +1641,7 @@ export function sqliteQuery(
             // introduced it — which is what the pattern-facing surface
             // withholds. That detail reaches the operator through the
             // scheduler's report of the dropped write.
-            // No request hash, for the reason the foreign-space refusal
-            // records none: an ending that means the request never went out
+            // No request hash: an ending that means the request never went out
             // is not an answer to it, and a hash here would make the next
             // evaluation of the same inputs a memo hit that never asks
             // again. Nothing spins on it either — this node reads its own
@@ -1705,7 +1766,10 @@ export function sqliteQuery(
             ...store,
             path: [...store.path, "requestHash"],
           }, {
-            meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+            meta: Object.freeze({
+              ...writeDestinationRead,
+              ...ignoreReadForScheduling,
+            }),
           }) as string | undefined;
         };
         // The acting reader at flush time: the CAPTURED run principal for
@@ -2209,6 +2273,19 @@ export function sqliteQuery(
           }
         } finally {
           inFlightIssues.delete(effectKey);
+          if (refreshToken !== undefined) {
+            // This request read the collection at the revision its run
+            // observed, or a later one. A run that has observed a different
+            // one since had no request to send while this one was out, so it
+            // is run again to send its own.
+            servedRevisions.set(effectKey, refreshToken);
+            if (
+              wantedRevisions.get(effectKey) !== refreshToken &&
+              registeredAction !== undefined && !cancelled.signal.aborted
+            ) {
+              runtime.scheduler.invalidateAction(registeredAction);
+            }
+          }
         }
       },
       {
@@ -2220,6 +2297,9 @@ export function sqliteQuery(
   };
   return {
     action,
+    onActionRegistered: (registered) => {
+      registeredAction = registered;
+    },
     storeWrites: ownedStoreLinks(runtime, parentCell, [
       resultCellCause("sqliteQuery", cause),
     ]),

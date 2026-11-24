@@ -105,6 +105,7 @@ export type ReplayMetrics = {
   anyOfPropertyMerges: number;
   getDocAtPathCalls: number;
   schemaMemoHits: number;
+  nativeDepthHandoffs: number;
   reads: number;
 };
 
@@ -335,6 +336,7 @@ export function replayFixture(
     anyOfPropertyMerges: 0,
     getDocAtPathCalls: 0,
     schemaMemoHits: 0,
+    nativeDepthHandoffs: 0,
     reads: 0,
   };
 
@@ -415,6 +417,7 @@ export function replayFixture(
     metrics.anyOfPropertyMerges += traverser.anyOfPropertyMerges;
     metrics.getDocAtPathCalls += traverser.getDocAtPathCalls;
     metrics.schemaMemoHits += traverser.schemaMemoHits;
+    metrics.nativeDepthHandoffs += traverser.nativeDepthHandoffs;
 
     if (collectOracle) {
       invocationOracles.push({

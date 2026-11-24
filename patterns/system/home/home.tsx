@@ -33,6 +33,7 @@ import FavoritesManager from "../favorites-manager/favorites-manager.tsx";
 import Self from "../self/self.tsx";
 import SharedSpaceCollection, {
   type SharedSpaceCollectionOutput,
+  SOCIAL_SPACES_TAB,
 } from "../shared-space/shared-space-collection.tsx";
 import {
   sharedSpaceCollectionViewOf,
@@ -99,9 +100,13 @@ import {
   TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
 } from "../private-inbox/private-inbox.tsx";
 
-// Types from favorites-manager.tsx
+// A stored favorite, as `favoriteEntrySchema` in `@commonfabric/home-schemas`
+// declares it.
 type Favorite = {
-  cell: { [NAME]?: string };
+  // A link to the favorited piece. Typed as a cell, so reading a favorite does
+  // not read the piece: that read would join the piece's confidentiality into
+  // every handler that touches the favorites, and through them into the list.
+  cell: Writable<{ [NAME]?: string }>;
   // Discovery tags snapshotted from the piece's schema when favorited.
   tags: string[];
   userTags: string[];
@@ -313,6 +318,8 @@ export type HomeOutput = {
   removeSpace: Stream<{ did?: string; name?: string }>;
   adoptSpace: Stream<{ name: string; did: string }>;
   renameSpace: Stream<{ did: string; name: string }>;
+  // Which of Home's tabs is selected.
+  activeTab: Writable<string>;
 };
 
 // Handler to add a favorite
@@ -674,6 +681,10 @@ const Home = pattern(
     const socialSpaceCollection = SharedSpaceCollection({
       catalog,
       view: sharedSpaces.view,
+      // Read from Home's own result, which leads nowhere, so that the
+      // collection is reached where it was and every unnamed node keeps its
+      // number.
+      selectedTab: home.activeTab,
     });
 
     return {
@@ -692,7 +703,7 @@ const Home = pattern(
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
               <cf-tab value="chats">Chats</cf-tab>
-              <cf-tab value="social-spaces">Social spaces</cf-tab>
+              <cf-tab value={SOCIAL_SPACES_TAB}>Social spaces</cf-tab>
             </cf-tab-list>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
@@ -795,7 +806,7 @@ const Home = pattern(
             <cf-tab-panel value="chats" id="home-chats">
               {chatManager}
             </cf-tab-panel>
-            <cf-tab-panel value="social-spaces" id="home-social-spaces">
+            <cf-tab-panel value={SOCIAL_SPACES_TAB} id="home-social-spaces">
               {socialSpaceCollection}
             </cf-tab-panel>
           </cf-tabs>
@@ -930,6 +941,7 @@ const Home = pattern(
       }),
       replaceRefusedPrivateInbox: replaceRefusedInboxStream,
       createOwnPrivateInbox: createOwnPrivateInboxOnly({ ownPrivateInbox }),
+      activeTab,
     };
   },
   homeArgumentSchema,

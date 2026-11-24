@@ -12,11 +12,14 @@ export interface BlobReference {
  * for one element, asking the runtime each time the reference changes and
  * keeping only the answer for the latest. The element shows `url` once it has
  * a value, and `requestUpdate()` is called on it when it gets one. A resolver
- * made for downloads resolves to the URL to save the blob from.
+ * made for downloads resolves to the URL to save the blob from. `onFailure`,
+ * when given, is called when the runtime cannot give the latest reference's
+ * URL.
  */
 export class BlobUrlResolver {
   #host: { requestUpdate(): void };
   #download: boolean;
+  #onFailure: (() => void) | undefined;
   #request = 0;
   #url: string | null = null;
 
@@ -26,10 +29,11 @@ export class BlobUrlResolver {
    */
   constructor(
     host: { requestUpdate(): void },
-    options: { download?: boolean } = {},
+    options: { download?: boolean; onFailure?: () => void } = {},
   ) {
     this.#host = host;
     this.#download = options.download === true;
+    this.#onFailure = options.onFailure;
   }
 
   /** The URL the latest reference resolved to, or `null` until it has. */
@@ -62,6 +66,7 @@ export class BlobUrlResolver {
       },
       () => {
         // A blob whose URL can't be resolved is shown as none.
+        if (request === this.#request) this.#onFailure?.();
       },
     );
   }

@@ -20,6 +20,7 @@
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import type { MutableFabricPlainObjectLayer } from "@commonfabric/data-model";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { sqlAffinity } from "./columns.ts";
 
@@ -111,8 +112,9 @@ export function whenMatches(
   };
 }
 
-/** `did:<protocol>:<v>` for each extracted `v` (distributes over the match
- *  list). Normalization is protocol-implied: mailto/web lowercase+trim,
+/** A reader `User(did:<protocol>:<v>)` for each extracted `v` (distributes
+ *  over the match list); in an integrity position, the bare DID is the
+ *  provenance subject. Normalization is protocol-implied: mailto/web lowercase+trim,
  *  did:key untouched (base58 is case-sensitive), unknown protocols identity. */
 export function principal(
   protocol: string,
@@ -130,7 +132,8 @@ export function principal(
 }
 
 /** The db's owner — the principal that created the SqliteDb cell, resolved
- *  from the db ref. A FIXED db property, so the rule stays pure. */
+ *  from the db ref, as the reader `User(<owner DID>)`. A FIXED db property,
+ *  so the rule stays pure. */
 export function dbOwner(): { dbOwner: true } {
   return { dbOwner: true };
 }
@@ -800,6 +803,15 @@ function evalPrincipal(
   );
 }
 
+// A reader, as a confidentiality alternative, is the structured
+// `User{subject}` atom (CFC spec §4.1.2, §15.2; §13.12.1 writes the db owner
+// `O = User(did:key:owner)`), never the bare DID: the fit test compares atoms
+// exactly, so a bare string would meet no `User` ceiling — the owner's own run
+// could not read the rows `dbOwner()` labels for it.
+export function readerAtom(did: string): { type: string; subject: string } {
+  return { type: CFC_ATOM_TYPE.User, subject: did };
+}
+
 // True if an `any()` alternative is (directly, or via a `when()` gate) a
 // conjunction/nested disjunction — the shape the evaluator must reject rather
 // than union-flatten. Mirrors `validateAnyOfAlternative`'s recursion so eval
@@ -859,10 +871,12 @@ function evalConf(
     return terms.flatMap((t) => evalConf(t, row, ctx));
   }
   if ("principal" in node) {
-    return evalPrincipal(node.principal as Record<string, unknown>, row);
+    return evalPrincipal(node.principal as Record<string, unknown>, row).map(
+      readerAtom,
+    );
   }
   if ("dbOwner" in node) {
-    return ctx.dbOwner !== undefined ? [ctx.dbOwner] : fail(
+    return ctx.dbOwner !== undefined ? [readerAtom(ctx.dbOwner)] : fail(
       "dbOwner() has no owner in the evaluation context",
     );
   }
@@ -979,7 +993,7 @@ function staticUnconditionalAlternatives(
   // principal): it contributes no static reader, so the aggregate refuses.
   if (presentOps(node).length > 1) return [];
   if (node.dbOwner === true) {
-    return ctx.dbOwner !== undefined ? [ctx.dbOwner] : [];
+    return ctx.dbOwner !== undefined ? [readerAtom(ctx.dbOwner)] : [];
   }
   if ("constant" in node) return [node.constant];
   if ("anyOf" in node && Array.isArray(node.anyOf)) {

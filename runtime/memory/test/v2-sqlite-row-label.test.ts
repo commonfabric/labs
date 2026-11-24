@@ -27,6 +27,13 @@ import {
 
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
 
+// A reader as the evaluator names it in a confidentiality position: the CFC
+// `User{subject}` atom (spec §15.2), never the bare DID.
+const user = (subject: string) => ({
+  type: "https://commonfabric.org/cfc/atom/User",
+  subject,
+});
+
 const EMAIL_COLUMNS = {
   id: "integer primary key",
   from: "text",
@@ -223,7 +230,9 @@ Deno.test("ruleCommonAlternatives: the static readers of EVERY clause (Epic E2)"
       principal("mailto", match(f.from, ADDR)),
     ),
   })).rowLabel as RowLabelSpec;
-  assertEquals(ruleCommonAlternatives(orRule, { dbOwner: OWNER }), [OWNER]);
+  assertEquals(ruleCommonAlternatives(orRule, { dbOwner: OWNER }), [
+    user(OWNER),
+  ]);
 
   // dbOwner in every conjunct's OR-clause → still common.
   const cnfRule = table(EMAIL_COLUMNS, (f) => ({
@@ -232,7 +241,9 @@ Deno.test("ruleCommonAlternatives: the static readers of EVERY clause (Epic E2)"
       any(dbOwner(), principal("mailto", match(f.to, ADDR))),
     ),
   })).rowLabel as RowLabelSpec;
-  assertEquals(ruleCommonAlternatives(cnfRule, { dbOwner: OWNER }), [OWNER]);
+  assertEquals(ruleCommonAlternatives(cnfRule, { dbOwner: OWNER }), [
+    user(OWNER),
+  ]);
 
   // The CONJUNCTIVE email rule (all(principal, …, dbOwner)) has NO common
   // reader — a principal() conjunct is data-dependent, so nobody reads every
@@ -273,7 +284,9 @@ Deno.test("ruleCommonAlternatives: the static readers of EVERY clause (Epic E2)"
       any(dbOwner(), constant("did:key:public")),
     ),
   })).rowLabel as RowLabelSpec;
-  assertEquals(ruleCommonAlternatives(nestedRule, { dbOwner: OWNER }), [OWNER]);
+  assertEquals(ruleCommonAlternatives(nestedRule, { dbOwner: OWNER }), [
+    user(OWNER),
+  ]);
 
   // An integrity-only rule has no confidentiality clause → no common
   // alternative to compute (the aggregate is public, decided by the caller).
@@ -491,10 +504,10 @@ Deno.test("splits a dirty RFC-5322 To line and normalizes mailto principals", ()
     auth: "",
   });
   assertEquals(confidentiality, [
-    "did:mailto:alice@a.example",
-    "did:mailto:john@smith.com",
-    "did:mailto:bob@example.com",
-    OWNER,
+    user("did:mailto:alice@a.example"),
+    user("did:mailto:john@smith.com"),
+    user("did:mailto:bob@example.com"),
+    user(OWNER),
   ]);
   assertEquals(integrity, []);
 });
@@ -507,9 +520,9 @@ Deno.test("structural dedup: a principal appearing in two columns contributes on
     auth: "",
   });
   assertEquals(confidentiality, [
-    "did:mailto:alice@a.example",
-    "did:mailto:bob@example.com",
-    OWNER,
+    user("did:mailto:alice@a.example"),
+    user("did:mailto:bob@example.com"),
+    user(OWNER),
   ]);
 });
 
@@ -547,7 +560,7 @@ Deno.test("capture group + did:web: derive the org domain from the sender", () =
     {},
   );
   if ("error" in res) throw new Error(res.error);
-  assertEquals(res.confidentiality, ["did:web:acme.example"]);
+  assertEquals(res.confidentiality, [user("did:web:acme.example")]);
 });
 
 Deno.test("did:key protocol does NOT normalize case (base58 is case-sensitive)", () => {
@@ -563,7 +576,7 @@ Deno.test("did:key protocol does NOT normalize case (base58 is case-sensitive)",
     {},
   );
   if ("error" in res) throw new Error(res.error);
-  assertEquals(res.confidentiality, ["did:key:z6MkExAmPlE"]);
+  assertEquals(res.confidentiality, [user("did:key:z6MkExAmPlE")]);
 });
 
 Deno.test("empty optional field contributes nothing (cc-only / bcc-only mail is legal)", () => {
@@ -574,9 +587,9 @@ Deno.test("empty optional field contributes nothing (cc-only / bcc-only mail is 
     auth: "",
   });
   assertEquals(confidentiality, [
-    "did:mailto:alice@a.example",
-    "did:mailto:bob@example.com",
-    OWNER,
+    user("did:mailto:alice@a.example"),
+    user("did:mailto:bob@example.com"),
+    user(OWNER),
   ]);
 });
 
@@ -587,7 +600,10 @@ Deno.test("null field value behaves like empty (SQLite NULL)", () => {
     cc: null,
     auth: null,
   });
-  assertEquals(confidentiality, ["did:mailto:alice@a.example", OWNER]);
+  assertEquals(confidentiality, [
+    user("did:mailto:alice@a.example"),
+    user(OWNER),
+  ]);
 });
 
 Deno.test("constant() injects a literal atom; intersect() meets integrity atom sets", () => {
@@ -697,7 +713,7 @@ Deno.test("an anyOf node evaluates to a structural OR-clause (Epic E1)", () => {
   });
   if ("error" in res) throw new Error(`unexpected error: ${res.error}`);
   assertEquals(res.confidentiality, [
-    { anyOf: [OWNER, "did:mailto:alice@a.example"] },
+    { anyOf: [user(OWNER), user("did:mailto:alice@a.example")] },
   ]);
 });
 
@@ -753,8 +769,8 @@ Deno.test("an all() of any()-clauses is proper CNF (Epic E1)", () => {
   );
   if ("error" in res) throw new Error(`unexpected error: ${res.error}`);
   assertEquals(res.confidentiality, [
-    { anyOf: [OWNER, "did:mailto:alice@a.example"] },
-    "did:mailto:bob@example.com",
+    { anyOf: [user(OWNER), user("did:mailto:alice@a.example")] },
+    user("did:mailto:bob@example.com"),
   ]);
 });
 
@@ -1094,5 +1110,50 @@ Deno.test("a wire match without the global flag still evaluates (forced, no thro
   };
   const res = evaluateRowLabel(spec, { from: "a@b.example" }, {});
   if ("error" in res) throw new Error(res.error);
-  assertEquals(res.confidentiality, ["did:mailto:a@b.example"]);
+  assertEquals(res.confidentiality, [user("did:mailto:a@b.example")]);
+});
+
+// CFC spec §4.1.2 / §15.2: a reader principal is the structured
+// `User{subject}` atom, never a bare DID string (§13.12.1 writes the db owner
+// as `O = User(did:key:owner)`, §4.2 an OR-clause participant as
+// `User(did:mailto:…)`). A bare string meets no `User` ceiling under the fit
+// test's exact atom comparison, so the owner's own run could not read rows its
+// own `dbOwner()` labels.
+Deno.test("dbOwner() and principal() name readers as User{subject} atoms", () => {
+  const OWNER = "did:key:zOwner";
+  const spec = table(
+    { id: "integer primary key", from: "text", to: "text" },
+    (f) => ({
+      confidentiality: any(
+        principal("mailto", match(f.from, ADDR)),
+        principal("mailto", match(f.to, ADDR)),
+        dbOwner(),
+      ),
+      integrity: authoredBy(principal("mailto", match(f.from, ADDR))),
+    }),
+  ).rowLabel as RowLabelSpec;
+  const res = evaluateRowLabel(
+    spec,
+    { from: "alice@a.example", to: "bob@b.example" },
+    { dbOwner: OWNER },
+  );
+  if ("error" in res) throw new Error(res.error);
+  assertEquals(res.confidentiality, [{
+    anyOf: [
+      user("did:mailto:alice@a.example"),
+      user("did:mailto:bob@b.example"),
+      user(OWNER),
+    ],
+  }]);
+  // Integrity names a provenance SUBJECT, not a reader: it stays the DID.
+  assertEquals(res.integrity, [{
+    kind: "claimed-authored-by",
+    subject: "did:mailto:alice@a.example",
+  }]);
+  // The common-alternative set names the same atom the rows carry, so the
+  // owner's aggregate read meets the owner's per-row reads.
+  assertEquals(
+    ruleCommonAlternatives(spec, { dbOwner: OWNER }),
+    [user(OWNER)],
+  );
 });

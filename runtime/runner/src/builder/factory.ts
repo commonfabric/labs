@@ -61,6 +61,7 @@ import {
   generateText,
   generateTextStream,
   ifElse,
+  indexedCollections,
   inspectConfLabel,
   latestComplete,
   llm,
@@ -140,6 +141,7 @@ import {
   NAME,
   schema as schemaIdentity,
   SELF,
+  SUGGESTIONS,
   TESTS,
   TILE_UI,
   TYPE,
@@ -328,6 +330,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     ),
     sqliteDatabase,
     sqliteQuery,
+    indexedCollections,
     table,
     cfLink,
     // The SQLite helper namespace — one import for the growing vocabulary:
@@ -421,6 +424,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     FS,
     TESTS,
     VIEWS,
+    SUGGESTIONS,
 
     // Schema utilities
     schema: runtimeSchema,

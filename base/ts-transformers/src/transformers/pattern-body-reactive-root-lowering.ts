@@ -817,7 +817,7 @@ function rewriteTrackedOpaquePatternBody(
       // Tracked-opaque static-key access takes precedence over the JSX
       // dynamic-wrap heuristic: when the root is a known opaque binding and
       // the access argument resolves to a static path segment (including
-      // well-known CF computed keys like UI/NAME/SELF/FS/VIEWS), the
+      // well-known CF computed keys like UI/NAME/SELF/FS/VIEWS/SUGGESTIONS), the
       // canonical form is an in-place read, whether or not the expression lives
       // inside a JSX slot: `root.key(...)`, or `root[SELF]` and then
       // `root[SELF].key(...)` for a path that starts with `SELF` (see

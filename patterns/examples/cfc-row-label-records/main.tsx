@@ -112,8 +112,14 @@ export default pattern<Record<string, never>, RecordsOutput>(() => {
   const db = sqliteDatabase({ tables: { records } });
 
   const ceiling = [
-    "did:mailto:ada@a.example",
-    "did:mailto:grace@g.example",
+    {
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: "did:mailto:ada@a.example",
+    },
+    {
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: "did:mailto:grace@g.example",
+    },
     { __ctDbOwner: true },
   ];
 

@@ -17,7 +17,7 @@ import { parseDiff } from "../lib/view/diff.ts";
 import {
   buildDiffDocument,
   type DiffWorkspace,
-  type WorkspaceCache,
+  WorkspaceCache,
 } from "../lib/view/diffdoc.ts";
 import { createDiffHighlighter, diffSource } from "../lib/view/diffedit.ts";
 import { renderFrame } from "../lib/view/render.ts";
@@ -343,7 +343,7 @@ export const shown = 2;
         read: () => newText,
       };
       const model = parseDiff(diff)!;
-      const cache: WorkspaceCache = new Map();
+      const cache = new WorkspaceCache();
       const { doc, edit } = buildDiffDocument(diff, model, ws, cache);
       const source = diffSource(ws, edit, cache);
       const highlighter = source.createHighlighter!(diff, doc.lines);
@@ -1223,7 +1223,7 @@ index 0000000..1111111 100644
       },
     };
     const model = parseDiff(EXPAND_DIFF)!;
-    const cache = new Map();
+    const cache = new WorkspaceCache();
     const { doc, edit } = buildDiffDocument(EXPAND_DIFF, model, ws, cache);
     const s = new Session(
       doc,

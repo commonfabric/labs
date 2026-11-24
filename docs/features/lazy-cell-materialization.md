@@ -308,7 +308,10 @@ Another client keeps seeing the last committed result, and a result that has
 never been written remains absent. Once the load settles, even if no data
 arrived, the computation runs again. A confirmed absence or invalid value
 that fails the declared schema replaces a stale output with a native
-`schemaMismatch` error. A failed load produces a native `sync` error with its
+`schemaMismatch` error. A load that ends without delivering a document, including one the reader
+cannot access, does not keep the computation waiting. A later replica
+replacement may put a previously delivered input in transit again.
+A failed load produces a native `sync` error with its
 cause. See [the refusal rule](../specs/server-side-execution/speculation.md)
 and [read readiness](../specs/data-unavailability.md#syncing-versus-schema-mismatch).
 

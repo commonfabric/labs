@@ -34,17 +34,38 @@ import { typeScriptLanguage } from "./typescript/language.ts";
 import { markdownLanguage } from "./markdown/language.ts";
 import { jsonLanguage, jsonLinesLanguage } from "./json/language.ts";
 import { yamlLanguage } from "./yaml/language.ts";
+import {
+  bazelignoreLanguage,
+  dockerignoreLanguage,
+  gitignoreLanguage,
+} from "./ignore/language.ts";
 import { pythonLanguage } from "./python/language.ts";
+import { goLanguage, goModLanguage, goSumLanguage } from "./go/language.ts";
 import { swiftLanguage } from "./swift/language.ts";
 import { kotlinLanguage } from "./kotlin/language.ts";
+import { rustLanguage } from "./rust/language.ts";
+import { leanLanguage } from "./lean/language.ts";
+import { leanToolchainLanguage } from "./lean-toolchain/language.ts";
 import { propertiesLanguage } from "./properties/language.ts";
 import { iniLanguage } from "./ini/language.ts";
+import { dotLanguage } from "./dot/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
 import { hclLanguage } from "./hcl/language.ts";
+import {
+  cFamilyHeaderLanguage,
+  cLanguage,
+  cppLanguage,
+  cudaLanguage,
+} from "./c-family/language.ts";
+import { starlarkLanguage } from "./starlark/language.ts";
+import { bazelrcLanguage } from "./bazelrc/language.ts";
 import { shellLanguage } from "./shell/language.ts";
 import { makeLanguage } from "./make/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
+import { gitAttributesLanguage } from "./gitattributes/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
+import { orgLanguage } from "./org/language.ts";
+import { directiveLanguage } from "./directive/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -107,9 +128,14 @@ export interface Semantics {
    * show a definition that lives outside the document. Null when unreadable. */
   fileLines(filePath: string): readonly Line[] | null;
 
-  /** Build the backing program now (off the interactive path), so the first
-   * real query does not pay the one-time cost. Safe to call repeatedly. */
+  /** Start building the backing program in a worker, so that the calling
+   * thread stays free while it builds and the first real query does not pay
+   * the one-time cost. Safe to call repeatedly. */
   prewarm(): void;
+
+  /** End any worker {@link prewarm} started. Queries still answer afterwards,
+   * building the program on the calling thread, and `prewarm` does nothing. */
+  dispose(): void;
 }
 
 /** Options a language needs to build its semantic layer. */
@@ -189,17 +215,17 @@ export interface HunkStructureContext {
   readonly sourceOmitsUtf8Bom: boolean;
 
   /** Line starts of the source text `doc` was parsed from. */
-  readonly sourceLineStarts: number[];
+  readonly sourceLineStarts: readonly number[];
 
   /** Last diff line of the hunk (its extent). */
   readonly hunkEnd: number;
 
-  readonly diffLineStarts: number[];
+  readonly diffLineStarts: readonly number[];
 
   /** Code-point columns of the diff text. */
   readonly diffColumnOf: ColumnOf;
 
-  readonly rawLines: string[];
+  readonly rawLines: readonly string[];
 
   /** Name → declaration index the remap contributes to (for `t` peeks). */
   readonly definitions: Map<string, Definition[]>;
@@ -260,7 +286,7 @@ export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
    * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
-   * `"make"`, `"binary"`, or `"plain-text"`.
+   * `"make"`, `"org"`, `"directive"`, `"binary"`, or `"plain-text"`.
    */
   readonly id: string;
 
@@ -291,6 +317,10 @@ export interface Language {
    * in XML text, a YAML scalar, or JSON, which has no comments.
    */
   readonly commentLinesAreInert?: boolean;
+
+  /** Whether a doc comment is part of what the source means, as Rust's are
+   * attributes that macros and documentation tests read. */
+  readonly docCommentsAreCode?: boolean;
 
   /** Color `text` into rendered lines only — the per-keystroke-safe subset of
    * {@link parseDocument}, with no structure tree or definitions. Used by the
@@ -378,8 +408,9 @@ export function prepareLanguages(
 }
 
 // A language used before its parser has loaded shows its source as plain text
-// and starts the load, so a view that opens files as it runs listens for loads.
-export { onGrammarLoad } from "./treesitter/adapter.ts";
+// and starts the load, so a view that opens files as it runs listens for loads,
+// and a view built once waits for the loads its parse started.
+export { finishGrammarLoads, onGrammarLoad } from "./treesitter/adapter.ts";
 
 /** Whether a renderer can be projected onto line-aligned diff content. */
 export function canRenderDiffLines(language: Language): boolean {
@@ -480,17 +511,36 @@ function allLanguages(): readonly Language[] {
     jsonLanguage,
     jsonLinesLanguage,
     yamlLanguage,
+    gitignoreLanguage,
+    dockerignoreLanguage,
+    bazelignoreLanguage,
     pythonLanguage,
+    goLanguage,
+    goModLanguage,
+    goSumLanguage,
     swiftLanguage,
     kotlinLanguage,
+    rustLanguage,
     tomlLanguage,
     hclLanguage,
+    leanLanguage,
+    leanToolchainLanguage,
+    cLanguage,
+    cppLanguage,
+    cudaLanguage,
+    cFamilyHeaderLanguage,
+    starlarkLanguage,
+    bazelrcLanguage,
     shellLanguage,
     makeLanguage,
     propertiesLanguage,
     iniLanguage,
+    dotLanguage,
     proguardLanguage,
+    gitAttributesLanguage,
     xmlLanguage,
+    orgLanguage,
+    directiveLanguage,
     binaryLanguage,
     plainTextLanguage,
   ];

@@ -72,7 +72,8 @@ describe("collaborative-text-changes", () => {
 
   beforeEach(() => {
     // Fan-out is manual, so a session sees another's write only once the
-    // test has the server deliver it.
+    // test has the server deliver it. The server advertises marked splices,
+    // so a list change beside an edit is held to its rules.
     server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
     storage = EmulatedStorageManager.connectTo(server, { as: signer });
     editorStorage = EmulatedStorageManager.connectTo(server, { as: signer });
@@ -211,6 +212,71 @@ describe("collaborative-text-changes", () => {
       body: "> abc",
     });
     expect(note.get()).toEqual({ title: "Agenda", body: "> abc" });
+  });
+
+  it("commits a head insertion into a list beside an edit of a text field of the same document", async () => {
+    // The edit goes as an `apply-op`, an operation of its own on the document,
+    // and the store admits a marked splice only where its document has no
+    // other operation in the commit, so the list goes index by index.
+    type Listed = Note & { tags: string[] };
+    const listedSchema = {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        body: { type: "string" },
+        tags: { type: "array", items: { type: "string" } },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any;
+    const seeding = rt.edit();
+    rt.getCell<Listed>(
+      space,
+      "collaborative-text-listed",
+      listedSchema,
+      seeding,
+    )
+      .set({ title: "Notes", body: "ac", tags: ["a", "b", "c"] });
+    await seeding.commit({ holdSyncedUntilCovered: false }).verdict;
+    await rt.storageManager.synced();
+    const listed = rt.getCell<Listed>(
+      space,
+      "collaborative-text-listed",
+      listedSchema,
+    );
+    await listed.sync();
+    await openAsEditor(listed as unknown as Cell<Note>);
+
+    const tx = rt.edit();
+    const tags = listed.withTx(tx).key("tags");
+    tags.set(["x", ...(tags.get() as string[])]);
+    listed.withTx(tx).key("body").applyChanges({ from: 0, insert: "> " });
+    const committed = await tx.commit({ holdSyncedUntilCovered: false })
+      .verdict;
+    expect(committed.error).toBeUndefined();
+    await rt.storageManager.synced();
+
+    const reader = EmulatedStorageManager.connectTo(server, { as: signer });
+    const readerRt = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: reader,
+    });
+    try {
+      const durable = readerRt.getCell<Listed>(
+        space,
+        "collaborative-text-listed",
+        listedSchema,
+      );
+      await durable.sync();
+      await durable.pull();
+      expect(durable.get()).toEqual({
+        title: "Notes",
+        body: "> abc",
+        tags: ["x", "a", "b", "c"],
+      });
+    } finally {
+      await readerRt.dispose();
+      await reader.close();
+    }
   });
 
   it("commits two calls on one field as edits against the value each one found", async () => {

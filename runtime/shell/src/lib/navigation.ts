@@ -4,6 +4,7 @@ import {
   type NavigationCommand,
   preserveAppViewMode,
   REPLACE_NAVIGATION_EVENT,
+  setNewTabReservation,
   UPDATE_PAGE_TITLE_EVENT,
   urlToAppView,
 } from "@commonfabric/navigation";
@@ -38,6 +39,10 @@ export class Navigation {
       this.#onUpdatePageTitle,
     );
     globalThis.addEventListener("popstate", this.#onPopState);
+    // The shell takes no `cf-open-external`, so its new tabs open through
+    // the default `globalThis.open` path, which a slow target's link can keep
+    // only with a tab reserved while the click still allows one.
+    setNewTabReservation(true);
 
     const thisUrl = new URL(globalThis.location.href);
     const init = urlToAppView(thisUrl);
@@ -49,9 +54,10 @@ export class Navigation {
 
   /**
    * Stops listening, removing the four global listeners the constructor
-   * added.
+   * added, and turns tab reservation back off.
    */
   dispose() {
+    setNewTabReservation(false);
     globalThis.removeEventListener(NAVIGATE_EVENT, this.#onNavigate);
     globalThis.removeEventListener(
       REPLACE_NAVIGATION_EVENT,

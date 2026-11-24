@@ -79,6 +79,87 @@ describe("serving-memory-server", () => {
       ).toBeUndefined();
     });
 
+    it("takes the currency index mode from the literals `record` and `skip`, and none from a value that names no mode", () => {
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "record" }),
+        ),
+      ).toEqual({ currencyIndex: "record" });
+      expect(
+        policyFromEnvironment(
+          { idleParkMs: 7 },
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "skip" }),
+        ),
+      ).toEqual({ idleParkMs: 7, currencyIndex: "skip" });
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "true" }),
+        ),
+      ).toBeUndefined();
+      expect(
+        policyFromEnvironment(
+          { currencyIndex: "record" },
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "skip" }),
+        ),
+      ).toEqual({ currencyIndex: "record" });
+    });
+
+    it("takes the `start-upstream` currency index mode from that literal", () => {
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "start-upstream" }),
+        ),
+      ).toEqual({ currencyIndex: "start-upstream" });
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "start_upstream" }),
+        ),
+      ).toBeUndefined();
+    });
+
+    it("takes the currency epoch from the environment where a currency mode is set and the policy names none", () => {
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({
+            SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+            SERVER_EXECUTION_CURRENCY_EPOCH: "build-7",
+          }),
+        ),
+      ).toEqual({ currencyIndex: "skip", currencyEpoch: "build-7" });
+      expect(
+        policyFromEnvironment(
+          { currencyIndex: "record" },
+          environment({ SERVER_EXECUTION_CURRENCY_EPOCH: "build-7" }),
+        ),
+      ).toEqual({ currencyIndex: "record", currencyEpoch: "build-7" });
+      expect(
+        policyFromEnvironment(
+          { currencyIndex: "skip", currencyEpoch: "named" },
+          environment({ SERVER_EXECUTION_CURRENCY_EPOCH: "build-7" }),
+        ),
+      ).toEqual({ currencyIndex: "skip", currencyEpoch: "named" });
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_EPOCH: "build-7" }),
+        ),
+      ).toBeUndefined();
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({
+            SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+            SERVER_EXECUTION_CURRENCY_EPOCH: "",
+          }),
+        ),
+      ).toEqual({ currencyIndex: "skip" });
+    });
+
     it("takes the flush deadlines from positive decimal integers within a timer's range", () => {
       expect(
         policyFromEnvironment(

@@ -7,6 +7,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
@@ -50,8 +51,11 @@ type QueryState = {
 };
 
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
+// A reader as the rule names it: the CFC `User{subject}` atom (spec §15.2),
+// the form `dbOwner()` and `principal()` label rows with, never the bare DID.
+const user = (subject: string) => ({ type: CFC_ATOM_TYPE.User, subject });
 // The atom the `principal("mailto", …)` rule mints for the addressed row.
-const BOB = "did:mailto:bob@example.test";
+const BOB = user("did:mailto:bob@example.test");
 
 // `emails`: every row's label carries the db owner, and a row addressed to
 // someone also carries that address. Under a ceiling naming the owner alone
@@ -589,7 +593,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
     it("withholds, under `skip`, the rows a query declaring no ceiling would otherwise read", async () => {
       const rt = await start({
-        cfcReadMaxConfidentiality: [signer.did()],
+        cfcReadMaxConfidentiality: [user(signer.did())],
         cfcReadOnExceed: "skip",
       });
       const { state } = await runQuery(rt, space, db, { sql: ROWS_SQL });
@@ -649,7 +653,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
     it("refuses a query's `onExceed: null` rather than reading it as absent", async () => {
       const rt = await start({
-        cfcReadMaxConfidentiality: [signer.did()],
+        cfcReadMaxConfidentiality: [user(signer.did())],
         cfcReadOnExceed: "skip",
       });
       const { state } = await runQuery(rt, space, db, {
@@ -660,7 +664,9 @@ describe("sqliteQuery under a runtime read ceiling", () => {
     });
 
     it("refuses the query under `fail`, the default mode, when a row exceeds", async () => {
-      const rt = await start({ cfcReadMaxConfidentiality: [signer.did()] });
+      const rt = await start({
+        cfcReadMaxConfidentiality: [user(signer.did())],
+      });
       const { state } = await runQuery(rt, space, db, { sql: ROWS_SQL });
       expect(String(state.error)).toMatch(/ceiling/);
       expect(state.result).toBeUndefined();
@@ -672,7 +678,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
       const rt = await start({});
       const { state } = await runQuery(rt, space, db, {
         sql: ROWS_SQL,
-        maxConfidentiality: [signer.did(), BOB],
+        maxConfidentiality: [user(signer.did()), BOB],
       });
       expect(state.error).toBeUndefined();
       expect(bodies(state)).toEqual(["mine", "shared"]);
@@ -680,13 +686,13 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
     it("meets a query's wider ceiling with the runtime's, so the query cannot widen past it", async () => {
       const rt = await start({
-        cfcReadMaxConfidentiality: [signer.did()],
+        cfcReadMaxConfidentiality: [user(signer.did())],
         cfcReadOnExceed: "skip",
       });
       // Alone, this ceiling admits both rows.
       const { state } = await runQuery(rt, space, db, {
         sql: ROWS_SQL,
-        maxConfidentiality: [signer.did(), BOB],
+        maxConfidentiality: [user(signer.did()), BOB],
       });
       expect(state.error).toBeUndefined();
       expect(bodies(state)).toEqual(["mine"]);
@@ -694,14 +700,14 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
     it("meets a Row schema's ceiling with the runtime's on the same terms", async () => {
       const rt = await start({
-        cfcReadMaxConfidentiality: [signer.did()],
+        cfcReadMaxConfidentiality: [user(signer.did())],
         cfcReadOnExceed: "skip",
       });
       const { state } = await runQuery(rt, space, db, {
         sql: ROWS_SQL,
         rowSchema: {
           type: "object",
-          ifc: { maxConfidentiality: [signer.did(), BOB] },
+          ifc: { maxConfidentiality: [user(signer.did()), BOB] },
         },
       });
       expect(state.error).toBeUndefined();
@@ -710,12 +716,12 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
     it("keeps a query's own narrower ceiling", async () => {
       const rt = await start({
-        cfcReadMaxConfidentiality: [signer.did(), BOB],
+        cfcReadMaxConfidentiality: [user(signer.did()), BOB],
         cfcReadOnExceed: "skip",
       });
       const { state } = await runQuery(rt, space, db, {
         sql: ROWS_SQL,
-        maxConfidentiality: [signer.did()],
+        maxConfidentiality: [user(signer.did())],
       });
       expect(state.error).toBeUndefined();
       expect(bodies(state)).toEqual(["mine"]);
@@ -723,7 +729,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
     it("lets a query's own `onExceed` stand over the runtime's default", async () => {
       const rt = await start({
-        cfcReadMaxConfidentiality: [signer.did()],
+        cfcReadMaxConfidentiality: [user(signer.did())],
         cfcReadOnExceed: "skip",
       });
       const { state } = await runQuery(rt, space, db, {
@@ -742,7 +748,9 @@ describe("sqliteQuery under a runtime read ceiling", () => {
       const COUNT_SQL = "SELECT COUNT(*) AS n FROM shared";
 
       it("returns the aggregate when the runtime's ceiling admits its reader", async () => {
-        const rt = await start({ cfcReadMaxConfidentiality: [signer.did()] });
+        const rt = await start({
+          cfcReadMaxConfidentiality: [user(signer.did())],
+        });
         const { state } = await runQuery(rt, space, aggregateDb, {
           sql: COUNT_SQL,
         });
@@ -752,7 +760,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
       it("refuses the aggregate when the runtime's ceiling omits its reader", async () => {
         const rt = await start({
-          cfcReadMaxConfidentiality: ["did:key:someone-else"],
+          cfcReadMaxConfidentiality: [user("did:key:someone-else")],
         });
         const { state } = await runQuery(rt, space, aggregateDb, {
           sql: COUNT_SQL,
@@ -769,7 +777,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
       // ceiling.
       it("a runtime `skip` falls back to `fail` and returns the admitted aggregate", async () => {
         const rt = await start({
-          cfcReadMaxConfidentiality: [signer.did()],
+          cfcReadMaxConfidentiality: [user(signer.did())],
           cfcReadOnExceed: "skip",
         });
         const { state } = await runQuery(rt, space, aggregateDb, {
@@ -781,7 +789,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
       it("a runtime `skip` falls back to `fail` and refuses the aggregate its ceiling omits", async () => {
         const rt = await start({
-          cfcReadMaxConfidentiality: ["did:key:someone-else"],
+          cfcReadMaxConfidentiality: [user("did:key:someone-else")],
           cfcReadOnExceed: "skip",
         });
         const { state } = await runQuery(rt, space, aggregateDb, {
@@ -793,7 +801,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
       it("the query's own `skip` is still refused on an aggregate", async () => {
         const rt = await start({
-          cfcReadMaxConfidentiality: [signer.did()],
+          cfcReadMaxConfidentiality: [user(signer.did())],
           cfcReadOnExceed: "skip",
         });
         const { state } = await runQuery(rt, space, aggregateDb, {
@@ -806,7 +814,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
     it("returns every row of a table whose rows carry no label", async () => {
       const rt = await start({
-        cfcReadMaxConfidentiality: ["did:key:someone-else"],
+        cfcReadMaxConfidentiality: [user("did:key:someone-else")],
         cfcReadOnExceed: "skip",
       });
       const { state } = await runQuery(rt, space, db, {
@@ -818,7 +826,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
 
     it("withholds a shared query result at observation without a scope refusal", async () => {
       const rt = await start({
-        cfcReadMaxConfidentiality: [signer.did()],
+        cfcReadMaxConfidentiality: [user(signer.did())],
         cfcReadOnExceed: "skip",
       });
       const { commonfabric: cf } = createTrustedBuilder(rt);
@@ -880,7 +888,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
         storageManager: EmulatedStorageManager.connectTo(server, {
           as: signer,
         }),
-        cfcReadMaxConfidentiality: [signer.did()],
+        cfcReadMaxConfidentiality: [user(signer.did())],
         cfcReadOnExceed: "skip",
       });
       runtimeB = new Runtime({

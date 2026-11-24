@@ -30,6 +30,7 @@ import { type NamesMap } from "../../product/collection-naming/naming.ts";
 import { bucketRowsByName } from "./crossref-index.ts";
 import Topics, {
   activityOrderOf,
+  cardsToShow,
   distinctByIdentity,
   mentionedBy,
   mentionedByEach,
@@ -597,17 +598,26 @@ export default pattern(() => {
     )
   );
 
-  // A comment's author carries the face the Profile gives, picture or avatar
-  // text, and none when it gives none.
+  // A comment's author carries the face the Profile gives, a picture blob,
+  // picture bytes or avatar text, and none when it gives none.
   const assert_author_carries_face = assert(() => {
     const text = topicAuthorFromPerson("Ada", { avatar: "🦊" });
     const picture = topicAuthorFromPerson("Ada", {
       picture: new FabricBytes(new Uint8Array(ADA_PICTURE)),
     });
+    const blob = topicAuthorFromPerson("Ada", {
+      pictureBlob: { space: "did:key:z6MkAdaSpace", id: "ada-picture" },
+    });
     const none = topicAuthorFromPerson("Ada");
     return text?.avatar === "🦊" && text.picture === undefined &&
+      text.pictureBlob === undefined &&
       isAdaPicture(picture?.picture) && picture?.avatar === undefined &&
-      none?.avatar === undefined && none?.picture === undefined;
+      picture?.pictureBlob === undefined &&
+      blob?.pictureBlob?.space === "did:key:z6MkAdaSpace" &&
+      blob.pictureBlob.id === "ada-picture" && blob.picture === undefined &&
+      blob.avatar === undefined &&
+      none?.avatar === undefined && none?.picture === undefined &&
+      none?.pictureBlob === undefined;
   });
 
   const assert_profile_comment_submitted = assert(() => {
@@ -739,6 +749,29 @@ export default pattern(() => {
   const assert_warm_row_orders_by_last_activity = assert(() =>
     activityOrderOf({ lastActivityAt: 2500, createdAt: 1700 }) === 2500
   );
+
+  // The board shows only the most recently active topics, so a board larger
+  // than the limit keeps the newest activity and drops the oldest, in activity
+  // order whatever order the topics were filed in.
+  const assert_cards_keep_the_most_recently_active = assert(() => {
+    const row = (name: string, createdAt: number, lastActivityAt: number) => ({
+      name,
+      value: {
+        title: name,
+        body: "",
+        createdAt,
+        commentCount: 0,
+        lastActivityAt,
+      },
+    });
+    const shown = cardsToShow([
+      row("filed first, active last", 100, 900),
+      row("filed second, never active", 200, 0),
+      row("filed third, active early", 300, 400),
+    ], 2);
+    return shown.map(({ name }) => name).join("|") ===
+      "filed first, active last|filed third, active early";
+  });
 
   // The ordering this exists for, stated as the comparison the sort makes: a
   // cold topic filed AFTER a warm one still sorts above it. Fixed inputs that
@@ -1475,6 +1508,7 @@ export default pattern(() => {
       { assertion: assert_row_universe_accepted },
       { assertion: assert_cold_row_orders_by_created_at },
       { assertion: assert_warm_row_orders_by_last_activity },
+      { assertion: assert_cards_keep_the_most_recently_active },
       { assertion: assert_cold_new_topic_outranks_an_older_warm_one },
       { assertion: assert_self_mention_inert_through_a_twin },
       { assertion: assert_mentioned_by_counts_each_matching_entry },

@@ -27,6 +27,9 @@ export interface FakePublication {
   owner: string;
   body: Record<string, unknown>;
   listing: PatternIndexListing;
+
+  /** The channel `shareVersion` shared it on. */
+  channel?: "beta" | "stable";
 }
 
 /** One call the fake answered, as it arrived. */
@@ -62,6 +65,7 @@ export class FakePatternIndex {
   readonly #members = new Map<DIDKey, { handle: string; role: "user" }>();
   readonly #options: FakePatternIndexOptions;
   readonly #lineageSeqs = new Map<string, number>();
+  readonly #versions = new Map<string, string>();
 
   constructor(options: FakePatternIndexOptions = {}) {
     this.#options = options;
@@ -123,6 +127,8 @@ export class FakePatternIndex {
         return this.#publish(member.handle, body);
       case "requestListing":
         return this.#requestListing(member.handle, body);
+      case "shareVersion":
+        return this.#shareVersion(member.handle, body);
       case "getPattern":
         return this.#get(member.handle, body);
       case "listPatterns":
@@ -183,13 +189,16 @@ export class FakePatternIndex {
       : undefined;
     const existing = this.publications.get(patternId);
     if (existing !== undefined) {
+      // The index answers the version already holding this source.
+      const versionId = [...this.#versions].find(([, id]) => id === patternId)
+        ?.[0];
       return json(200, {
         patternId,
         created: false,
         listing: existing.listing,
         ...(lineageKey === undefined
           ? {}
-          : { seq: this.#lineageSeqs.get(lineageKey) }),
+          : { seq: this.#lineageSeqs.get(lineageKey), versionId }),
       });
     }
     this.publications.set(patternId, {
@@ -203,13 +212,38 @@ export class FakePatternIndex {
     }
     const seq = (this.#lineageSeqs.get(lineageKey) ?? 0) + 1;
     this.#lineageSeqs.set(lineageKey, seq);
+    // Version ids are unique across lineages, as the index's are.
+    const versionId = `ver-${this.#versions.size + 1}`;
+    this.#versions.set(versionId, patternId);
     return json(200, {
       patternId,
       created: true,
       listing: "not_requested",
+      versionId,
       seq,
       visibility: "private",
       share: "none",
+    });
+  }
+
+  /** Shares a version as `requestListing` does, on the channel asked for. */
+  #shareVersion(owner: string, body: Record<string, unknown>): Response {
+    const patternId = this.#versions.get(String(body.versionId));
+    if (patternId === undefined) return json(404, { error: "not found" });
+    const listed = this.#requestListing(owner, { patternId });
+    if (listed.status !== 200) return listed;
+    const stored = this.publications.get(patternId)!;
+    const asked = body.channel === "beta" ? "beta" : "stable";
+    // Channels only move forward: stable never goes back to beta.
+    const changed = stored.channel !== asked && stored.channel !== "stable";
+    if (changed) stored.channel = asked;
+    return json(200, {
+      versionId: body.versionId,
+      patternId,
+      visibility: "public",
+      share: "pending",
+      listing: stored.listing,
+      changed,
     });
   }
 

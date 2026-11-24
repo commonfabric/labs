@@ -45,7 +45,11 @@ import type {
   PrivatePanel,
   ViewerState,
 } from "./schemas.tsx";
-import { addParticipant, rosterProfiles } from "./participants.tsx";
+import {
+  addParticipant,
+  joinAsViewer,
+  rosterProfiles,
+} from "./participants.tsx";
 
 type State = {
   panels: Writable<Writable<Panel>[]>;
@@ -744,6 +748,7 @@ export default pattern<LoomInput, LoomOutput>(
     const move = movePanel(state);
     const duplicate = admitPanel({ panels, mode: "duplicate" });
     const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
+    const join = addParticipant({ roster: participants });
     const present = setPresentation(state);
     const hide = hidePanel({ panels, hiddenPanels });
     const unhide = unhidePanel({ hiddenPanels });
@@ -903,7 +908,8 @@ export default pattern<LoomInput, LoomOutput>(
       setPresentation: present,
       participants: roster,
       members: membersForUser,
-      addParticipant: addParticipant({ roster: participants }),
+      addParticipant: join,
+      joinAsViewer: joinAsViewer({ join, profile: viewerProfile.result }),
       chatRoom: room,
       setChatRoom: setChatRoom({ chatRoom }),
       ensureChatRoom: ensureChatRoom({ chatRoom }),

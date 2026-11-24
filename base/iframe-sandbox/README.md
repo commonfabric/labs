@@ -57,8 +57,10 @@ characters they replace, so the module computes what it was written to; only a
 raw template string, read through `String.raw`, sees the escape itself. The
 guest's policy admits the script as it admits any inline script the document
 carries, so a document that declares a policy of its own must allow inline
-scripts. An empty `src` is no guest, and runs no script. A change to either
-reloads the guest.
+scripts. An empty `src` is no guest, and runs no script. Assigning `null` or
+`undefined` to `src`, or removing its attribute, sets it to the empty string,
+clears the guest, and releases its capability sessions. A change to either `src`
+or `script` reloads the guest.
 
 `assets`, when set, holds the guest's static files: a record from a name
 matching `[A-Za-z0-9_-]+` to a base64 `data:` URL, the one image source the

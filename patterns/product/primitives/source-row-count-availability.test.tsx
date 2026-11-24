@@ -20,6 +20,7 @@ import {
 } from "commonfabric";
 import {
   findElementByText,
+  propValue,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
 import {
@@ -71,7 +72,10 @@ export default pattern(() => {
       { assertion: assert(() => count.errorMessage === "offline") },
       {
         assertion: assert(() =>
-          findElementByText(count[UI], "cf-alert", "offline") !== undefined
+          propValue(
+            findElementByText(count[UI], "cf-alert", "offline"),
+            "status",
+          ) === "error"
         ),
       },
       {
@@ -88,8 +92,16 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           !count.pending && count.total === 0 && count.matching === 0 &&
-          count.errorMessage === "Use the replacement counter" &&
-          textContent(count[UI]).includes("Use the replacement counter") &&
+          count.errorMessage === "" &&
+          count[NAME] === "row count retired in records" &&
+          propValue(
+              findElementByText(
+                count[UI],
+                "cf-alert",
+                "Use the replacement counter",
+              ),
+              "status",
+            ) === "info" &&
           !textContent(count[UI]).includes("0 of 0")
         ),
       },
@@ -100,7 +112,10 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          count.errorMessage === "This row count output has been retired."
+          count.errorMessage === "" &&
+          textContent(count[UI]).includes(
+            "This row count output has been retired.",
+          )
         ),
       },
       { action: action(() => read.set({ rows: [{ total: 0, matching: 0 }] })) },

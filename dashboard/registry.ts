@@ -10,10 +10,10 @@ import type { Tile } from "./types.ts";
 import { benchmark, keyBenchmarks } from "./tiles/benchmark.ts";
 import {
   labsCiDuration,
-  loomCiDuration,
+  cfsCiDuration,
   weaverCiDuration,
 } from "./tiles/ci-duration.ts";
-import { labsCiTrust, loomCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
+import { labsCiTrust, cfsCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
 import { ciHealth } from "./tiles/ci-health.ts";
 import { coverageDebt } from "./tiles/coverage-debt.ts";
 import { dau } from "./tiles/dau.ts";
@@ -32,12 +32,12 @@ import { testSelection } from "./tiles/test-selection.ts";
 export const TILES: Tile[] = [
   ciHealth,
   labsCiTrust,
-  loomCiTrust,
+  cfsCiTrust,
   weaverCiTrust,
 
   testFlakes,
   labsCiDuration,
-  loomCiDuration,
+  cfsCiDuration,
   weaverCiDuration,
 
   testSelection,

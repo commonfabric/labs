@@ -101,7 +101,9 @@ participants.push({ name, ...profileFace(myProfile), joinedAt: Date.now() });
 
 - **Pros:** Self-contained — every other viewer renders from plain values
   already in the shared space, no cross-space resolution, no dependency on the
-  joiner's profile space being reachable later. Durable and trivially
+  joiner's profile space being reachable later, except that a picture held as
+  a blob is copied as its reference: drawing it fetches it from the blob's
+  space, and it shows as initials while that space's host is unreachable. Durable and trivially
   serializable. Renders identically and immediately for all viewers. Best when
   the roster must stay legible with remote profile spaces offline, or when you
   explicitly do not want a live cross-space dependency.
@@ -190,7 +192,11 @@ export interface Participant {
   profile: ParticipantProfileCell;
   /** Display name, snapshotted from the joiner's profile at join time. */
   name: string;
-  /** Picture bytes, snapshotted from the joiner's profile, if its owner set one. */
+  /** The picture's blob, snapshotted from the joiner's profile, if its owner
+   * set one. */
+  pictureBlob?: { space: string; id: string };
+  /** Picture bytes, snapshotted instead from a profile that holds its owner's
+   * picture inline. */
   picture?: FabricBytes;
   /** Avatar text, snapshotted instead when its owner set no picture. */
   avatar?: string;
@@ -346,6 +352,7 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
               {participants.map((p) => (
                 <cf-hstack gap="2" align="center">
                   <cf-avatar
+                    blob={p.pictureBlob}
                     bytes={p.picture}
                     src={p.avatar}
                     name={p.name}
@@ -440,7 +447,8 @@ Two deployable versions:
   contributor's profile. Verified end-to-end across multiple real identities.
 - **Snapshot (self-containment variant):**
   [`patterns/examples/shared-profile-roster/main.tsx`](../../patterns/examples/shared-profile-roster/main.tsx)
-  renders participants via **`<cf-avatar bytes={p.picture} name={p.name} />`**
+  renders participants via
+  **`<cf-avatar blob={p.pictureBlob} bytes={p.picture} name={p.name} />`**
   from values copied at join time, with the current viewer's own identity on a
   trusted `<cf-profile-badge>`. Verified deployed (`cf piece new … main.tsx`): 0
   console errors; participant rows show avatars; the viewer

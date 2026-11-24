@@ -4,7 +4,12 @@ import { css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import { iconClose } from "../components/icons.ts";
-import type { HistoryStep, RuntimeInternals } from "../lib/runtime.ts";
+import {
+  type PatternChange,
+  type RuntimeInternals,
+  type SpaceHistoryStep,
+  withOlderSteps,
+} from "../lib/runtime.ts";
 import { BaseView } from "./BaseView.ts";
 
 /** The step of history a fork shows, and where the fork stands. */
@@ -16,8 +21,45 @@ export type OpenHistory = {
   busy: boolean;
 };
 
+/** A restore of a piece's pattern code the panel asked for, and its state. */
+export type PatternRestore = {
+  /** The piece whose pattern is being restored. */
+  pieceId: string;
+
+  /** The source revision it is being restored to. */
+  revisionId: string;
+
+  /** The scope that completes `pieceId` into a document address. */
+  scope?: PatternChange["scope"];
+
+  /** Whether the runtime has yet to answer. */
+  busy: boolean;
+
+  /**
+   * Why the runtime did not restore the source: it does not fit the piece's
+   * data as it stands.
+   */
+  warning?: string;
+
+  /** The token that, sent back, restores the source despite `warning`. */
+  confirmationToken?: string;
+
+  /** Why the restore failed, when it did. */
+  error?: string;
+};
+
+/**
+ * Returns whether `restore` was asked of `change`: the same revision of the
+ * same piece in the same scope, an omitted scope being the space's.
+ */
+function isRestoreOf(restore: PatternRestore, change: PatternChange): boolean {
+  return restore.pieceId === change.pieceId &&
+    restore.revisionId === change.revisionId &&
+    (restore.scope ?? "space") === (change.scope ?? "space");
+}
+
 /** Returns what the step list calls `step`. */
-function stepLabel(step: HistoryStep): string {
+function stepLabel(step: SpaceHistoryStep): string {
   switch (step.kind) {
     case "event":
       return step.events === 1 ? "Event" : `${step.events} events`;
@@ -145,6 +187,17 @@ export class XHistoryView extends BaseView {
       grid-column: 1 / -1;
     }
 
+    .pattern-change {
+      display: grid;
+      gap: 0.25rem;
+      justify-items: start;
+      padding: 0 0.75rem 0.5rem 1.5rem;
+    }
+
+    .pattern-change .note {
+      padding: 0;
+    }
+
     .note {
       margin: 0;
       padding: 0.75rem;
@@ -171,9 +224,31 @@ export class XHistoryView extends BaseView {
   @property({ attribute: false })
   accessor error: string | undefined = undefined;
 
+  /**
+   * The piece in view, where the view names one by id: its pattern changes
+   * are listed whether or not the space lists the piece.
+   */
+  @property({ attribute: false })
+  accessor pieceId: string | undefined = undefined;
+
+  /** The scope that completes `pieceId`, where it is not the space's. */
+  @property({ attribute: false })
+  accessor pieceScope: PatternChange["scope"] = undefined;
+
+  /** The pattern restore the panel asked for, while it is unsettled. */
+  @property({ attribute: false })
+  accessor patternRestore: PatternRestore | undefined = undefined;
+
+  /**
+   * How many changes the shell has made that add to the space's history; a
+   * new count lists the history again.
+   */
+  @property({ attribute: false })
+  accessor changes = 0;
+
   /** The steps listed so far, newest first. */
   @state()
-  private accessor _steps: readonly HistoryStep[] = [];
+  private accessor _steps: readonly SpaceHistoryStep[] = [];
 
   /** The seq the next older stretch of history starts below. */
   @state()
@@ -182,30 +257,138 @@ export class XHistoryView extends BaseView {
   /** How many listings have begun, which tells a superseded one apart. */
   #listing = 0;
 
+  /** Stops following the history of the space listed, while it is followed. */
+  #stopFollowing: (() => void) | undefined = undefined;
+
+  /** The newest seq of the space the runtime has reported. */
+  #reportedSeq = 0;
+
+  /**
+   * The reported seq the latest listing began after, so that a listing
+   * answers every report made before it and only a later one lists again.
+   * A report is not compared with the steps listed: a commit the history
+   * does not list, such as one of another branch, would otherwise be
+   * listed for without end.
+   */
+  #coveredSeq = 0;
+
   /**
    * Lists a stretch of history: the newest when `before` is absent, which
    * replaces the list, and otherwise the one below `before`, which extends
-   * it.
+   * it. With `refresh`, the newest stretch is listed because the space moved
+   * on: it replaces only the steps it reaches, keeps the older ones listed
+   * beneath it, and reuses the piece sources already read.
    */
-  #list = new Task<[number | undefined], void>(this, {
-    task: async ([before]) => {
-      const { rt, space } = this;
+  #list = new Task<[number | undefined, boolean?], void>(this, {
+    task: async ([before, refresh]) => {
+      const { rt, space, pieceId, pieceScope } = this;
       const listing = ++this.#listing;
+      // An older stretch does not list the newest steps, so it answers no
+      // report.
+      if (before === undefined) this.#coveredSeq = this.#reportedSeq;
       if (rt === undefined || space === undefined) {
         this._steps = [];
         this._next = undefined;
         return;
       }
-      const page = await rt.spaceHistory(space, before);
+      const page = await rt.spaceHistory(
+        space,
+        before,
+        pieceId === undefined ? [] : [{
+          id: pieceId,
+          ...(pieceScope !== undefined ? { scope: pieceScope } : {}),
+        }],
+        { reuseSources: refresh === true },
+      );
       // A stretch that arrives after a later listing began belongs to a list
       // that one has replaced.
       if (listing !== this.#listing) return;
-      this._steps = before === undefined
-        ? page.steps
-        : [...this._steps, ...page.steps];
-      this._next = page.next;
+      if (before !== undefined) {
+        this._steps = withOlderSteps(this._steps, page.steps);
+        this._next = page.next;
+      } else if (refresh === true && this.open !== undefined) {
+        // A fork opened while the refresh was made keeps the list it was
+        // opened from; closing it lists again.
+      } else if (refresh === true && page.steps.length === 0) {
+        // A refresh that finds no step leaves the steps listed as they are.
+      } else if (refresh === true) {
+        // The older steps listed stay only where the new page reaches back
+        // to them: the space can have moved on by more than a page, and
+        // steps kept below such a page would leave the ones between out
+        // of reach, with no cursor to list them by.
+        const reached = page.steps.at(-1)?.startSeq;
+        const newestListed = this._steps[0]?.seq;
+        const meets = reached !== undefined && newestListed !== undefined &&
+          (page.next === undefined || reached <= newestListed);
+        const below = meets
+          ? this._steps.filter((step) => step.seq < reached)
+          : [];
+        this._steps = withOlderSteps(page.steps, below);
+        if (below.length === 0) this._next = page.next;
+      } else {
+        this._steps = page.steps;
+        this._next = page.next;
+      }
     },
+    // A listing that ends, well or not, is followed by another when the space
+    // moved on again while it was made. The task calls these just before it
+    // leaves `PENDING`, so the refresh is asked for a microtask later.
+    onComplete: () => this.#refreshAfterListing(),
+    onError: () => this.#refreshAfterListing(),
   });
+
+  /**
+   * Helper for `#list`, which lists once more after a listing that ended
+   * with a seq reported during it.
+   */
+  #refreshAfterListing(): void {
+    if (this.#reportedSeq > this.#coveredSeq) {
+      queueMicrotask(() => this.#refresh());
+    }
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.#follow();
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.#stopFollowing?.();
+    this.#stopFollowing = undefined;
+  }
+
+  /**
+   * Follows the history of the space listed, so that the list grows as the
+   * space moves on, once the panel is in the page and has a runtime and a
+   * space.
+   */
+  #follow(): void {
+    this.#stopFollowing?.();
+    this.#stopFollowing = undefined;
+    this.#reportedSeq = 0;
+    this.#coveredSeq = 0;
+    const { rt, space } = this;
+    if (!this.isConnected || rt === undefined || space === undefined) return;
+    this.#stopFollowing = rt.watchSpaceHistory(space, (seq) => {
+      this.#reportedSeq = Math.max(this.#reportedSeq, seq);
+      this.#refresh();
+    });
+  }
+
+  /**
+   * Lists the newest steps again when the space has moved on past the
+   * newest one listed. A listing under way is left to finish, and is
+   * followed by this one; a fork that is open keeps the list it was opened
+   * from, which closing it lists again.
+   */
+  #refresh(): void {
+    if (!this.isConnected || this.open !== undefined) return;
+    if (this.#reportedSeq <= this.#coveredSeq) return;
+    if (this.#reportedSeq <= (this._steps[0]?.seq ?? 0)) return;
+    if (this.#list.status === TaskStatus.PENDING) return;
+    void this.#list.run([undefined, true]);
+  }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     const moved = changed.has("rt") || changed.has("space");
@@ -214,11 +397,16 @@ export class XHistoryView extends BaseView {
     if (moved) {
       this._steps = [];
       this._next = undefined;
+      this.#follow();
     }
     // Returning from a fork, by discarding it or restoring from it, is what
     // can have added to the space's history; opening one adds nothing, and
     // keeps the stretch the open step was chosen from.
-    if (moved || (changed.has("open") && this.open === undefined)) {
+    if (
+      moved || changed.has("changes") || changed.has("pieceId") ||
+      changed.has("pieceScope") ||
+      (changed.has("open") && this.open === undefined)
+    ) {
       void this.#list.run([undefined]);
     }
   }
@@ -257,7 +445,7 @@ export class XHistoryView extends BaseView {
    * Renders one step. `eventIndex` counts the `event` steps listed before
    * this one, which gives a test a stable way to name such a step.
    */
-  #renderStep(step: HistoryStep, eventIndex: number) {
+  #renderStep(step: SpaceHistoryStep, eventIndex: number) {
     const current = this.open?.seq === step.seq;
     return html`
       <li>
@@ -266,6 +454,7 @@ export class XHistoryView extends BaseView {
           data-kind="${step.kind}"
           data-seq="${step.seq}"
           data-event-index="${step.kind === "event" ? eventIndex : nothing}"
+          data-start-seq="${step.startSeq}"
           aria-current="${current ? "true" : "false"}"
           ?disabled="${this.open?.busy === true || current}"
           @click="${() =>
@@ -281,7 +470,92 @@ export class XHistoryView extends BaseView {
             </span>
           `}
         </button>
+        ${step.patternChanges.map((change) =>
+          this.#renderPatternChange(change)
+        )}
       </li>
+    `;
+  }
+
+  /**
+   * Renders one change of a piece's pattern code a step recorded, with the
+   * way to put the piece back on that code without touching its data.
+   */
+  #renderPatternChange(change: PatternChange) {
+    const restore = this.patternRestore;
+    const mine = restore !== undefined && isRestoreOf(restore, change);
+    const blocked = this.open !== undefined || restore?.busy === true;
+    return html`
+      <div
+        class="pattern-change"
+        data-revision="${change.revisionId}"
+      >
+        <span>
+          ${change.pieceName ?? `Piece #${change.pieceId.slice(-6)}`}:
+          ${change.label}${change.current ? " · Current" : ""}
+        </span>
+        <span class="detail">${change.originLabel}</span>
+        ${change.current ? nothing : html`
+          <cf-button
+            class="pattern-restore"
+            variant="outline"
+            size="sm"
+            title="Puts the piece back on this version of its pattern code and keeps its current data"
+            ?disabled="${blocked}"
+            @click="${() =>
+              this.command({
+                type: "restore-pattern",
+                pieceId: change.pieceId,
+                revisionId: change.revisionId,
+                ...(change.scope !== undefined ? { scope: change.scope } : {}),
+              })}"
+          >Restore this pattern version</cf-button>
+        `}
+        ${mine && restore?.warning !== undefined
+          ? html`
+            <p class="note error" role="alert">${restore.warning}</p>
+            ${restore.confirmationToken === undefined ? nothing : html`
+              <cf-button
+                class="pattern-restore-confirm"
+                size="sm"
+                ?disabled="${blocked}"
+                @click="${() =>
+                  this.command({
+                    type: "restore-pattern",
+                    pieceId: change.pieceId,
+                    revisionId: change.revisionId,
+                    ...(change.scope !== undefined
+                      ? { scope: change.scope }
+                      : {}),
+                    confirmationToken: restore.confirmationToken,
+                  })}"
+              >Restore it anyway</cf-button>
+            `}
+          `
+          : nothing}
+        ${mine && restore?.error !== undefined
+          ? html`
+            <p class="note error" role="alert">${restore.error}</p>
+          `
+          : nothing}
+      </div>
+    `;
+  }
+
+  /**
+   * Renders what a pattern restore left to say, where the change it was
+   * asked of is on no step listed: listing the history again after a restore
+   * starts from the newest steps, which the change may be older than.
+   */
+  #unlistedRestoreNote() {
+    const restore = this.patternRestore;
+    const said = restore?.error ?? restore?.warning;
+    if (restore === undefined || said === undefined) return nothing;
+    const listed = this._steps.some((step) =>
+      step.patternChanges.some((change) => isRestoreOf(restore, change))
+    );
+    return listed ? nothing : html`
+      <p class="note error pattern-restore-note" role="alert">${said}</p>
     `;
   }
 
@@ -301,6 +575,7 @@ export class XHistoryView extends BaseView {
       ${this.error === undefined ? nothing : html`
         <p class="note error" role="alert">${this.error}</p>
       `}
+      ${this.#unlistedRestoreNote()}
       ${failed
         ? html`
           <p class="note error" role="alert">

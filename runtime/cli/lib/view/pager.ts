@@ -17,6 +17,12 @@ import {
 } from "@commonfabric/github-webhooks/relay";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { CSI, term } from "./ansi.ts";
+import {
+  type ParseJob,
+  type ParseOutcome,
+  recolorBatch,
+  workerParser,
+} from "./backgroundparse.ts";
 import { type BlameRunner, blameRunner } from "./blame.ts";
 import type { Document } from "./model.ts";
 import { decodeKeys } from "./keys.ts";
@@ -25,7 +31,7 @@ import { type PushedFrame, Session, type SessionOptions } from "./session.ts";
 import { ui } from "./theme.ts";
 import { onGrammarLoad, type Semantics } from "./languages/language.ts";
 import type { EditableSource } from "./editsource.ts";
-import { realFileGateway } from "./filegateway.ts";
+import { type FileGateway, realFileGateway } from "./filegateway.ts";
 import { ViewError } from "./errors.ts";
 import { join } from "@std/path";
 import {
@@ -51,6 +57,7 @@ import {
   watchForPullRequest,
 } from "./pullrequest.ts";
 import {
+  defaultBranch,
   describePush,
   type GitQuery,
   openPage,
@@ -100,7 +107,18 @@ const SPINNER_FRAME_MS = 150;
  * the viewer, saying it is quitting, before the viewer closes. */
 const PULL_REQUEST_QUIT_MS = 2000;
 
-export type PagerOptions = SessionOptions;
+export type PagerOptions = SessionOptions & {
+  /** Whole-file parses the view left for the pager to finish while it takes
+   * keys, whose file sides it shows as plain text until then. */
+  readonly parses?: readonly ParseJob[];
+
+  /**
+   * Called once the pager stops finishing `parses` while it is open: after it
+   * has parsed the document again with the last of them, or when opening
+   * another file or a failure stops them early.
+   */
+  readonly parsesEnded?: () => void;
+};
 
 /** Why `error` happened, to follow a colon in the task dialog, with the
  * reason GitHub gave quoted when GitHub refused a request. */
@@ -185,6 +203,17 @@ export interface PagerDeps {
   /** Attribute each line of a file with `git blame`, rejecting with git's
    * message when it cannot, and stopping git when `signal` aborts. */
   blame: BlameRunner;
+
+  /** The files the viewer can open from its file picker. */
+  files: FileGateway;
+
+  /** Starts running `jobs` away from the thread that takes keys, giving each
+   * batch of outcomes to `deliver` as it arrives; returns a function that
+   * stops the jobs still running. */
+  parseInBackground(
+    jobs: readonly ParseJob[],
+    deliver: (outcomes: readonly ParseOutcome[]) => void,
+  ): () => void;
 }
 
 /** The real terminal and process operations, which find the user's files
@@ -229,6 +258,8 @@ export function realPagerDeps(
       readPullRequestList(join(home, ".cache", "github-prs.tsv")),
     relay: relayAddress,
     blame: blameRunner(),
+    files: realFileGateway(),
+    parseInBackground: (jobs, deliver) => workerParser(jobs, deliver),
   };
 }
 
@@ -262,7 +293,7 @@ export async function runPager(
     consoleSize(deps),
     semantics,
     editSource,
-    realFileGateway(),
+    deps.files,
   );
 
   // While a dialog is up, the terminal reports every key in full, so that
@@ -317,7 +348,7 @@ export async function runPager(
     // gone, and has nothing left to draw on.
     if (cleanedUp) return;
     paint(session.displayDoc(), session.view(), changedOnly);
-    if (session.taskSpinning) {
+    if (session.taskSpinning || session.highlighting) {
       cancelSpin ??= deps.setSpinnerTimer(spin);
     }
     for (const load of session.takeBlameLoads()) {
@@ -334,13 +365,14 @@ export async function runPager(
     }
   };
 
-  // While the task dialog shows a running step, its spinner turns a frame at
-  // a time, writing only the rows it changes, except while a pressed button
-  // is drawn, whose own draw starts its timer again.
+  // While the task dialog shows a running step, or the status bar shows
+  // highlighting progress, its spinner turns a frame at a time, writing only
+  // the rows it changes, except while a pressed button is drawn, whose own
+  // draw starts its timer again.
   let cancelSpin: (() => void) | undefined;
   const spin = () => {
     cancelSpin = undefined;
-    if (!session.taskSpinning || cancelPush) return;
+    if (!(session.taskSpinning || session.highlighting) || cancelPush) return;
     session.advanceSpinner();
     draw(true);
   };
@@ -452,10 +484,87 @@ export async function runPager(
   // the viewer while it waits for a key.
   const quitting = Promise.withResolvers<null>();
 
+  // The complete files whose parses the view left are shown as plain text,
+  // and parse in the background while keys keep arriving, while the status
+  // bar shows how much of their source has been parsed. The document is
+  // parsed again and drawn each time a batch of source has finished parsing
+  // since it was last parsed again, and once more when every parse has ended.
+  // Parsing it again builds only the file sections whose parses finished, so
+  // the batch bounds how long that takes. The parses stop when the viewer
+  // closes, or when opening another file ends the progress. Once they end,
+  // other than by the viewer closing, `parsesEnded` lets the view forget
+  // their results.
+  const parses = options.parses ?? [];
+  let stopParses: (() => void) | undefined;
+  let parsesEnded = options.parsesEnded;
+  const endParses = (message?: string) => {
+    stopParses?.();
+    stopParses = undefined;
+    parsesEnded?.();
+    parsesEnded = undefined;
+    session.showHighlightProgress(null);
+    if (message !== undefined) session.showMessage(message);
+  };
+  const startParses = () => {
+    const total = parses.reduce((sum, job) => sum + job.text.length, 0);
+    let parsed = 0;
+    let shown = 0;
+    let unfinished = parses.length;
+    const batch = recolorBatch(session.doc.text.length);
+    const failures: string[] = [];
+    const deliver = (outcomes: readonly ParseOutcome[]) => {
+      if (cleanedUp) return;
+      if (!session.highlighting) {
+        endParses();
+        return;
+      }
+      try {
+        for (const outcome of outcomes) {
+          const job = parses[outcome.index];
+          parsed += job.text.length;
+          unfinished--;
+          if (outcome.kind === "parsed") {
+            job.finish(outcome.result);
+          } else {
+            job.fail();
+            failures.push(outcome.failure);
+          }
+        }
+        if (unfinished > 0) {
+          session.showHighlightProgress(parsed / Math.max(1, total));
+          // The spinner's next frame draws the gauge.
+          if (parsed - shown < batch) return;
+          shown = parsed;
+          session.reparse({ force: true });
+        } else {
+          session.reparse({ force: true });
+          endParses(
+            failures.length === 0 ? undefined : "Some files could not be " +
+              `highlighted, and are shown as plain text: ${failures[0]}`,
+          );
+        }
+      } catch (error) {
+        endParses(`Highlighting failed: ${describeFailure(error)}`);
+      }
+      draw();
+    };
+    session.showHighlightProgress(0);
+    try {
+      const stop = deps.parseInBackground(parses, deliver);
+      // Outcomes delivered before it returned may have ended the parses.
+      if (session.highlighting) stopParses = stop;
+      else stop();
+    } catch (error) {
+      endParses(`Highlighting failed: ${describeFailure(error)}`);
+    }
+    draw(true);
+  };
+
   let cleanedUp = false;
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
+    stopParses?.();
     taskController?.abort();
     stopWatching();
     cancelQuit?.();
@@ -759,8 +868,17 @@ export async function runPager(
           pullRequest(open.number, open.url)
         } is open: ${link(open.url)}`;
       }
-      const { title, body } = pullRequestText(deps.git, target);
-      const { repository, head, base } = target;
+      const { repository, head, remote } = target;
+      const asking = step(say`Asking ${remote} which branch is its default`);
+      const base = await defaultBranch(
+        deps.pushIo(taskOutput, signal).queryAsync,
+        remote,
+      );
+      if (base === null) {
+        throw new Error(`${remote}'s default branch is unknown`);
+      }
+      asking();
+      const { title, body } = pullRequestText(deps.git, target, base);
       const creating = step(
         say`Creating a pull request in ${repository} from ${head} into ${base}`,
       );
@@ -831,13 +949,21 @@ export async function runPager(
   };
 
   // A push that fails, unless the server refused it, can be tried again, as
-  // when the network failed it. The push dialog's output goes on from how
-  // the failed push ended.
-  const pushFailed = (output: string) => {
+  // when the network failed it, asking first as the failed push would have,
+  // and keeping to the default branch it kept to. The push dialog's output
+  // goes on from how the failed push ended.
+  const pushFailed = (output: string, confirmed: boolean, main?: string) => {
     if (!pushRefused(output)) {
-      retry = { label: RETRY_PUSH, run: () => startBranchPush(true) };
+      retry = {
+        label: RETRY_PUSH,
+        run: () => startBranchPush(true, confirmed, main),
+      };
     }
   };
+
+  // The default branch origin named before the push dialog asked whether to
+  // push, which the push the dialog confirms keeps to.
+  let confirmedMain: string | undefined;
 
   // Pushing a branch that origin already has asks first, saying what the
   // push would do, and which pull request is open from the branch, if one
@@ -846,8 +972,10 @@ export async function runPager(
   const askToPush = async (
     branch: string,
     remote: PushedBranch,
+    main: string,
     signal: AbortSignal,
   ): Promise<null> => {
+    confirmedMain = main;
     let open: TaskText;
     try {
       const { found } = await lookForPullRequest(branch, signal);
@@ -866,8 +994,13 @@ export async function runPager(
   };
 
   // Once the push dialog has asked, or a push has failed, pushing again
-  // continues the dialog, and asks nothing.
-  const startBranchPush = async (again = false) => {
+  // continues the dialog. A push the user has confirmed asks nothing, and
+  // keeps to `main` as origin's default branch when given one.
+  const startBranchPush = async (
+    again = false,
+    confirmed = again,
+    main?: string,
+  ) => {
     session.branchPushRequested = false;
     session.pushConfirmed = false;
     // A watch is for the push whose dialog it outlived.
@@ -884,10 +1017,12 @@ export async function runPager(
         io,
         controller.signal,
         (branch, url) => pushed(io, branch, url, controller.signal),
-        pushFailed,
-        again
+        (output, learned) => pushFailed(output, confirmed, learned),
+        confirmed
           ? undefined
-          : (branch, remote) => askToPush(branch, remote, controller.signal),
+          : (branch, remote, main) =>
+            askToPush(branch, remote, main, controller.signal),
+        main,
       );
     } catch (error) {
       summary = say`Push failed: ${failure(error)}`;
@@ -1023,7 +1158,7 @@ export async function runPager(
 
   const startRequested = () => {
     if (session.branchPushRequested) startBranchPush();
-    if (session.pushConfirmed) startBranchPush(true);
+    if (session.pushConfirmed) startBranchPush(true, true, confirmedMain);
     if (session.retryRequested) {
       session.retryRequested = false;
       retry?.run();
@@ -1041,10 +1176,11 @@ export async function runPager(
         (padBg ? term.setDefaultBg(padBg) : ""),
     );
     draw();
-    // Warm the TypeScript program after the first frame is on screen, while the
-    // user is reading it and before any keypress arrives, so the first info card
-    // does not pay the one-time build cost on the interactive path.
-    if (semantics) deps.setTimer(() => semantics.prewarm(), 0);
+    if (parses.length > 0) startParses();
+    // Start building the TypeScript program in a worker once the first frame
+    // is on screen, so that keys are answered while it builds and the first
+    // info card does not pay the one-time build cost.
+    semantics?.prewarm();
     while (!session.quit) {
       // A read that quitting interrupts is left unfinished, for the viewer is
       // closing.
@@ -1092,6 +1228,7 @@ export async function runPager(
         break;
       }
       if (!session.taskDialogUp) stopWatching();
+      if (stopParses && !session.highlighting) endParses();
       if (!session.pullRequestQuitPending) {
         cancelQuit?.();
         cancelQuit = undefined;
@@ -1105,6 +1242,7 @@ export async function runPager(
       if (session.needsReparse) scheduleReparse();
     }
   } finally {
+    semantics?.dispose();
     stopParserListener();
     stopReveal();
     stopExpiry();

@@ -139,11 +139,15 @@ export const SourceRowCountPresentation = pattern<
     isPending(observedCountRead) || isSyncing(observedCountRead)
   );
   const errorMessage = computed(() =>
-    hasError(observedCountRead) || isObsolete(observedCountRead)
+    hasError(observedCountRead)
+      ? observedCountRead.message || "The row count query failed."
+      : ""
+  );
+  const retirement = computed(() =>
+    isObsolete(observedCountRead)
       ? observedCountRead.message || "This row count output has been retired."
       : ""
   );
-  const queryHasError = computed(() => errorMessage !== "");
 
   // Both counts fall back to zero while the read is in flight, and `0 of 0` is
   // the one reading this part exists to rule out — a full table that looks
@@ -151,7 +155,9 @@ export const SourceRowCountPresentation = pattern<
   const summary = computed(() =>
     pending
       ? "counting"
-      : queryHasError
+      : retirement !== ""
+      ? "retired"
+      : errorMessage !== ""
       ? "unavailable"
       : `${matching} of ${total}`
   );
@@ -160,7 +166,9 @@ export const SourceRowCountPresentation = pattern<
     [NAME]: computed(() =>
       pending
         ? `counting rows in ${table}`
-        : queryHasError
+        : retirement !== ""
+        ? `row count retired in ${table}`
+        : errorMessage !== ""
         ? `row count unavailable in ${table}`
         : `${matching} of ${total} rows in ${table}`
     ),
@@ -174,8 +182,13 @@ export const SourceRowCountPresentation = pattern<
         </cf-hstack>
 
         {ifElse(
-          queryHasError,
+          computed(() => errorMessage !== ""),
           <cf-alert status="error">{errorMessage}</cf-alert>,
+          null,
+        )}
+        {ifElse(
+          computed(() => retirement !== ""),
+          <cf-alert status="info">{retirement}</cf-alert>,
           null,
         )}
       </cf-vstack>

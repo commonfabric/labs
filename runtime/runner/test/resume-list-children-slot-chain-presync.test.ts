@@ -17,10 +17,9 @@ const otherSpace = (await Identity.fromPassphrase(
 // documents that alternate spaces, so no traversal delivers the next hop
 // alongside the last (a metadata family is same-space, and a crossing is
 // not followed into another space): on a cold replica every hop is cold
-// until something names it. A coordinator keys the element on where the
-// slot's VALUE resolution ends, so the pre-sync must follow the chain to
-// that same end before deriving the child — however long the chain — or it
-// names a child the coordinator never mints and the real one resumes cold.
+// until something names it. A coordinator keys the element on the link the
+// slot holds, which the list document alone decides, so the pre-sync names
+// the coordinator's child from the list however cold the chain behind it.
 const CHAIN_HOPS = 8;
 const hopSpace = (hop: number) => (hop % 2 === 0 ? otherSpace : space);
 
@@ -65,7 +64,7 @@ describe("resume-list-children-slot-chain-presync", () => {
     return { runtime, manager };
   }
 
-  it("names the coordinator's child for a slot whose value chain is longer than a round warms", async () => {
+  it("names the coordinator's child for a slot whose value chain is cold", async () => {
     const cellId = "slot-chain-host";
 
     // BUILD: the chain — `hop-1` holds a link to `hop-2`, … , the last hop
@@ -114,7 +113,7 @@ describe("resume-list-children-slot-chain-presync", () => {
       (authored.key("rows").getAsQueryResult() as { n: number }[])
         .map((row) => row.n),
     ).toEqual([7]);
-    // The child the coordinator minted for the slot, keyed on the chain's end.
+    // The child the coordinator minted for the slot, keyed on its link.
     const container = authored.key("rows").resolveAsCell();
     const slots = container.getRaw() as unknown[];
     const childIds: string[] = slots.flatMap((slot) => {
@@ -126,10 +125,10 @@ describe("resume-list-children-slot-chain-presync", () => {
     runtimes.splice(runtimes.indexOf(author.runtime), 1);
 
     // RESUME: the cold replica's pre-sync must name that same child before
-    // the coordinator instantiates it (mutation: a pre-sync that stops
-    // following the chain after a fixed number of pulls keys the element on
-    // a cold hop and names a child that exists nowhere; the real one is
-    // first touched by the coordinator's own run, after it registered).
+    // the coordinator instantiates it (mutation: a pre-sync that keys the
+    // element anywhere but on the slot's link names a child that exists
+    // nowhere; the real one is first touched by the coordinator's own run,
+    // after it registered).
     const resumer = replica();
     await resumer.runtime.patternManager.compilePattern(PROGRAM, { space });
     const resumed = resumer.runtime.getCell<{ rows: { n: number }[] }>(
@@ -163,5 +162,69 @@ describe("resume-list-children-slot-chain-presync", () => {
       (resumed.key("rows").getAsQueryResult() as { n: number }[])
         .map((row) => row.n),
     ).toEqual([7]);
+  });
+  it("resumes a map without pulling the document its slot links to", async () => {
+    const cellId = "slot-link-host";
+    const indexes: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { pattern } from 'commonfabric';",
+          "export default pattern<{ items: { n: number }[] }>(({ items }) => {",
+          "  return { rows: items.map((_, index) => ({ index })) };",
+          "});",
+        ].join("\n"),
+      }],
+    };
+
+    // BUILD: a host whose list holds one link into the other space.
+    const author = replica();
+    const element = author.runtime.getCell<unknown>(otherSpace, "slot-link");
+    {
+      const elementTx = author.runtime.edit();
+      element.withTx(elementTx).set({ n: 7 });
+      expect((await elementTx.commit().settled).error).toBeUndefined();
+    }
+    const tx = author.runtime.edit();
+    const compiled = await author.runtime.patternManager.compilePattern(
+      indexes,
+      { space, tx },
+    );
+    const authored = author.runtime.getCell<{ rows: { index: number }[] }>(
+      space,
+      cellId,
+      compiled.resultSchema,
+      tx,
+    );
+    author.runtime.run(tx, compiled, { items: [element] }, authored);
+    author.runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await authored.pull();
+    await author.runtime.settled();
+    await author.runtime.patternManager.flushCompileCacheWrites();
+    await author.runtime.storageManager.synced();
+    await author.runtime.dispose({ closeStorage: false });
+    runtimes.splice(runtimes.indexOf(author.runtime), 1);
+
+    // RESUME: a cold replica's pre-sync derives the child from the list
+    // document alone, so the start leaves the other space unopened (mutation:
+    // a pre-sync that pulls what a slot links to opens it).
+    const resumer = replica();
+    await resumer.runtime.patternManager.compilePattern(indexes, { space });
+    const resumed = resumer.runtime.getCell<{ rows: { index: number }[] }>(
+      space,
+      cellId,
+      compiled.resultSchema,
+    );
+    expect(await resumer.runtime.runner.start(resumed)).toBe(true);
+    await resumer.runtime.settled();
+    expect(resumer.manager.openedSpaces()).not.toContain(otherSpace);
+
+    await resumed.pull();
+    expect(
+      (resumed.key("rows").getAsQueryResult() as { index: number }[])
+        .map((row) => row.index),
+    ).toEqual([0]);
   });
 });

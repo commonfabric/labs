@@ -15,6 +15,8 @@
  *    the row's label from the NEW value.
  */
 
+import { equal } from "@std/assert";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import app from "../../toolshed/app.ts";
@@ -179,17 +181,35 @@ async function runTest(base: URL) {
             conf.push(atom);
           }
         }
-        return conf.map((a) => JSON.stringify(a));
+        return conf;
       };
       const row0 = await rowLabel(0);
-      if (!row0.includes(JSON.stringify("did:mailto:carol2@c.example"))) {
+      if (
+        !row0.some((atom) =>
+          equal(atom, {
+            type: CFC_ATOM_TYPE.User,
+            subject: "did:mailto:carol2@c.example",
+          })
+        )
+      ) {
         throw new Error(
-          `row 1's label must re-derive from the upserted sender; got ${row0}`,
+          `row 1's label must re-derive from the upserted sender; got ${
+            JSON.stringify(row0)
+          }`,
         );
       }
-      if (row0.includes(JSON.stringify("did:mailto:alice@a.example"))) {
+      if (
+        row0.some((atom) =>
+          equal(atom, {
+            type: CFC_ATOM_TYPE.User,
+            subject: "did:mailto:alice@a.example",
+          })
+        )
+      ) {
         throw new Error(
-          `row 1's label must NOT keep the pre-upsert sender; got ${row0}`,
+          `row 1's label must NOT keep the pre-upsert sender; got ${
+            JSON.stringify(row0)
+          }`,
         );
       }
 

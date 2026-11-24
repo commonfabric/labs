@@ -8,6 +8,11 @@
 
 import { valueEqual } from "@commonfabric/data-model";
 import { aclDocId } from "../acl.ts";
+import { SPACE_INVITES_REVISION_DOC_ID } from "../space-invites.ts";
+import {
+  isRespelled,
+  respellBareDidEnvelope,
+} from "./cfc-bare-did-migration.ts";
 import * as Engine from "./engine.ts";
 import {
   type BranchName,
@@ -266,10 +271,13 @@ const divergedInstances = (
  * records a serving loop keeps of its own progress through the branch's
  * commits: the event logs, the watermark, and the effect and attention
  * indexes. Those describe what has happened on the branch, which a restore
- * adds to and does not undo.
+ * adds to and does not undo. It leaves alone the invitation service's revision
+ * document too, which follows the service's private ledger, and a restore does
+ * not touch that ledger.
  */
 const isRestored = (id: EntityId, space: string): boolean =>
   id !== aclDocId(space) &&
+  id !== SPACE_INVITES_REVISION_DOC_ID &&
   !id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
   id !== SERVER_EXECUTION_WATERMARK_DOC_ID &&
   id !== SERVER_EXECUTION_ATTENTION_DOC_ID &&
@@ -281,12 +289,17 @@ const isRestored = (id: EntityId, space: string): boolean =>
  * `source` holds and deletes each one `source` lacks. The commit records
  * where it restored from, so the history of `target` keeps every state it
  * went through, the one the restore replaced included. Session-scoped
- * documents stay as they are, as do the space's access list and its serving
- * loop's records. Returns
+ * documents stay as they are, as do the space's access list, the invitation
+ * service's revision document, and its serving loop's records. Returns
  * `undefined`, writing nothing, when the two hold the same documents.
  *
  * A collaborative field of a document the commit sets ends there, and its
  * editors start it again from the restored value.
+ *
+ * On a store whose bare-DID labels have been respelled
+ * (`cfc-bare-did-migration.ts`), a document set from `source` carries its
+ * labels respelled the same way, so a restore does not bring back a spelling
+ * the store has retired.
  *
  * @throws When either branch does not exist, or when `sourceSeq` lies outside
  * `source`'s history or below the store's compaction floor.
@@ -316,17 +329,36 @@ export const restoreBranch = (
     );
     const operations: Operation[] = [];
     const scopeKeys = new Map<number, string>();
+    const respells = isRespelled(engine);
     for (const { id, scopeKey } of instances) {
       const scope = scopeOfScopeKey(scopeKey);
       if (scope === "session" || !isRestored(id, options.space)) continue;
       const held = Engine.readState(engine, { id, scopeKey, branch: target })
         ?.document ?? null;
-      const wanted = Engine.readState(engine, {
+      let wanted = Engine.readState(engine, {
         id,
         scopeKey,
         branch: source,
         seq: sourceSeq,
       })?.document ?? null;
+      // A respelled store writes a recorded label back respelled too, so a
+      // restore does not bring back what `cfc-bare-did-migration.ts`
+      // retired.
+      if (wanted !== null && respells) {
+        const respelled = respellBareDidEnvelope(
+          (wanted as { cfc?: unknown }).cfc,
+          (ref) =>
+            Engine.readState(engine, {
+              id: ref,
+              branch: source,
+              seq: sourceSeq,
+            })
+              ?.document?.value,
+        );
+        if (respelled !== undefined) {
+          wanted = { ...wanted, cfc: respelled } as typeof wanted;
+        }
+      }
       if (held === null ? wanted === null : valueEqual(held, wanted)) continue;
       if (scope !== "space") scopeKeys.set(operations.length, scopeKey);
       operations.push(

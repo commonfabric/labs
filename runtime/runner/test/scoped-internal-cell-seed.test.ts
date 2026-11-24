@@ -177,6 +177,151 @@ describe("scoped-internal-cell-seed", () => {
     });
   }
 
+  it("fills the default's missing fields under an instance a session's first write created, keeping the field it wrote", async () => {
+    // A session's first keystroke can create its instance before the seed
+    // reaches it, holding only the field it typed and no owner link. The
+    // seed then owes the fields the instance lacks, and nothing it holds.
+    const first = openRuntime(owner);
+    const compiled = await first.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { pattern, Writable } from "commonfabric";
+          interface Draft { title: string; members: string }
+          export default pattern<Record<string, never>>(() => ({
+            draft: Writable.perSession.of<Draft>({ title: "", members: "" }),
+          }));`,
+      }],
+    }, { space });
+    await first.runSynced(first.getCell(space, "typed draft"), compiled, {});
+    await first.idle();
+
+    const second = openRuntime(owner);
+    const piece = second.getCell(space, "typed draft");
+    await piece.sync();
+    const draft = piece.key("draft").resolveAsCell();
+    await draft.sync();
+    expect(draft.getRawUntyped()).toBeUndefined();
+    const typed = second.edit();
+    draft.withTx(typed).setRawUntyped({ title: "typed" });
+    expect((await typed.commit().settled).error).toBeUndefined();
+
+    expect(await second.runner.start(piece)).toBe(true);
+    await second.idle();
+
+    expect(draft.getRawUntyped()).toEqual({ title: "typed", members: "" });
+    expect(JSON.stringify(draft.getMetaRaw("result") ?? null)).toContain(
+      piece.getAsNormalizedFullLink().id,
+    );
+  });
+
+  it("fills the missing fields beneath a nested field a session's first write created", async () => {
+    const first = openRuntime(owner);
+    const compiled = await first.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { pattern, Writable } from "commonfabric";
+          interface Draft {
+            enabled: boolean;
+            editor: { title: string; members: string };
+          }
+          export default pattern<Record<string, never>>(() => ({
+            draft: Writable.perSession.of<Draft>({
+              enabled: false,
+              editor: { title: "", members: "" },
+            }),
+          }));`,
+      }],
+    }, { space });
+    await first.runSynced(first.getCell(space, "nested draft"), compiled, {});
+    await first.idle();
+
+    const second = openRuntime(owner);
+    const piece = second.getCell(space, "nested draft");
+    await piece.sync();
+    const draft = piece.key("draft").resolveAsCell();
+    await draft.sync();
+    expect(draft.getRawUntyped()).toBeUndefined();
+    const typed = second.edit();
+    draft.withTx(typed).setRawUntyped({ editor: { title: "B" } });
+    expect((await typed.commit().settled).error).toBeUndefined();
+
+    expect(await second.runner.start(piece)).toBe(true);
+    await second.idle();
+
+    expect(draft.getRawUntyped()).toEqual({
+      enabled: false,
+      editor: { title: "B", members: "" },
+    });
+  });
+
+  it("keeps a default field a user removed after their first write created a complete instance, in their next session", async () => {
+    // The first write left nothing to fill, and the seed still records the
+    // instance's owner link, so the removal that follows is the user's.
+    const first = openRuntime(owner);
+    const compiled = await first.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { pattern, Writable } from "commonfabric";
+          interface Draft { title: string; members?: string }
+          export default pattern<Record<string, never>>(() => ({
+            draft: Writable.perUser.of<Draft>({ title: "", members: "" }),
+          }));`,
+      }],
+    }, { space });
+    await first.runSynced(first.getCell(space, "complete draft"), compiled, {});
+    await first.idle();
+
+    const firstSession = openRuntime(visitor);
+    const piece = firstSession.getCell(space, "complete draft");
+    await piece.sync();
+    const draft = piece.key("draft").resolveAsCell();
+    await draft.sync();
+    expect(draft.getRawUntyped()).toBeUndefined();
+    const typed = firstSession.edit();
+    draft.withTx(typed).setRawUntyped({ title: "B", members: "" });
+    expect((await typed.commit().settled).error).toBeUndefined();
+    expect(await firstSession.runner.start(piece)).toBe(true);
+    await firstSession.idle();
+    const removed = firstSession.edit();
+    draft.withTx(removed).setRawUntyped({ title: "published" });
+    expect((await removed.commit().settled).error).toBeUndefined();
+    await firstSession.idle();
+    await firstSession.storageManager.synced();
+
+    const nextSession = openRuntime(visitor);
+    const reopened = nextSession.getCell(space, "complete draft");
+    await reopened.sync();
+    expect(await nextSession.runner.start(reopened)).toBe(true);
+    await nextSession.idle();
+
+    const instance = reopened.key("draft").resolveAsCell();
+    await instance.sync();
+    expect(instance.getRawUntyped()).toEqual({ title: "published" });
+  });
+
+  it("leaves an initialized instance as its user left it, a default field they removed included, when they load again", async () => {
+    // A field missing from an instance that carries its owner link is one
+    // its writers removed, not one a first write raced the seed for.
+    const first = await load("user", owner);
+    const instance = first.draft.resolveAsCell();
+    const edit = first.runtime.edit();
+    instance.withTx(edit).setRawUntyped({ title: "published" });
+    expect((await edit.commit().settled).error).toBeUndefined();
+    await first.runtime.idle();
+
+    const reloaded = await load("user", owner);
+
+    expect(reloaded.draft.resolveAsCell().getRawUntyped()).toEqual({
+      title: "published",
+    });
+  });
+
   it("keeps a user's per-user value when that user loads again", async () => {
     await writeTitle(await load("user", owner), "kept");
     const reloaded = await load("user", owner);

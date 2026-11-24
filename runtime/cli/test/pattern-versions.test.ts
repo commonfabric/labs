@@ -90,7 +90,9 @@ const stubClient = (answers: {
       return answers.publish?.() ?? Promise.resolve(RECORDED);
     },
     getPattern: ({ patternId }) => {
-      const found = answers.patterns?.[patternId];
+      const found = patternId === undefined
+        ? undefined
+        : answers.patterns?.[patternId];
       return found === undefined
         ? Promise.reject(new PatternIndexError("getPattern", 404))
         : Promise.resolve(found as PatternIndexPattern);
@@ -983,7 +985,7 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
           undefined,
           deps as never,
         ),
-      ).rejects.toThrow(/--from-index keeps none/);
+      ).rejects.toThrow(/a piece from the index keeps none/);
       expect(recorded).toHaveLength(1);
     });
 

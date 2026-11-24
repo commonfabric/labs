@@ -5062,7 +5062,13 @@ describe("parseWishTarget", () => {
   });
 
   it("throws for a profile's face field named below `#profile`, in the target or its path", () => {
-    for (const target of ["#profile/picture", "#profile/avatar/0"]) {
+    for (
+      const target of [
+        "#profile/pictureBlob",
+        "#profile/picture",
+        "#profile/avatar/0",
+      ]
+    ) {
       expect(() => parseWishTarget(target)).toThrow("does not exist");
     }
     expect(() => parseWishTarget("#profile", ["picture"])).toThrow(

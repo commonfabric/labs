@@ -11,7 +11,7 @@
  * manager then lists the room too. Last, the
  * first opens their manager again, creates a group from the group controls of
  * that new page, and starts another chat, whose row's link opens the new room.
- * Then someone who shares a group with another person adds them to a second
+ * Then someone who shares a direct chat with another person adds them to a
  * group from its page, by address alone; their manager offers it to the
  * person through the profile it lists for them, the room's page shows it was
  * offered, and the person's own manager lists it once they open it. And
@@ -37,6 +37,7 @@ import {
   waitForSettledText,
   waitForText,
 } from "./cfc-browser-helpers.ts";
+import { directRoomLabel } from "./fabrichat-room-fixture.ts";
 import { clickButtonWithExactText } from "./note-button-helpers.ts";
 import { initializePiecesController } from "./pieces-controller.ts";
 import { clickCellLink } from "./topics-navigation-helpers.ts";
@@ -73,7 +74,7 @@ describe("fabrichat-join", () => {
   let groupOwnerIdentity: Identity;
   let groupMemberIdentity: Identity;
 
-  // Two people who share a group room, one of whom adds the other to a second.
+  // Two people who share a direct room, one of whom adds the other to a group.
   let adderIdentity: Identity;
   let addedIdentity: Identity;
 
@@ -112,7 +113,11 @@ describe("fabrichat-join", () => {
     await openChatManager(firstShell, firstIdentity);
     await fillCfInput(first, "#fabrichat-start-direct", address);
     await clickTrustedAction(first, START_ACTION);
-    await waitForSettledText(first, "#fabrichat-rooms", `With ${address}`);
+    await waitForSettledText(
+      first,
+      "#fabrichat-rooms",
+      directRoomLabel(address),
+    );
 
     // The notice for the second person links to the room, and following it
     // opens the room's page.
@@ -151,7 +156,7 @@ describe("fabrichat-join", () => {
     await waitForSettledText(
       second,
       "#fabrichat-rooms",
-      `With ${firstIdentity.did()}`,
+      directRoomLabel(firstIdentity.did()),
     );
 
     // The first person starts a second chat, whose row's link opens the new
@@ -159,7 +164,11 @@ describe("fabrichat-join", () => {
     // on the page, where a room would offer a chat with each of its
     // participants as well.
     await openChatManager(firstShell, firstIdentity);
-    await waitForSettledText(first, "#fabrichat-rooms", `With ${address}`);
+    await waitForSettledText(
+      first,
+      "#fabrichat-rooms",
+      directRoomLabel(address),
+    );
 
     // A reloaded page is a new session, whose group draft starts out empty,
     // and a group composed there is created with the title typed into it.
@@ -171,8 +180,15 @@ describe("fabrichat-join", () => {
     const thirdAddress = thirdIdentity.did();
     await fillCfInput(first, "#fabrichat-start-direct", thirdAddress);
     await clickTrustedAction(first, START_ACTION);
-    await waitForSettledText(first, "#fabrichat-rooms", `With ${thirdAddress}`);
-    const newRoomId = await clickCellLink(first, `With ${thirdAddress}`);
+    await waitForSettledText(
+      first,
+      "#fabrichat-rooms",
+      directRoomLabel(thirdAddress),
+    );
+    const newRoomId = await clickCellLink(
+      first,
+      directRoomLabel(thirdAddress),
+    );
     const newRoomView = await waitForPieceSelected(first, newRoomId);
     expect(newRoomView.spaceDid).not.toBe(roomView.spaceDid);
     expect(newRoomView.spaceDid).not.toBe(firstIdentity.did());
@@ -219,7 +235,7 @@ describe("fabrichat-join", () => {
     await waitForSettledText(
       member,
       "#fabrichat-rooms",
-      `With ${groupOwnerIdentity.did()}`,
+      directRoomLabel(groupOwnerIdentity.did()),
     );
   });
 
@@ -256,10 +272,24 @@ describe("fabrichat-join", () => {
     await waitForText(added, "#fabrichat-messages", "Hello from Grace");
     await waitForSettledText(adder, "cf-profile-badge", "Grace Hopper");
 
+    // Start a direct chat from Grace's own roster chip. Address-only offers
+    // consult that room's roster, not the roster of an unrelated group.
+    await clickTrustedAction(adder, START_ACTION);
+    await openChatManager(firstShell, adderIdentity);
+    await waitForSettledText(
+      adder,
+      "#fabrichat-rooms",
+      directRoomLabel(addedAddress),
+    );
+
     // The adder creates a second group, of their own alone, and opens it. Its
-    // add control offers the person from their chats.
+    // add control offers the person from their chats. The manager's views read
+    // no room's roster until a picker of the people is opened, so the group
+    // control lists the person once the adder asks for the people from their
+    // chats (#10040).
     const secondTitle = "Added team";
     await openChatManager(firstShell, adderIdentity);
+    await clickButtonWithExactText(adder, "Add people from your chats");
     await waitForSettledText(adder, "#fabrichat-group-people", "Grace Hopper");
     await fillCfInput(adder, "#fabrichat-group-title", secondTitle);
     await clickButtonWithExactText(adder, "Create group");
@@ -275,9 +305,8 @@ describe("fabrichat-join", () => {
     // Added by their address alone, the person is offered the room through
     // the profile the adder's manager lists for them, which points at their
     // Home's private inbox, and the room's page, reading the manager's verdict
-    // from the adder's home, says so. Under server execution the served offer
-    // finds that profile in the manager's per-user `people`, which this page
-    // derived while it listed the person among the add control's candidates.
+    // from the adder's home, says so. The offer reads the profile from their
+    // direct room's roster, independent of the session's people picker.
     const outcome = `Added ${addedAddress}, and offered them this chat.`;
     await fillCfInput(adder, "#fabrichat-add-member-address", addedAddress);
     await clickTrustedAction(adder, ADD_MEMBER_ACTION);

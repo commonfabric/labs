@@ -1316,6 +1316,15 @@ export interface IStorageProvider {
   presentCount?(absences: readonly UnexaminedAbsence[]): number;
 
   /**
+   * Those of `absences`, addresses {@link unexaminedAbsences} returned, this
+   * replica still holds no record of. Optional alongside
+   * {@link unexaminedAbsences}.
+   */
+  stillUnexamined?(
+    absences: readonly UnexaminedAbsence[],
+  ): readonly UnexaminedAbsence[];
+
+  /**
    * Whether the store read-through, asked for the instance `address` names
    * under `identity`, reported holding nothing there, with no write to it
    * reported since. Such an absence stays unexamined for commit to
@@ -1427,6 +1436,14 @@ export interface IStorageProvider {
   listHistory?(
     options?: { branch?: BranchName; before?: number; limit?: number },
   ): Promise<CommitSummary[]>;
+
+  /**
+   * Observes the newest seq of the space this provider has learned of
+   * moving forward: a commit of its own being accepted, or the server
+   * pushing a commit to a document it watches. Returns the function that
+   * stops observing.
+   */
+  subscribeServerSeq?(observer: (serverSeq: number) => void): () => void;
 
   /** Returns the space's branches, deleted ones included. */
   listBranches?(): Promise<BranchInfo[]>;
@@ -2228,6 +2245,17 @@ export interface IStorageTransaction {
   getPotentiallyExternalReadActivities?(): Iterable<IReadActivity> | undefined;
 
   /**
+   * Optional. Freezes every record that
+   * `getPotentiallyExternalReadActivities` lists, so that each keeps the
+   * metadata object it carries; that object stays as open to change as it
+   * was. Returns a count that advances whenever that list gains a record or
+   * is emptied, so two calls that return the same count frame a list of the
+   * same records, each with the same metadata object. Returns `undefined`
+   * where the transaction froze nothing.
+   */
+  freezeReadActivityRecords?(): number | undefined;
+
+  /**
    * Optional ordered log of every applied write attempt, in transaction
    * order, stamped on the same per-transaction activity clock as read
    * activities. Unlike `getWriteDetails` (per-path, last-value upserts,
@@ -2832,6 +2860,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * threading metadata through intermediate APIs.
    */
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T;
+
+  /**
+   * Merge `meta` into every read issued until the returned scope is disposed
+   * (explicit per-read meta wins), as `runWithAmbientReadMeta()` does for the
+   * reads its function issues. Scopes nest: each is disposed before the scope
+   * it was entered within.
+   */
+  enterAmbientReadMeta(meta: Metadata): Disposable;
 
   markCfcRelevant(reason?: string): void;
 
@@ -3939,6 +3975,16 @@ export interface ISpaceReplica extends ISpace {
   /** Existing session progress without starting I/O or awaiting commits. */
   getDiagnostics?(): SpaceStorageDiagnostic;
 
+  /**
+   * Whether the server this replica is connected to advertised
+   * `markedSplicesV1`, so that a transaction may send a change to an array
+   * as marked splices (`V2StorageTransaction.#arraySpliceGate()`). `false`
+   * until a session exists and for a server that predates marked splices,
+   * and then the change goes index by index. Optional: a replica without it
+   * reads as `false`.
+   */
+  markedSplices?(): boolean;
+
   /** The sizes of the structures this replica holds. */
   getSizes?(): SpaceStorageSizes;
 
@@ -3990,6 +4036,21 @@ export interface ISpaceReplica extends ISpace {
   /** Whether the server this replica's session is on reports the links
    * its walks follow out of the space (`syncCrossingsV1`). */
   crossingsReported?(): boolean;
+
+  /**
+   * Whether a watch through this replica on the space's invitation ledger
+   * revision document (`SPACE_INVITES_REVISION_DOC_ID`) sees it move with
+   * every change to the ledger: the session is on the space's default branch,
+   * where the invitation service moves it, and its server advertises
+   * `spaceInvitesRevision`, as the session's latest handshake said. A session
+   * on another branch sees the document as it stood at the fork, and one that
+   * asked to fork a branch is taken to be of it, even where the server opened
+   * it on the default branch, since `session.open` does not say. A session
+   * replaced on reconnect (`IStorageManager.subscribeSpaceSessionReplaced()`)
+   * is on a server that may answer otherwise, so a reader whose watch rests on
+   * the answer asks again then.
+   */
+  invitesRevisionWatchable?(): boolean;
 
   /** Waits for session restoration before issuing fallback subscriptions. */
   whenSessionRestored?(): Promise<void>;

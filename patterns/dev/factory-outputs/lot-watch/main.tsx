@@ -1571,6 +1571,7 @@ export default pattern<LotWatchInput, LotWatchOutput>(
                           ? (
                             <cf-hstack gap="2" align="center">
                               <cf-avatar
+                                blob={reporterFace.pictureBlob}
                                 bytes={reporterFace.picture}
                                 src={reporterFace.avatar ?? ""}
                                 name={reporterLabel}

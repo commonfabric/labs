@@ -30,7 +30,9 @@ import {
   fabricAwareEqual,
   FabricInstance,
   FabricPrimitive,
+  hashStringOf,
   isFabricObjectOrArray,
+  isFabricPlainContainer,
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   refuseFabricInstance,
@@ -110,6 +112,7 @@ import {
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
 import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import { arrayMatchesPositionally } from "../schema-match.ts";
+import { keptElementIndices } from "../storage/array-edit-script.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
@@ -1557,12 +1560,27 @@ const structuralProvenanceForPath = (
 };
 
 /**
+ * Whether `value` at `path` of the document `id` is what a served event's
+ * processed claim writes. Only a stream's entries document holds one, and
+ * only while the path holds what the claim writes: `true` for the mark and
+ * for `withheld`, nothing for a cleared delivery deferral. It says nothing of
+ * whether the runtime named the path a claim; `isProcessedClaimPath()` and
+ * the transaction's write-identity summary each also require that.
+ */
+export const isProcessedClaimValue = (
+  id: string,
+  path: readonly string[],
+  value: unknown,
+): boolean =>
+  id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
+  value === (path.at(-1) === "deliveryDeferral" ? undefined : true);
+
+/**
  * Whether `path` of `target` is a served event's processed claim, as an
  * authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM` marker on `tx` names
- * it, holding `value`, the value the transaction wrote there. Only a stream's
- * entries document holds one, and only while the path holds what the claim
- * writes: `true` for the mark and for `withheld`, nothing for a cleared
- * delivery deferral. Anything else written there is measured as any write is.
+ * it, holding `value`, the value the transaction wrote there
+ * (`isProcessedClaimValue()`). Anything else written there is measured as any
+ * write is.
  */
 const isProcessedClaimPath = (
   tx: IExtendedStorageTransaction,
@@ -1574,8 +1592,7 @@ const isProcessedClaimPath = (
   path: readonly string[],
   value: unknown,
 ): boolean =>
-  target.id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
-  value === (path.at(-1) === "deliveryDeferral" ? undefined : true) &&
+  isProcessedClaimValue(target.id, path, value) &&
   structuralProvenanceForPath(
       tx,
       target,
@@ -1929,6 +1946,105 @@ const writePolicyInputIndexes = new WeakMap<
 >();
 
 /**
+ * The inputs of one document's list by the paths they name in that document,
+ * each with its position in the list.
+ */
+type WritePolicyInputPathNode = {
+  children: Map<string, WritePolicyInputPathNode>;
+  inputs: { position: number; input: WritePolicyInput }[];
+};
+
+/**
+ * The path index of each document's list that
+ * `writePolicyInputsForDocument()` built.
+ */
+const writePolicyInputPathIndexes = new WeakMap<
+  readonly WritePolicyInput[],
+  WritePolicyInputPathNode
+>();
+
+/**
+ * The write-policy inputs about `target`'s document that name a path in it at
+ * or above `path`, in the order they were recorded: an input whose target, or
+ * for a structural-provenance claim any of whose sources, is in the document
+ * at a concrete prefix of `path` (`concretePathHasPrefix`). Every other input
+ * of the document names no place that covers `path`, so a check that asks
+ * only about covering inputs reads these and decides as it would over all of
+ * `writePolicyInputsForDocument()`.
+ *
+ * A transaction that writes many slots of one document records an input for
+ * each, and a check at each slot that scanned them all would make the
+ * preparation quadratic in the slots written. The index is by path segment,
+ * so a query costs the length of `path` and the inputs it returns.
+ */
+const writePolicyInputsCoveringPath = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): readonly WritePolicyInput[] => {
+  const inputs = writePolicyInputsForDocument(tx, target);
+  if (inputs.length === 0) return inputs;
+  let root = writePolicyInputPathIndexes.get(inputs);
+  if (root === undefined) {
+    root = { children: new Map(), inputs: [] };
+    const key = cfcDocumentKey(target);
+    const add = (
+      address: CfcDocumentAddress & { path: readonly string[] },
+      position: number,
+      input: WritePolicyInput,
+    ) => {
+      if (cfcDocumentKey(address) !== key) return;
+      let node = root!;
+      for (const segment of address.path) {
+        let next = node.children.get(segment);
+        if (next === undefined) {
+          next = { children: new Map(), inputs: [] };
+          node.children.set(segment, next);
+        }
+        node = next;
+      }
+      // An input that names one path twice is listed there once.
+      if (node.inputs[node.inputs.length - 1]?.input !== input) {
+        node.inputs.push({ position, input });
+      }
+    };
+    inputs.forEach((input, position) => {
+      if ("target" in input && input.target !== undefined) {
+        add(input.target, position, input);
+      }
+      if (input.kind === "structural-provenance") {
+        for (const source of input.sources) add(source, position, input);
+      }
+    });
+    writePolicyInputPathIndexes.set(inputs, root);
+  }
+  const covering: { position: number; input: WritePolicyInput }[] = [];
+  let nodes = 0;
+  let node: WritePolicyInputPathNode | undefined = root;
+  for (let depth = 0; node !== undefined; depth++) {
+    if (node.inputs.length > 0) {
+      nodes++;
+      for (const entry of node.inputs) covering.push(entry);
+    }
+    if (depth === path.length) break;
+    node = node.children.get(path[depth]);
+  }
+  // One node's inputs are in recorded order already. Inputs from several
+  // nodes are put back in it, and an input that names two covering paths is
+  // returned once.
+  if (nodes > 1) covering.sort((a, b) => a.position - b.position);
+  const result: WritePolicyInput[] = [];
+  for (const { input } of covering) {
+    if (result[result.length - 1] !== input) result.push(input);
+  }
+  return result;
+};
+
+/**
  * Whether `path` lies at or under a capture or binding the runtime staged in
  * this transaction, with the slot still holding it. Staging writes nothing
  * the referenced value holds, so the integrity the receiving slot's schema
@@ -1946,7 +2062,7 @@ const pathHoldsStagedReference = (
 ): boolean => {
   const logicalPath = canonicalizeLogicalPath(path);
   const scope = normalizeCellScope(target.scope);
-  return writePolicyInputsForDocument(tx, target).some((input) =>
+  return writePolicyInputsCoveringPath(tx, target, logicalPath).some((input) =>
     input.kind === "initialization" &&
     (input.mode === "capture" || input.mode === "binding") &&
     tx.isRuntimeWritePolicyInput(input) &&
@@ -2082,10 +2198,18 @@ const pathHoldsUnattributedInitialization = (
     address.space === target.space && address.id === target.id &&
     normalizeCellScope(address.scope) === normalizeCellScope(target.scope) &&
     concretePathHasPrefix(logicalPath, canonicalizeLogicalPath(address.path));
-  const inputs = writePolicyInputsForDocument(tx, target);
+  // Every test below holds only of an input that covers the path, so each
+  // reads the covering inputs. Whether the transaction attributes what it
+  // initializes is a question about the document, and reads all of its
+  // inputs.
+  const covering = writePolicyInputsCoveringPath(tx, target, logicalPath);
   if (
-    !attributesInitializationAt(tx, target, inputs) &&
-    inputs.some((input) => {
+    !attributesInitializationAt(
+      tx,
+      target,
+      writePolicyInputsForDocument(tx, target),
+    ) &&
+    covering.some((input) => {
       if (input.kind === "structural-provenance") {
         if (!tx.isRuntimeWritePolicyInput(input)) return false;
         // A setup projection names the result field it projects and the
@@ -2114,7 +2238,7 @@ const pathHoldsUnattributedInitialization = (
     return true;
   }
   const unchangedTarget = { ...target, id: target.id as URI };
-  return inputs.some((input) =>
+  return covering.some((input) =>
     tx.isRuntimeWritePolicyInput(input) &&
     ((input.kind === "preserved-output" && covers(input.target) &&
       writePreservesRuntimeOutput(tx, unchangedTarget)) ||
@@ -3840,6 +3964,247 @@ const valueWriteTargets = (
 /** What one of {@link valueWriteTargets}' documents records of its writes. */
 type ValueWriteTarget = ReturnType<typeof valueWriteTargets> extends
   Map<string, infer Target> ? Target : never;
+
+/**
+ * Where a stored per-element entry of a rewritten array goes: it stays where
+ * it is, it moves to `path` with the element it labels, or it is dropped with
+ * an element the write removed.
+ */
+type ElementEntryPlacement =
+  | { kind: "kept" }
+  | { kind: "moved"; path: readonly string[] }
+  | { kind: "dropped" };
+
+/**
+ * The most removals and additions the alignment of an array's old and new
+ * elements searches for a shortest edit script within, between their common
+ * prefix and suffix (`keptElementIndices()`). It is the bound the commit's
+ * array diff uses.
+ */
+const ELEMENT_ALIGNMENT_MAX_EDITS = 64;
+
+/** What a stored entry is, for {@link elementEntryPlacements}. */
+const isPerValueElementEntry = (entry: LabelMapEntry): boolean =>
+  (entry.origin === "derived" || entry.origin === "structure") &&
+  entry.observes !== "shape" &&
+  !isRuntimeMintedTemplate({
+    origin: entry.origin,
+    path: canonicalizeLogicalPath(entry.path),
+  });
+
+/**
+ * Sets the slot at `rel` beneath `root` to `slot`, or empties it where
+ * `present` is false. `root` and every container in `owned` are copies this
+ * caller may change; any other container on the way down is copied once,
+ * put in its parent's place, and added to `owned`, so a later call for a
+ * path through it copies nothing. Returns false where a container on the way
+ * is not a plain array or record.
+ */
+const setSlotIn = (
+  root: unknown[],
+  owned: Set<unknown>,
+  rel: readonly string[],
+  slot: unknown,
+  present: boolean,
+): boolean => {
+  let container = root as unknown as Record<string, unknown>;
+  for (let depth = 0; depth < rel.length - 1; depth++) {
+    const key = rel[depth]!;
+    let child = container[key];
+    if (!isFabricPlainContainer(child as FabricValue)) return false;
+    if (!owned.has(child)) {
+      child = Array.isArray(child)
+        ? child.slice()
+        : { ...(child as Record<string, unknown>) };
+      owned.add(child);
+      container[key] = child;
+    }
+    container = child as Record<string, unknown>;
+  }
+  const key = rel[rel.length - 1]!;
+  if (present) container[key] = slot;
+  else delete container[key];
+  return true;
+};
+
+/**
+ * Where each stored per-value entry beneath an element of an array this
+ * transaction rewrote goes, so that an entry follows the element it labels.
+ *
+ * The value diff (`normalizeAndDiff()`) writes an array index by index, and
+ * writes nothing at an index whose value did not change. An element that
+ * moves onto an index holding an equal value is therefore not written there,
+ * and the clear of entries beneath written paths leaves that index the
+ * entries of the element that stood there before. So the old and new arrays
+ * are aligned by a shortest edit script (`keptElementIndices()`), and an
+ * entry beneath an old element the script keeps at another index moves there
+ * with it. A script keeps a subsequence, so an element that changes places
+ * with others, such as the first of three moved to the end, is one it
+ * removes at the old index and adds at the new one. Each old element the
+ * script removes is therefore paired, in order, with the first new element
+ * it adds that is equal to it and not yet paired, and its entries move there.
+ * An entry beneath an old element left unpaired is dropped, except where the
+ * new element at the same index is one the script adds and nothing is paired
+ * with: an element edited in place pairs with itself there, and its entries
+ * are cleared beneath the paths the diff wrote and kept elsewhere, as before.
+ *
+ * Only `derived` and `structure` entries move, existence entries excepted:
+ * those are frozen at their path's creation (§8.12.8) and stay where they
+ * are. Declared entries are policy for a position, and link entries follow
+ * the reference their slot holds (`linkEntrySuperseded`).
+ *
+ * An array is aligned where the transaction wrote beneath one of its indices
+ * or its length and wrote neither it nor any path above it, and where no
+ * array above it is aligned: an element that moves is equal to what it was,
+ * so nothing beneath it moves within it. The old array is the new one with
+ * each written path's value before the transaction put back, deepest first.
+ * Returns `undefined` where no stored entry is beneath such an array.
+ */
+const elementEntryPlacements = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  written: ValueWriteTarget,
+  writtenPrefixes: PathPrefixIndex,
+  storedEntries: readonly LabelMapEntry[],
+): ((entryPath: readonly string[]) => ElementEntryPlacement) | undefined => {
+  const entryPaths = storedEntries.filter(isPerValueElementEntry)
+    .map((entry) => canonicalizeLogicalPath(entry.path));
+  if (entryPaths.length === 0) return undefined;
+  const candidates = new Map<string, readonly string[]>();
+  for (const path of written.paths) {
+    for (let depth = 0; depth < path.length; depth++) {
+      const segment = path[depth]!;
+      if (segment !== "length" && !isArrayIndexPropertyName(segment)) continue;
+      const array = path.slice(0, depth);
+      const key = pathKey(array);
+      if (candidates.has(key) || writtenPrefixes.hasPrefixOf(array)) continue;
+      if (
+        !entryPaths.some((entryPath) =>
+          entryPath.length > depth && isPrefix(array, entryPath) &&
+          isArrayIndexPropertyName(entryPath[depth]!)
+        )
+      ) {
+        continue;
+      }
+      candidates.set(key, array);
+    }
+  }
+  const arrays = [...candidates.values()].filter((array) =>
+    ![...candidates.values()].some((outer) =>
+      outer.length < array.length && isPrefix(outer, array)
+    )
+  );
+  const alignments: {
+    array: readonly string[];
+    kept: Int32Array;
+    added: Uint8Array;
+    afterLength: number;
+  }[] = [];
+  for (const array of arrays) {
+    const after = tx.readValueOrThrow({ ...target, path: [...array] }, {
+      meta: INTERNAL_VERIFIER_META,
+    });
+    if (!Array.isArray(after)) continue;
+    const beneath = written.paths
+      .filter((path) => path.length > array.length && isPrefix(array, path))
+      .sort((left, right) => right.length - left.length);
+    const beforeArray: unknown[] = after.slice();
+    const owned = new Set<unknown>([beforeArray]);
+    let beforeLength: number | undefined;
+    let rebuilt = true;
+    for (const path of beneath) {
+      const key = pathKey(path);
+      const rel = path.slice(array.length);
+      const previous = written.previousValuesByPath.get(key);
+      if (rel.length === 1 && rel[0] === "length") {
+        if (typeof previous === "number") beforeLength = previous;
+        continue;
+      }
+      rebuilt = setSlotIn(
+        beforeArray,
+        owned,
+        rel,
+        previous,
+        written.previousPresentByPath.get(key) ?? previous !== undefined,
+      );
+      if (!rebuilt) break;
+    }
+    if (!rebuilt) continue;
+    if (beforeLength !== undefined) beforeArray.length = beforeLength;
+    const beforeKeys: (string | undefined)[] = [];
+    const afterKeys: (string | undefined)[] = [];
+    const keyOf = (
+      values: readonly unknown[],
+      keys: (string | undefined)[],
+      index: number,
+    ): string =>
+      keys[index] ??= index in values
+        ? `=${hashStringOf(values[index] as FabricValue)}`
+        : "hole";
+    const kept = keptElementIndices(
+      beforeArray.length,
+      after.length,
+      (beforeIndex, afterIndex) =>
+        (beforeIndex in beforeArray) === (afterIndex in after) &&
+        (Object.is(beforeArray[beforeIndex], after[afterIndex]) ||
+          keyOf(beforeArray, beforeKeys, beforeIndex) ===
+            keyOf(after, afterKeys, afterIndex)),
+      ELEMENT_ALIGNMENT_MAX_EDITS,
+    );
+    const added = new Uint8Array(after.length).fill(1);
+    for (const afterIndex of kept) if (afterIndex >= 0) added[afterIndex] = 0;
+    const addedByKey = new Map<string, number[]>();
+    for (let afterIndex = after.length - 1; afterIndex >= 0; afterIndex--) {
+      if (added[afterIndex] === 0) continue;
+      const key = keyOf(after, afterKeys, afterIndex);
+      const queue = addedByKey.get(key);
+      if (queue === undefined) addedByKey.set(key, [afterIndex]);
+      else queue.push(afterIndex);
+    }
+    for (let beforeIndex = 0; beforeIndex < kept.length; beforeIndex++) {
+      if (kept[beforeIndex]! >= 0) continue;
+      const afterIndex = addedByKey.get(
+        keyOf(beforeArray, beforeKeys, beforeIndex),
+      )?.pop();
+      if (afterIndex === undefined) continue;
+      kept[beforeIndex] = afterIndex;
+      added[afterIndex] = 0;
+    }
+    alignments.push({ array, kept, added, afterLength: after.length });
+  }
+  if (alignments.length === 0) return undefined;
+  return (entryPath) => {
+    for (const { array, kept, added, afterLength } of alignments) {
+      if (entryPath.length <= array.length || !isPrefix(array, entryPath)) {
+        continue;
+      }
+      const segment = entryPath[array.length]!;
+      if (!isArrayIndexPropertyName(segment)) return { kind: "kept" };
+      const index = Number(segment);
+      if (index >= kept.length) return { kind: "kept" };
+      const afterIndex = kept[index]!;
+      if (afterIndex === index) return { kind: "kept" };
+      if (afterIndex >= 0) {
+        return {
+          kind: "moved",
+          path: [
+            ...array,
+            String(afterIndex),
+            ...entryPath.slice(array.length + 1),
+          ],
+        };
+      }
+      return index < afterLength && added[index] === 1
+        ? { kind: "kept" }
+        : { kind: "dropped" };
+    }
+    return { kind: "kept" };
+  };
+};
 
 /**
  * What stands at `rel` below `value`: the first link met on the way down,
@@ -5858,7 +6223,9 @@ const deriveFlowJoinImpl = (
   // and the input witnesses retained beside it (`input-witness.ts`). The
   // flow join is one per-tx label stamped on every written doc, so the
   // identity must hold for the whole tx: minted only when every
-  // non-privileged write was authored under the same defined identity,
+  // non-privileged write was authored under the same defined identity (a
+  // served event's processed claim, the runtime's write and outside the
+  // stamp, is not one of them),
   // captured at write time (see `CfcTxState.writeIdentity`) — not whichever
   // identity is current at prepare, which a later run in the same tx may
   // have changed and which an unattributed write must not borrow. Ambiguity
@@ -7878,6 +8245,24 @@ type InputRead = Omit<IReadActivity, "journalIndex"> & {
   journalIndex: number;
 };
 
+/** Metadata with no marker of its own, which says what it inherits. */
+const UNMARKED_METADATA: NonNullable<IReadActivity["meta"]> = Object.freeze(
+  {},
+);
+
+/**
+ * Whether what `meta` says of its reads can no longer change: it is absent,
+ * or frozen with a prototype that is `Object.prototype` or none. What
+ * `Object.prototype` says is compared apart
+ * (`InputReadSnapshot.inheritedInternal`).
+ */
+const classificationIsFixed = (meta: IReadActivity["meta"]): boolean => {
+  if (meta === undefined) return true;
+  if (!Object.isFrozen(meta)) return false;
+  const prototype = Object.getPrototypeOf(meta);
+  return prototype === Object.prototype || prototype === null;
+};
+
 /** The reads an `InputReadView` holds, and what they were built from. */
 type InputReadSnapshot = {
   // What the reads were copied from: every record the transaction offered,
@@ -7885,9 +8270,18 @@ type InputReadSnapshot = {
   // metadata object classed its reads as the verifier's own. A record keeps
   // its place in the transaction's list while that classification changes,
   // by its metadata being replaced or changed in place.
+  // `list` is the object the transaction handed out, and `revision` what it
+  // returned on freezing the records of that list, or `undefined` where it
+  // froze none.
+  list: Iterable<IReadActivity>;
+  revision: number | undefined;
   records: readonly IReadActivity[];
   metas: readonly IReadActivity["meta"][];
-  internalByMeta: ReadonlyMap<IReadActivity["meta"], boolean>;
+  // The distinct metadata objects whose classification can change, each
+  // with how it classed its reads, and how metadata that carries no marker
+  // of its own classed its reads, which is what its prototype says.
+  openMetas: readonly (readonly [IReadActivity["meta"], boolean])[];
+  inheritedInternal: boolean;
   triggerCount: number;
   reads: readonly InputRead[];
   // The value path each read observes, or `undefined` for a read of one of
@@ -8036,7 +8430,11 @@ const buildGatedInputReads = (
  * the reads again only when the records differ, one carries another
  * metadata object, or a metadata object classes its reads otherwise than
  * it did, so a read recorded or reclassified during the pass reaches the
- * targets verified after it.
+ * targets verified after it. Each ask has the transaction freeze the
+ * records it lists (`freezeReadActivityRecords`), so a record the view has
+ * copied refuses another metadata object, and an ask of a transaction that
+ * lists the records it listed classifies each distinct metadata object
+ * again and compares no record.
  * The resolver's generation says whether a write retired an envelope the
  * view resolved. The view is deliberately class-blind (`consumes: "all"`):
  * the gate is a screen over everything the transaction consumed, and
@@ -8063,9 +8461,30 @@ export class InputReadView {
     gatedReads: ReturnType<typeof buildGatedInputReads>;
   };
 
+  #recordsCompared = 0;
+  #metadataObjectsClassified = 0;
+
   /** Binds the view to the transaction whose reads it holds. */
   constructor(tx: IExtendedStorageTransaction) {
     this.#tx = tx;
+  }
+
+  /**
+   * How many records the asks so far compared with the copy the view held:
+   * every record at each ask of a transaction that does not freeze its
+   * records or hands out another list, and none otherwise.
+   */
+  get recordsCompared(): number {
+    return this.#recordsCompared;
+  }
+
+  /**
+   * How many metadata objects the asks so far classified again: at each
+   * ask that held a copy, each distinct object of that copy that is not
+   * frozen.
+   */
+  get metadataObjectsClassified(): number {
+    return this.#metadataObjectsClassified;
   }
 
   /**
@@ -8169,13 +8588,24 @@ export class InputReadView {
     const rawList: readonly IReadActivity[] = Array.isArray(raw)
       ? raw
       : [...raw];
+    const revision = tx.freezeReadActivityRecords?.();
     const triggers = triggerReadSources(tx);
-    if (
-      this.#reads !== undefined &&
-      this.#reads.triggerCount === triggers.length &&
-      InputReadView.#stands(this.#reads, rawList)
-    ) {
-      return this.#reads;
+    const held = this.#reads;
+    if (held !== undefined && held.triggerCount === triggers.length) {
+      // The transaction says its list holds the records it held, each frozen
+      // with the metadata object it had, so only what those objects say can
+      // differ.
+      const sameRecords = revision !== undefined &&
+        revision === held.revision && raw === held.list &&
+        rawList.length === held.records.length;
+      if (!sameRecords) this.#recordsCompared += rawList.length;
+      this.#metadataObjectsClassified += held.openMetas.length;
+      if (
+        (sameRecords || InputReadView.#sameRecords(held, rawList)) &&
+        InputReadView.#classifiedAsHeld(held)
+      ) {
+        return held;
+      }
     }
     let clockLessReads = 0;
     const metas: IReadActivity["meta"][] = [];
@@ -8204,13 +8634,20 @@ export class InputReadView {
         journalIndex: -Infinity,
       });
     }
+    const openMetas: [IReadActivity["meta"], boolean][] = [];
+    for (const entry of internalByMeta) {
+      if (!classificationIsFixed(entry[0])) openMetas.push(entry);
+    }
     this.#reads = {
+      list: raw,
+      revision,
       // A copy, so the records compared at the next ask are the ones this
       // snapshot was built from even where the transaction hands out its
       // own growing list.
       records: [...rawList],
       metas,
-      internalByMeta,
+      openMetas,
+      inheritedInternal: isInternalVerifierRead(UNMARKED_METADATA),
       triggerCount: triggers.length,
       reads,
       gatePaths: reads.map((read) => canonicalizeDocumentPath(read.path)),
@@ -8230,15 +8667,11 @@ export class InputReadView {
 
   /**
    * Helper for `#current()`, which says whether `held` was built from
-   * exactly `records`, each classified as it is now. The transaction keeps a
-   * record whose classification is not sealed so that a consumer reads its
-   * metadata again, so every ask reads every record's metadata: a record
-   * carrying another metadata object ends the snapshot, and so does a
-   * metadata object that classes its reads otherwise than it did. The
-   * classification is the metadata object's, and a transaction's records
-   * share a few of them, so each distinct one is classified once per ask.
+   * exactly `records`, each carrying the metadata object it carried. It
+   * reads every record, which a record that is not frozen needs: its
+   * metadata can be replaced while it keeps its place.
    */
-  static #stands(
+  static #sameRecords(
     held: InputReadSnapshot,
     records: readonly IReadActivity[],
   ): boolean {
@@ -8249,7 +8682,23 @@ export class InputReadView {
         return false;
       }
     }
-    for (const [meta, internal] of held.internalByMeta) {
+    return true;
+  }
+
+  /**
+   * Helper for `#current()`, which says whether each metadata object of
+   * `held` classes its reads as it did. The classification is the metadata
+   * object's, which can change in place unless the object is frozen, so
+   * each distinct object that is not is classified once per ask. The count
+   * of those is what an ask costs: a site that records each read under a
+   * metadata object of its own makes that count follow the reads unless it
+   * freezes the object.
+   */
+  static #classifiedAsHeld(held: InputReadSnapshot): boolean {
+    if (isInternalVerifierRead(UNMARKED_METADATA) !== held.inheritedInternal) {
+      return false;
+    }
+    for (const [meta, internal] of held.openMetas) {
       if (isInternalVerifierRead(meta) !== internal) return false;
     }
     return true;
@@ -13623,6 +14072,18 @@ export function* prepareBoundaryCommitSteps(
     // slot beside a reference it anchored there.
     const carriedUnplacedStampPaths: (readonly string[])[] = [];
     let placesSlotStamp = false;
+    // Where the per-value entries beneath the elements of an array this
+    // transaction rewrote go: each follows the element it labels.
+    const elementPlacement = flowPersist && flowTarget !== undefined &&
+        existing !== undefined
+      ? elementEntryPlacements(
+        tx,
+        { space, id, scope },
+        flowTarget,
+        flowWrittenPrefixes,
+        existing.labelMap.entries,
+      )
+      : undefined;
     for (const entry of existing?.labelMap.entries ?? []) {
       const entryPath = canonicalizeLogicalPath(entry.path);
       const key = pathKey(entryPath);
@@ -13665,6 +14126,46 @@ export function* prepareBoundaryCommitSteps(
           });
           continue;
         }
+      }
+      // An entry beneath an element that moved goes with it, and one beneath
+      // an element the write removed goes with that (`elementEntryPlacements`).
+      // A moved entry is carried as an untouched path's is, at its new path;
+      // the index it leaves takes the entries of whichever element moved
+      // there, or the paths the diff wrote there are cleared as usual.
+      const placement = elementPlacement !== undefined &&
+          isPerValueElementEntry(entry)
+        ? elementPlacement(entryPath)
+        : { kind: "kept" as const };
+      if (placement.kind !== "kept") {
+        flowCleared = true;
+        if (placement.kind === "moved") {
+          const movedLabel = carriedStampLabel(entry, placement.path);
+          if (
+            existing?.stampPlacement !== "committed" &&
+            isWriterStamp({ ...entry, label: movedLabel })
+          ) {
+            carriedUnplacedStampPaths.push(placement.path);
+          }
+          if (hasLabelValues(movedLabel)) {
+            persistedLabelEntries.push({
+              path: [...placement.path],
+              label: cloneLabel(movedLabel),
+              ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+              ...(entry.observes !== undefined
+                ? { observes: entry.observes }
+                : {}),
+            });
+          }
+        } else if (
+          poolsExistence(entry) &&
+          (entry.label.confidentiality?.length ?? 0) > 0
+        ) {
+          clearedExistence.push({
+            path: entryPath,
+            confidentiality: entry.label.confidentiality!,
+          });
+        }
+        continue;
       }
       // A declared entry minted at a slot labels the position, not the
       // pointer the slot holds, so a link-origin entry there stays until its

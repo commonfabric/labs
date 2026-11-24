@@ -70,6 +70,7 @@ import {
   type RouterSenderSnapshot,
 } from "./router-protocol.ts";
 import type { Server } from "./server.ts";
+import { carriesOnlySessionOpenProofs } from "./session-open-auth.ts";
 import { serverMessageSync } from "./message-parts.ts";
 
 type Backend = ReturnType<Server["connectRouted"]>;
@@ -2745,7 +2746,12 @@ export class RoutedMemoryHost {
             "invocation",
             "actingAs",
             "statement",
-          ].some((key) => body[key] !== undefined),
+          ].some((key) =>
+            body[key] !== undefined &&
+            // A client's proof chain is the one `authorization` a router
+            // forwards (04-protocol.md §4.5.1); the server verifies it.
+            !(key === "authorization" && carriesOnlySessionOpenProofs(body))
+          ),
         );
         if (body.type === "memory.compression") {
           // The router answers this control itself, for every toolshed on the

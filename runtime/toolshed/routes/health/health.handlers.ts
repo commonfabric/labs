@@ -13,6 +13,7 @@ import type {
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getCommitRates,
+  getCurrencyDelivery,
   getDocumentCachesDiagnostics,
   getDocumentInterests,
   getPushPriorityStats,
@@ -88,6 +89,11 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
   // which spaces are being written to, by which sessions, and whether one
   // is in a write storm. Present whenever a memory server is co-hosted.
   const commitRates = getCommitRates();
+  // What passed between the currency indexes of the spaces the memory
+  // server holds: the triggers and pulls between a space and the spaces it
+  // reads, and the spaces a change kept coming back to, each with the
+  // circle it came round. Present whenever a memory server is co-hosted.
+  const currencyDelivery = getCurrencyDelivery();
   // The diagnostics clients reported about their sessions: the remote-echo
   // breaker's trips and clears, beside the commit rates of the same
   // sessions. Present whenever a memory server is co-hosted.
@@ -101,6 +107,7 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
     processMemory: Deno.memoryUsage(),
     ...(documentCaches === undefined ? {} : { documentCaches }),
     ...(commitRates === undefined ? {} : { commitRates }),
+    ...(currencyDelivery === undefined ? {} : { currencyDelivery }),
     ...(sessionReports === undefined ? {} : { sessionReports }),
     ...(servingLoop === undefined ? {} : {
       servingLoop: { ...servingLoop, ...(push === undefined ? {} : { push }) },

@@ -94,7 +94,8 @@ export interface EditableSource {
    * plain file or a non-diff pipe. */
   readonly isDiff?: boolean;
 
-  /** Complete diff sides used to scan syntax hidden between visible hunks. */
+  /** Each diff file's languages and complete sides, used to scan syntax
+   * hidden between visible hunks. The sides are highlighted when asked for. */
   diffCountContexts?(
     text: string,
   ): readonly DiffCountFileContext[] | undefined;

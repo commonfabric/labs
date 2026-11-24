@@ -21,6 +21,26 @@ import type { TrackedGraphState } from "./query.ts";
 import type { SessionCacheEntry } from "./server-sync.ts";
 import { trackedIdsFromEntries } from "./server-sync.ts";
 
+/**
+ * Why a session owes a full watch evaluation:
+ * - `first-selection`: the planner sent the first selection for a view, or
+ *   the first for a new revision of one;
+ * - `resume`: the session was resumed over a new connection, which replaced
+ *   the delivery state its next sync diffs against;
+ * - `lost-frame`: a frame that never reached the client was rolled back,
+ *   leaving delivery state only a full evaluation re-diffs;
+ * - `failed-pass`: a refresh pass failed after it may have advanced the
+ *   session's tracking state;
+ * - `routed-restore`: a routed context's retained interests were cleared
+ *   ahead of a fresh-context restore.
+ */
+export type FullResyncCause =
+  | "first-selection"
+  | "resume"
+  | "lost-frame"
+  | "failed-pass"
+  | "routed-restore";
+
 export type SessionState = {
   id: string;
   space: string;
@@ -97,11 +117,10 @@ export type SessionState = {
   caughtUpLocalSeq: number;
   pendingCaughtUpLocalSeq: number;
 
-  /** Set when delivery-state rollback re-inserted tombstone cache entries
-   * for a lost frame's removes: the incremental refresh retracts only what
-   * its own re-walks retire, so the next sync must run a FULL watch
-   * evaluation to re-diff them out. Self-clearing. */
-  forceFullResync: boolean;
+  /** Why the session's next sync runs a FULL watch evaluation instead of
+   * an incremental refresh, or `false` when it owes none. Self-clearing.
+   * The cause is carried into the slow-query record of that evaluation. */
+  forceFullResync: FullResyncCause | false;
 
   /**
    * Set when a planner selection changed what the session's views may run
@@ -635,7 +654,7 @@ export class SessionRegistry {
     session.viewSelections = new Map();
     session.viewDemandGraphs = new Map();
     session.viewDemandEntities = new Map();
-    session.forceFullResync = true;
+    session.forceFullResync = "routed-restore";
     session.viewPlansPending = false;
     session.viewSupportGrown = false;
     session.viewSupportReplaced = false;

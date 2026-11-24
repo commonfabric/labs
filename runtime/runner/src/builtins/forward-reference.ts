@@ -154,7 +154,10 @@ function forwardsNothingToUnwrittenStore(
   if (findAndInlineDataUriLinks(ref) !== undefined) return false;
   const { space, id, scope } = store.getAsNormalizedFullLink();
   const document = tx.readOrThrow({ space, id, scope, path: [] }, {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   });
   return document === undefined;
 }

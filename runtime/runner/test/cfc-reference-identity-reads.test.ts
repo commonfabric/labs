@@ -47,6 +47,7 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { machineryRead } from "../src/storage/reactivity-log.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { labelsThroughLink } from "./support/reached-labels.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-reference-identity");
 const space = signer.did();
@@ -138,10 +139,15 @@ describe("cfc-reference-identity-reads", () => {
     cfc?: { labelMap?: { entries: StoredEntry[] } };
   } | undefined;
 
-  const storedEntries = (id: string): StoredEntry[] =>
-    ((storageManager!.open(space).replica as unknown as {
+  const storedEntries = (id: string): StoredEntry[] => {
+    const replica = storageManager!.open(space).replica as unknown as {
       getDocument(id: string): StoredDocument;
-    }).getDocument(id))?.cfc?.labelMap?.entries ?? [];
+    };
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    );
+  };
 
   const derivedConfidentiality = (id: string): unknown[] | undefined =>
     storedEntries(id).find((entry) => entry.origin === "derived")

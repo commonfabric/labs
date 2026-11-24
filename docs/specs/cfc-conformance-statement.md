@@ -126,7 +126,8 @@ over its read prefix, skips write-destination reads too.
 
 **The write-destination marking sites:** `normalizeAndDiff` and the preserved
 output attempt read in `data-updating.ts`; `CellImpl.isStream` as called from
-`set()` and the append snapshot of `push` and `pushAll` in `cell.ts`;
+`set()`, the append snapshot of `push` and `pushAll`, and the add-unique
+snapshot of `addUnique` in `cell.ts`;
 `storedQueryState` and `storedRequestHash` in `builtins/sqlite-builtins.ts`;
 `storedCellsRead` in `builtins/fetch.ts`; the setup's comparison of the
 projection it builds with the stored result (`#nextResultProjection` in
@@ -472,7 +473,7 @@ document is ensured; equality is computed after the cross-space transform of
 
 **Deviations.**
 
-- With `cfcContentAddressedLabels` on (off by default), a stored version-1
+- With `cfcContentAddressedLabels` on, its default, a stored version-1
   envelope with unchanged labels is rewritten once in version 2;
   [`content-addressed-cfc-labels.md`](content-addressed-cfc-labels.md) under
   "Idempotence and the merge loop" and `SC-11` state this as the one
@@ -698,6 +699,31 @@ describes: a release removes a clause that stands for someone other than the
 owner, which no route under the pin removes, and every such removal is signed
 by the owner and recorded.
 
+An array the value diff rewrites is persisted index by index:
+`normalizeAndDiff` in `data-updating.ts` writes each index whose value changed,
+and the persist region clears the `derived` and `structure` entries beneath
+those paths and stamps them with the attempt's join. An element whose value at
+its index did not change is not written, and keeps the entries stored beneath
+it. An element the write moves to another index keeps them too:
+`elementEntryPlacements` in `cfc/prepare.ts` aligns the old and new arrays by
+a shortest edit script and moves each such entry, existence entries excepted,
+to the element's new index. An element the script removes is paired, in
+order, with an equal element it adds, which is how an element that changes
+places with others is carried, and the entries beneath an element left
+unpaired are dropped, except where the new element at its index is unpaired
+too: that element is the old one edited in place, and keeps its entries
+beneath the paths the diff did not write. Where no script within 64 edits
+aligns the arrays between their common prefix and suffix, the elements between
+are paired by value, in order, and the same exception covers the rest. Without
+the move, an element moved onto an index holding an equal value would take the
+entries of the element that stood there, and its own would be lost. Declared
+entries stay with their position, and link entries follow the reference their
+slot holds. This is §8.10.2.3, which specs `main` adopted at `f549c796`
+([specs#106](https://github.com/commonfabric/specs/pull/106)), later than the
+pin. The runtime conforms to it: the pairing joins equal values only, the
+attempt's join is stamped at the length and the indices the diff writes and
+nowhere else, and existence entries stay at their paths.
+
 **Residuals, with direction.**
 
 - Containers outside the wildcard scope: schemas mixing named `properties`
@@ -718,6 +744,9 @@ by the owner and recorded.
   counts as one under this runtime's presence semantics is not established.
 - Entries written before classification existed are folded into existence
   conservatively, an over-taint the same section states.
+- The alignment matches elements by value, so a write that sets an element
+  equal to one stored elsewhere in the array, without reading it, carries that
+  element's entries to it, an over-taint §8.10.2.3 accepts.
 - Cross-space label metadata: commitments are probe-able; `Space` ids,
   `Policy` and `Context` names and hashes, and authorship subjects stay
   public; declared entries and carried-forward entries persist verbatim;

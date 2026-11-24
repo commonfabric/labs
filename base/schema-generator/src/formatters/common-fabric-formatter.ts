@@ -2306,6 +2306,27 @@ export class CommonFabricFormatter implements TypeFormatter {
     return withValueRecordsOf({ ...schema, scope }, schema, context);
   }
 
+  /**
+   * Helper for `#formatWrapperType()`, which returns whether `node` names an
+   * interface or class that extends the wrapper `typeRef` rather than the
+   * wrapper itself. Such a type's arguments are its own parameters, as the
+   * kinds of an `IndexedCollections<Kinds>` are, and none of them is the
+   * wrapper's payload.
+   */
+  #namesSubtypeOf(
+    node: ts.TypeReferenceNode,
+    typeRef: ts.TypeReference,
+    context: GenerationContext,
+  ): boolean {
+    let named = context.typeChecker.getSymbolAtLocation(node.typeName);
+    if (named === undefined) return false;
+    if (named.flags & ts.SymbolFlags.Alias) {
+      named = context.typeChecker.getAliasedSymbol(named);
+    }
+    return (named.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.Class)) !==
+        0 && named !== typeRef.target.symbol;
+  }
+
   #formatWrapperType(
     typeRef: ts.TypeReference,
     typeRefNode: ts.TypeNode | undefined,
@@ -2322,7 +2343,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     let innerTypeNode: ts.TypeNode | undefined = undefined;
     if (
       typeRefNode && ts.isTypeReferenceNode(typeRefNode) &&
-      typeRefNode.typeArguments
+      typeRefNode.typeArguments &&
+      !this.#namesSubtypeOf(typeRefNode, typeRef, context)
     ) {
       const firstArg = typeRefNode.typeArguments[0];
       if (firstArg) {

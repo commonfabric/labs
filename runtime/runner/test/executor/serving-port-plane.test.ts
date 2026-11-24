@@ -244,6 +244,145 @@ describe("serving-port-plane", () => {
       ]);
     });
 
+    it("asks the server's thread to advance, store and judge the currency index, and returns what it reports", async () => {
+      const record = {
+        piece: "of:piece",
+        under: ["of:outer"],
+        vouched: true,
+        writes: ["computed:out"],
+        owned: ["of:state"],
+        slices: [{
+          key: "space",
+          vouched: true,
+          reads: [{ space, id: "of:input", scopeKey: "space", derived: false }],
+          vouches: ["computed:out"],
+        }],
+      };
+      const batch = {
+        asOf: 4,
+        seen: [6],
+        epoch: "release-7",
+        records: [record],
+      };
+      const marked = [
+        { piece: "of:piece", slice: "space", seq: 5, under: ["of:outer"] },
+      ];
+      const asked: unknown[] = [];
+      bridge.onRequest("server.advanceCurrency", (params) => {
+        asked.push(params);
+        return marked;
+      });
+      bridge.onRequest("server.storeCurrencyRecords", (params) => {
+        asked.push(params);
+        return {
+          marked,
+          falseClean: ["of:piece"],
+          blocked: [],
+          blockedBy: [],
+          behind: ["of:piece"],
+          unread: [],
+        };
+      });
+      bridge.onRequest("server.judgeCurrencyRoots", (params) => {
+        asked.push(params);
+        return {
+          servable: [{
+            root: "of:argument",
+            piece: "of:piece",
+            origins: ["of:piece"],
+          }],
+          held: [{
+            root: "of:held",
+            piece: "of:reader",
+            readers: ["of:reader"],
+          }],
+          upstream: [{
+            reader: "of:reader",
+            slice: "space",
+            id: "computed:out",
+            scopeKey: "space",
+            piece: "of:producer",
+          }],
+          refused: { marked: 2 },
+          marked: [],
+        };
+      });
+
+      expect(await plane.server.advanceCurrency(space)).toEqual(marked);
+      expect(await plane.server.storeCurrencyRecords(space, batch)).toEqual({
+        marked,
+        falseClean: ["of:piece"],
+        blocked: [],
+        blockedBy: [],
+        behind: ["of:piece"],
+        unread: [],
+      });
+      expect(
+        await plane.server.judgeCurrencyRoots(space, ["of:argument"], {
+          excludePrincipal: alice,
+          epoch: "release-7",
+          running: ["of:running"],
+        }),
+      ).toEqual({
+        servable: [{
+          root: "of:argument",
+          piece: "of:piece",
+          origins: ["of:piece"],
+        }],
+        held: [{
+          root: "of:held",
+          piece: "of:reader",
+          readers: ["of:reader"],
+        }],
+        upstream: [{
+          reader: "of:reader",
+          slice: "space",
+          id: "computed:out",
+          scopeKey: "space",
+          piece: "of:producer",
+        }],
+        refused: { marked: 2 },
+        marked: [],
+      });
+      expect(asked).toEqual([
+        { space },
+        { space, batch },
+        {
+          space,
+          roots: ["of:argument"],
+          excludePrincipal: alice,
+          epoch: "release-7",
+          running: ["of:running"],
+        },
+      ]);
+    });
+
+    it("asks the server's thread to replace the demand a space carries into another, and returns how many rows it refused", async () => {
+      const rows = [{
+        id: "of:far",
+        scope: "space" as const,
+        scopeKey: "space" as const,
+        origin: { space, sessionId: "alice-session" },
+      }];
+      const asked: unknown[] = [];
+      bridge.onRequest("server.setCarriedDemand", (params) => {
+        asked.push(params);
+        return { refused: 1 };
+      });
+
+      expect(
+        await plane.server.setCarriedDemand("did:key:source", space, rows, {
+          excludePrincipal: alice,
+        }),
+      ).toEqual({ refused: 1 });
+      expect(asked).toEqual([{
+        space: "did:key:source",
+        reader: space,
+        rows,
+        excludePrincipal: alice,
+      }]);
+    });
+
     it("returns whether a session is live for a principal from the sessions the server reported", async () => {
       openSession("alice-session", alice);
       await handled();

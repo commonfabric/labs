@@ -26,7 +26,6 @@ import { getLogger } from "@commonfabric/logger";
 import { type DID, Identity, legacySpaceDid } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
-  decodeMemoryBoundary,
   eventAttentionEntryKey,
   eventAttentionIndexKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
@@ -52,7 +51,6 @@ import {
   popFrame,
   pushFrame,
   Runtime,
-  type RuntimeFetch,
   runtimePresets,
   type SigilLink,
   type SpaceHostRegistration,
@@ -4032,118 +4030,6 @@ describe("runtime-processor", () => {
   });
 
   describe("`RuntimeProcessor` blob upload IPC", () => {
-    it("posts `FabricBytes` contents to the blob route and returns an absolute URL", async () => {
-      const originalFetch = globalThis.fetch;
-      let requestedUrl: string | undefined;
-      let requestedPayload: unknown;
-      const blobFetch: RuntimeFetch = (input, init) => {
-        requestedUrl = input.toString();
-        requestedPayload = decodeMemoryBoundary(init?.body as string);
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              id: "fid1:test",
-              url: "blobs/test.png",
-            }),
-            {
-              status: 201,
-              headers: { "Content-Type": "application/json" },
-            },
-          ),
-        );
-      };
-      globalThis.fetch = blobFetch as typeof globalThis.fetch;
-      // A processor over only the fields the handler reads.
-      const hostForSpaceCalls: string[] = [];
-      const processor = buildProcessor({
-        runtime: {
-          hostForSpace: (space: string) => {
-            hostForSpaceCalls.push(space);
-            return new URL("http://toolshed.test/base");
-          },
-        },
-      });
-
-      // The bytes as the transport's decode delivers them: the handler owns
-      // its request's payload. Kept here so the test can check what became of it.
-      const payload = new FabricBytes(new Uint8Array([1, 2, 3]));
-
-      try {
-        await expect(
-          processor.handleUploadBlob({
-            type: RequestType.UploadBlob,
-            space: "did:key:test-space" as never,
-            contentType: "image/png",
-            body: payload,
-            suffix: "png",
-          }),
-        ).resolves.toEqual({
-          id: "fid1:test",
-          url: "http://toolshed.test/did:key:test-space/blobs/test.png",
-        });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-
-      // The handler does not decode: the ceding that `BaseRequest`'s ownership
-      // rule turns on happens at the envelope rather than here, so the bytes
-      // arrive already decoded and are handed on as they are.
-
-      expect(requestedUrl).toBe(
-        "http://toolshed.test/did:key:test-space/blobs/upload.png",
-      );
-      // The host is resolved for the REQUEST's space, not any init space.
-      expect(hostForSpaceCalls).toEqual(["did:key:test-space"]);
-      // Strict, so that a request naming no file posts no `name` key at all:
-      // the blob's id is the hash of exactly what is posted.
-      expect(requestedPayload).toStrictEqual({
-        type: "image/png",
-        body: new FabricBytes(new Uint8Array([1, 2, 3])),
-      });
-    });
-
-    it("posts the file's name with the contents when the request names one", async () => {
-      const originalFetch = globalThis.fetch;
-      let requestedUrl: string | undefined;
-      let requestedPayload: unknown;
-      const blobFetch: RuntimeFetch = (input, init) => {
-        requestedUrl = input.toString();
-        requestedPayload = decodeMemoryBoundary(init?.body as string);
-        return Promise.resolve(
-          Response.json({ id: "fid1:test", url: "blobs/test.png" }, {
-            status: 201,
-          }),
-        );
-      };
-      globalThis.fetch = blobFetch as typeof globalThis.fetch;
-      const processor = buildProcessor({
-        runtime: { hostForSpace: () => new URL("http://toolshed.test/base") },
-      });
-
-      try {
-        await processor.handleUploadBlob({
-          type: RequestType.UploadBlob,
-          space: "did:key:test-space" as never,
-          contentType: "image/png",
-          body: new FabricBytes(new Uint8Array([1, 2, 3])),
-          name: "photo.png",
-        });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-
-      expect(requestedPayload).toStrictEqual({
-        type: "image/png",
-        body: new FabricBytes(new Uint8Array([1, 2, 3])),
-        name: "photo.png",
-      });
-      // The request names no suffix, so the path names no blob, and the store
-      // takes the suffix from the name.
-      expect(requestedUrl).toBe(
-        "http://toolshed.test/did:key:test-space/blobs",
-      );
-    });
-
     it("returns the URL a blob's space's host serves it at", async () => {
       const hostForSpaceCalls: string[] = [];
       const processor = buildProcessor({
@@ -4217,7 +4103,7 @@ describe("runtime-processor", () => {
           name: 7 as never,
         }),
       ).rejects.toThrow(
-        "uploadBlob requires any name it is given to be a string",
+        "The name given is not one a blob may hold",
       );
     });
   });

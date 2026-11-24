@@ -18,6 +18,7 @@ import {
   languageForFile,
   prepareLanguages,
 } from "../lib/view/languages/language.ts";
+import { rustLanguage } from "../lib/view/languages/rust/language.ts";
 
 function contextLines(path: string, lines: readonly string[]) {
   return languageForFile(path).highlightLines(lines.join("\n"), path);
@@ -78,8 +79,8 @@ async function commentOnly(...files: Side[]): Promise<boolean[]> {
     [...diff, ""].join("\n"),
     files.map(({ path, before, after }) => ({
       languages: sideLanguages(path),
-      oldLines: contextLines(path, [...before, ""]),
-      newLines: contextLines(path, [...after, ""]),
+      oldLines: () => contextLines(path, [...before, ""]),
+      newLines: () => contextLines(path, [...after, ""]),
     })),
   );
 }
@@ -157,12 +158,12 @@ describe("diffcounts", () => {
 
   it("recognizes comments in files that use plain-text highlighting", () => {
     const diff = [
-      "diff --git a/main.rs b/main.rs",
-      "--- a/main.rs",
-      "+++ b/main.rs",
+      "diff --git a/Main.java b/Main.java",
+      "--- a/Main.java",
+      "+++ b/Main.java",
       "@@ -1 +1 @@",
-      "-fn main() {} // old comment",
-      "+fn main() {} // new comment",
+      "-void main() {} // old comment",
+      "+void main() {} // new comment",
       "diff --git a/page.html b/page.html",
       "--- a/page.html",
       "+++ b/page.html",
@@ -201,6 +202,22 @@ describe("diffcounts", () => {
     ]).concat("").join("\n");
 
     expect(countsFor(diff).comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("reads a comment marker after an escaped quote as part of a string in files without highlighting", () => {
+    const diff = [
+      "diff --git a/Main.java b/Main.java",
+      "--- a/Main.java",
+      "+++ b/Main.java",
+      "@@ -1,2 +1,2 @@",
+      '-call("a \\" // b"); // old',
+      '-call("c \\" // d");',
+      '+call("a \\" // b"); // new',
+      '+call("c \\" // e");',
+      "",
+    ].join("\n");
+
+    expect(countsFor(diff).comments.totals).toEqual({ adds: 1, dels: 1 });
   });
 
   it("does not treat an unquoted URL as a comment", () => {
@@ -273,18 +290,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * hidden note",
-        " * old note",
-        " */",
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * hidden note",
-        " * new note",
-        " */",
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * hidden note",
+          " * old note",
+          " */",
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * hidden note",
+          " * new note",
+          " */",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
@@ -306,18 +325,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * old note",
-        " */",
-        "run_old();",
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * new note",
-        " */",
-        "run_new();",
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * old note",
+          " */",
+          "run_old();",
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * new note",
+          " */",
+          "run_new();",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -340,20 +361,22 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * old note",
-        " */",
-        "run_old();",
-        '// say "hello */',
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * new note",
-        " */",
-        "run_new();",
-        '// say "hello */',
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * old note",
+          " */",
+          "run_old();",
+          '// say "hello */',
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * new note",
+          " */",
+          "run_new();",
+          '// say "hello */',
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -371,18 +394,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("readme.md"),
-      oldLines: contextLines("readme.md", [
-        "```html",
-        "<!-- literal example",
-        "```",
-        "old prose",
-      ]),
-      newLines: contextLines("readme.md", [
-        "```html",
-        "<!-- literal example",
-        "```",
-        "new prose",
-      ]),
+      oldLines: () =>
+        contextLines("readme.md", [
+          "```html",
+          "<!-- literal example",
+          "```",
+          "old prose",
+        ]),
+      newLines: () =>
+        contextLines("readme.md", [
+          "```html",
+          "<!-- literal example",
+          "```",
+          "new prose",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -400,14 +425,16 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("readme.md"),
-      oldLines: contextLines("readme.md", [
-        "    <!-- literal example",
-        "old prose",
-      ]),
-      newLines: contextLines("readme.md", [
-        "    <!-- literal example",
-        "new prose",
-      ]),
+      oldLines: () =>
+        contextLines("readme.md", [
+          "    <!-- literal example",
+          "old prose",
+        ]),
+      newLines: () =>
+        contextLines("readme.md", [
+          "    <!-- literal example",
+          "new prose",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -878,6 +905,140 @@ describe("diffcounts", () => {
     expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
   });
 
+  it("does not read a Rust lifetime's quote as opening a literal", () => {
+    const diff = [
+      "diff --git a/main.rs b/main.rs",
+      "--- a/main.rs",
+      "+++ b/main.rs",
+      "@@ -1 +1 @@",
+      "-fn f(x: &'a str) {} // don't a",
+      "+fn f(x: &'a str) {} // don't b",
+      "",
+    ].join("\n");
+
+    expect(countsFor(diff).comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("does not read a quote in a Rust character literal as opening a string", () => {
+    const diff = [
+      "diff --git a/main.rs b/main.rs",
+      "--- a/main.rs",
+      "+++ b/main.rs",
+      "@@ -1 +1 @@",
+      "-let q = ['\"', '\\''];  // a",
+      "+let q = ['\"', '\\''];  // b",
+      "",
+    ].join("\n");
+
+    expect(countsFor(diff).comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("carries a Rust string that spans lines, with escaped quotes, within a hunk", () => {
+    const diff = [
+      "diff --git a/main.rs b/main.rs",
+      "--- a/main.rs",
+      "+++ b/main.rs",
+      "@@ -1,3 +1,3 @@",
+      ' let s = "one \\" still open',
+      "-// two",
+      "+// three",
+      ' ";',
+      "",
+    ].join("\n");
+
+    expect(countsFor(diff).comments.totals).toEqual({ adds: 1, dels: 1 });
+  });
+
+  it("does not read a Rust quote that may close a string as opening one when the hunk starts mid-file", () => {
+    const diff = [
+      "diff --git a/main.rs b/main.rs",
+      "--- a/main.rs",
+      "+++ b/main.rs",
+      "@@ -10,3 +10,3 @@",
+      ' end of help text";',
+      "-let x = 1; // a",
+      "+let x = 1; // b",
+      "",
+    ].join("\n");
+
+    expect(countsFor(diff).comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("does not carry a Rust string across a gap whose lines are not available", () => {
+    const diff = [
+      "diff --git a/main.rs b/main.rs",
+      "--- a/main.rs",
+      "+++ b/main.rs",
+      "@@ -1,2 +1,2 @@",
+      ' let s = "open',
+      "-// one",
+      "+// two",
+      "@@ -20,2 +20,2 @@",
+      ' let t = "x";',
+      "-// a",
+      "+// b",
+      "",
+    ].join("\n");
+
+    expect(countsFor(diff).comments.totals).toEqual({ adds: 1, dels: 1 });
+  });
+
+  it("carries a Rust string opened before the hunk through the complete file's lines", () => {
+    const diff = [
+      "diff --git a/main.rs b/main.rs",
+      "--- a/main.rs",
+      "+++ b/main.rs",
+      "@@ -3 +3 @@",
+      "-// a",
+      "+// b",
+      "",
+    ].join("\n");
+    const side = (line: string) =>
+      contextLines("main.rs", ['let s = "', "text", line, '";']);
+    const counts = countsFor(diff, [{
+      languages: sideLanguages("main.rs"),
+      oldLines: () => side("// a"),
+      newLines: () => side("// b"),
+    }]);
+
+    expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
+  });
+
+  it("does not read raw strings in files that are not Rust", () => {
+    const diff = [
+      "diff --git a/notes.md b/notes.md",
+      "--- a/notes.md",
+      "+++ b/notes.md",
+      "@@ -1 +1 @@",
+      '-See r"x <!-- a -->',
+      '+See r"x <!-- b -->',
+      "",
+    ].join("\n");
+
+    expect(countsFor(diff).comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("reads Rust's comment forms for a file chosen as Rust under another name", () => {
+    const languages = {
+      oldLanguage: rustLanguage,
+      newLanguage: rustLanguage,
+    };
+    const diff = [
+      "diff --git a/build.in b/build.in",
+      "--- a/build.in",
+      "+++ b/build.in",
+      "@@ -1 +1 @@",
+      "-fn main() {} // old",
+      "+fn main() {} // new",
+      "",
+    ].join("\n");
+
+    expect(countsFor(diff, [{ languages }]).comments.totals).toEqual({
+      adds: 0,
+      dels: 0,
+    });
+  });
+
   it("tracks nested block comments in Rust", () => {
     const diff = [
       "diff --git a/main.rs b/main.rs",
@@ -921,6 +1082,10 @@ describe("diffcounts", () => {
   });
 
   describe("commentOnlyFiles", () => {
+    it("returns no files for text that is not a unified diff", () => {
+      expect(commentOnlyFiles("just some text\n", [])).toEqual([]);
+    });
+
     it("returns true for files whose changes touch only comments", async () => {
       expect(
         await commentOnly(
@@ -964,8 +1129,72 @@ describe("diffcounts", () => {
             before: ["<!-- a -->", "<a>x<!-- b -->y</a>"],
             after: ["<!-- c -->", "<a>x<!-- d -->y</a>"],
           },
+          {
+            path: "lib.rs",
+            before: ["// a", "fn run() {} // b", "/* c /* d */ e */"],
+            after: ["// f", "fn run() {} // g", "/* h /* d */ i */"],
+          },
+          {
+            path: ".gitignore",
+            before: ["# Build output", "dist/"],
+            after: ["# Build output", "# from the bundler", "dist/"],
+          },
+          {
+            path: "main.go",
+            before: ["// a", "package main"],
+            after: ["// b", "// c", "package main"],
+          },
         ),
-      ).toEqual([true, true, true, true, true, true, true]);
+      ).toEqual([true, true, true, true, true, true, true, true, true, true]);
+    });
+
+    it("returns false for Rust doc comments, which are attributes, and true for a TypeScript doc comment", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "edited.rs",
+            before: ["/// Old.", "fn run() {}"],
+            after: ["/// New.", "fn run() {}"],
+          },
+          {
+            path: "added.rs",
+            before: ["fn run() {}"],
+            after: ["//! Crate.", "fn run() {}"],
+          },
+          {
+            path: "documented.ts",
+            before: ["/** Old. */", "run();"],
+            after: ["/** New. */", "run();"],
+          },
+        ),
+      ).toEqual([false, false, true]);
+    });
+
+    it("returns false for a Rust change inside a raw string that holds comment markers", async () => {
+      expect(
+        await commentOnly({
+          path: "text.rs",
+          before: ['const T: &str = r#"a " // b"#;'],
+          after: ['const T: &str = r#"a " // c"#;'],
+        }),
+      ).toEqual([false]);
+    });
+
+    it("returns false for a change to a Go directive or a cgo preamble, neither of which is a comment", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "main.go",
+            before: ["//go:build linux", "", "package main"],
+            after: ["//go:build darwin", "", "package main"],
+          },
+          {
+            path: "math.go",
+            before: ["package main", "", "// #include <math.h>", 'import "C"'],
+            after: ["package main", "", "// #include <tgmath.h>", 'import "C"'],
+          },
+        ),
+      ).toEqual([false, false]);
     });
 
     it("returns false for a change after a shell comment inside backticks, which ends at the closing backtick", async () => {
@@ -1026,8 +1255,10 @@ describe("diffcounts", () => {
             before: ["if ready:", "    go()"],
             after: ["if ready:", "go()"],
           },
+          // Git reads a `#` after leading white space as part of a pattern.
+          { path: ".gitignore", before: ["dist/"], after: ["dist/", " #x"] },
         ),
-      ).toEqual(Array(14).fill(false));
+      ).toEqual(Array(15).fill(false));
     });
 
     it("returns false when whitespace changes inside a multiline literal", async () => {
@@ -1147,7 +1378,7 @@ describe("diffcounts", () => {
       expect(
         await commentOnly(
           { path: "README.md", before: ["<!-- a -->"], after: ["<!-- b -->"] },
-          { path: "main.go", before: ["// a"], after: ["// b"] },
+          { path: "notes.txt", before: ["// a"], after: ["// b"] },
         ),
       ).toEqual([false, false]);
     });
@@ -1197,10 +1428,11 @@ describe("diffcounts", () => {
         ].join("\n");
       const sides = {
         languages: sideLanguages("a.ts"),
-        oldLines: contextLines("a.ts", ["// a", ""]),
-        newLines: contextLines("a.ts", ["// b", ""]),
+        oldLines: () => contextLines("a.ts", ["// a", ""]),
+        newLines: () => contextLines("a.ts", ["// b", ""]),
       };
 
+      expect(commentOnlyFiles("not a diff", [sides])).toEqual([]);
       expect(commentOnlyFiles(renamed, [sides])).toEqual([false]);
       expect(commentOnlyFiles(plain(index), [])).toEqual([false]);
       expect(commentOnlyFiles(plain(index), [{ languages: sides.languages }]))
@@ -1211,7 +1443,7 @@ describe("diffcounts", () => {
       // Highlighting whose spans leave part of a line out.
       expect(commentOnlyFiles(plain(index), [{
         ...sides,
-        oldLines: [{ text: "// a", spans: [] }, { text: "", spans: [] }],
+        oldLines: () => [{ text: "// a", spans: [] }, { text: "", spans: [] }],
       }])).toEqual([false]);
     });
 
@@ -1236,8 +1468,8 @@ describe("diffcounts", () => {
 
       expect(commentOnlyFiles(diff, [{
         languages: sideLanguages("w.py"),
-        oldLines: contextLines("w.py", before),
-        newLines: contextLines("w.py", rebuilt),
+        oldLines: () => contextLines("w.py", before),
+        newLines: () => contextLines("w.py", rebuilt),
       }])).toEqual([false]);
     });
 
@@ -1256,8 +1488,9 @@ describe("diffcounts", () => {
         ].join("\n");
       const context = (before: string, after: string) => [{
         languages: sideLanguages("a.ts"),
-        oldLines: contextLines("a.ts", [before.replace("\uFEFF", ""), ""]),
-        newLines: contextLines("a.ts", [after.replace("\uFEFF", ""), ""]),
+        oldLines: () =>
+          contextLines("a.ts", [before.replace("\uFEFF", ""), ""]),
+        newLines: () => contextLines("a.ts", [after.replace("\uFEFF", ""), ""]),
       }];
       const both = ["\uFEFFrun(); // a", "\uFEFFrun(); // b"] as const;
       const removed = ["\uFEFFrun(); // a", "run(); // a"] as const;

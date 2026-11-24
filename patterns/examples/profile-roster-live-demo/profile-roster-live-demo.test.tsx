@@ -93,6 +93,8 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_names_itself },
       { assertion: assert_starts_unjoined },
+      { action: live.join },
+      { assertion: assert_nobody_joined },
       { action: namelessJoins },
       { action: profilelessJoins },
       { assertion: assert_nobody_joined },

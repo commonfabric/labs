@@ -479,11 +479,14 @@ is the invariant a client is most likely to violate without knowing the rule
 exists.
 
 The generic invitation service commits its private admission records and unique
-redemption receipts in the same engine transaction as an ACL-only system commit.
+redemption receipts in the same engine transaction as its public system commits.
 That internal operation reads current authority under the SQLite write lock and
-publishes cache and watch changes only after durable commit. Its only public
-document operation remains the whole-document ACL `set` described here. Private
-invitation metadata is not part of `ClientCommit` and cannot be submitted through
+publishes cache and watch changes only after durable commit. It has two public
+document operations, each a commit of its own: the whole-document ACL `set`
+described here, which stays an ACL-only commit, and the `set` of its revision
+document, `of:space-invites-revision`, which counts the ledger's changes and
+which the store refuses in any commit but a system one. Private invitation
+metadata is not part of `ClientCommit` and cannot be submitted through
 `session.transact`. See the
 [invitation service contract](../../../runtime/toolshed/README.md#space-invitations).
 
@@ -832,7 +835,7 @@ reads the space's ACL document and refuses the commit when that document holds a
 deletion tombstone. That holds for every fresh commit whatever its class or
 path: a session's authored commit, a served run's access-list change and every
 other commit carrying delegated carriage, a serving wave's `derived` commit, the
-invitation service's system commit, and the operator `writeDocument` path. An
+invitation service's system commits, and the operator `writeDocument` path. An
 exact replay of a commit accepted before the deletion still answers from the
 store, since replay detection precedes admission. A commit that writes a
 deletion tombstone is held to these clauses inside that transaction too, against
@@ -849,8 +852,8 @@ step and the outbox already handle
 and an invitation operation gets `space-deleted`.
 
 The invitation service decides `space-deleted` in `invite()`, the server's
-invitation entry point, inside the write transaction it runs every one of the
-five operations in (`executeInvite`), so a deletion committed through another
+invitation entry point, inside the write transaction it runs every operation in
+(`applyInvite`), so a deletion committed through another
 connection is seen there as it is by the engine. Over HTTP, the router reaches
 `invite()` only once the request has passed rate limiting, its proof has
 verified, and its body has validated
@@ -907,7 +910,7 @@ verified chain's root issuer); engine admission of every fresh commit, inside
 its write transaction (`applyCommitTransaction` in
 `runtime/memory/v2/engine.ts`); the foreign grant
 (`#foreignGrantOn` in `runtime/memory/v2/server.ts`); invitation admission
-(`invite()` and `executeInvite` in `runtime/memory/v2/server.ts` and
+(`invite()` and `applyInvite` in `runtime/memory/v2/server.ts` and
 `runtime/memory/v2/invites.ts`); client emission (`writeAcl()` in
 `runtime/runner/src/acl-manager.ts`). The chain clause applies only where the
 server admits delegations (`acl.delegations`, which toolshed sets from

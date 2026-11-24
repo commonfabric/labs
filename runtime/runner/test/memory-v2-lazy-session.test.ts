@@ -30,7 +30,11 @@ function entityListingStorage(
           serverFlags,
           close: () => Promise.resolve(),
         } as never,
-        session: { subscribeTermination: () => () => {}, ...session } as never,
+        session: {
+          subscribeTermination: () => () => {},
+          subscribeServerSeq: () => () => {},
+          ...session,
+        } as never,
       }),
   });
   return { storage, provider: storage.open(space) };
@@ -85,6 +89,7 @@ describe("Memory v2 lazy session creation", () => {
           client: { close: async () => {} } as never,
           session: {
             subscribeTermination: () => () => {},
+            subscribeServerSeq: () => () => {},
           } as never,
         });
       },
@@ -135,6 +140,7 @@ describe("Memory v2 lazy session creation", () => {
           } as never,
           session: {
             subscribeTermination: () => () => {},
+            subscribeServerSeq: () => () => {},
           } as never,
         });
       },
@@ -168,6 +174,7 @@ describe("Memory v2 lazy session creation", () => {
           } as never,
           session: {
             subscribeTermination: () => () => {},
+            subscribeServerSeq: () => () => {},
             transact: (commit: { operations: { id: URI }[] }) => {
               commits += 1;
               return Promise.resolve(
@@ -222,6 +229,7 @@ describe("Memory v2 lazy session creation", () => {
           client: { close: () => Promise.resolve() } as never,
           session: {
             subscribeTermination: () => () => {},
+            subscribeServerSeq: () => () => {},
             transact: (commit: { operations: { id: URI }[] }) => {
               commits += 1;
               return Promise.resolve(
@@ -275,6 +283,7 @@ describe("Memory v2 lazy session creation", () => {
           } as never,
           session: {
             subscribeTermination: () => () => {},
+            subscribeServerSeq: () => () => {},
             transact: (commit: { operations: { id: URI }[] }) => {
               commits += 1;
               return Promise.resolve(

@@ -190,7 +190,18 @@ faced them:
   and seeds that demander's instances of the piece's owned cells
   declaring a default narrower than their owner (the arrival seed,
   serving-loop.md §7 `ownedDefaultSeeds`): the start that would have
-  seeded them runs on no viewer's runtime under served views.
+  seeded them runs on no viewer's runtime under served views. A
+  viewer's first write can create its instance before the seed reaches
+  it, holding only the fields written and no owner link; the seed then
+  fills the default's other fields under it, at any depth, writes the
+  owner link even when no field is missing, and changes none the
+  instance holds. A seed whose create a
+  wave dropped for that write runs once more to do so (serving-loop.md
+  §3d), and one lost for good leaves the demander unseeded, asked again
+  when its demand next changes. The
+  serving runtime's own start of a piece names no actor and seeds no
+  instance: not the service identity's session, which no viewer reads
+  and which every new serving runtime replaces.
   Demand-paced still: instances come only from demanders (never "all
   known principals"), and an eager/idle-scheduled node NOBODY demands
   with an identity keeps the wave-level fallback and, if it narrows,
@@ -336,7 +347,7 @@ coexist on one root, the run set is exactly the identity-bearing
 demand entries: the space demand rides those runs (the space
 consumer reads the run's value) and mints no separate userless run,
 so the root's derived writes carry the scoped demander's acting
-annotation — recorded, not read (protocol.md §1; its "a space-scope
+annotation — recorded, and deciding nothing (protocol.md §1; its "a space-scope
 derivation carries none" is the NO-identity-bearing-demand case).
 Before any narrowing, a node runs at SPACE
 scope and needs no principal at all. Handlers are the other case and

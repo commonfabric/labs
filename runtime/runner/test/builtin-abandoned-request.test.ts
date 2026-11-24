@@ -102,10 +102,9 @@ describe("a builtin whose staged request is abandoned", () => {
         llmDialog: [],
         generateText: [],
         generateObject: [],
-        // The `sqliteQuery` sink is ungated under the bundle for a reason of
-        // its own — the bound a read wants is the database's space, which a
-        // clause list cannot hold — so a deployment that wants a
-        // confidentiality gate on it declares one, as this case does.
+        // The `sqliteQuery` sink is ungated under the bundle, since the
+        // server a query reaches applies the same access rules — so a deployment
+        // that wants a confidentiality gate on it declares one, as this case does.
         sqliteQuery: [],
       },
     });

@@ -168,8 +168,14 @@ export default pattern<MailboxInput, MailboxOutput>(
       {
         reactOn: db,
         maxConfidentiality: [
-          "did:mailto:alice@a.example",
-          "did:mailto:bob@example.com",
+          {
+            type: "https://commonfabric.org/cfc/atom/User",
+            subject: "did:mailto:alice@a.example",
+          },
+          {
+            type: "https://commonfabric.org/cfc/atom/User",
+            subject: "did:mailto:bob@example.com",
+          },
           { __ctDbOwner: true },
         ],
         onExceed: "skip",

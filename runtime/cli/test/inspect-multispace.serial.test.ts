@@ -7,6 +7,12 @@ import {
   it,
 } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { toFileUrl } from "@std/path";
+import {
+  type CurrencyRecord,
+  storeCurrencyRecords,
+} from "@commonfabric/memory/v2/currency-index";
+import { close, open } from "@commonfabric/memory/v2/engine";
 import { defaultCacheDir } from "@commonfabric/state-inspector";
 
 import {
@@ -398,6 +404,98 @@ describe("inspect-multispace", () => {
       expect(output).not.toContain(
         "  PARTIAL\tinstance?\tof:partial\tpresent=2\tmissing=1\tclusters=1",
       );
+    });
+  });
+
+  describe("currency-cycles", () => {
+    /** The directory the stores of these cases are in. */
+    let stores: string;
+
+    /**
+     * A record of `piece`, which writes `writes` and reads `read` in
+     * `source`.
+     */
+    const reading = (
+      piece: string,
+      writes: string,
+      source: string,
+      read: string,
+    ): CurrencyRecord => ({
+      piece,
+      under: [],
+      vouched: true,
+      writes: [writes],
+      owned: [],
+      slices: [{
+        key: "space",
+        vouched: true,
+        reads: [{ space: source, id: read, scopeKey: "space", derived: false }],
+        vouches: [],
+      }],
+    });
+
+    /** Writes a store for `space` whose currency index holds `records`. */
+    const seedCurrency = async (space: string, records: CurrencyRecord[]) => {
+      const engine = await open({
+        url: toFileUrl(`${stores}/${space}.sqlite`),
+      });
+      storeCurrencyRecords(engine, {
+        space,
+        asOf: 0,
+        seen: [],
+        epoch: "epoch-one",
+        records,
+      });
+      close(engine);
+    };
+
+    beforeEach(async () => {
+      stores = `${scratch}/stores`;
+      await Deno.mkdir(stores);
+      await seedCurrency(CONV_A, [
+        reading("of:first", "of:a", CONV_B, "of:b"),
+      ]);
+      await seedCurrency(CONV_B, [
+        reading("of:second", "of:b", CONV_A, "of:a"),
+      ]);
+    });
+
+    it("prints the pieces in two spaces that read what each other write, with the documents", async () => {
+      expect(await lines(["currency-cycles", "--dir", stores])).toEqual([
+        "spaces examined: 2  with a currency index: 2  pieces recorded: 2",
+        "reads across spaces: 2",
+        `  ${CONV_B} reads 1 document(s) of ${CONV_A}`,
+        `  ${CONV_A} reads 1 document(s) of ${CONV_B}`,
+        "cycles across spaces: 1",
+        "  2 piece(s) in 2 spaces",
+        `    ${CONV_A} of:first writes of:a, read by ${CONV_B} of:second in space`,
+        `    ${CONV_B} of:second writes of:b, read by ${CONV_A} of:first in space`,
+      ]);
+    });
+
+    it("names a space that was read and not examined, and prints no cycle through it", async () => {
+      expect(
+        await lines([
+          "currency-cycles",
+          "--spaces",
+          `${stores}/${CONV_A}.sqlite`,
+        ]),
+      ).toEqual([
+        "spaces examined: 1  with a currency index: 1  pieces recorded: 1",
+        "reads across spaces: 1",
+        `  ${CONV_A} reads 1 document(s) of ${CONV_B}`,
+        "read and not examined, so a cycle through one is not seen: " + CONV_B,
+        "cycles across spaces: 0",
+      ]);
+    });
+
+    it("returns the cycles as JSON", async () => {
+      expect(await runInspectJson(["currency-cycles", "--dir", stores]))
+        .toMatchObject({
+          cycleCount: 1,
+          cycles: [{ spaces: [CONV_A, CONV_B], pieces: 2 }],
+          unexamined: [],
+        });
     });
   });
 });

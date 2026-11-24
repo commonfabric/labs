@@ -12,7 +12,10 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
-import type { ProfileFaceFields } from "../../system/profile-face/profile-face.ts";
+import type {
+  PictureBlob,
+  ProfileFaceFields,
+} from "../../system/profile-face/profile-face.ts";
 
 /**
  * Group Chat Room Pattern v9
@@ -58,7 +61,11 @@ export interface User {
   name: string;
   joinedAt: number;
 
-  /** Picture bytes, snapshotted from the joiner's shared profile. */
+  /** Picture blob, snapshotted from the joiner's shared profile. */
+  pictureBlob?: PictureBlob;
+
+  /** Picture bytes, snapshotted instead when the joiner's profile holds its
+   * picture as bytes. */
   picture?: FabricBytes;
 
   /** Avatar text, snapshotted instead when the joiner's profile has no
@@ -279,6 +286,7 @@ export default pattern<RoomInput, RoomOutput>(
       return (users.get() || []).find((user: User) => user.name === resolved);
     });
 
+    const myPictureBlob = computed(() => myUser?.pictureBlob);
     const myPicture = computed(() => myUser?.picture);
     const myAvatar = computed(() => myUser?.avatar || "");
 
@@ -346,6 +354,7 @@ export default pattern<RoomInput, RoomOutput>(
                         }}
                       >
                         <cf-avatar
+                          blob={user.pictureBlob}
                           bytes={user.picture}
                           src={user.avatar}
                           name={user.name}
@@ -394,6 +403,9 @@ export default pattern<RoomInput, RoomOutput>(
                           usr && usr.name === msg.author
                         )
                         : undefined
+                    );
+                    const authorPictureBlob = computed(() =>
+                      author?.pictureBlob
                     );
                     const authorPicture = computed(() => author?.picture);
                     const authorAvatar = computed(() => author?.avatar || "");
@@ -479,6 +491,7 @@ export default pattern<RoomInput, RoomOutput>(
                               ifElse(
                                 shouldShowAvatar,
                                 <cf-avatar
+                                  blob={authorPictureBlob}
                                   bytes={authorPicture}
                                   src={authorAvatar}
                                   name={msg.author}
@@ -706,6 +719,7 @@ export default pattern<RoomInput, RoomOutput>(
                         when the user joined in the lobby) */
                     }
                     <cf-avatar
+                      blob={myPictureBlob}
                       bytes={myPicture}
                       src={myAvatar}
                       name={myNameResolved}
