@@ -157,10 +157,10 @@ counts differ. The client counts values that fill no slot, the request's root
 among them, so it can refuse a dense request at the limit that the server would
 read. A sparse array's absent places count for the server alone, so a commit
 whose array holds few values at indices past the limit passes the client and is
-refused by the server on receipt. A client that does not read the field keeps to the default,
-which a server's limit is never below. A `messageSlots` that is not a safe
-integer at or above the default fails the handshake. A routed connection takes
-its bounds from the router instead (`routerFrameSlots`,
+refused by the server on receipt. A client that does not read the field keeps
+to the default, which a server's limit is never below. A `messageSlots` that is
+not a safe integer at or above the default fails the handshake. A routed
+connection takes its bounds from the router instead (`routerFrameSlots`,
 [routed Mode A](routed-mode-a.md)).
 
 `stableExpressionResultIds` declares the expression result identity contract:
