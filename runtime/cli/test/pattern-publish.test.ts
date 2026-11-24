@@ -282,6 +282,46 @@ describe("pattern-publish", () => {
       expect(first.remixedFrom).toBe("pat-theirs");
     });
 
+    it("sends `standalone` on every version it publishes when it is stated, and never when it is not", async () => {
+      dirty = undefined;
+      await publishedReport(
+        { entry, slot: "cf-path:stands", standalone: false },
+        depsWith(scripted([FAIL, PASS], [REWRITE])),
+      );
+      const stated = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(stated.map((c) => c.body.standalone)).toEqual([false, false]);
+
+      index.calls.length = 0;
+      await publishedReport({ entry }, depsWith(undefined));
+      const unstated = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(unstated).toHaveLength(1);
+      expect(Object.hasOwn(unstated[0].body, "standalone")).toBe(false);
+    });
+
+    it("says a pattern published as standalone was stored as a part when it needs an input", async () => {
+      const deps = depsWith(undefined);
+      const compile = deps.compileEntry;
+      const report = await publishedReport({ entry, standalone: true }, {
+        ...deps,
+        compileEntry: async (path, program) => ({
+          ...await compile(path, program),
+          argumentSchema: {
+            type: "object",
+            properties: { home: { type: "string" } },
+            required: ["home"],
+          },
+        }),
+      });
+
+      expect(report.standalone).toBe(false);
+      expect(report.storedAsPart).toBe(true);
+      expect(
+        publishReportLines(report).some((line) =>
+          line.startsWith("Stored as a part, not standalone")
+        ),
+      ).toBe(true);
+    });
+
     it("keeps the source as a version before a rewrite it writes over uncommitted edits with allowDirty", async () => {
       dirty = [entry];
       const report = await publishedReport(

@@ -58,6 +58,26 @@ const json = (status: number, value: unknown): Response =>
     headers: { "content-type": "application/json" },
   });
 
+/**
+ * What the index answers about `standalone` for a publication: what was
+ * asked, except that a required input with no default makes it a part. A
+ * publication that asked nothing gets no answer here, since the fake keeps
+ * no lineage to inherit one from.
+ */
+const storedStandalone = (
+  body: Record<string, unknown>,
+): { standalone?: boolean } => {
+  if (typeof body.standalone !== "boolean") return {};
+  const schema = (body.schemas as { argumentSchema?: unknown } | undefined)
+    ?.argumentSchema as
+      | { required?: string[]; properties?: Record<string, object> }
+      | undefined;
+  const needsInput = (schema?.required ?? []).some((name) =>
+    !Object.hasOwn(schema?.properties?.[name] ?? {}, "default")
+  );
+  return { standalone: body.standalone && !needsInput };
+};
+
 export class FakePatternIndex {
   readonly calls: FakeCall[] = [];
   readonly publications = new Map<string, FakePublication>();
@@ -207,8 +227,14 @@ export class FakePatternIndex {
       body,
       listing: "not_requested",
     });
+    const standalone = storedStandalone(body);
     if (lineageKey === undefined) {
-      return json(200, { patternId, created: true, listing: "not_requested" });
+      return json(200, {
+        patternId,
+        created: true,
+        listing: "not_requested",
+        ...standalone,
+      });
     }
     const seq = (this.#lineageSeqs.get(lineageKey) ?? 0) + 1;
     this.#lineageSeqs.set(lineageKey, seq);
@@ -223,6 +249,7 @@ export class FakePatternIndex {
       seq,
       visibility: "private",
       share: "none",
+      ...standalone,
     });
   }
 
