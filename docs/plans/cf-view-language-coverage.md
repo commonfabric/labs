@@ -1213,15 +1213,16 @@ The scanner reads the syntax of BuildKit's Dockerfile frontend. Parser
 directives open the file, and the `escape` directive can make the backtick the
 escape character. A line that ends in the escape character continues on the next
 line other than a blank line or a comment, and the shell grammar reads the
-continued command as one. The shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a
-`HEALTHCHECK` command is colored as shell, unless a `SHELL` instruction earlier
-in the stage, or in the stage it is built from, names a shell other than `sh`,
-`bash`, `dash`, or `ash`. The exec form is colored as a JSON array of strings. A
-`RUN` whose command is a single heredoc runs that heredoc's body as a script,
-with the interpreter its shebang names or else the stage's shell, and the shell
-grammar colors the body when that is one of those shells. The shell reads the
-heredocs of any other `RUN` as part of its command, and the bodies of `COPY` and
-`ADD` heredocs are strings. Other arguments color quoted strings and variable
+continued command as BuildKit joins it, without the escape character and line
+break. The shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a `HEALTHCHECK` command
+is colored as shell, unless a `SHELL` instruction earlier in the stage, or in
+the stage it is built from, names a shell other than `sh`, `bash`, `dash`, or
+`ash`. The exec form is colored as a JSON array of strings. A `RUN` whose
+command is a single heredoc runs that heredoc's body as a script, with the
+interpreter its shebang names or else the stage's shell, and the shell grammar
+colors the body when that is one of those shells. The shell reads the heredocs
+of any other `RUN` as part of its command, and the bodies of `COPY` and `ADD`
+heredocs are strings. Other arguments color quoted strings and variable
 references. The structure tree lists build stages, by name or by base image, and
 the variables that `ARG` and `ENV` set in each.
 

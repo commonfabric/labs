@@ -31,16 +31,15 @@
  * set. Variables set before the first stage are listed at the top level.
  */
 
-import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
-import { flattenStructure } from "../../model.ts";
+import type { Document, Line, TokenClass } from "../../model.ts";
 import { linesFromClasses } from "../classes.ts";
 import { languageForSource } from "../language.ts";
 import { shellLanguage } from "../shell/language.ts";
 import { shellGrammar } from "../shell/shell.ts";
 import {
   type LocatedEntry,
-  structureNode,
-  structureSource,
+  scannedDocument,
+  type TreeEntry,
 } from "../structure.ts";
 import { tokenClasses } from "../treesitter/adapter.ts";
 
@@ -113,12 +112,6 @@ interface Word {
   readonly equals?: number;
 }
 
-/** A structure entry and the entries it holds. */
-interface Entry {
-  readonly entry: LocatedEntry;
-  readonly children: LocatedEntry[];
-}
-
 /** A build stage whose extent grows as instructions join it. */
 interface Stage {
   readonly start: number;
@@ -135,7 +128,7 @@ class Scanner {
   readonly classes: (TokenClass | undefined)[];
 
   /** The top-level structure entries, in order. */
-  readonly entries: Entry[] = [];
+  readonly entries: TreeEntry[] = [];
 
   /**
    * Whether each character belongs to a line continuation or to a line that
@@ -502,15 +495,13 @@ class Scanner {
       this.#stageShells.set(stage.name.toLowerCase(), this.#posix);
     }
     this.entries.push({
-      entry: {
-        kind: "class",
-        label: stage.label,
-        name: stage.name,
-        nameOffset: stage.nameOffset,
-        startOffset: stage.start,
-        endOffset: stage.end,
-        astKind: "stage",
-      },
+      kind: "class",
+      label: stage.label,
+      name: stage.name,
+      nameOffset: stage.nameOffset,
+      startOffset: stage.start,
+      endOffset: stage.end,
+      astKind: "stage",
       children: stage.children,
     });
   }
@@ -547,7 +538,7 @@ class Scanner {
           astKind: instruction,
         };
         if (this.#stage === undefined) {
-          this.entries.push({ entry, children: [] });
+          this.entries.push(entry);
         } else {
           this.#stage.children.push(entry);
         }
@@ -845,23 +836,5 @@ export function dockerfileLines(text: string): Line[] {
 /** Colors `text` and lists its build stages and the variables they set. */
 export function dockerfileDocument(text: string): Document {
   const scanner = new Scanner(text);
-  const source = structureSource(text);
-  const structure: StructureNode[] = scanner.entries.map((
-    { entry, children },
-  ) =>
-    structureNode(
-      source,
-      entry,
-      0,
-      (depth) =>
-        children.map((child) => structureNode(source, child, depth, () => [])),
-    )
-  );
-  return {
-    text,
-    lines: linesFromClasses(text, scanner.classes, source.lineStarts),
-    structure,
-    flatStructure: flattenStructure(structure),
-    definitions: source.definitions,
-  };
+  return scannedDocument(text, scanner.classes, scanner.entries);
 }
