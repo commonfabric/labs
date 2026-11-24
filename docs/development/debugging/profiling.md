@@ -817,7 +817,18 @@ process:
   ([`serving-loop.md` §7](../../specs/server-side-execution/serving-loop.md)),
   present only when this process serves. `settle.series` is a ready-made
   per-authored-input latency series: admission to watermark coverage, with the
-  wave and cycle counts behind each entry.
+  wave and cycle counts behind each entry. `actions.entries` lists the 50
+  actions the serving runtimes spent the most wall time on, most first, each
+  with its `space`, its scheduler id (`action`), the result cell of its
+  `piece`, its `pattern` and `module` names, where it is authored (`src`), its
+  `runs`, how many of them a change to its inputs caused (`inputRuns`), and
+  its `totalMs`, `longestMs` and `lastMs`. An entry with `inputRuns` close to
+  `runs` and a large `longestMs` is an action that is slow on every write to
+  what it reads, rather than once. `dropped` and `droppedMs` count the actions
+  not listed and their time. A run is counted when it ends, so an action still
+  running, however long, has no entry yet, and an event handler has none at
+  all. The first run of an action that takes a second or more is also logged,
+  as `slow-action`, with the same identity.
 
 Everything here but `processMemory`, which is a reading of the moment,
 `commitRates`, which is a window rather than a lifetime, and

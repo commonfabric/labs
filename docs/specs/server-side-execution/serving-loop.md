@@ -2770,8 +2770,8 @@ needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
 budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
 discarded, held}, workers: {serving, spare, parked, heapUsed, heapStopped,
-started, retired, evicted, failed, shared, heapLimited}, push:
-{prioritizedSessions,
+started, retired, evicted, failed, shared, heapLimited}, actions: {entries,
+dropped, droppedMs}, push: {prioritizedSessions,
 followerSessions, mixedFlushes} }`
 (where the loop runs in workers, the block is every worker's counters taken
 together with the last counters of each worker that has closed
@@ -2790,6 +2790,15 @@ killed; `shared` counts placements that joined a worker already serving
 another space at the cap; `heapLimited` counts the workers, among the
 failed, that reached their heap limit, and `heapStopped` is how many spaces
 are on no worker now because a worker they were alone on did; §1's Workers;
+`actions` lists the actions the serving runtimes spent the most wall time on,
+fed from each completed run's `scheduler.run.complete` marker and ranked by
+total time: a host tracks at most 512, a run of an action with no row takes the
+cheapest action's row only if it alone took longer than that action's total,
+and the block lists at most 50 per host and 50 per process, rows of one action
+of one space from several workers taken together; `dropped` and `droppedMs`
+count the rows not listed, and the time of those rows and of runs no row took
+(`action-costs.ts`); a run is counted when it ends, so an action whose run is
+still going has no row;
 `parkedRuntimes` counts the runtimes idle parks kept, those a successor
 tenure served with, and those disposed unused — expired, evicted, tainted,
 or turned down at activation because the store head moved — with `held`

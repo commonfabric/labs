@@ -195,10 +195,23 @@ export type RuntimeTelemetryMarker = {
   actionInfo?: SchedulerActionInfo;
   durationMs: number;
 
+  /**
+   * Whether a change to one of the action's inputs caused this run, as
+   * opposed to its first run or a run that demand alone asked for. A marker
+   * that does not carry it reports a run no input change caused.
+   */
+  inputDriven?: boolean;
+
+  /** The id of the result cell of the piece the action belongs to. */
+  piece?: string;
+
   /** Read work for this run, when accounting is enabled. */
   reads?: ActionReadStats;
 
-  /** Authored file, line, and column for the measured action. */
+  /**
+   * Authored file, line, and column for the measured action, absent for an
+   * action with no verified authored site.
+   */
   src?: string;
 
   error?: string;
