@@ -1180,14 +1180,21 @@ describe("diffcounts", () => {
       ).toEqual([false]);
     });
 
-    it("returns false for a change to a Go directive, which is not a comment", async () => {
+    it("returns false for a change to a Go directive or a cgo preamble, neither of which is a comment", async () => {
       expect(
-        await commentOnly({
-          path: "main.go",
-          before: ["//go:build linux", "", "package main"],
-          after: ["//go:build darwin", "", "package main"],
-        }),
-      ).toEqual([false]);
+        await commentOnly(
+          {
+            path: "main.go",
+            before: ["//go:build linux", "", "package main"],
+            after: ["//go:build darwin", "", "package main"],
+          },
+          {
+            path: "math.go",
+            before: ["package main", "", "// #include <math.h>", 'import "C"'],
+            after: ["package main", "", "// #include <tgmath.h>", 'import "C"'],
+          },
+        ),
+      ).toEqual([false, false]);
     });
 
     it("returns false for a change after a shell comment inside backticks, which ends at the closing backtick", async () => {

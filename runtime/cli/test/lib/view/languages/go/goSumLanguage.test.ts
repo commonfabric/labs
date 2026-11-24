@@ -54,7 +54,16 @@ describe("goSumLanguage", () => {
     expect(classesOf(lines, "extra")).toEqual(["plain"]);
   });
 
-  it("lists each module once, over the lines that name it", () => {
+  it("lists a module again where its lines do not adjoin", () => {
+    const document = goSumLanguage.parseDocument(
+      "a v1 h1:x=\nb v1 h1:y=\na v2 h1:z=",
+    );
+
+    expect(document.flatStructure.map((node) => [node.label, node.startLine]))
+      .toEqual([["a", 0], ["b", 1], ["a", 2]]);
+  });
+
+  it("lists each module over the run of lines that name it", () => {
     const document = goSumLanguage.parseDocument(SUMS);
 
     expect(

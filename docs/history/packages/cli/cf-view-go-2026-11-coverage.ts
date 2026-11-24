@@ -98,8 +98,8 @@ const withErrors: { path: string; errorLines: number; lines: number }[] = [];
 for (const argument of Deno.args) {
   const [repository, ref] = argument.split("=");
   const name = repository.replace(/\/root\/?$/, "").split("/").at(-1);
-  const paths = (await git(repository, "ls-tree", "-r", "--name-only", ref))
-    .split("\n").filter((path) => path !== "");
+  const paths = (await git(repository, "ls-tree", "-r", "-z", "--name-only", ref))
+    .split("\0").filter((path) => path !== "");
   for (const path of paths) {
     const language = languageForFile(path);
     if (!language.id.startsWith("go")) continue;
@@ -122,7 +122,8 @@ for (const argument of Deno.args) {
     for (const line of lines) {
       for (const span of line.spans) {
         if (span.cls === "whitespace") continue;
-        const length = [...span.text].length;
+        // A comment or a string colors the white space inside it too.
+        const length = [...span.text].filter((c) => /\S/u.test(c)).length;
         tally.characters += length;
         tally.counts[span.cls] = (tally.counts[span.cls] ?? 0) + length;
       }
@@ -130,12 +131,17 @@ for (const argument of Deno.args) {
     if (language.id !== "go") continue;
     const tree = parser.parse(source)!;
     if (tree.rootNode.hasError) {
+      // The rows an error region or a token error recovery inserted covers.
       const rows = new Set<number>();
-      for (const node of tree.rootNode.descendantsOfType("ERROR")) {
-        for (let row = node.startPosition.row; row <= node.endPosition.row;) {
-          rows.add(row++);
+      const visit = (node: SyntaxNode) => {
+        if (node.type === "ERROR" || node.isMissing) {
+          const { startPosition: start, endPosition: end } = node;
+          for (let row = start.row; row <= end.row;) rows.add(row++);
+        } else if (node.hasError) {
+          for (const child of node.children) visit(child);
         }
-      }
+      };
+      visit(tree.rootNode);
       withErrors.push({ path: label, errorLines: rows.size, lines: lines.length });
     }
     tree.delete();

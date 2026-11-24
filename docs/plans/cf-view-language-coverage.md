@@ -202,7 +202,7 @@ selected grammar and query, and one empty highlight.
 | 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 25 ms |
 | Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
 | Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 192 lines | 650 shipped lines; 200 for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 650 shipped lines; 200 for a later grammar |
 | Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
@@ -471,12 +471,12 @@ lines when Python was measured; it has since gained the line-break, structure
 parent, and short-comment rules that Kotlin, HCL, and shell use, and the
 tracking of grammar loads that Org mode's source blocks use. Shell's module was
 91 lines when it was measured, and its short-comment rule brought it to 270.
-Go's `go/go.ts` adds 192 lines, inside the 200 a later host grammar may add,
-which brings the total to 1,381.
+Go's `go/go.ts` adds 197 lines, inside the 200 a later host grammar may add,
+which brings the total to 1,386.
 
 Go is the first language measured since the total passed its maximum, so it
 starts the comparison under "Reconsidering the dependency". The marginal costs
-a switch would remove are Go's 192 lines of highlight query and structure rule
+a switch would remove are Go's 197 lines of highlight query and structure rule
 and its 0.21 MiB WebAssembly grammar. No focused Go implementation exists. The
 focused Python scanner that the adapter replaced was 863 lines and colored
 without a structure tree, and a focused implementation needs a second
@@ -705,7 +705,8 @@ the first that is not blank, and an embedded field is listed under its type. A
 method's label names its receiver's type, as in `func (*Item) Render`.
 Declarations inside a function body are not structure. A comment that Go's
 tools read as a directive, such as a `//go:build` constraint, is colored as a
-directive rather than a comment.
+directive rather than a comment, as are the comments between `import "C"` and
+the declaration before it, which cgo compiles as C.
 
 A coverage check over the 2,954 files found every file reconstructed exactly,
 and fewer than one in a million characters other than white space without a
@@ -722,7 +723,7 @@ module file scanner reads the tokens the Go command's `modfile` package reads,
 colors the directives that package knows as keywords, the declared module path
 as a declared name, and versions as numbers, and lists each directive with the
 lines of its block under it. The checksum scanner colors each line's module
-path, version, and hash, and lists each module once. Every one of the 17 files
+path, version, and hash, and lists each module over the lines that name it. Every one of the 17 files
 reconstructed exactly, with every character other than white space classed.
 
 Completion gate: Go source and both manifest formats select correctly in

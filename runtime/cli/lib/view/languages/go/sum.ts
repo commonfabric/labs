@@ -2,8 +2,8 @@
  * Go checksum files (`go.sum` and `go.work.sum`) for the pager. Each line
  * names a module path, a version, and a hash, separated by white space. A
  * version that ends in `/go.mod` names the hash of that version's module file
- * alone. The structure tree lists each module path once, over the run of lines
- * that name it.
+ * alone. The structure tree lists each module path over each run of lines
+ * that name it, which is once in a file the Go command keeps sorted.
  */
 
 import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";

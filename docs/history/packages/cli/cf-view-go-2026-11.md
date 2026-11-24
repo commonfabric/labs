@@ -68,11 +68,15 @@ reports it. An initialization sample's processor time runs from the probe
 module's first statement to the empty highlight, so it includes the threads
 that compile the code it loads.
 
-The code measured is the commit before three later changes to it: the pattern
+The code measured is the commit before four later changes to it: the pattern
 that colors comment directives tests a different regular expression, an
 embedded field's structure label is cut at its tag rather than by searching for
-the tag's text, and the module file scanner reads its tokens differently. None
-of them changes how much work a highlight, a parse, or an edit does.
+the tag's text, the module file scanner reads its tokens differently, and a
+pattern colors a cgo preamble as code. The first three change no work a
+highlight, a parse, or an edit does. For the fourth, 40 alternating runs in one
+process on the probe's source, with and without that pattern, put the complete
+highlight's median at 32.55 and 33.21 ms and the re-color's at 18.17 and 18.08
+ms.
 
 ## Timings
 
@@ -158,7 +162,7 @@ Even unscaled, each figure is inside the maximum for a parser-backed language.
 | --- | ---: | ---: |
 | Compiled `cf` increase | 0.38 MiB | 10 MiB for a later grammar |
 | Unpacked dependencies | 3.66 MiB | 10 MiB for a later grammar |
-| Owned source | 192 lines | 200 lines for a later grammar |
+| Owned source | 197 lines | 200 lines for a later grammar |
 | Parser-specific build and deployment steps | 0 | 0 |
 
 Built with `deno task build-binaries cf`, the binary was 187,574,882 bytes at
@@ -177,10 +181,12 @@ two focused scanners, `mod.ts` and `sum.ts`, which do not use the adapter. Go
 needed no change to the adapter.
 
 The plan also bounds the common runtime and the Python, Go, Bash, and HTML host
-grammars at 1,000 owned source lines together. At the merge base, before Go,
-those already measured 1,153 lines: the adapter's `treesitter/adapter.ts` 654
-and the `classes.ts` split out of it 103, `python/python.ts` 126, and
-`shell/shell.ts` 270. With Go they measure 1,345. Python and shell, with Go,
+grammars at 1,000 owned source lines together. At `9e66fbf2d9`, the commit
+these measurements started from, those already measured 1,153 lines before Go:
+the adapter's `treesitter/adapter.ts` 654 and the `classes.ts` split out of it
+103, `python/python.ts` 126, and `shell/shell.ts` 270. Go's module adds 197.
+The adapter grew again before Go landed, and the plan records the totals at
+that point. Python and shell, with Go,
 occupy 34.95 MiB of the 40 MiB those grammars and the runtime may occupy
 unpacked.
 
@@ -205,11 +211,12 @@ The check read 2,954 Go files, 9 module files, and 8 checksum files, and found
 no `go.work` or `go.work.sum` file. Every file reconstructed exactly from its
 colored spans.
 
-The Go files hold 921,183 lines and 26,091,131 characters other than white
-space, of which 2 have no token class. Comments take 32.95 percent of those
-characters, identifiers 13.55 percent, strings 13.14 percent, called names 8.14
-percent, and property names 5.85 percent. The grammar could not parse part of 2
-files, 3 of their 1,125 lines: gVisor's `runsc/cgroup/cgroup.go` and Loom
+The Go files hold 921,183 lines and 24,508,857 characters other than white
+space, of which 2 have no token class. Comments take 29.79 percent of those
+characters, identifiers 14.43 percent, strings 12.82 percent, called names 8.67
+percent, and property names 6.23 percent. The grammar could not parse part of 2
+files, 3 of their 1,125 lines, counting both the regions it marks as errors and
+the tokens it inserts to recover: gVisor's `runsc/cgroup/cgroup.go` and Loom
 Scripts' `gmessages-client/internal/handoff/handoff_test.go`. Each declares a
 function of its own named `new` or `make`, which Go allows, and the grammar
 reads a call's first argument as the type the built-in function of that name
@@ -217,7 +224,7 @@ takes, as in `new("self", cgroupsPath, useSystemd)`. Coloring continues inside
 those regions.
 
 Every character other than white space in the module and checksum files has a
-token class. In the 10,563 of the module files, identifiers take 54.15 percent,
-versions 24.66 percent, and comments 16.14 percent; in the 155,869 of the
-checksum files, hashes take 49.66 percent, module paths 26.13 percent, versions
-18.15 percent, and the `/go.mod` suffix 6.06 percent.
+token class. Of the module files' 10,408 such characters, identifiers take
+54.96 percent, versions 25.03 percent, and comments 14.89 percent. Of the
+checksum files' 155,869, hashes take 49.66 percent, module paths 26.13 percent,
+versions 18.15 percent, and the `/go.mod` suffix 6.06 percent.

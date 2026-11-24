@@ -669,7 +669,7 @@ variables, and the fields and methods each type declares. Go module and
 workspace files, `go.mod` and `go.work`, have a language of their own, whose
 structure tree lists each directive and the lines of its block. So do Go
 checksum files, `go.sum` and `go.work.sum`, whose structure tree lists each
-module once.
+module over the lines that name it.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with

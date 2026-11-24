@@ -207,6 +207,31 @@ describe("goLanguage", () => {
       expect(classesOf(lines, "// Package p. Go:")).toEqual(["comment"]);
     });
 
+    it("colors a cgo preamble as code, and the comments beyond the declaration before it as comments", () => {
+      const lines = highlight([
+        "// Package p.",
+        "package p",
+        "",
+        "// #include <math.h>",
+        "// #cgo LDFLAGS: -lm",
+        'import "C"',
+        "",
+        "/*",
+        "#include <stdio.h>",
+        "*/",
+        'import "C"',
+        "",
+        "// Doc for fmt.",
+        'import "fmt"',
+      ].join("\n"));
+
+      for (const word of ["//", "#include", "<math.h>", "#cgo", "<stdio.h>"]) {
+        expect(classesOf(lines, word)).toEqual(["keyword"]);
+      }
+      expect(classesOf(lines, "// Package p.")).toEqual(["comment"]);
+      expect(classesOf(lines, "// Doc for fmt.")).toEqual(["comment"]);
+    });
+
     it("reconstructs malformed and incomplete input exactly", () => {
       for (
         const source of [

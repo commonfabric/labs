@@ -16,6 +16,11 @@ const HIGHLIGHT_QUERY = `
 ; \`go/ast\` recognizes one.
 ((comment) @keyword
   (#match? @keyword "^//(line |extern |export |[a-z0-9]+:[a-z0-9])"))
+; The comments between \`import "C"\` and the declaration before it, which cgo
+; compiles as C.
+((comment)+ @keyword . (import_declaration
+  (import_spec path: (interpreted_string_literal) @string))
+  (#eq? @string "\\"C\\""))
 (comment) @comment
 
 [(interpreted_string_literal) (raw_string_literal) (rune_literal)] @string
