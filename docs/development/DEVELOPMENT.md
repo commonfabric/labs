@@ -1071,15 +1071,12 @@ that has to stay, such as one in a test that shows the overflow, sits under a
 ### `using` on a path that runs often
 
 V8 runs a function that declares `using` far slower than one with a `try`
-block. In the V8 that Deno 2.9 ships, a call to a function that enters and
-leaves one `using` scope costs a few hundred nanoseconds more than the same
-function written with `try` and `finally`, dozens of times the cost of the
-whole call. That is nothing for a function that opens a file. In CPU profiles
-of the runner's `lazy-view-epoch` and `link-scan-dereference` benchmarks, a
-`using` scope in `runWithAmbientReadMeta()`, which runs inside the schema read
-of each child of a view, takes four to six percent of the busy time. In a
-function that runs per read, per element, or per call of another hot function,
-restore state in a `finally` block instead:
+block: entering and leaving one `using` scope costs dozens of times as much as
+the same function written with `try` and `finally`. That is nothing for a
+function that opens a file, and a measurable share of the runner's time for one
+on its per-element read paths. In a function that runs per read, per element,
+or per call of another hot function, restore state in a `finally` block
+instead:
 
 ```ts
 // Shown at module scope.
@@ -1100,8 +1097,8 @@ function withScope<T>(scope: string, fn: () => T): T {
 
 A scope that has to outlive the call that enters it, such as one a suspended
 traversal holds, is a `Disposable` its caller disposes. Make that an instance of
-a small class. An object literal whose `[Symbol.dispose]` is an arrow function
-costs about 100 ns more to create.
+a small class, which V8 creates several times faster than an object literal
+whose `[Symbol.dispose]` is an arrow function.
 
 ### Turning a file URL into a path
 
