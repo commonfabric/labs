@@ -145,6 +145,18 @@ If the server does not support the requested version or the required data-model
 flags do not match what it implements, it returns a typed error response and
 does not mark the connection ready.
 
+A server given a limit on client messages other than the default also sends
+`messageSlots` in `hello.ok`: the most slots it reads in one message from this
+connection's client. A slot is a place a value fills or leaves absent, an array
+counting as its length and a record as its number of members, and the default
+is 1,000,000. A direct client holds each request to the advertised limit in
+place of the default: it stages a watch set in parts that fit it, and refuses,
+unsent, a commit that does not. A client that does not read the field keeps to
+the default, which a server's limit is never below. A `messageSlots` that is
+not a positive safe integer fails the handshake. A routed connection takes its
+bounds from the router instead (`routerFrameSlots`,
+[routed Mode A](routed-mode-a.md)).
+
 `stableExpressionResultIds` declares the expression result identity contract:
 `ifElse`, `when`, and `unless` key their result stores on the owning piece and
 output spot. It is inherent to the build, and an absent marker means false.
