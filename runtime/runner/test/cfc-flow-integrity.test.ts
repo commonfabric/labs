@@ -17,6 +17,7 @@ import type { IFCLabel } from "../src/cfc/mod.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-flow-integrity");
 const space = signer.did();
@@ -79,11 +80,12 @@ describe("CFC flow labels: integrity propagation (phase C)", () => {
     id: string,
   ): StoredEntry[] => {
     const replica = storageManager.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { cfc?: unknown } | undefined;
     };
-    return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    );
   };
 
   const derivedIntegrity = (
