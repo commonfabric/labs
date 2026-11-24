@@ -95,9 +95,11 @@ visit recorded.
 
 A record that names no `space` slice is one taken while no live computation
 ran at the space's key. A runtime takes such a record of a piece it holds and
-does not run: a piece an enclosing piece's start instantiated, whose own root
-the loop left unstarted because the store can serve it, or one no session
-demands. The record has nothing to put in the slice's place, so:
+does not run. An enclosing piece's start instantiates every piece beneath
+it, and the computations of one of those are live only while a session
+demands what they write or a live computation reads it: a viewer of the
+enclosing piece who demands nothing of the inner one leaves it without one,
+and so does a viewer who left before the loop reached it. The record has nothing to put in the slice's place, so:
 
 - a `space` slice that is clean and of the recording epoch is left as it is,
   where the record is vouched for. Its rows are the ones a clean run left,

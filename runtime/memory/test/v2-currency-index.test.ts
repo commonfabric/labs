@@ -1100,8 +1100,8 @@ describe("currency-index", () => {
 
     describe("with a record that names no `space` slice, of a piece that holds one", () => {
       // Such a record is one taken while no live computation of the piece
-      // ran at the space's key, as a runtime takes of a piece it holds and
-      // leaves unstarted.
+      // ran at the space's key, as a runtime takes of a piece it holds
+      // while no session demands what the piece writes.
 
       /** A record of `of:piece` that vouches for `computed:out` from `of:a`. */
       const vouching = record("of:piece", {

@@ -1297,7 +1297,7 @@ executing:
   replaces them; a viewer's slice it does not name keeps its rows and its
   mark. A record that names no `space` slice was taken while nothing live
   ran at the space's key, as a runtime takes of a piece an enclosing start
-  instantiated and whose own root it left unstarted (§1). It leaves a
+  instantiated while no session demands what it writes. It leaves a
   `space` slice that is clean and of the recording epoch with its rows,
   which a later change to an instance they name marks as it marks an absent
   viewer's, and replaces any other, or the missing one of a piece with no
