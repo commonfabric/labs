@@ -1,7 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { blobSuffix, storedBlobPath } from "../src/blob-record.ts";
+import {
+  blobReferenceOf,
+  blobSuffix,
+  storedBlobPath,
+} from "../src/blob-record.ts";
 
 describe("blob-record", () => {
   describe("blobSuffix()", () => {
@@ -27,6 +31,37 @@ describe("blob-record", () => {
       expect(storedBlobPath("fid1:abc_-123", "png")).toBe(
         "blobs/abc_-123.png",
       );
+    });
+  });
+
+  describe("blobReferenceOf()", () => {
+    it("returns the space and id of a value that names a blob, and nothing else it holds", () => {
+      expect(
+        blobReferenceOf({
+          space: "did:key:z6MkBlobSpace",
+          id: "fid1:abc",
+          name: "photo.png",
+        }),
+      ).toEqual({ space: "did:key:z6MkBlobSpace", id: "fid1:abc" });
+    });
+
+    it("returns `undefined` for a value that names no blob", () => {
+      for (
+        const value of [
+          undefined,
+          null,
+          "fid1:abc",
+          ["did:key:z6MkBlobSpace", "fid1:abc"],
+          {},
+          { space: "did:key:z6MkBlobSpace" },
+          { space: "did:key:z6MkBlobSpace", id: "" },
+          { space: "did:key:z6MkBlobSpace", id: 7 },
+          { space: "space", id: "fid1:abc" },
+          { space: 7, id: "fid1:abc" },
+        ]
+      ) {
+        expect(blobReferenceOf(value)).toBeUndefined();
+      }
     });
   });
 });

@@ -30,8 +30,17 @@
  * none of them runs at admission.
  */
 
-import { fabricAwareEqual } from "@commonfabric/data-model";
-import { DEFAULT_BRANCH, type ScopeKey, scopeOfScopeKey } from "../v2.ts";
+import {
+  fabricAwareEqual,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
+import {
+  decodeTrustedMemoryBoundary,
+  DEFAULT_BRANCH,
+  resolveScopeKey,
+  type ScopeKey,
+  scopeOfScopeKey,
+} from "../v2.ts";
 import { ANY_INSTANCE, sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import { type Engine, read, serverSeq } from "./engine.ts";
 
@@ -59,6 +68,36 @@ const COMPUTED_ID_PREFIX = "computed:";
  * no revision included.
  */
 const SUPERSEDED_SEQ = -1;
+
+/**
+ * The scope key of the run that made the write at `opIndex` of a serving
+ * loop's derivation, read off the attribution the commit stores with each
+ * write (protocol.md §1): `space` for a run that acted as nobody, a user's
+ * key for one that acted as the user, and a session's for one that acted as
+ * the pair. `undefined` where `annotations`, the commit's stored column,
+ * attributes that write to no run.
+ *
+ * A run acts as the narrowest scope it read, and is filed under the scope
+ * its node has read for that viewer in any run, so the key is that of the
+ * run's slice only where the two agree.
+ */
+const runKeyOf = (
+  annotations: string | null,
+  opIndex: number,
+): string | undefined => {
+  const stored = annotations === null
+    ? undefined
+    : decodeTrustedMemoryBoundary(annotations);
+  const found = Array.isArray(stored)
+    ? stored.find((entry) => isFabricPlainObject(entry) && entry.op === opIndex)
+    : undefined;
+  if (!isFabricPlainObject(found)) return undefined;
+  const { actingUser: principal, actingSession: sessionId } = found;
+  if (typeof principal !== "string" || principal === "") return SPACE_SLICE;
+  return typeof sessionId === "string" && sessionId !== ""
+    ? resolveScopeKey("session", { principal, sessionId })
+    : resolveScopeKey("user", { principal });
+};
 
 export { ANY_INSTANCE };
 
@@ -266,9 +305,13 @@ export type CurrencyStored = {
 
   /**
    * The pieces with a slice that had been clean since its last record, then
-   * wrote an instance it vouched for again, to a value other than the one
+   * wrote an instance it answered for again, to a value other than the one
    * it held, with no input of its having changed: what it held was not what
-   * it computes.
+   * it computes. An instance the slice vouched for at its own key counts
+   * whichever derivation wrote it. One it decided at another key counts
+   * where every revision since is attributed to a run at the slice's key
+   * and the batch names the instance as one the slice decides, so a slot
+   * another slice's run wrote in between is not counted.
    */
   falseClean: string[];
 
@@ -476,6 +519,25 @@ INSERT OR REPLACE INTO currency_decide (
   branch, slice, piece, id, instance_key, seq
 )
 VALUES (:branch, :slice, :piece, :id, :instance_key, :seq)
+`),
+  // The slots one slice answers for whose head stands above its row. A row
+  // stored behind every head answers for no slot, and is left out.
+  selectDecidesBehind: engine.prepare(`
+SELECT d.id AS id, d.instance_key AS instance_key, d.seq AS seq
+FROM currency_decide d
+JOIN head h
+  ON h.branch = d.branch AND h.id = d.id AND h.scope_key = d.instance_key
+WHERE d.branch = :branch AND d.slice = :slice AND d.piece = :piece
+  AND d.seq > ${SUPERSEDED_SEQ} AND h.seq > d.seq
+`),
+  // The writes one commit made to one instance, each with what the commit
+  // stores of the runs that made its writes.
+  selectRevisionWriters: engine.prepare(`
+SELECT r.op_index AS op_index, c.annotations AS annotations
+FROM revision r
+JOIN "commit" c ON c.seq = r.commit_seq
+WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
+  AND r.seq = :seq
 `),
   // The rows for one slot, of whichever slices' runs wrote it.
   selectDeciders: engine.prepare(`
@@ -1549,22 +1611,68 @@ export const storeCurrencyRecords = (
   };
 
   /**
-   * Whether `ref`, clean since its last record, wrote an instance it
-   * vouched for again, to a value other than the one it held, with nothing
-   * it read having changed. Read before its rows are replaced.
+   * Whether every write the commit at `seq` made to the instance
+   * `(id, scopeKey)` is one it attributes to a run at the scope key `slice`.
    */
-  const wroteAgainUnprompted = (ref: SliceRef): boolean => {
-    const vouches = (statements.selectVouches.all({
+  const writtenAs = (
+    id: string,
+    scopeKey: string,
+    seq: number,
+    slice: string,
+  ): boolean => {
+    const writes = statements.selectRevisionWriters.all({
+      branch,
+      id,
+      scope_key: scopeKey,
+      seq,
+    }) as Array<{ op_index: number; annotations: string | null }>;
+    return writes.every(({ op_index, annotations }) =>
+      runKeyOf(annotations, op_index) === slice
+    );
+  };
+
+  /**
+   * Whether `ref`, clean since its last record, wrote an instance it
+   * answered for again, to a value other than the one it held, with nothing
+   * it read having changed. `decides` are the instances at another key that
+   * the record being stored names as ones `ref` decides. Read before the
+   * rows of `ref` are replaced.
+   *
+   * An instance at the slice's own key counts whichever derivation wrote
+   * it. One at another key is shared with the runs of other slices, any of
+   * which may write it as it decides, so it counts only where the slice's
+   * own run is known to have written it: every revision above the slice's
+   * row is attributed to a run at the slice's key, and the record names the
+   * instance as one that holds what the slice's run left. Where another
+   * slice's run wrote it in between, what the slice's run then wrote may
+   * have been prompted by that write, and is not counted.
+   */
+  const wroteAgainUnprompted = (
+    ref: SliceRef,
+    decides: readonly CurrencyInstance[],
+  ): boolean => {
+    /** The instances at its own key the slice vouched for. */
+    const vouched = (statements.selectVouches.all({
       branch,
       slice: ref.slice,
       piece: ref.piece,
     }) as Array<{ id: string; seq: number; held: number }>).filter((row) =>
       row.held === 1
-    );
+    ).map(({ id, seq }) => ({ id, scopeKey: ref.slice, seq }));
+
+    /** The instances at another key it answered for that were written since. */
+    const decided = (statements.selectDecidesBehind.all({
+      branch,
+      slice: ref.slice,
+      piece: ref.piece,
+    }) as Array<{ id: string; instance_key: string; seq: number }>).map((
+      { id, instance_key, seq },
+    ) => ({ id, scopeKey: instance_key, seq }));
+
     // A revision that is no derivation is a change from outside, and
     // whatever the piece wrote after it was prompted.
-    for (const { id, seq } of vouches) {
-      const above = revisionsAbove(id, ref.slice, seq);
+    for (const { id, scopeKey, seq } of [...vouched, ...decided]) {
+      const above = revisionsAbove(id, scopeKey, seq);
       if (above.some((revision) => !isDerivation(revision))) return false;
     }
     const written = new Set(
@@ -1620,16 +1728,31 @@ export const storeCurrencyRecords = (
         if (headOf(row.entity, row.entity_scope_key) > row.seq) return false;
       }
     }
-    // A start derives every output of a piece afresh, those of a slice that
-    // was current among them, so an instance written again as it stood is
-    // no sign that the stored value was stale.
-    return vouches.some(({ id, seq }) =>
-      headOf(id, ref.slice) > seq &&
+
+    /**
+     * Whether the instance holds another document than it did at `seq`. A
+     * start derives every output of a piece afresh, those of a slice that
+     * was current among them, so an instance written again as it stood is
+     * no sign that the stored value was stale.
+     */
+    const differs = (
+      { id, scopeKey, seq }: CurrencyInstance & { seq: number },
+    ): boolean =>
+      headOf(id, scopeKey) > seq &&
       !sameDocument(
-        read(engine, { id, scopeKey: ref.slice as ScopeKey, seq }),
-        read(engine, { id, scopeKey: ref.slice as ScopeKey }),
-      )
-    );
+        read(engine, { id, scopeKey: scopeKey as ScopeKey, seq }),
+        read(engine, { id, scopeKey: scopeKey as ScopeKey }),
+      );
+
+    return vouched.some(differs) ||
+      decided.some((slot) =>
+        decides.some(({ id, scopeKey }) =>
+          id === slot.id && scopeKey === slot.scopeKey
+        ) &&
+        revisionsAbove(slot.id, slot.scopeKey, slot.seq).every((revision) =>
+          writtenAs(slot.id, slot.scopeKey, revision, ref.slice)
+        ) && differs(slot)
+      );
   };
 
   engine.database.transaction(() => {
@@ -1674,11 +1797,16 @@ export const storeCurrencyRecords = (
         ],
     }));
     const wasClean = stored.flatMap(({ record, slices }) =>
-      slices.map((slice) => ({ piece: record.piece, slice: slice.key }))
-    ).filter((ref) => rowOf(context, ref)?.was_clean === 1);
+      slices.map((slice) => ({
+        ref: { piece: record.piece, slice: slice.key },
+        decides: slice.decides ?? [],
+      }))
+    ).filter(({ ref }) => rowOf(context, ref)?.was_clean === 1);
     result.falseClean = [
       ...new Set(
-        wasClean.filter(wroteAgainUnprompted).map((ref) => ref.piece),
+        wasClean.filter(({ ref, decides }) =>
+          wroteAgainUnprompted(ref, decides)
+        ).map(({ ref }) => ref.piece),
       ),
     ];
 

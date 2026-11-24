@@ -1268,10 +1268,18 @@ describe("CFProfileBadge", () => {
     const VISITOR_DID =
       "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
     const picture = new FabricBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    const pictureBlob = { space: "did:key:zProfileSpace", id: "fid1:picture" };
+
+    /** A face field's value, the principal its own cell represents, and,
+     * when not `true`, whether the worker read that principal with it. */
+    type FieldRead =
+      | [unknown, string | undefined]
+      | [unknown, string | undefined, boolean];
 
     /**
-     * A badge for a profile whose label names `owner`, whose picture and
-     * avatar fields hold what `fields` says, each as its value, the principal
+     * A badge for a profile whose label names `owner`, whose picture blob,
+     * picture and avatar fields hold what `fields` says, a picture blob that
+     * is not given holding nothing, each as its value, the principal
      * the worker read its own cell to represent, and whether it read that
      * principal with the value. The profile's label is the one the worker
      * read with its value only when `current`. Returns the face the badge
@@ -1280,13 +1288,19 @@ describe("CFProfileBadge", () => {
      */
     async function faceOf(
       owner: string | undefined,
-      fields: Record<
-        "picture" | "avatar",
-        [unknown, string | undefined] | [unknown, string | undefined, boolean]
-      >,
+      fields: Record<"picture" | "avatar", FieldRead> & {
+        pictureBlob?: FieldRead;
+      },
       current = true,
     ) {
+      const blobField = fields.pictureBlob ?? [undefined, undefined];
       const cells = {
+        pictureBlob: faceField(
+          blobField[0],
+          blobField[1],
+          "of:pictureBlob",
+          blobField[2],
+        ),
         picture: faceField(
           fields.picture[0],
           fields.picture[1],
@@ -1307,7 +1321,7 @@ describe("CFProfileBadge", () => {
         id: () => "fid1:piece",
         runtime: runtimeWithOtherRoot,
         asSchema: (schema: { properties: Record<string, unknown> }) => ({
-          key: (field: "picture" | "avatar") => cells[field],
+          key: (field: "pictureBlob" | "picture" | "avatar") => cells[field],
           subscribe: (
             cb: (
               val: unknown,
@@ -1326,7 +1340,11 @@ describe("CFProfileBadge", () => {
         }),
       });
       await badge.accessForTestingOnly.resolve();
-      await Promise.all([cells.picture.delivered, cells.avatar.delivered]);
+      await Promise.all([
+        cells.pictureBlob.delivered,
+        cells.picture.delivered,
+        cells.avatar.delivered,
+      ]);
       return {
         face: badge.accessForTestingOnly.face,
         cells,
@@ -1341,6 +1359,56 @@ describe("CFProfileBadge", () => {
       });
 
       expect(face).toEqual({ picture, avatar: undefined });
+    });
+
+    it("draws the picture blob its owner set, ahead of their picture's bytes", async () => {
+      const { face } = await faceOf(OWNER_DID, {
+        pictureBlob: [pictureBlob, OWNER_DID],
+        picture: [picture, OWNER_DID],
+        avatar: ["🦊", OWNER_DID],
+      });
+
+      expect(face).toEqual({
+        pictureBlob,
+        picture: undefined,
+        avatar: undefined,
+      });
+    });
+
+    it("draws the owner's picture bytes in place of a picture blob someone else set", async () => {
+      const { face } = await faceOf(OWNER_DID, {
+        pictureBlob: [pictureBlob, VISITOR_DID],
+        picture: [picture, OWNER_DID],
+        avatar: ["🦊", OWNER_DID],
+      });
+
+      expect(face).toEqual({
+        pictureBlob: undefined,
+        picture,
+        avatar: undefined,
+      });
+    });
+
+    it("draws the owner's avatar in place of a picture blob the owner set that names no blob", async () => {
+      for (
+        const value of [
+          { space: "not a did", id: "fid1:picture" },
+          { space: pictureBlob.space, id: "" },
+          {},
+        ]
+      ) {
+        const { face } = await faceOf(OWNER_DID, {
+          pictureBlob: [value, OWNER_DID],
+          picture: [new FabricBytes(new Uint8Array()), OWNER_DID],
+          avatar: ["🦊", OWNER_DID],
+        });
+
+        expect(face).toEqual({
+          pictureBlob: undefined,
+          picture: undefined,
+          avatar: "🦊",
+        });
+      }
     });
 
     it("draws the owner's avatar in place of a picture someone else set", async () => {
@@ -1394,10 +1462,14 @@ describe("CFProfileBadge", () => {
         avatar: ["🦊", OWNER_DID],
       });
 
-      expect([cells.picture, cells.avatar].map((cell) => cell.subscriptions()))
-        .toEqual([1, 1]);
+      expect(
+        [cells.pictureBlob, cells.picture, cells.avatar].map((cell) =>
+          cell.subscriptions()
+        ),
+      ).toEqual([1, 1, 1]);
       const properties = Object.keys(subscribedWith?.properties ?? {});
       expect(properties).toContain("name");
+      expect(properties).not.toContain("pictureBlob");
       expect(properties).not.toContain("picture");
       expect(properties).not.toContain("avatar");
     });

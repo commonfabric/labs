@@ -973,7 +973,7 @@ Deno.test("diffedit cov: a diff matching no file on disk yields a read-only sour
   const emptyEdit: DiffEdit = {
     lines: new Map(),
     fileText: new Map(),
-    oldFileLines: [],
+    oldFileLines: () => null,
     languages: diffLanguages(DIFF, parseDiff(DIFF)!),
     hunks: [],
   };
@@ -1007,7 +1007,7 @@ Deno.test("diffedit cov: save skips a verified hunk whose file was not captured 
   const edit: DiffEdit = {
     lines: new Map([[5, { absPath: "/ghost/m.ts", newLine: 0, markerLen: 1 }]]),
     fileText: new Map(), // deliberately missing /ghost/m.ts
-    oldFileLines: [],
+    oldFileLines: () => null,
     languages: [],
     hunks: [
       { absPath: "/ghost/m.ts", newStart: 1, newCount: 1, verified: true },
@@ -3456,6 +3456,78 @@ deleted file mode 100644
 -beta
 `;
     assertEquals(src.expandRoom!(del).size, 0);
+  } finally {
+    done();
+  }
+});
+
+Deno.test("diffedit cov: expandRoom bounds each hunk by its file's ends and its own file's other hunks", () => {
+  const lines = Array.from({ length: 20 }, (_, i) => `l${i + 1}`);
+  const { ws, done } = tempWs({
+    "a.ts": lines.join("\n") + "\n",
+    // The second file has no final newline, and the third, in the middle,
+    // has a hunk at the lines the first file's second hunk covers.
+    "b.ts": "x\ny\nz",
+    "c.ts": lines.join("\n") + "\n",
+  });
+  try {
+    const diff = `diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -3,2 +3,2 @@
+-old3
++l3
+ l4
+diff --git a/c.ts b/c.ts
+--- a/c.ts
++++ b/c.ts
+@@ -6,1 +6,1 @@
+-old6
++l6
+diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -10,2 +10,2 @@
+ l10
+-old11
++l11
+diff --git a/b.ts b/b.ts
+--- a/b.ts
++++ b/b.ts
+@@ -3 +3 @@
+-old
+\\ No newline at end of file
++z
+\\ No newline at end of file
+`;
+    const { src } = sourceFor(diff, ws);
+    const room = src.expandRoom!(diff);
+    const at = (header: string) => room.get(diff.split("\n").indexOf(header));
+
+    assertEquals(at("@@ -3,2 +3,2 @@"), {
+      up: 2,
+      down: 5,
+      atFileTop: false,
+      atFileBottom: false,
+    });
+    assertEquals(at("@@ -6,1 +6,1 @@"), {
+      up: 5,
+      down: 14,
+      atFileTop: false,
+      atFileBottom: false,
+    });
+    assertEquals(at("@@ -10,2 +10,2 @@"), {
+      up: 5,
+      down: 9,
+      atFileTop: false,
+      atFileBottom: false,
+    });
+    assertEquals(at("@@ -3 +3 @@"), {
+      up: 2,
+      down: 0,
+      atFileTop: false,
+      atFileBottom: true,
+    });
   } finally {
     done();
   }

@@ -190,6 +190,32 @@ describe("static-key-reads", () => {
       ]);
     });
 
+    it("reads `row[SUGGESTIONS]` in place, with no lift", async () => {
+      const root = await compile(`
+        import {
+          type ReadonlyCell,
+          SUGGESTIONS,
+          type Suggestion,
+        } from "commonfabric";
+
+        interface OffersOutput {
+          [SUGGESTIONS]: ReadonlyCell<Suggestion>[];
+        }
+
+        const Offers = pattern<RowInput, OffersOutput>(() => ({
+          [SUGGESTIONS]: [],
+        }));
+
+        export default pattern<RowInput, OffersOutput>(({ piece }) => {
+          const row = Offers({ piece });
+          return { [SUGGESTIONS]: row[SUGGESTIONS] };
+        });
+      `);
+
+      expect(hoistedLifts(root)).toEqual([]);
+      expect(keyReads(root, "row")).toEqual([["__cfHelpers.SUGGESTIONS"]]);
+    });
+
     it("reads a path below `row[VIEWS]` as one key read", async () => {
       const root = await compile(`
         export default pattern<RowInput, RowView>(({ piece }) => {

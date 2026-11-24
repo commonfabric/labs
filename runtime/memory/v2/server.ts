@@ -268,6 +268,7 @@ import {
 } from "./server-sync.ts";
 import {
   authorizationError,
+  carriesOnlySessionOpenProofs,
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
@@ -2914,7 +2915,8 @@ class Connection {
           this.#routedOwns !== undefined &&
           (!this.#routedOwns(parsed.space) || parsed.principal === undefined ||
             parsed.invocation !== undefined ||
-            parsed.authorization !== undefined ||
+            (parsed.authorization !== undefined &&
+              !carriesOnlySessionOpenProofs(parsed)) ||
             parsed.session.actingAs !== undefined)
         ) {
           this.#send({

@@ -809,9 +809,10 @@ export const identityOfScopeKey = (
  *   to prevent).
  * - ATTRIBUTION — `actingUser`/`actingSession`, the acting identity of the
  *   action RUN that produced the write (`action × instance`, never the
- *   action). Recorded, not read: no enforcement path consumes it today
- *   (protocol.md §1 — audit/forensics, and the anticipated signature
- *   graduation).
+ *   action). No enforcement path consumes it (protocol.md §1 —
+ *   audit/forensics, and the anticipated signature graduation). Its one
+ *   reader is the currency index's count of false cleans, which decides
+ *   nothing (serving-loop.md §3b).
  * - PRODUCER — `action`, the durable identity of the action whose run
  *   made the write, the one the run's basis rows are keyed by
  *   (serving-loop.md §3b). With the attribution it names the run, so a
@@ -1930,8 +1931,11 @@ export type SessionOpenRequest = {
 
   /**
    * The authenticated principal of the connection the session opens as. A
-   * request naming one carries no signature of its own, and the server reads
-   * neither `invocation` nor `authorization` from it.
+   * request naming one carries no signature of its own: the server reads no
+   * `invocation` from it, and from `authorization` only `proofs`, a proof
+   * chain the request may present (04-protocol.md section 4.5.1), which is
+   * also the one `authorization` a routed open may carry
+   * (`carriesOnlySessionOpenProofs`).
    */
   principal?: string;
 

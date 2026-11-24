@@ -146,7 +146,7 @@ of them (AMENDED — RULED 2026-08-16, the fan-out design §B6/§I.3;
 fan-out stage B):** under the per-demander run supply the redirect
 is written inside the DISCOVERING run's own transaction, so its
 annotation carries that run's scope-derived attribution (below) —
-the discovering principal — recorded, not read, like every
+the discovering principal — recorded, and deciding nothing, like every
 attribution; the redirect's value is a constant shape (no user data)
 and annotations are not pushed, so no client observes who narrowed
 first. One coupling to state plainly: the shared broad-slot redirect
@@ -337,16 +337,22 @@ exists to prevent:
   a run that acts as nobody included. A write of an effect
   completion names none: it lands a result, and no run derives it.
   Recorded, not
-  read, like the attribution: a mechanism that starts DECIDING from
+  read: a mechanism that starts DECIDING from
   it needs a spec edit here first.
 
-Attributed, not signed, today — and RECORDED, not read, today
+Attributed, not signed, today — and RECORDED, deciding nothing, today
 (stated after the 2026-08-03 provenance audit asked): no
 enforcement path consumes the attribution annotation — CFC labels
 are the load-bearing enforcement — so its present consumers are
 audit/forensics and the anticipated signature graduation below; a
 mechanism that starts DECIDING from attribution needs a spec edit
-here first. One such mechanism is specified: the admission of a
+here first. One reader that decides nothing is specified: the
+currency index's count of false cleans reads the attribution of each
+derived write to a document instance several slices' runs write, to
+tell whether a slice's own run rewrote it (serving-loop.md §3b, §7's
+`falseClean`); the count is a diagnostic, and no admission, serving
+or enforcement decision reads it. One mechanism that decides is
+specified: the admission of a
 served access-list change decides from the actor its delegated
 carriage names (§2's delegated row). The considered alternative — N
 commits per wave, one per session, each attributed at its
