@@ -817,11 +817,29 @@ process:
   ([`serving-loop.md` §7](../../specs/server-side-execution/serving-loop.md)),
   present only when this process serves. `settle.series` is a ready-made
   per-authored-input latency series: admission to watermark coverage, with the
-  wave and cycle counts behind each entry.
+  wave and cycle counts behind each entry. `actions.entries` lists up to 50
+  of the actions the serving runtimes spent the most wall time on, most first,
+  each with its `space`, its scheduler id (`action`), and where they are known
+  the result cell of its `piece`, its `pattern` and `module` names, and where
+  it is authored (`src`); then its `runs`, how many of them a change to its
+  inputs caused (`inputRuns`, a retry of such a run included), and its
+  `totalMs`, `longestMs` and `lastMs`. `inputRuns` says what causes the runs
+  and `longestMs` how slow one of them was; `totalMs` over `runs` is the mean.
+  The ranking is bounded rather than exact: each host tracks at most 512
+  actions, an action that loses its row to a costlier one and runs again
+  starts a new row, and so its counts, from that run, which is the exception to
+  the lifetime accumulation described below. `dropped` counts the rows given
+  up that way and the rows past the list's bound, and `droppedMs` their time
+  and that of every run that never took a row, so an action whose runs never
+  took one is in `droppedMs` and in no count. A run is counted when it ends, so
+  an action still running, however long, has no entry yet, and an event
+  handler has none at all. The first run of an action that takes a second or
+  more is also logged, as `slow-action`, with the same identity.
 
 Everything here but `processMemory`, which is a reading of the moment,
-`commitRates`, which is a window rather than a lifetime, and
-`sessionReports.recent`, which keeps only the newest reports, accumulates
+`commitRates`, which is a window rather than a lifetime,
+`sessionReports.recent`, which keeps only the newest reports, and
+`servingLoop.actions`, whose rows can restart as above, accumulates
 for the process's whole life, across every space it has served, so
 a phase is a difference between two captures rather than any single one — and
 **only `count` and `totalTime` subtract**. `min`, `max`, `p50`,
