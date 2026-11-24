@@ -40,6 +40,10 @@
  * result has and which cones ended in an error state. `home` then takes
  * one event, which adds a space to the list it keeps (`interaction`).
  *
+ * With `SCALE_CHANGES` set, the step of the last timed send of `room` on
+ * the arm `runner` lists each document its commits changed, with its scope
+ * and its size as JSON after the commit, largest first (`changes`).
+ *
  * With `SCALE_CPU_PROFILE` set to the path of a file, the timed sends of
  * `room` and the event of `home` are sampled and the profile is written
  * to that path followed by the size.
@@ -296,11 +300,13 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       for (const { address, after } of notification.changes) {
         if (seen.has(address.id)) continue;
         seen.add(address.id);
-        changedByCommits.documents += 1;
-        changedByCommits.bytes += after === undefined ? 0 : JSON.stringify(
+        const bytes = after === undefined ? 0 : JSON.stringify(
           after,
           (_, member) => typeof member === "bigint" ? `${member}n` : member,
         ).length;
+        changedByCommits.documents += 1;
+        changedByCommits.bytes += bytes;
+        changesListed?.push([`${address.id} ${address.scope}`, bytes]);
       }
       return undefined;
     },
@@ -519,6 +525,12 @@ const counted = (instance: Instance, before: Instance["counts"]) => ({
  * kept: `CHAT_SEND_SURFACE` and `CHAT_SEND_ACTION` of
  * `./fabrichat/schemas.tsx`.
  */
+/**
+ * Where `SCALE_CHANGES` is set and a timed send is listed: each document a
+ * commit changed, with its scope, and its size as JSON after the commit.
+ */
+let changesListed: [string, number][] | undefined;
+
 const SEND_GESTURE = Deno.env.get("SCALE_POLICIES") === "keep"
   ? { surface: "ChatSendSurface", action: "ChatSend" }
   : undefined;
@@ -786,12 +798,17 @@ for (
       const before = { ...instance.counts };
       const adapter = started.adapter?.();
       started.trace?.();
+      if (Deno.env.get("SCALE_CHANGES") !== undefined && index === 2) {
+        changesListed = [];
+      }
       began = performance.now();
       const committed = await send(
         binding,
         { body: `timed ${index}` },
         SEND_GESTURE,
       );
+      const listed = changesListed?.sort(([, a], [, b]) => b - a);
+      changesListed = undefined;
       if (Deno.env.get("SCALE_TRACE") !== undefined && index === 2) {
         print({ ...base, step: "trace", ...started.trace?.() });
       }
@@ -802,6 +819,7 @@ for (
         committed,
         ...counted(instance, before),
         ...adapted(adapter),
+        ...(listed === undefined ? {} : { changes: listed }),
       });
     }
     await stopProfile();
