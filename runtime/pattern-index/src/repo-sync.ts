@@ -233,8 +233,10 @@ export type PublishClient = Pick<
 
 /**
  * Publishes one compiled entry whose head is `head`, or that has none. An
- * entry with no head that moved from `movedFrom` names that path's head as
- * its predecessor, so the index moves the lineage rather than starting one.
+ * entry with no head that moved from `movedFrom` names that path, so the
+ * index moves its lineage here rather than starting one. A move the index
+ * refuses throws, and the entry is reported failed: published anyway, it
+ * would start a new lineage no later sync could move.
  */
 const publishEntry = async (
   entry: Extract<PlannedEntry, { status: "compiled" }>,
@@ -253,27 +255,20 @@ const publishEntry = async (
   }
   const response = await client.publishPattern({
     ...entry.request,
-    ...(head === undefined && movedFrom !== undefined
-      ? { priorPatternId: movedFrom.patternId }
-      : {}),
     source: {
       repository: options.repository,
       path: entry.path,
       commit: options.commit,
       sourceHash: entry.sourceHash,
+      ...(head === undefined && movedFrom !== undefined
+        ? { movedFrom: movedFrom.path }
+        : {}),
     },
   });
   // An index that predates repository sync drops `source` and publishes an
   // unlinked version; that is a failure, not a success.
   if (response.ignored?.includes("source")) {
     throw new Error("the index ignored the repository source");
-  }
-  // Ignored, the move would start a new lineage at the new path, and no
-  // later sync would try it again: the new path has a head from then on.
-  if (response.ignored?.includes("priorPatternId")) {
-    throw new Error(
-      `the index did not move the lineage of ${movedFrom?.path} to this path`,
-    );
   }
   const status = response.unchanged === true
     ? "unchanged"

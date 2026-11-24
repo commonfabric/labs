@@ -92,10 +92,11 @@ A lineage belongs to a path. When the globs stop selecting a path (the file is
 deleted, moved, or newly excluded), its lineage is withdrawn: unlisted, and
 still readable by id. A path that comes back resumes the same lineage. A
 repository that records how its patterns moved keeps a moved file's lineage,
-history included: the sync names the old path's newest version as the moved
-file's predecessor, and does not withdraw the old path. The table is at
-`moves-table`, relative to the repository root: a JSON object, or a module
-exporting `MOVED_PATTERN_KEYS` (Labs passes its own,
+history included: the sync tells the index the path the file moved from
+(`movedFrom`), and does not withdraw that path. The index refuses a move it
+cannot make, and the entry is reported failed rather than starting a new
+lineage. The table is at `moves-table`, relative to the repository root: a JSON
+object, or a module exporting `MOVED_PATTERN_KEYS` (Labs passes its own,
 `runtime/runner/src/pattern-key-moves.ts`), mapping former paths to current ones
 below `program-root`. A key ending in `/` moves a whole directory. A file may
 have several former paths, as when every old path points straight at the newest

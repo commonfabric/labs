@@ -505,20 +505,23 @@ describe("repo-sync", () => {
         client,
       );
       expect(published[0].source?.path).toBe("p/new/main.tsx");
-      expect(published[0].priorPatternId).toBe("head:p/old.tsx");
+      expect(published[0].source?.movedFrom).toBe("p/old.tsx");
+      expect(published[0].priorPatternId).toBeUndefined();
       // The moved lineage is at its new path now; only the deleted file's
       // is withdrawn.
       expect(withdrawals).toEqual([["p/deleted.tsx"]]);
     });
 
-    it("returns a move the index ignored as failed", async () => {
+    it("returns a move the index refuses as failed", async () => {
       const { client } = fakeIndex([head("p/old.tsx")]);
-      client.publishPattern = (request) =>
-        Promise.resolve({
-          patternId: request.patternId,
-          created: true,
-          ignored: ["priorPatternId"],
-        });
+      client.publishPattern = () =>
+        Promise.reject(
+          new PatternIndexError(
+            "publishPattern",
+            409,
+            "a live pattern is already at p/new/main.tsx",
+          ),
+        );
       const report = await publishPlan(
         {
           entries: [{
@@ -530,11 +533,11 @@ describe("repo-sync", () => {
         PUBLISH_OPTIONS,
         client,
       );
-      expect(report.entries).toEqual([{
+      expect(report.entries[0]).toMatchObject({
         path: "p/new/main.tsx",
         status: "failed",
-        reason: "the index did not move the lineage of p/old.tsx to this path",
-      }]);
+      });
+      expect(syncFailed(report)).toBe(true);
     });
 
     it("names no predecessor for an entry with its own head, or whose former path is still selected or already claimed", async () => {
@@ -563,13 +566,14 @@ describe("repo-sync", () => {
         client,
       );
       expect(
-        published.map((
-          request,
-        ) => [request.source?.path, request.priorPatternId]),
+        published.map((request) => [
+          request.source?.path,
+          request.source?.movedFrom,
+        ]),
       ).toEqual([
         ["p/own.tsx", undefined],
         ["p/a/main.tsx", undefined],
-        ["p/b/main.tsx", "head:p/old.tsx"],
+        ["p/b/main.tsx", "p/old.tsx"],
         ["p/c/main.tsx", undefined],
       ]);
     });
