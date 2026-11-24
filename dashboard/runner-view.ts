@@ -697,9 +697,7 @@ export class RunnersView {
     for (const token of boardTokens(board)) if (!first.has(token.runId)) first.set(token.runId, token);
     const entries = board.runs.flatMap((run) => {
       const token = first.get(run.id);
-      // A run's page is its job's, without the job.
-      const url = token?.url.replace(/\/job\/\d+$/, "");
-      return token ? [{ id: run.id, title: runTitle(token), jobs: run.jobs, url }] : [];
+      return token ? [{ id: run.id, title: runTitle(token), jobs: run.jobs, url: token.runUrl }] : [];
     }).sort((a, b) =>
       a.title.localeCompare(b.title, undefined, { numeric: true }) || (a.id < b.id ? -1 : 1)
     );

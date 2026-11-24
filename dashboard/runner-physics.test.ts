@@ -91,6 +91,43 @@ function hanging(world: HeapWorld, height: number): number[] {
   return result;
 }
 
+/** Returns a heap of three balls ten across, at rest in a pyramid on the floor of a box 200 by 100. */
+function pyramid(): HeapWorld {
+  const world = new HeapWorld(200, 100, 10);
+  world.add(1, 45, 95);
+  world.add(2, 55, 95);
+  world.add(3, 50, 95 - Math.sqrt(10 ** 2 - 5 ** 2));
+  runToRest(world);
+  return world;
+}
+
+/**
+ * Returns the IDs of the balls of `world`, in a box `width` by `height`,
+ * balanced near the top of a single other: off the floor, clear of the sides,
+ * held up by one ball less than a fifth of a ball across from straight
+ * beneath it, and touching no other beside or below it.
+ */
+function perched(world: HeapWorld, width: number, height: number): number[] {
+  const d = world.diameter;
+  const r = d / 2;
+  const result: number[] = [];
+  for (let i = 0; i < world.count; i++) {
+    const x = world.xAt(i);
+    const y = world.yAt(i);
+    if (y >= height - r - 0.5 || x <= r + 0.5 || x >= width - r - 0.5) continue;
+    const touching: number[] = [];
+    for (let j = 0; j < world.count; j++) {
+      if (j !== i && world.yAt(j) > y - r && Math.hypot(world.xAt(j) - x, world.yAt(j) - y) <= d * 1.02) {
+        touching.push(j);
+      }
+    }
+    if (touching.length !== 1) continue;
+    const [under] = touching;
+    if (world.yAt(under) - y > r && Math.abs(world.xAt(under) - x) < 0.2 * d) result.push(world.idAt(i));
+  }
+  return result;
+}
+
 /** Returns a heap of `count` balls ten across, at rest in a row along the floor of a box a hundred square. */
 function row(count: number): HeapWorld {
   const world = new HeapWorld(100, 100, 10);
@@ -264,8 +301,9 @@ describe("runner-physics", () => {
 
         it("leaves asleep the balls of a deep heap at rest that only rest on balls a landing ball wakes", () => {
           // The ball dropped on the heap wakes the few it lands on and
-          // presses; the balls resting on those stay in contact with them,
-          // so stay asleep, and so does everything farther off.
+          // presses, and rolls off any it lands balanced on, into a groove;
+          // the balls resting on those stay in contact with them, so stay
+          // asleep, and so does everything farther off.
           const world = deepHeap();
           const d = world.diameter;
           const before = positions(world);
@@ -278,9 +316,51 @@ describe("runner-physics", () => {
             const was = before.get(id);
             if (was === undefined || (where.x === was.x && where.y === was.y)) continue;
             moved++;
-            expect(Math.hypot(was.x - landed.x, was.y - landed.y)).toBeLessThan(2 * d);
+            expect(Math.hypot(was.x - landed.x, was.y - landed.y)).toBeLessThan(2.5 * d);
           }
-          expect(moved).toBeLessThanOrEqual(6);
+          expect(moved).toBeLessThanOrEqual(12);
+        });
+
+        it("leaves a pyramid at rest standing when a ball beside its base shoots away level with it", () => {
+          // The ball added overlaps the base's right ball a little and leaves
+          // at once; a ball beside another, not beneath it, holds nothing up,
+          // so the pyramid, which stands only while it sleeps, sleeps on.
+          const world = pyramid();
+          const before = positions(world);
+          world.add(4, 64, 95, 550, 0);
+          runToRest(world);
+          expect(farthestMoved(world, before)).toBeLessThan(0.1);
+          expect(positions(world).get(3)?.y).toBeLessThan(90);
+        });
+
+        it("does not leave a ball that lands on a pyramid at rest balanced on top of a single other", () => {
+          // Each of these throws ends with a ball slowly beginning to roll
+          // off the top of another, slowly enough to look still.
+          for (const [x, y] of [[42, 94], [70, 89]]) {
+            const world = pyramid();
+            world.add(4, x, y, -550, 0);
+            runToRest(world);
+            expect({ x, y, perched: perched(world, 200, 100) }).toEqual({ x, y, perched: [] });
+            expectInside(world, 200, 100);
+          }
+        });
+
+        it("lets balls on top of others come to rest at once when held by a neighbor or a side", () => {
+          // Three balls on three, side by side between the walls, each held
+          // in place by its neighbors or a wall; and a ball on another in a box
+          // too narrow for it to roll off, which rolls against a side.
+          const rows = new HeapWorld(30, 100, 10);
+          for (let i = 0; i < 3; i++) rows.add(i, 5 + 10 * i, 95);
+          for (let i = 0; i < 3; i++) rows.add(10 + i, 5 + 10 * i, 85);
+          expect(runToRest(rows)).toBeLessThan(30);
+          for (let i = 0; i < 3; i++) expect(positions(rows).get(10 + i)?.y).toBeCloseTo(85, 1);
+          const narrow = new HeapWorld(15, 100, 10);
+          narrow.add(1, 7.5, 95);
+          narrow.add(2, 7.6, 80);
+          expect(runToRest(narrow)).toBeLessThan(60);
+          const top = positions(narrow).get(2);
+          expect(top?.y).toBeLessThan(90);
+          expect([5, 10]).toContain(Math.round((top?.x ?? NaN) * 100) / 100);
         });
 
         it("nests a ball dropped right above a ball of a row at rest in the groove beside it", () => {

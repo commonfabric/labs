@@ -78,6 +78,8 @@ export interface Token {
   readonly labels: readonly string[];
   readonly runner: string | null;
   readonly url: string;
+  /** The run's page on GitHub. */
+  readonly runUrl: string;
 }
 
 /** A runner of a machine, or a place a job keeps in a box of places. */
@@ -314,6 +316,7 @@ export function buildBoard(
     labels: job.labels,
     runner: job.runner,
     url: job.url,
+    runUrl: `https://github.com/${job.owner}/${job.repository}/actions/runs/${job.runId}`,
   });
 
   const active = [...jobs].sort((a, b) => a.id - b.id);

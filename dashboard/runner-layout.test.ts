@@ -28,6 +28,7 @@ const token = (id: number): Token => ({
   labels: [],
   runner: null,
   url: `https://example.com/${id}`,
+  runUrl: "https://github.com/example/labs/actions/runs/1",
 });
 
 const slot = (

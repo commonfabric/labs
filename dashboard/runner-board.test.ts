@@ -153,6 +153,7 @@ function token(fields: Partial<Token> = {}): Token {
     labels: [],
     runner: null,
     url: "https://github.com/acme/labs/actions/runs/100/job/1",
+    runUrl: "https://github.com/acme/labs/actions/runs/100",
     ...fields,
   };
 }
@@ -709,7 +710,24 @@ describe("runner-board", () => {
           labels: ["ubuntu-latest"],
           runner: "GitHub Actions 1001438681",
           url: "https://github.com/acme/labs/actions/runs/100/job/1",
+          runUrl: "https://github.com/acme/labs/actions/runs/100",
         }]);
+      });
+
+      it("gives each token its run's page, from its owner, repository, and run, whatever its job's page", () => {
+        const built = board([
+          job(1, { url: "https://github.com/acme/labs/runs/9001?check_suite_focus=true" }),
+          hosted(2, ["ubuntu-latest"], { owner: "other", repository: "tools", runId: 200 }),
+          job(3, { repository: "docs", runId: 300, labels: ["ubuntu-latest"] }),
+        ]);
+
+        expect(
+          boardTokens(built).map((token) => [token.id, token.runUrl]).sort(),
+        ).toEqual([
+          [1, "https://github.com/acme/labs/actions/runs/100"],
+          [2, "https://github.com/other/tools/actions/runs/200"],
+          [3, "https://github.com/acme/docs/actions/runs/300"],
+        ]);
       });
 
       it("gives a token of a run with no pull request `null`", () => {

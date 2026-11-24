@@ -336,12 +336,19 @@ export class HeapWorld {
     // A ball balanced near the top of a single other, touching nothing else
     // beside or below it, nor the floor or a side, has not come to rest,
     // however slowly it has begun to roll off.
+    // One balanced dead on top is nudged off it, away from its support, or
+    // to one side by its ID, so that it does not stay balanced for ever.
     let perched = false;
     const r = this.#d / 2;
-    for (let i = 0; i < this.#ids.length && !perched; i++) {
-      perched = this.#supports[i] === 1 && this.#touches[i] === 1 &&
-        Math.abs(this.#supportDx[i]) < 0.2 * this.#d && this.#y[i] < this.#height - r - 0.5 &&
-        this.#x[i] > r + 0.5 && this.#x[i] < this.#width - r - 0.5;
+    for (let i = 0; i < this.#ids.length; i++) {
+      if (
+        this.#supports[i] !== 1 || this.#touches[i] !== 1 ||
+        Math.abs(this.#supportDx[i]) >= 0.2 * this.#d || this.#y[i] >= this.#height - r - 0.5 ||
+        this.#x[i] <= r + 0.5 || this.#x[i] >= this.#width - r - 0.5
+      ) continue;
+      perched = true;
+      const away = this.#supportDx[i] > 0 || (this.#supportDx[i] === 0 && this.#ids[i] % 2 === 0) ? -1 : 1;
+      this.#px[i] -= away * this.#d * 0.001;
     }
     const settled = (this.#still >= 6 && !perched) ||
       (this.#time >= 5 + waiting && this.#time - this.#insideSince >= 1);
