@@ -461,6 +461,78 @@ describe("StoreCurrency", () => {
         expect(judged.servable).toEqual(["shared", "derived", "own-derived"]);
       });
 
+      describe("for a root the memory server finds nothing derives", () => {
+        const idleRuntime = {
+          scheduler: { hasNodesUnderDemandRoot: () => false },
+        } as unknown as Runtime;
+
+        /** A loop in `mode` whose memory server finds `of:data` underived. */
+        const underivedIn = (
+          mode: CurrencyIndexMode,
+          stats: ServingLoopStats,
+        ) =>
+          new StoreCurrency({
+            space: SPACE,
+            server: {
+              judgeCurrencyRoots: (_space, roots) =>
+                Promise.resolve({
+                  servable: roots.filter((root) => root !== "of:data").map((
+                    root,
+                  ) => ({ root, piece: "of:piece", origins: [] })),
+                  underived: roots.filter((root) => root === "of:data"),
+                  held: [],
+                  upstream: [],
+                  refused: {},
+                  marked: [],
+                }),
+            } as Pick<
+              HostMemoryServer,
+              "judgeCurrencyRoots"
+            > as HostMemoryServer,
+            mode,
+            epoch: "epoch-one",
+            serviceIdentity: "did:key:service",
+            stats,
+            onOwed: () => {},
+            onMarked: () => {},
+          });
+
+        /** Judges `of:data` under the key `data` beside `of:result`. */
+        const judgeBoth = (currency: StoreCurrency) =>
+          currency.judge(
+            idleRuntime,
+            new Map([
+              ["data", { id: "of:data", scope: "space" }],
+              ["result", { id: "of:result", scope: "space" }],
+            ]),
+            () => true,
+            true,
+          );
+
+        it("returns its key apart from the servable ones, counts it as left unloaded, and leaves it to the caller under `skip`", async () => {
+          const stats = emptyServingLoopStats();
+          const currency = underivedIn("skip", stats);
+
+          const judged = await judgeBoth(currency);
+
+          expect(judged.underived).toEqual(["data"]);
+          expect(judged.servable).toEqual(["result"]);
+          expect(stats.currency.servable).toBe(2);
+          expect(stats.currency.servedFromStore).toBe(2);
+        });
+
+        it("returns its key and counts it as servable and not as left unloaded, under `record`", async () => {
+          const stats = emptyServingLoopStats();
+          const currency = underivedIn("record", stats);
+
+          const judged = await judgeBoth(currency);
+
+          expect(judged.underived).toEqual(["data"]);
+          expect(stats.currency.servable).toBe(2);
+          expect(stats.currency.servedFromStore).toBe(0);
+        });
+      });
+
       describe("for a root that rests on a piece recording a source origin", () => {
         let judgments: number;
         let currency: StoreCurrency;
@@ -620,6 +692,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
+          underived: [],
           held: [],
           rearm: [],
         });
@@ -658,6 +731,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
+          underived: [],
           held: [],
           rearm: [],
         });
@@ -672,6 +746,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
+          underived: [],
           held: ["key"],
           rearm: [],
         });
@@ -705,6 +780,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: ["key"],
           origins: new Map(),
+          underived: [],
           held: [],
           rearm: [],
         });
@@ -745,6 +821,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
+          underived: [],
           held: ["key"],
           rearm: [],
         });

@@ -681,7 +681,10 @@ export class StoreCurrency {
    * @returns The keys the store can serve, which the caller leaves unloaded
    * where the loop skips (`skips`) and loads anyway under `record`, with the
    * pieces each rests on that record a source origin (`origins`), which the
-   * caller follows first; the keys held because what the store holds of
+   * caller follows first; the keys whose stored document leads to no piece
+   * and that nothing derives, which a load would park with no piece
+   * started, and which the caller parks so where the loop skips; the keys
+   * held because what the store holds of
    * them is stale only upstream, which the caller leaves unloaded while the
    * pieces upstream are started (`upstreamReads`), and which only a
    * `start-upstream` loop returns any of; and the keys a judgment had left
@@ -697,6 +700,7 @@ export class StoreCurrency {
     {
       servable: string[];
       origins: ReadonlyMap<string, readonly string[]>;
+      underived: string[];
       held: string[];
       rearm: CurrencyRearm[];
     }
@@ -738,6 +742,7 @@ export class StoreCurrency {
       return {
         servable,
         origins: this.#originsOf(servable),
+        underived: [],
         held: [...candidates.keys()].filter((key) => this.#held.has(key)),
         rearm: [],
       };
@@ -795,10 +800,23 @@ export class StoreCurrency {
     const holding = new Map(
       judged.held.map(({ root, piece, readers }) => [root, { piece, readers }]),
     );
+    const plain = new Set(judged.underived);
     const servable: string[] = [];
+    const underived: string[] = [];
     const held: string[] = [];
     const rearm: CurrencyRearm[] = [];
     for (const [key, root] of candidates) {
+      // A document nothing derives rests on no piece, so no mark reaches it.
+      // The caller parks it as a load that finds no piece would, and a
+      // commit to it brings the load.
+      if (plain.has(root)) {
+        this.#served.delete(key);
+        this.#held.delete(key);
+        underived.push(key);
+        this.#stats.currency.servable += 1;
+        if (this.skips) this.#stats.currency.servedFromStore += 1;
+        continue;
+      }
       const piece = pieces.get(root);
       // A piece with nodes here is running, and its root is loaded as one a
       // start already covers.
@@ -854,7 +872,13 @@ export class StoreCurrency {
       const seq = markingSeq(judged.marked, left.piece);
       if (seq !== undefined) rearm.push({ key, seq });
     }
-    return { servable, origins: this.#originsOf(servable), held, rearm };
+    return {
+      servable,
+      origins: this.#originsOf(servable),
+      underived,
+      held,
+      rearm,
+    };
   }
 
   /**

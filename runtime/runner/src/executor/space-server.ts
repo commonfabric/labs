@@ -6297,6 +6297,17 @@ export class SpaceServer implements TransactionSealDestination {
       const root = this.#demandRootAddresses.get(key);
       if (root !== undefined) rootKeys.set(key, root);
     }
+    // ONE changed-doc collection for the whole pass, opened BEFORE the
+    // judgment and the pull below rather than per root inside it. A root the
+    // judgment found leads to no piece is parked on what the store held when
+    // it was judged. The pull is what registers each root's watch, and a
+    // registered watch is what lets the traversal read from the replica
+    // instead of fetching, so between the two a root's reading is only as
+    // current as frame delivery has made it. The terminal arm's invalidation
+    // check has to test the span either reading was taken over, and that
+    // span starts here.
+    const changedDocs = new Map<string, number>();
+    this.#structureLoadChangedDocs = changedDocs;
     // The roots the store can serve as they stand (serving-loop.md §1):
     // where the loop skips they are neither loaded nor started, and stay
     // awaiting a first load, so each later pass judges them again. A root,
@@ -6346,6 +6357,9 @@ export class SpaceServer implements TransactionSealDestination {
           this.#rearmSeqsUnderRetry.delete(key);
           this.#rearmSeqsAwaitingFollow.delete(key);
         }
+        for (const key of judged.underived) {
+          this.#parkUnderivedRoot(key, rootKeys, changedDocs);
+        }
       }
       this.#armCurrencyExpiry();
       // The instances that keep something stale upstream are demanded
@@ -6360,15 +6374,6 @@ export class SpaceServer implements TransactionSealDestination {
         this.#pendingDemandWake = true;
       }
     }
-    // ONE changed-doc collection for the whole pass, opened BEFORE the pull
-    // below rather than per root inside it. The pull is what registers each
-    // root's watch, and a registered watch is what lets the traversal read
-    // from the replica instead of fetching, so between the two a root's
-    // reading is only as current as frame delivery has made it. The terminal
-    // arm's invalidation check has to test the span the reading was taken
-    // over, and that span starts here.
-    const changedDocs = new Map<string, number>();
-    this.#structureLoadChangedDocs = changedDocs;
     try {
       await this.#loadStructureRootDocs(runtime, rootKeys);
       // The STRUCTURE LOAD, per watch ROOT and per row marked as a piece's
@@ -7397,6 +7402,32 @@ export class SpaceServer implements TransactionSealDestination {
     return this.#rearmedAwaitingSettle.size > 0 &&
       runtime.storageManager.open(this.#options.space).replica
           .unappliedForeignSeqFloor?.() === undefined;
+  }
+
+  /**
+   * Helper for `#loadDemandedStructure()`, which parks the root `key` that a
+   * judgment found to be a document that leads to no piece and that nothing
+   * derives, as its structure load would park it: terminal, watching the
+   * document alone, so that a commit to the document re-arms the load. The
+   * load reads the same document through the replica and finds no
+   * back-link to follow and no pattern pointer, so it would start nothing
+   * and observe nothing else. A commit to the document admitted since the
+   * pass opened `changedDocs` may postdate what the judgment read, and
+   * leaves the root in `rootKeys` to be loaded.
+   */
+  #parkUnderivedRoot(
+    key: string,
+    rootKeys: Map<string, { id: string; scope: CellScope }>,
+    changedDocs: ReadonlyMap<string, number>,
+  ): void {
+    const root = rootKeys.get(key);
+    if (root === undefined || changedDocs.has(root.id)) return;
+    rootKeys.delete(key);
+    this.#demandedRoots.add(key);
+    this.#rootsAwaitingFirstLoad.delete(key);
+    this.#pendingStructureLoads.delete(key);
+    this.#structureLoadDeferralStreaks.delete(key);
+    this.#terminalStructureLoads.set(key, new Set([root.id]));
   }
 
   /**
