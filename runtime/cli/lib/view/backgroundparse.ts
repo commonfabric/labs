@@ -100,9 +100,11 @@ export function parse(
  * build runs, a parse that fits what is left of a budget runs at once, and any
  * other is left pending as a {@link ParseJob} that {@link take} hands over.
  * Once taken, a parse still pending leaves its file side plain each time a
- * build asks for it, and a finished one gives its result. A parse asked for
- * with text other than the text it was left pending with, as after a save,
- * runs at once, as does any parse that was never left pending.
+ * build asks for it, and a finished one gives its result to the first build
+ * that asks, and is then forgotten, so that the view does not keep every
+ * complete-file parse. A parse asked for with text other than the text it was
+ * left pending with, as after a save, runs at once, as does any parse that was
+ * never left pending or whose result was given.
  */
 export class PendingParses {
   #budget: number;
@@ -154,7 +156,7 @@ export class PendingParses {
       language: pending.language,
       text: pending.text,
       fileName: pending.fileName,
-      finish: (result) => this.#settle(pending, result),
+      finish: (result) => this.#settle(pending, result, false),
       fail: () =>
         this.#settle(
           pending,
@@ -164,6 +166,7 @@ export class PendingParses {
             pending.text,
             pending.fileName,
           ),
+          true,
         ),
     }));
   }
@@ -179,8 +182,13 @@ export class PendingParses {
   ): ParseResult | null {
     const known = this.#parses.get(key);
     if (known?.kind === kind && known.text === text) {
-      return known.result ?? null;
+      const result = known.result;
+      if (result === undefined) return null;
+      if (!known.failed) this.#release(key, known);
+      return result;
     }
+    // A parse asked for with other text, as after a save, is of no further use.
+    if (known) this.#release(key, known);
     if (this.#taken || known) return parse(kind, language, text, fileName);
     if (text.length <= this.#budget) {
       this.#budget -= text.length;
@@ -192,19 +200,34 @@ export class PendingParses {
       text,
       fileName,
       result: undefined,
+      failed: false,
+      released: false,
     });
     return null;
   }
 
-  /** Helper for {@link take}'s jobs, which keeps `result` for `pending`. */
-  #settle(pending: Parse, result: ParseResult): void {
+  /** Helper for {@link take}'s jobs, which keeps `result` for `pending`,
+   * unless it was released, and whether it stands in for a parse that
+   * `failed`. */
+  #settle(pending: Parse, result: ParseResult, failed: boolean): void {
     if (result.kind !== pending.kind) {
       throw new Error(
         `A ${pending.kind} parse cannot finish with ${result.kind}.`,
       );
     }
-    pending.result = result;
+    if (!pending.released) {
+      pending.result = result;
+      pending.failed = failed;
+    }
     this.#finished++;
+  }
+
+  /** Helper for {@link #parse}, which forgets `pending`, named `key`. The jobs
+   * {@link take} handed over still refer to it, so its result is dropped too. */
+  #release(key: string, pending: Parse): void {
+    this.#parses.delete(key);
+    pending.released = true;
+    pending.result = undefined;
   }
 }
 
@@ -215,6 +238,14 @@ interface Parse {
   readonly text: string;
   readonly fileName: string | undefined;
   result: ParseResult | undefined;
+
+  /** Whether `result` is the plain text a failed parse leaves, which every
+   * build that asks is given, so that the parse is not tried again. */
+  failed: boolean;
+
+  /** Whether the parse was forgotten, after a build took its result or asked
+   * for it with other text, so that no result is kept for it. */
+  released: boolean;
 }
 
 /**

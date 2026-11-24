@@ -598,17 +598,26 @@ export default pattern(() => {
     )
   );
 
-  // A comment's author carries the face the Profile gives, picture or avatar
-  // text, and none when it gives none.
+  // A comment's author carries the face the Profile gives, a picture blob,
+  // picture bytes or avatar text, and none when it gives none.
   const assert_author_carries_face = assert(() => {
     const text = topicAuthorFromPerson("Ada", { avatar: "🦊" });
     const picture = topicAuthorFromPerson("Ada", {
       picture: new FabricBytes(new Uint8Array(ADA_PICTURE)),
     });
+    const blob = topicAuthorFromPerson("Ada", {
+      pictureBlob: { space: "did:key:z6MkAdaSpace", id: "ada-picture" },
+    });
     const none = topicAuthorFromPerson("Ada");
     return text?.avatar === "🦊" && text.picture === undefined &&
+      text.pictureBlob === undefined &&
       isAdaPicture(picture?.picture) && picture?.avatar === undefined &&
-      none?.avatar === undefined && none?.picture === undefined;
+      picture?.pictureBlob === undefined &&
+      blob?.pictureBlob?.space === "did:key:z6MkAdaSpace" &&
+      blob.pictureBlob.id === "ada-picture" && blob.picture === undefined &&
+      blob.avatar === undefined &&
+      none?.avatar === undefined && none?.picture === undefined &&
+      none?.pictureBlob === undefined;
   });
 
   const assert_profile_comment_submitted = assert(() => {

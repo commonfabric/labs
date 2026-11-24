@@ -7,6 +7,7 @@ import {
   buildDiffDocument,
   type DiffWorkspace,
   realWorkspace,
+  WorkspaceCache,
 } from "../lib/view/diffdoc.ts";
 import { createDiffSemantics } from "../lib/view/languages/typescript/semantics.ts";
 import type { Semantics } from "../lib/view/languages/language.ts";
@@ -407,7 +408,7 @@ ${visibleNewSide}`,
       diff,
       parseDiff(diff)!,
       stubWs(root),
-      new Map(),
+      new WorkspaceCache(),
     );
     const removed = diff.split("\n").flatMap((line, index) =>
       line === "-export const removed = 1;" ? [index] : []
@@ -446,7 +447,7 @@ Deno.test("diff doc: old-file cache separates repeated file versions", () => {
     diff,
     parseDiff(diff)!,
     ws,
-    new Map(),
+    new WorkspaceCache(),
   );
   const removed = diff.split("\n").flatMap((line, index) =>
     line === "-value" ? [index] : []

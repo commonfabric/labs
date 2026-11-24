@@ -20,7 +20,11 @@ import type { BlameLine, BlameRequest } from "../lib/view/blame.ts";
 import { fileSource } from "../lib/view/editsource.ts";
 import { type FileGateway, realFileGateway } from "../lib/view/filegateway.ts";
 import { parseDiff } from "../lib/view/diff.ts";
-import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
+import {
+  buildDiffDocument,
+  type DiffWorkspace,
+  WorkspaceCache,
+} from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
 import { ViewError } from "../lib/view/errors.ts";
 import { sgr, term } from "../lib/view/ansi.ts";
@@ -586,7 +590,7 @@ function pendingDiff() {
     resolve: (path) => `/workspace/${path}`,
     read: (path) => path === "/workspace/answer.ts" ? text : null,
   };
-  const cache = new Map();
+  const cache = new WorkspaceCache();
   const pending = new PendingParses(0);
   const { doc, edit } = buildDiffDocument(
     diff,

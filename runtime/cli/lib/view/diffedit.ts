@@ -494,7 +494,7 @@ export function diffSource(
         }
         for (const [path, contents] of changes) {
           expectedFiles.set(path, contents);
-          cache?.delete(path);
+          cache?.forget(path);
         }
         for (const { hunk, newStart, newCount } of advancedHunks) {
           hunk.newStart = newStart;
@@ -552,10 +552,9 @@ function buildDiffCountContexts(
   if (!model) return [];
   const raw = text.split("\n");
   const decided = editedLanguages(edit.languages, text, model, ws);
-  const oldFileLines = edit.oldFileLines;
   return model.files.map((file, fileIndex) => {
     const languages = decided[fileIndex];
-    const oldLines = oldFileLines[fileIndex] ?? undefined;
+    const oldLines = edit.oldFileLines(fileIndex) ?? undefined;
     const newText = oldLines
       ? reconstructNewSide(file, oldLines, raw, model.lines)
       : undefined;
@@ -932,7 +931,7 @@ function hunkFooting(
   if (file.newPath === undefined) return null;
   const absPath = ws.resolve(file.newPath);
   if (!absPath) return null;
-  const content = cache?.get(absPath)?.fileText ?? ws.read(absPath);
+  const content = cache?.file(absPath)?.fileText ?? ws.read(absPath);
   if (content === null) return null;
   const fileLines = content.split("\n");
   const fileLineEndings = fileContentLines(content).map((line) => line.ending);
@@ -1361,7 +1360,7 @@ function applyExpansion(
 export function createDiffHighlighter(
   initialText: string,
   seed?: readonly Line[],
-  oldFileLines?: readonly (readonly Line[] | null)[],
+  oldFileLines?: (fileIndex: number) => readonly Line[] | null,
   languagesFor: (
     text: string,
     model: DiffModel,
@@ -1559,7 +1558,7 @@ function rehighlightTouchedHunks(
   lines: Line[],
   changedStart: number,
   changedEnd: number,
-  oldFileLines: readonly (readonly Line[] | null)[] | undefined,
+  oldFileLines: ((fileIndex: number) => readonly Line[] | null) | undefined,
   languages: readonly DiffFileLanguages[],
   completeFiles?: DiffHighlightFiles,
   completeHighlighters?: Map<string, Highlighter>,
@@ -1600,7 +1599,7 @@ function rehighlightTouchedHunks(
   const appliedNewPaths = new Set<string>();
   for (const { fileIndex, oldSide, newSide, touched } of statefulFiles) {
     if (oldSide.language.highlightFullFileOnDiffEdit) {
-      const completeOld = oldFileLines?.[fileIndex];
+      const completeOld = oldFileLines?.(fileIndex);
       for (const { hunk } of touched) {
         if (completeOld) {
           applyCompleteHunkSide(
@@ -1936,13 +1935,13 @@ function diffLineRender(
 function oldLineSpansAt(
   model: DiffModel | null,
   line: number,
-  oldFileLines?: readonly (readonly Line[] | null)[],
+  oldFileLines?: (fileIndex: number) => readonly Line[] | null,
 ): readonly Span[] | undefined {
   const entry = model?.lines[line];
   if (!model || entry?.kind !== "del" || entry.oldLine === undefined) {
     return undefined;
   }
-  return oldFileLines?.[diffFileIndexAt(model, line)]?.[entry.oldLine]?.spans;
+  return oldFileLines?.(diffFileIndexAt(model, line))?.[entry.oldLine]?.spans;
 }
 
 /** The index of the diff file containing `line`, or -1 outside every file. */
@@ -2095,9 +2094,7 @@ function reparse(
       }
       : {}),
   };
-  const editedCache: WorkspaceCache = new Map(cache);
-  for (const path of statefulEdits.keys()) editedCache.delete(path);
-  return build(editedWorkspace, editedCache);
+  return build(editedWorkspace, cache?.without(statefulEdits.keys()));
 }
 
 function writeWorkspaceFile(

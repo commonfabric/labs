@@ -25,6 +25,10 @@ import type {
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+import {
+  ignoreReadForScheduling,
+  markReadAsAttemptedWrite,
+} from "../src/storage/reactivity-log.ts";
 import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
 import { RuntimeOwnedStores } from "../src/cfc/runtime-owned-stores.ts";
 import {
@@ -139,6 +143,109 @@ describe("extended-storage-transaction", () => {
       expect(wrapped.stageContentAddressedDocument(space, code)).toBe(codeId);
       expect(stagedIds(tx)).toContain(codeId);
       tx.abort?.();
+    });
+  });
+
+  describe("ambient read metadata", () => {
+    // A read carrying `ignoreReadForScheduling` stays out of the reactivity
+    // log's reads, and one also carrying `markReadAsAttemptedWrite` lands in
+    // its attempted writes, which is what shows the metadata a read carried.
+
+    const logged = async (
+      cause: string,
+      readWithin: (tx: IExtendedStorageTransaction, read: () => void) => void,
+    ) => {
+      const { tx, cell } = await seeded(cause);
+      try {
+        const link = cell.getAsNormalizedFullLink();
+        readWithin(tx, () => tx.readValueOrThrow(link));
+        const log = tx.getReactivityLog();
+        const named = ({ id }: { id: string }) => id === link.id;
+        return {
+          reads: log.reads.filter(named).length,
+          attemptedWrites: (log.attemptedWrites ?? []).filter(named).length,
+        };
+      } finally {
+        tx.abort("done");
+      }
+    };
+
+    it("applies to a read inside the function and not to one after it", async () => {
+      expect(
+        await logged("ambient-inside", (tx, read) => {
+          tx.runWithAmbientReadMeta(ignoreReadForScheduling, read);
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 0 });
+      expect(
+        await logged("ambient-after", (tx, read) => {
+          tx.runWithAmbientReadMeta(ignoreReadForScheduling, () => {});
+          read();
+        }),
+      ).toEqual({ reads: 1, attemptedWrites: 0 });
+    });
+
+    it("applies to no read after the function throws", async () => {
+      const failure = new Error("inside");
+      expect(
+        await logged("ambient-after-throw", (tx, read) => {
+          expect(() =>
+            tx.runWithAmbientReadMeta(ignoreReadForScheduling, () => {
+              throw failure;
+            })
+          ).toThrow(failure);
+          read();
+        }),
+      ).toEqual({ reads: 1, attemptedWrites: 0 });
+    });
+
+    it("gives a read in a nested scope the metadata of both scopes", async () => {
+      expect(
+        await logged("ambient-nested", (tx, read) => {
+          tx.runWithAmbientReadMeta(ignoreReadForScheduling, () => {
+            tx.runWithAmbientReadMeta(markReadAsAttemptedWrite, read);
+          });
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 1 });
+    });
+
+    it("gives a read after a nested scope the enclosing scope's metadata alone", async () => {
+      expect(
+        await logged("ambient-after-nested", (tx, read) => {
+          tx.runWithAmbientReadMeta(ignoreReadForScheduling, () => {
+            tx.runWithAmbientReadMeta(markReadAsAttemptedWrite, () => {});
+            read();
+          });
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 0 });
+    });
+
+    it("applies from `enterAmbientReadMeta()` until its scope is disposed", async () => {
+      expect(
+        await logged("ambient-entered", (tx, read) => {
+          const scope = tx.enterAmbientReadMeta(ignoreReadForScheduling);
+          read();
+          scope[Symbol.dispose]();
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 0 });
+      expect(
+        await logged("ambient-disposed", (tx, read) => {
+          tx.enterAmbientReadMeta(ignoreReadForScheduling)[Symbol.dispose]();
+          read();
+        }),
+      ).toEqual({ reads: 1, attemptedWrites: 0 });
+    });
+
+    it("gives a read in a nested `enterAmbientReadMeta()` scope the metadata of both scopes", async () => {
+      expect(
+        await logged("ambient-entered-nested", (tx, read) => {
+          const outer = tx.enterAmbientReadMeta(ignoreReadForScheduling);
+          const inner = tx.enterAmbientReadMeta(markReadAsAttemptedWrite);
+          read();
+          inner[Symbol.dispose]();
+          read();
+          outer[Symbol.dispose]();
+        }),
+      ).toEqual({ reads: 0, attemptedWrites: 1 });
     });
   });
 

@@ -1,0 +1,3 @@
+{"date":"2026-11-23","from":{"k":"unit","s":"cli","n":"isRasterImage() > returns `true` for each format's signature"},"to":{"k":"unit","s":"cli","n":"rasterImageType() > returns a media type for each format's signature"}}
+{"date":"2026-11-23","from":{"k":"unit","s":"cli","n":"isRasterImage() > returns `false` for a prefix of a signature, or a near miss"},"to":{"k":"unit","s":"cli","n":"rasterImageType() > returns `undefined` for a prefix of a signature, or a near miss"}}
+{"date":"2026-11-23","from":{"k":"unit","s":"cli","n":"isRasterImage() > returns `false` for SVG, and for SVG behind a format's first bytes"},"to":{"k":"unit","s":"cli","n":"rasterImageType() > returns `undefined` for SVG, and for SVG behind a format's first bytes"}}

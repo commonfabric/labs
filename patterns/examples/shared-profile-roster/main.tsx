@@ -16,6 +16,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  type PictureBlob,
   profileFace,
   type ProfileFaceFields,
 } from "../../system/profile-face/profile-face.ts";
@@ -29,9 +30,11 @@ import {
  * (`wish({ query: "#profile" })`). See `docs/specs/shared-profile-rosters.md`.
  *
  * This pattern demonstrates the **snapshot** (self-containment) variant: name +
- * picture are copied at join time, so the roster is fully self-describing
- * inside the shared space and never depends on other users' profile spaces
- * being reachable. Participants render from those snapshots via `<cf-avatar>`,
+ * picture are copied at join time, so the roster describes each participant
+ * from inside the shared space. A picture held as bytes is copied whole; one
+ * held as a blob is copied as its reference, so drawing it still fetches it
+ * from the blob's space, and it shows as initials while that space's host is
+ * unreachable. Participants render from those snapshots via `<cf-avatar>`,
  * and the current viewer's OWN live profile is shown with the trusted
  * `<cf-profile-badge>`.
  *
@@ -71,7 +74,11 @@ export interface Participant {
    * picture; otherwise "". */
   avatar: string;
 
-  /** Picture bytes, snapshotted from the joiner's profile, if it has one. */
+  /** Picture blob, snapshotted from the joiner's profile, if it has one. */
+  pictureBlob?: PictureBlob;
+
+  /** Picture bytes, snapshotted instead when the joiner's profile holds its
+   * picture as bytes. */
   picture?: FabricBytes;
   joinedAt: number;
 }
@@ -232,6 +239,7 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
               {participants.map((p) => (
                 <cf-hstack gap="2" align="center">
                   <cf-avatar
+                    blob={p.pictureBlob}
                     bytes={p.picture}
                     src={p.avatar}
                     name={p.name}
