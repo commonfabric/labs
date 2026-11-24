@@ -995,7 +995,7 @@ export async function runsUnderWay(
   const all = async (status: string) => {
     const runs: Record<string, unknown>[] = [];
     for (let page = 1; page <= 10; page++) {
-      const { runs: found } = await list(`status=${status}&page=${page}&`);
+      const { runs: found } = await list(`status=${status}&${page === 1 ? "" : `page=${page}&`}`);
       for (const run of found) runs.push(run);
       if (found.length < PAGE) break;
     }
