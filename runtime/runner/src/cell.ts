@@ -3611,8 +3611,14 @@ export class CellImpl<T extends FabricValue>
       resolvedLink,
       resolvedLink.schema ?? this.schema,
     );
+    // The destination snapshot decides only whether each candidate is
+    // appended, and where, as `push()`'s does: what is written is the
+    // caller's candidates, and nothing returns to the caller. So it joins
+    // neither observed labels nor conflict preconditions. Resolving an
+    // existing element's link to compare it reads that element's document
+    // as an ordinary observation, and explicit handler reads retain theirs.
     let currentValue = this.#tx.readValueOrThrow(resolvedLink, {
-      meta: mergeableOpRead,
+      meta: Object.freeze({ ...mergeableOpRead, ...writeDestinationRead }),
     });
     const cause = this.#frame?.cause;
     const stored = Array.isArray(currentValue);

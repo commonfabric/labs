@@ -81,8 +81,30 @@ content nor the array's length reaches the caller. This lets a writer append a s
 owner-confidential array without observing its membership. The destination's
 write policy still applies, and explicit source reads still contribute their
 labels. Object anchoring's ancestry reads retain their ordinary classification.
-Value-dependent operations such as `addUnique()` still observe the destination
-and require its read ceiling.
+
+**The add-unique snapshot.** `Cell.addUnique()` reads the destination array
+the same way, with the same two markers, to decide which candidates are already
+present and to place the rest at its tail. A candidate matches an existing entry
+by link identity when it is a cell, and by stored-value equality otherwise.
+Whichever way the comparison goes, the destination afterwards holds every
+candidate, the method returns nothing, and every value it writes is a caller's
+candidate. That is §18.6.2's unobservability invariant, and why the snapshot
+is a write-destination read. Resolving an existing entry's link for the
+identity comparison reads that entry's document as an ordinary observation, and
+the operation still answers to the destination's write policy. As with the
+append, a writer whose read ceiling the list's label exceeds can add to it
+without reading it.
+
+A handler that adds a keyed element (`elementById()`) to a list therefore
+carries into that element's document what the handler itself read and what
+resolving the list's existing entries read, but not the list's own label.
+Without the marker, a clause one earlier write left on the list would reach
+every later element document, which has no declaration to hold it, and every
+later keyed add would be refused. An object candidate is different: it anchors into
+a document of its own, and the anchoring's ancestry reads keep their ordinary
+classification, because they decide the id the new document takes, which is
+where the write lands. `removeByValue()` writes back a value built from what it
+read, so its read stays an ordinary observation.
 
 **The served event append.** Under server execution, a handler run's send to a
 stream in the same space appends the event's entry to that stream's entries
@@ -262,6 +284,15 @@ Key removal and array shrink are the other shape: what the comparison
 observes is the parent's membership, and what surfaces is a delete at a
 child, so the parent's membership reaches a child whose own ceiling may
 admit a wider audience than the parent's.
+
+The add-unique snapshot is the second shape at a list. Whether
+`Cell.addUnique()` appended discloses whether an entry equal to the candidate
+was already present. That is one bit of the list's membership, landing in the
+list document's own write set, and repeated attempts with candidates of the
+writer's choosing make it a membership oracle for whoever sees that write set.
+Pattern code does not: the method returns nothing, and reading the list back,
+or running because it changed, is a labeled observation. The write set reaches
+only the runtime and the memory server, which the threat model trusts.
 
 Write elision is what opens that channel, and elision is not new here. What
 the exclusion changes is that the elision's influence is no longer labeled at
