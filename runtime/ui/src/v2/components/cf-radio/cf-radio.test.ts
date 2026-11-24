@@ -121,7 +121,7 @@ describe("CFRadio", () => {
       expect(changes).toEqual([{ checked: true, value: "yes" }]);
     });
 
-    it("sends a radio in a group to the group, leaving the radio as it was", async () => {
+    it("sends a radio in a group to the group, which checks it, firing no change of its own", async () => {
       const group = document.createElement("cf-radio-group");
       document.body.append(group);
       const sent: boolean[] = [];
@@ -132,9 +132,10 @@ describe("CFRadio", () => {
       const { element, changes } = await radioWith({}, group);
 
       element.click();
+      await element.updateComplete;
 
       expect(sent).toEqual([true]);
-      expect(element.checked).toBe(false);
+      expect(element.checked).toBe(true);
       expect(changes).toEqual([]);
     });
 

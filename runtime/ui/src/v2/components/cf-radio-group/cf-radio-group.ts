@@ -53,8 +53,10 @@
  *
  * @accessibility
  * - Uses role="radiogroup" for proper screen reader support
- * - Keyboard navigation with the arrow keys: Down and Right select the next radio, Up and Left the previous
- * - Manages focus and selection state for radio buttons
+ * - One Tab stop: Tab enters the group on the checked radio, or on the first
+ *   enabled radio while none is checked, and a second Tab leaves it
+ * - The arrow keys move focus and selection to the next or previous enabled
+ *   radio, wrapping at the ends
  * - Automatically assigns group name to child radios if not specified
  *
  * @methods
@@ -98,22 +100,8 @@ export class CFRadioGroup extends BaseElement {
   /** Cell controller for value binding */
   #cellController = createCellController<unknown>(this, {
     timing: { strategy: "immediate" }, // Radio changes should be immediate
-    onChange: (newValue, oldValue) => {
-      this.#syncRadios();
-
-      // Emit change events
-      this.emit("cf-change", {
-        value: newValue,
-        oldValue,
-        items: this.items,
-      });
-
-      this.emit("change", {
-        value: newValue,
-        oldValue,
-        items: this.items,
-      });
-    },
+    onChange: (newValue, oldValue) =>
+      this.#selectionChanged(newValue, oldValue),
   });
 
   static override properties = {
@@ -151,6 +139,7 @@ export class CFRadioGroup extends BaseElement {
 
     // Add event listeners for slotted cf-radio elements
     this.addEventListener("radio-click", this.#handleRadioClick);
+    this.addEventListener("radio-state", this.#updateTabStops);
     this.addEventListener("keydown", this.#handleKeydown);
   }
 
@@ -158,6 +147,7 @@ export class CFRadioGroup extends BaseElement {
     super.disconnectedCallback();
     // Clean up event listeners
     this.removeEventListener("radio-click", this.#handleRadioClick);
+    this.removeEventListener("radio-state", this.#updateTabStops);
     this.removeEventListener("keydown", this.#handleKeydown);
   }
 
@@ -238,7 +228,7 @@ export class CFRadioGroup extends BaseElement {
 
   #handleItemChange(item: RadioItem) {
     if (this.disabled || item.disabled) return;
-    this.#cellController.setValue(item.value);
+    this.#select(item.value);
   }
 
   #handleItemKeydown = (event: KeyboardEvent) => {
@@ -265,11 +255,24 @@ export class CFRadioGroup extends BaseElement {
         radio.disabled = false;
       }
     }
+    this.#updateTabStops();
   }
+
+  /**
+   * Makes one radio the group's Tab stop, the checked radio if it is enabled
+   * and otherwise the first enabled radio, and takes the others out of the Tab
+   * order, where the arrow keys reach them.
+   */
+  #updateTabStops = (): void => {
+    const radios = Array.from(this.querySelectorAll("cf-radio"));
+    const enabled = radios.filter((radio) => !radio.disabled);
+    const stop = enabled.find((radio) => radio.checked) ?? enabled[0];
+    for (const radio of radios) radio.tabIndex = radio === stop ? 0 : -1;
+  };
 
   #handleRadioClick = (event: CustomEvent<{ radio: CFRadio }>): void => {
     const { value } = event.detail.radio;
-    if (value) this.#cellController.setValue(value);
+    if (value) this.#select(value);
   };
 
   #handleKeydown = (event: KeyboardEvent): void => {
@@ -302,6 +305,32 @@ export class CFRadioGroup extends BaseElement {
   }
 
   /**
+   * Selects `value`: a bound cell is written through the controller, and
+   * otherwise the group holds `value` itself.
+   */
+  #select(value: unknown): void {
+    if (this.#cellController.hasCell()) {
+      this.#cellController.setValue(value);
+      return;
+    }
+    const oldValue = this.#getCurrentValue();
+    this.value = value;
+    // #selectionChanged() reads the controller now, before willUpdate binds it.
+    this.#cellController.bind(value);
+    this.#selectionChanged(value, oldValue);
+  }
+
+  /**
+   * Checks the slotted radio holding the selection, if any, and announces the
+   * selection.
+   */
+  #selectionChanged(value: unknown, oldValue: unknown): void {
+    this.#syncRadios();
+    this.emit("cf-change", { value, oldValue, items: this.items });
+    this.emit("change", { value, oldValue, items: this.items });
+  }
+
+  /**
    * Get the current value from the cell controller
    */
   #getCurrentValue(): unknown {
@@ -319,14 +348,14 @@ export class CFRadioGroup extends BaseElement {
    * Set the selected radio by value
    */
   setValue(value: unknown): void {
-    this.#cellController.setValue(value);
+    this.#select(value);
   }
 
   /**
    * Clear the selection
    */
   clear(): void {
-    this.#cellController.setValue(undefined);
+    this.#select(undefined);
   }
 }
 
