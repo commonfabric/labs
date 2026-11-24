@@ -76,9 +76,14 @@ const controls: Control[] = [
   },
 ];
 
-function press(element: HTMLElement, key: string): KeyboardEvent {
+function press(
+  element: HTMLElement,
+  key: string,
+  repeat = false,
+): KeyboardEvent {
   const event = new KeyboardEvent("keydown", {
     key,
+    repeat,
     bubbles: true,
     cancelable: true,
   });
@@ -149,6 +154,20 @@ describe("a control whose host is the control", () => {
         expect(event.defaultPrevented).toBe(true);
         expect(clicks()).toBe(1);
         if (control.state) expect(state(element)).not.toBe(before);
+      });
+
+      it("activates once for a held key, taking its repeats", async () => {
+        const { element, clicks } = await mounted();
+
+        press(element, control.key);
+        const repeats = [press(element, control.key, true)];
+        repeats.push(press(element, control.key, true));
+
+        expect(clicks()).toBe(1);
+        expect(repeats.map((event) => event.defaultPrevented)).toEqual([
+          true,
+          true,
+        ]);
       });
 
       it("leaves other keys alone", async () => {

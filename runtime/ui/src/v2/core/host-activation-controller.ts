@@ -111,6 +111,9 @@ export class HostActivationController implements ReactiveController {
     const key = event.key === "Spacebar" ? " " : event.key;
     if (!this.#options.keys.includes(key)) return;
     event.preventDefault();
+    // A held key repeats; like a native checkbox, the control activates
+    // once per press. The repeats are still taken, so Space does not scroll.
+    if (event.repeat) return;
     this.#host.click();
   };
 }
