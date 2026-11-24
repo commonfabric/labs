@@ -220,6 +220,8 @@ installFakeClock({
     "made-session",
     // The same, for a rendered tree that two principals read.
     "scoped-view",
+    // The same, for the rows of a `map` that two principals read.
+    "scoped-rows",
   ],
 });
 
