@@ -1613,17 +1613,10 @@ the per-epic implementation notes).
   A piece that writes many documents whose labels are one join, such as
   the parts of its lists of readers over many distinctly labelled items,
   then commits that join once instead of once per path. Today's path keeps
-  the option's value. A runtime from before version 2 refuses such an
-  envelope: its metadata reader (`readStoredCfcMetadata`) throws
-  `UnknownCfcMetadataVersionError` when it reads the labels of the document,
-  as the commit preparation of a transaction that read it or a reader of
-  its labels does (`test/cfc-envelope-version-guard.test.ts` shows the
-  same reader on a version it postdates). So compiled pieces run only in a
-  space whose every reader runs a build that understands version 2; a space
-  still read by an older runtime keeps `compiledPatterns` off until those
-  readers are updated. The readers of a runtime with `compiledPatterns` on
-  read it: the runtime that runs the piece
-  (`test/compiled/row-documents.test.ts`, the stored clause of each row),
+  the option's value. A runtime from before version 2 cannot read such
+  documents (`UnknownCfcMetadataVersionError`), which the owner accepted
+  for compiled pieces (ruling Z95). Every reader of this build reads them:
+  the runtime that runs the piece (`test/compiled/row-documents.test.ts`),
   a client and a second piece on the same storage
   (`test/compiled/content-addressed-labels.test.ts`), and clients of a
   serving loop over a socket (`test/compiled/scoped-view.test.ts`).
