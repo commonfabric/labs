@@ -25,6 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Round twenty-one: a scoped read in the body of a per-element construct stored per row (P454 to P456), cut from the merged branch at `5db1c2658d` | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -98,6 +99,33 @@ twenty).
   minutes at 27 GB resident. The fix is plan (b) of note 1007: the per-row
   form of a scoped read inside the body of a per-element construct, with
   places pulled only where their inputs changed for the acting scope key.
+  Round twenty-one built it on `claude/compiled-pattern-scoped-rows`
+  (`b5aa103f8f`, local, not on the merged branch; notes 1016 to 1026, P454
+  to P456): an expression of a row that reads a scoped value is a cone of
+  its own per element key, stored in a document of its own per output and
+  element keys with an instance per scope key, and the row, of the space,
+  holds a link to it. A send then changes 44 documents of 0.57 MB at 100
+  messages, 2.10 MB at 500 and 4.02 MB at 1,000, with 172 records, 59
+  evaluations and 31 evaluations of element bodies at every size; the seed
+  at 1,000 completes (979 s, 6.46 GB peak). A send still grows with the
+  room through three documents: the basis document, which lists every
+  document of the piece (1.88 MB at 1,000); the room's rendered tree, still
+  of the scope `session` through reads the plan cannot see as scoped
+  (`Handle.resolveAsCell` returns the handle where today's runtime follows
+  the link; `Instance.rootOf` reads the `failed` member of a wish's state;
+  1.74 MB at 1,000); and the argument document of the stored messages. The
+  first of those reads is also a soundness defect: a message stores a link
+  of the scope `user` that each reader resolves in its own instance, so a
+  second principal would see its own profile as every message's author (no
+  test; FabriChat runs with one user). The round also fixed a defect of
+  `Instance.#current` that kept an entry's old value where bringing a
+  dependency up to date wrote a position the entry read. It regressed
+  `examples/fair-share/main.tsx` in the corpus (writer-fit refusals at
+  every event, and a resume refused whole; cause not checked) and
+  `apps/redactor/vault.tsx` varies between runs. Whether to plan apart
+  every operator expression that reads a handle or a value of another cone,
+  at the cost of a cone instance per row for each, is the owner's decision
+  (note 1025).
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
@@ -257,13 +285,13 @@ Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
 and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integrity, P410 and
 P411 specification review; P420 to P425 resume by units, fourth round; P390
-to P394 serving, round fifteen; P450 to P453 the merges and rounds nineteen
-and twenty (the next is P454). Note
+to P394 serving, round fifteen; P450 to P456 the merges and rounds nineteen
+to twenty-one (the next is P457). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
 and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
-1015 the merges and the rounds after them on the merged branch (the next is
-1016). The plan documents hold decisions up to
+1026 the merges and the rounds after them (1016 to 1026 on
+`claude/compiled-pattern-scoped-rows`; the next is 1027). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
