@@ -50,6 +50,7 @@ export {
   type JSONValue,
   NAME,
   type Schema,
+  SUGGESTIONS,
   TILE_UI,
   TYPE,
   UI,
