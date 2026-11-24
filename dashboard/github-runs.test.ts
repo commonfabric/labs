@@ -1946,8 +1946,8 @@ describe("github-runs", () => {
 
     const TOP = `repos/${REPO}/actions/runs?per_page=100`;
     const STATUSES = ["requested", "queued", "pending", "waiting", "in_progress"];
-    const filtered = (status: string) =>
-      `repos/${REPO}/actions/runs?status=${status}&per_page=100`;
+    const filtered = (status: string, page = 1) =>
+      `repos/${REPO}/actions/runs?status=${status}&${page === 1 ? "" : `page=${page}&`}per_page=100`;
     const byId = (id: number) => `repos/${REPO}/actions/runs/${id}`;
 
     /**
@@ -2024,7 +2024,7 @@ describe("github-runs", () => {
 
       await runsUnderWay(request, REPO);
 
-      expect(asked.map(({ path }) => path)).toEqual([TOP, ...STATUSES.map(filtered)]);
+      expect(asked.map(({ path }) => path)).toEqual([TOP, ...STATUSES.map((status) => filtered(status))]);
     });
 
     it("reads only the unfiltered list when it reaches back past the oldest a run under way can be", async () => {
@@ -2045,14 +2045,17 @@ describe("github-runs", () => {
           workflow_runs: [
             run(60, { status: "queued", created_at: BEYOND_HORIZON }),
             run(50, { status: "queued" }),
+            { id: 70, status: "queued" },
           ],
         },
         [byId(50)]: run(50, { status: "queued", conclusion: null }),
+        [byId(70)]: run(70, { status: "queued", conclusion: null }),
       });
 
       await runsUnderWay(request, REPO);
 
-      expect(asked.slice(1 + STATUSES.length).map(({ path }) => path)).toEqual([byId(50)]);
+      // One that does not say when it was made could be under way.
+      expect(asked.slice(1 + STATUSES.length).map(({ path }) => path)).toEqual([byId(50), byId(70)]);
     });
 
     it("requests the list of each status a run under way can have, with run list access, when the unfiltered list goes on past its first page", async () => {
@@ -2061,7 +2064,7 @@ describe("github-runs", () => {
       await runsUnderWay(request, REPO);
 
       expect(asked).toEqual(
-        [TOP, ...STATUSES.map(filtered)]
+        [TOP, ...STATUSES.map((status) => filtered(status))]
           .map((path) => ({ path, options: { runListAccess: RUN_LIST_ACCESS } })),
       );
     });
@@ -2075,6 +2078,49 @@ describe("github-runs", () => {
 
       expect(await runsUnderWay(request, REPO, new Map(), false)).toEqual([queued]);
       expect(asked.map(({ path }) => path)).toEqual([TOP]);
+    });
+
+    it("reads a filtered list page by page while its pages are full, and returns the runs further down it", async () => {
+      // The full pages hold runs too old to be read again, so that only the
+      // run past them is.
+      const page = (from: number) => ({
+        workflow_runs: Array.from({ length: 100 }, (_, i) => run(from + i, { status: "queued", created_at: BEYOND_HORIZON })),
+      });
+      const deep = run(250, { status: "queued", conclusion: null });
+      const { request, asked } = answering({
+        [TOP]: fullPage(),
+        [filtered("queued", 1)]: page(2000),
+        [filtered("queued", 2)]: page(3000),
+        [filtered("queued", 3)]: { workflow_runs: [deep] },
+        [byId(250)]: deep,
+      });
+
+      expect(await runsUnderWay(request, REPO)).toEqual([deep]);
+      expect(asked.filter(({ path }) => /runs\/\d+$/.test(path)).map(({ path }) => path)).toEqual([byId(250)]);
+      expect(asked.map(({ path }) => path).filter((path) => path.includes("status=queued"))).toEqual([
+        `repos/${REPO}/actions/runs?status=queued&per_page=100`,
+        `repos/${REPO}/actions/runs?status=queued&page=2&per_page=100`,
+        `repos/${REPO}/actions/runs?status=queued&page=3&per_page=100`,
+      ]);
+      expect(asked.map(({ path }) => path).filter((path) => path.includes("status=waiting"))).toEqual([
+        filtered("waiting", 1),
+      ]);
+    });
+
+    it("reads no more than ten pages of a filtered list", async () => {
+      const answers: Record<string, unknown> = { [TOP]: fullPage() };
+      for (let number = 1; number <= 11; number++) {
+        answers[filtered("pending", number)] = {
+          workflow_runs: Array.from({ length: 100 }, (_, i) => run(10_000 * number + i, { created_at: BEYOND_HORIZON })),
+        };
+      }
+      const { request, asked } = answering(answers);
+
+      await runsUnderWay(request, REPO);
+
+      expect(asked.map(({ path }) => path).filter((path) => path.includes("status=pending"))).toEqual(
+        Array.from({ length: 10 }, (_, i) => filtered("pending", i + 1)),
+      );
     });
 
     it("reads again by id the runs the filtered lists name that the unfiltered list does not, and returns those not completed", async () => {

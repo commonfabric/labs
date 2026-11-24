@@ -1169,22 +1169,54 @@ describe("runners-feed", () => {
           expect(github.repositoryReads).toBe(2);
         });
 
-        it("drops the jobs held of a repository GitHub refuses to show without reading its runs again, listing no problem, and counts the read current", async () => {
+        it("keeps the jobs held of a repository the dashboard may not read, lists the problem, and counts the read current", async () => {
+          using time = new FakeTime(NOW);
           const other = "example/hidden";
-          const refused = (path: string) => new GitHubStatusError(`GitHub API ${path} failed: HTTP 403`, 403);
+          const message = `GitHub API repos/${other} failed: HTTP 403`;
           github.repos = [other, REPO];
           const socket = await openPage();
           await relay.deliver("workflow_job", jobPayload(apiJob(30, 3), other));
-          github.failingRepos.set(other, refused(`repos/${other}`));
-          github.failingRunReads.set(3, refused(`repos/${other}/actions/runs/3`));
+          // A new connection, so that what was read before is no longer
+          // vouched for, and only this read could count as current.
+          await relay.end();
+          await relay.deliver("ping", {});
+          github.failingRepos.set(other, new GitHubStatusError(message, 403));
 
           await feed.prime();
-          await feed.serve(new FakeSocket());
-
-          expect(heldJobs()).toEqual([]);
+          expect(heldJobs()).toEqual([30]);
           expect(github.runReads).toEqual([]);
-          expect(socket.snapshots.at(-1)?.problems).toEqual([]);
+          expect(socket.snapshots.at(-1)?.problems).toEqual([`${other}: ${message}`]);
+
+          time.tick(REREAD_MS);
+          await relay.deliver("ping", {});
+          await feed.serve(new FakeSocket());
           expect(github.repositoryReads).toBe(2);
+        });
+
+        it("counts a read not current when a run held cannot be read again by id, or a run's jobs cannot be read", async () => {
+          for (const fail of ["run", "jobs"]) {
+            using time = new FakeTime(NOW);
+            github = new FakeGitHub();
+            relay = new FakeRelay();
+            feed = new RunnersFeed(github, relay.webhooks, VERSION);
+            await openPage();
+            await relay.deliver("workflow_job", jobPayload(apiJob(30, 3)));
+            await relay.end();
+            await relay.deliver("ping", {});
+            if (fail === "run") github.failingRunReads.set(3, new Error("HTTP 502"));
+            else {
+              github.runs.set(REPO, [apiRun(3)]);
+              github.failingJobs.set(3, new Error("HTTP 502"));
+            }
+
+            await feed.prime();
+            expect(heldJobs()).toEqual([30]);
+
+            time.tick(REREAD_MS);
+            await relay.deliver("ping", {});
+            await feed.serve(new FakeSocket());
+            expect(github.repositoryReads).toBe(3);
+          }
         });
 
         it("keeps the jobs held of a repository whose runs GitHub refuses for its rate limit, lists the problem, and counts the read not current", async () => {

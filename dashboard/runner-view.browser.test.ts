@@ -941,6 +941,37 @@ Deno.test("RunnersView names a ball pointed at on a board shown twice as wide, w
   }
 });
 
+Deno.test("RunnersView links each run in the legend to its page on GitHub, opening a tab of its own, and links no run whose address is elsewhere", () => {
+  const { elements, remove } = mount();
+  try {
+    const view = new RunnersView(elements);
+    view.show(
+      boardOf([
+        job(1, 7, { repository: "alpha", running: false }),
+        job(2, 8, { repository: "beta", running: false, url: "https://example.com/acme/beta/actions/runs/8/job/2" }),
+      ]),
+      noOutcome,
+      true,
+    );
+    const titles = [...elements.legend.querySelectorAll(".run .title")];
+    expect(titles.map((title) => title.textContent)).toEqual([
+      "alpha · CI on main @ aaaaaaa",
+      "beta · CI on main @ aaaaaaa",
+    ]);
+    const [linked, unlinked] = titles;
+    if (!(linked instanceof HTMLAnchorElement)) throw new Error("the run on GitHub is not linked");
+    expect([linked.href, linked.target, linked.rel]).toEqual([
+      "https://github.com/acme/labs/actions/runs/7",
+      "_blank",
+      "noopener",
+    ]);
+    expect(unlinked.tagName).toBe("SPAN");
+    expect(unlinked.hasAttribute("href")).toBe(false);
+  } finally {
+    remove();
+  }
+});
+
 Deno.test("RunnersView.show() sends a job whose end is known off the board marked as it ended, and lets one without an end simply go", async () => {
   const { elements, remove } = mount();
   try {
@@ -1677,8 +1708,16 @@ Deno.test("BallRenderer made on a lost WebGL context draws nothing until the con
   expect(rgba(pixels(canvas), 30, 40)).toEqual([255, 0, 0, 255]);
 });
 
-// A canvas whose WebGL 2 context refuses every shader, as some drivers do.
+// A canvas whose WebGL 2 context refuses every shader, as some drivers do,
+// while it is told to.
 class RefusingCanvas extends HTMLCanvasElement {
+  #refusing = true;
+
+  /** Says whether the canvas's WebGL refuses shaders from now on. */
+  refuseShaders(refusing: boolean): void {
+    this.#refusing = refusing;
+  }
+
   override getContext(contextId: "2d", options?: CanvasRenderingContext2DSettings): CanvasRenderingContext2D | null;
   override getContext(
     contextId: "bitmaprenderer",
@@ -1690,9 +1729,10 @@ class RefusingCanvas extends HTMLCanvasElement {
   override getContext(contextId: string, options?: unknown): RenderingContext | null {
     const context = super.getContext(contextId, options);
     if (!(context instanceof WebGL2RenderingContext)) return context;
+    const refusing = () => this.#refusing;
     return new Proxy(context, {
       get(target, key) {
-        if (key === "getShaderParameter") return () => false;
+        if (key === "getShaderParameter" && refusing()) return () => false;
         const value = Reflect.get(target, key);
         return typeof value === "function" ? value.bind(target) : value;
       },
@@ -1701,9 +1741,12 @@ class RefusingCanvas extends HTMLCanvasElement {
 }
 customElements.define("refusing-canvas", RefusingCanvas, { extends: "canvas" });
 
-// A canvas whose WebGL refuses its shaders, with an ID, a class, and a style.
-function refusingCanvas(id: string, className: string): HTMLCanvasElement {
+// A canvas whose WebGL refuses its shaders, at once unless `later`, with an
+// ID, a class, and a style.
+function refusingCanvas(id: string, className: string, later = false): RefusingCanvas {
   const canvas = document.createElement("canvas", { is: "refusing-canvas" });
+  if (!(canvas instanceof RefusingCanvas)) throw new Error("the canvas is not one that refuses shaders");
+  canvas.refuseShaders(!later);
   canvas.id = id;
   canvas.className = className;
   canvas.style.opacity = "0.9";
@@ -1749,6 +1792,75 @@ Deno.test("RunnersView whose WebGL cannot be set up draws its balls with the 2D 
     expect(drawn.parentElement).toBe(elements.board);
     const center = inkCenter(drawn);
     if (center === undefined) throw new Error("no ball was drawn");
+    pointAt(elements.board, center.x, center.y);
+    expect(elements.tooltip.textContent).toBe("labs · CI on main @ aaaaaaa\nbuild\nRunning on ci-mac-01-1");
+  } finally {
+    remove();
+  }
+});
+
+// Loses `canvas`'s WebGL context, makes it refuse shaders, and has it
+// restored, resolving once it is.
+async function restoreRefusing(canvas: RefusingCanvas): Promise<void> {
+  const losing = canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context");
+  if (!losing) throw new Error("the browser cannot lose a WebGL context on purpose");
+  const lost = once(canvas, "webglcontextlost");
+  losing.loseContext();
+  await lost;
+  // The browser allows a restore only once it has finished telling every
+  // listener of the loss.
+  await nextFrame();
+  canvas.refuseShaders(true);
+  const restored = once(canvas, "webglcontextrestored");
+  losing.restoreContext();
+  await restored;
+}
+
+Deno.test("BallRenderer whose WebGL cannot be set up again once restored draws with the 2D context, on a canvas that takes the first's place", async () => {
+  const holder = document.createElement("div");
+  const canvas = refusingCanvas("refused", "layer", true);
+  holder.append(canvas);
+  document.body.append(holder);
+  try {
+    const balls = new BallRenderer(canvas);
+    expect(balls.accelerated).toBe(true);
+    balls.add(30, 40, 15, "#ff0000", null);
+    balls.draw(100, 80, 1);
+    expect(rgba(pixels(canvas), 30, 40)).toEqual([255, 0, 0, 255]);
+
+    await restoreRefusing(canvas);
+    expect(balls.accelerated).toBe(false);
+    const fresh = holder.firstElementChild;
+    if (!(fresh instanceof HTMLCanvasElement)) throw new Error("no canvas took the first's place");
+    expect(fresh).not.toBe(canvas);
+    expect(holder.children).toHaveLength(1);
+    expect([fresh.id, fresh.className, fresh.style.opacity]).toEqual(["refused", "layer", "0.9"]);
+    balls.add(30, 40, 15, "#ff0000", null);
+    balls.draw(100, 80, 1);
+    expect(rgba(pixels(fresh), 30, 40)).toEqual([255, 0, 0, 255]);
+    expect(rgba(pixels(fresh), 5, 5)).toEqual([0, 0, 0, 0]);
+  } finally {
+    holder.remove();
+  }
+});
+
+Deno.test("RunnersView whose WebGL cannot be set up again once restored draws its balls with the 2D context in the balls' place", async () => {
+  const { elements: mounted, remove } = mount();
+  try {
+    const balls = refusingCanvas("balls", "layer", true);
+    mounted.balls.replaceWith(balls);
+    const elements = { ...mounted, balls };
+    const view = new RunnersView(elements);
+    view.show(boardOf([job(1, 7, { name: "build", runner: "ci-mac-01-1" })]), noOutcome, true);
+    await nextFrame();
+    const center = ballCenter(elements);
+
+    await restoreRefusing(balls);
+    await nextFrame();
+    const drawn = elements.board.querySelector("#balls");
+    if (!(drawn instanceof HTMLCanvasElement)) throw new Error("the balls have no canvas");
+    expect(drawn).not.toBe(balls);
+    expect(inkCenter(drawn)).toEqual(center);
     pointAt(elements.board, center.x, center.y);
     expect(elements.tooltip.textContent).toBe("labs · CI on main @ aaaaaaa\nbuild\nRunning on ci-mac-01-1");
   } finally {

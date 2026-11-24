@@ -67,7 +67,8 @@ export function heapDiameter(
  * simulated, stays as it lies when a ball is added to it.
  *
  * Once no ball has moved a quarter of a pixel, or a twelfth of its width if
- * that is less, in each sixtieth of a second for a tenth of a second, or once
+ * that is less, in each sixtieth of a second for a tenth of a second, and
+ * none is balanced near the top of a single other, or once
  * it has moved for five seconds, with every ball in the box for at least one,
  * or at most once it has moved for ten, the heap is at rest, and stepping it
  * does nothing until something changes. A heap at rest with balls sticking out
@@ -86,6 +87,9 @@ export class HeapWorld {
   #py = new Float64Array(16);
   #squares = new Int32Array(16);
   #awake = new Uint8Array(16);
+  #supports = new Uint8Array(16);
+  #touches = new Uint8Array(16);
+  #supportDx = new Float64Array(16);
   #from = 1;
   #to = 1;
   #d = 1;
@@ -295,6 +299,9 @@ export class HeapWorld {
     const awake = new Uint8Array(room);
     awake.set(this.#awake);
     this.#awake = awake;
+    this.#supports = new Uint8Array(room);
+    this.#touches = new Uint8Array(room);
+    this.#supportDx = new Float64Array(room);
   }
 
   /**
@@ -326,7 +333,17 @@ export class HeapWorld {
     if (outside > 0) this.#insideSince = Infinity;
     else this.#insideSince = Math.min(this.#insideSince, this.#time);
     const waiting = this.#from === this.#to ? 0 : GROWING;
-    const settled = this.#still >= 6 ||
+    // A ball balanced near the top of a single other, touching nothing else
+    // beside or below it, nor the floor or a side, has not come to rest,
+    // however slowly it has begun to roll off.
+    let perched = false;
+    const r = this.#d / 2;
+    for (let i = 0; i < this.#ids.length && !perched; i++) {
+      perched = this.#supports[i] === 1 && this.#touches[i] === 1 &&
+        Math.abs(this.#supportDx[i]) < 0.2 * this.#d && this.#y[i] < this.#height - r - 0.5 &&
+        this.#x[i] > r + 0.5 && this.#x[i] < this.#width - r - 0.5;
+    }
+    const settled = (this.#still >= 6 && !perched) ||
       (this.#time >= 5 + waiting && this.#time - this.#insideSince >= 1);
     // Balls still outside a heap that has stopped moving are stuck on the
     // slope, with no room for them in the box at their size.
@@ -510,6 +527,13 @@ export class HeapWorld {
     const ids = this.#ids;
     const squares = this.#squares;
     const awake = this.#awake;
+    // How many balls hold up each, and how far across the last one is; and
+    // how many touch each from beside or below.
+    const supports = this.#supports;
+    const supportDx = this.#supportDx;
+    const touches = this.#touches;
+    supports.fill(0, 0, count);
+    touches.fill(0, 0, count);
     const starts = [0, 0, 0];
     const ends = [0, 0, 0];
     for (let i = 0; i < count; i++) {
@@ -536,13 +560,25 @@ export class HeapWorld {
           // leaving a gap of more than a fiftieth of a ball and less than a
           // whole one, which no step moves a ball past, wakes, so that it
           // falls rather than hang in the air.
-          if (awake[i] !== awake[j] && distance2 > d * d * 1.0404 && distance2 < d * d * 4) {
-            const lower = y[i] > y[j] ? i : j;
-            const upper = lower === i ? j : i;
-            if (awake[lower] && !awake[upper]) {
-              awake[upper] = 1;
-              this.#px[upper] = x[upper];
-              this.#py[upper] = y[upper];
+          const beneath = y[i] > y[j] ? i : j;
+          const above = beneath === i ? j : i;
+          // A ball holds up another only from clearly below it: one nested
+          // between two others has them seven eighths of a ball beneath.
+          const under = y[beneath] - y[above] > d / 2;
+          if (distance2 < d * d * 1.0404) {
+            touches[above]++;
+            if (under) {
+              supports[above]++;
+              supportDx[above] = x[beneath] - x[above];
+            } else {
+              touches[beneath]++;
+            }
+          }
+          if (under && awake[i] !== awake[j] && distance2 > d * d * 1.0404 && distance2 < d * d * 4) {
+            if (awake[beneath] && !awake[above]) {
+              awake[above] = 1;
+              this.#px[above] = x[above];
+              this.#py[above] = y[above];
             }
           }
           if (distance2 >= d * d) continue;

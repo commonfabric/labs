@@ -528,6 +528,44 @@ describe("runner-board", () => {
         expect(poolOf(built, "github-hosted").boxes.map((box) => box.jobs.length)).toEqual([2]);
       });
 
+      it("puts jobs asking for the same set of labels, in any order, case, or repetition, in one box titled with them sorted", () => {
+        const built = board([
+          hosted(1, ["ubuntu-latest", "gpu"]),
+          hosted(2, ["GPU", "ubuntu-latest"]),
+          job(3, { labels: ["ubuntu-latest", "Ubuntu-Latest", "gpu"] }),
+          hosted(4, ["ubuntu-latest"]),
+        ]);
+
+        const pool = poolOf(built, "github-hosted");
+        expect(pool.boxes.map((box) => [box.id, box.title, box.jobs.map((token) => token.id)]))
+          .toEqual([
+            ["gpu, ubuntu-latest", "gpu, ubuntu-latest", [1, 2]],
+            ["ubuntu-latest", "ubuntu-latest", [4]],
+          ]);
+        expect(queueIds(pool)).toEqual([3]);
+      });
+
+      it("takes a running job on a runner named after GitHub's group to be on one of GitHub's unless it asked for a self-hosted runner", () => {
+        const named = { runner: "GitHub Actions 1001438681", runnerGroup: null };
+        const githubs = board([job(1, { running: true, labels: ["gpu"], ...named })]);
+        const selfHosted = board([
+          job(1, { running: true, labels: ["self-hosted", "gpu"], ...named }),
+        ]);
+        const grouped = board([
+          job(1, {
+            running: true,
+            labels: ["self-hosted", "gpu"],
+            ...named,
+            runnerGroup: "GitHub Actions",
+          }),
+        ]);
+
+        expect(poolIds(githubs)).toEqual(["github-hosted"]);
+        expect(poolIds(selfHosted)).toEqual(["labelled gpu"]);
+        expect(boxOf(selfHosted, "labelled gpu", "gpu").jobs.map((token) => token.id)).toEqual([1]);
+        expect(poolIds(grouped)).toEqual(["github-hosted"]);
+      });
+
       it("takes a running job that says no runner and asks for none self-hosted to be on one of GitHub's", () => {
         const githubs = board([job(1, { running: true, labels: ["ubuntu-latest"] })]);
         const selfHosted = board([job(1, { running: true, labels: ["self-hosted"] })]);

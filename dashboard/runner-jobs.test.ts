@@ -377,6 +377,19 @@ describe("runner-jobs", () => {
           expect([...tracker.jobs.keys()]).toEqual([1]);
         });
 
+        it("returns `true` for news that gives a run with jobs held a new pull request, and `false` otherwise", () => {
+          const tracker = new JobTracker();
+          tracker.take(jobNews(1));
+
+          expect(tracker.take(runNews(100, { pullRequest: 12 }))).toBe(true);
+          expect(tracker.take(runNews(100, { pullRequest: 12 }))).toBe(false);
+          expect(tracker.take(runNews(100, { pullRequest: 13 }))).toBe(true);
+          expect(tracker.take(runNews(100))).toBe(false);
+          expect(tracker.pullRequest(100)).toBe(13);
+          expect(tracker.take(runNews(200, { pullRequest: 14 }))).toBe(false);
+          expect(tracker.pullRequest(200)).toBe(14);
+        });
+
         it("notes the pull request a run is for, whatever its status", () => {
           const tracker = new JobTracker();
 

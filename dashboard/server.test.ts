@@ -2251,6 +2251,32 @@ boardTest("start: connects to the relay, and connects again on its clock once th
   assertEquals(relay.connections, 2);
 });
 
+boardTest("start: binds the runners page's feed to the relay it is given", async () => {
+  const key = async () => await (await handle(req("/runners/key"))).text();
+  const before = await key();
+  const log = console.log;
+  console.log = () => {};
+  const relay = new FakeRelay();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    ({ timer } = start(
+      ((opts: Deno.ServeTcpOptions) => {
+        opts.onListen?.({ transport: "tcp", hostname: "localhost", port: PORT });
+        return undefined;
+      }) as unknown as typeof Deno.serve,
+      () => {},
+      relay.webhooks,
+    ));
+  } finally {
+    clearInterval(timer);
+    console.log = log;
+  }
+
+  const after = await key();
+  assert(after !== before, "a feed of its own serves a key of its own");
+  assertEquals(await key(), after);
+});
+
 describe("workflow activity", () => {
   beforeEach(resetBoardForTest);
   afterEach(resetBoardForTest);
