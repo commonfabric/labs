@@ -55,6 +55,8 @@ export const plainTextLanguage: Language = {
       "known_hosts",
       "ssh_known_hosts",
       "github-known-hosts",
+      // The version of Bazel a repository builds with.
+      ".bazelversion",
     ],
     filenamePatterns: [
       /^(?:LICENSE|NOTICE)\..+$/i,
