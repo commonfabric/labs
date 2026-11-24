@@ -129,13 +129,21 @@ describe("a rendered tree under the serving loop that reads a value of the scope
       ["children", 1, "props", "disabled"],
       (held) => held === true,
     );
-    // deno-lint-ignore no-explicit-any
-    const read = first.getCellFromLink<any>(result.getAsNormalizedFullLink());
+    const read = first.getCellFromLink<{ call?: unknown }>(
+      result.getAsNormalizedFullLink(),
+    );
     cancels.push(read.sink(() => {}));
-    await waitForCellValue(first, read, (held) => held?.call !== undefined, {
-      stuckLabel: "the first client reads the stream `call`",
-    });
-    (read.key("call") as Cell<unknown>).send({ name: "Ann" } as never);
+    await waitForCellValue<{ call?: unknown }>(
+      first,
+      read,
+      (held) => held?.call !== undefined,
+      {
+        stuckLabel: "the first client reads the stream `call`",
+      },
+    );
+    (read.key("call" as never) as unknown as Cell<unknown>).send(
+      { name: "Ann" } as never,
+    );
     await reads(
       first,
       result,
