@@ -337,8 +337,10 @@ export interface LoomOutput {
   addParticipant: Stream<{ profile: ParticipantProfile }>;
   /**
    * Lists the sender in the Loom: adds the sender's own `#profile` to
-   * `participants` through `addParticipant`. A host that admits its user to
-   * the Loom sends it when they join and on each open.
+   * `participants` through `addParticipant`. Nothing is listed while that
+   * profile is unresolved, so a host that admits its user to the Loom sends it
+   * when they join, on each open, and again while they are missing from
+   * `participants`.
    */
   joinAsViewer: Stream<void>;
   chatRoom?: Writable<LinkedChatRoom>;
