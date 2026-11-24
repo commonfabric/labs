@@ -88,9 +88,11 @@ import {
 } from "./plan-write.ts";
 import { freezeModuleData, hardenFunction } from "./frozen.ts";
 import {
+  narrowerThan,
   type Scope,
   scopedDocument,
   type ScopeInstancesOptions,
+  scopeKeyReaches,
   scopeOfDocument,
   scopeOfKey,
 } from "./scope-instances.ts";
@@ -914,6 +916,20 @@ type Slot = {
   uses: Set<string>;
   /** The entry is compared on every pull. */
   always: boolean;
+  /**
+   * The scope key of the entry the slot is of, where the entry is of one:
+   * a change of that key, or of the space, marks the slot, and a change of
+   * another key does not (`scopeKeyReaches`).
+   */
+  scoped?: string;
+  /**
+   * The entry, while it is set aside for its scope key and the memo holds
+   * the entry of another key under the same name (`Instance.#forActing`).
+   * The slot stays registered as a reader of what the entry read and a user
+   * of what it used, so a change marks it as it marks the entry in the
+   * memo.
+   */
+  aside?: Entry;
 };
 
 type Entry = {
@@ -2212,13 +2228,12 @@ export class Host {
     }
     // So does the cone of another value: a value of a scope key that a
     // cone of the space places, or reads through the reference, leaves
-    // the cone of the space (P451). An evaluation that is no cone, as an
-    // assembly or the place of an output in a scope instance, is given the
-    // value.
+    // the cone of the space (P451), in an element body as outside every
+    // one (P454). An evaluation that is no cone, as an assembly or the
+    // place of an output in a scope instance, is given the value.
     if (
       this.key !== RESULT && instance.store.scopes !== undefined &&
-      this.context.size === 0 && this.cone !== undefined &&
-      output.cone !== this.cone
+      this.cone !== undefined && output.cone !== this.cone
     ) {
       const placed = instance.scopedValue(index, this);
       if (placed !== undefined) return this.#below(placed, path);
@@ -3624,6 +3639,13 @@ export class Instance {
   /** The names of the entries that used each name. */
   readonly #users = new Map<string, Set<string>>();
   /**
+   * The slots of the entries set aside for a scope key, by the name of the
+   * entry and the key (`Slot.aside`).
+   */
+  readonly #asideSlots = new Map<string, Map<string, Slot>>();
+  /** The slots set aside that used each name. */
+  readonly #asideUsers = new Map<string, Set<Slot>>();
+  /**
    * The entries that read the position of an element, by the name of
    * what is kept under the element's key.
    */
@@ -3696,26 +3718,43 @@ export class Instance {
     if (position !== undefined) slot.reads.add(position);
     else if (used !== undefined) slot.suspects.add(used);
     else slot.all = true;
-    if (this.#open.has(slot.key)) this.#markedDuring.add(slot.key);
-    const entry = this.#memo.get(slot.key);
-    if (entry !== undefined) entry.checkedAt = undefined;
-    const units = this.#units.get(slot.key);
-    if (units !== undefined) {
-      for (const unit of units) this.#dueUnits.add(unit);
+    if (slot.aside !== undefined) {
+      slot.aside.checkedAt = undefined;
+    } else {
+      if (this.#open.has(slot.key)) this.#markedDuring.add(slot.key);
+      const entry = this.#memo.get(slot.key);
+      if (entry !== undefined) entry.checkedAt = undefined;
+      const units = this.#units.get(slot.key);
+      if (units !== undefined) {
+        for (const unit of units) this.#dueUnits.add(unit);
+      }
     }
     if (slot.marked) return;
     slot.marked = true;
     this.#nowDue();
-    this.#markUsers(slot.key);
+    this.#pullDue(slot);
+    this.#markUsers(slot.key, slot.scoped);
   }
 
-  /** Marks the entries that used what `used` names. */
-  #markUsers(used: string): void {
-    const users = this.#users.get(used);
-    if (users === undefined) return;
-    for (const user of users) {
+  /**
+   * Marks the entries that used what `used` names, where the change of
+   * `used` was one of the scope key `scoped` or of the space: those set
+   * aside for a key as well as those in the memo, and of the keys the
+   * change reaches alone (`scopeKeyReaches`).
+   */
+  #markUsers(used: string, scoped?: string): void {
+    for (const user of this.#users.get(used) ?? []) {
       const slot = this.#slots.get(user);
-      if (slot !== undefined) this.#mark(slot, undefined, used);
+      if (slot !== undefined && scopeKeyReaches(scoped, slot.scoped)) {
+        this.#mark(slot, undefined, used);
+      }
+    }
+    const aside = this.#asideUsers.get(used);
+    if (aside === undefined) return;
+    for (const slot of [...aside]) {
+      if (scopeKeyReaches(scoped, slot.scoped)) {
+        this.#mark(slot, undefined, used);
+      }
     }
   }
 
@@ -3727,8 +3766,86 @@ export class Instance {
       if (keyed) root.#keyedCount -= 1;
     }
     slot.regs.length = 0;
-    for (const used of slot.uses) this.#users.get(used)?.delete(slot.key);
+    for (const used of slot.uses) {
+      if (slot.aside === undefined) this.#users.get(used)?.delete(slot.key);
+      else this.#asideUsers.get(used)?.delete(slot);
+    }
     slot.uses.clear();
+  }
+
+  /**
+   * Sets the slot of the entry `entry`, which the memo held, aside with
+   * the entry: it stays registered, as a user of what the entry used by
+   * the slot itself, and the memo has no slot for the name until another
+   * entry is evaluated or brought back.
+   */
+  #toAside(slot: Slot, entry: Entry): void {
+    this.#slots.delete(slot.key);
+    slot.aside = entry;
+    slot.scoped = entry.scoped;
+    for (const used of slot.uses) {
+      this.#users.get(used)?.delete(slot.key);
+      let users = this.#asideUsers.get(used);
+      if (users === undefined) {
+        users = new Set();
+        this.#asideUsers.set(used, users);
+      }
+      users.add(slot);
+    }
+    let byKey = this.#asideSlots.get(slot.key);
+    if (byKey === undefined) {
+      byKey = new Map();
+      this.#asideSlots.set(slot.key, byKey);
+    }
+    byKey.set(entry.scoped!, slot);
+  }
+
+  /**
+   * Makes a slot set aside the slot of its name again, with what marks it
+   * holds, where its entry is brought back into the memo. A slot the memo
+   * had for the name meanwhile is dropped.
+   */
+  #fromAside(slot: Slot): void {
+    const held = this.#slots.get(slot.key);
+    if (held !== undefined && held !== slot) {
+      this.#unregister(held);
+      if (held.always) this.#alwaysCount -= 1;
+    }
+    const byKey = this.#asideSlots.get(slot.key);
+    byKey?.delete(slot.scoped!);
+    if (byKey?.size === 0) this.#asideSlots.delete(slot.key);
+    for (const used of slot.uses) {
+      this.#asideUsers.get(used)?.delete(slot);
+      const users = this.#users.get(used) ?? new Set();
+      users.add(slot.key);
+      this.#users.set(used, users);
+    }
+    slot.aside = undefined;
+    this.#slots.set(slot.key, slot);
+  }
+
+  /**
+   * Forgets the entries of the name `key` set aside for a scope key, with
+   * their slots and registrations.
+   */
+  #forgetAside(key: string): void {
+    for (const slot of this.#asideSlots.get(key)?.values() ?? []) {
+      this.#unregister(slot);
+      if (slot.always) this.#alwaysCount -= 1;
+    }
+    this.#asideSlots.delete(key);
+    this.store.scopes?.forget(`${this.id}\n${key}`);
+  }
+
+  /**
+   * Marks the entries of the name `key` set aside for a scope key as not
+   * current: all of them, or those of the keys `of` accepts.
+   */
+  #staleAside(key: string, of?: (scoped: string) => boolean): void {
+    this.store.scopes?.staleAside(`${this.id}\n${key}`, of);
+    for (const [scoped, slot] of this.#asideSlots.get(key) ?? []) {
+      if (of === undefined || of(scoped)) this.#mark(slot);
+    }
   }
 
   /** On the root: the readers registered at a path of a document. */
@@ -3875,6 +3992,13 @@ export class Instance {
       open.record.changes += 1;
       open.record.patchBytes += (JSON.stringify(put) ?? "").length;
     }
+    // A change of a document of a scope is one of the instance of the scope
+    // key that is evaluated for: an entry of another key read another
+    // instance, and is not marked.
+    const named = scopeOfDocument(change.doc);
+    const writtenFor = named.scope === undefined
+      ? undefined
+      : named.key ?? this.store.scopes?.keyOf(named.scope);
     // `above` says that the readers are of a position above the change:
     // a read that found which position a reference names (`Position.own`)
     // is not one of what the position holds below it.
@@ -3882,6 +4006,7 @@ export class Instance {
       if (regs === undefined) return;
       for (const reg of [...regs]) {
         if (above && reg.position.own) continue;
+        if (!scopeKeyReaches(writtenFor, reg.slot.scoped)) continue;
         reg.slot.instance.#mark(reg.slot, reg.position);
       }
     };
@@ -7815,6 +7940,73 @@ export class Instance {
    * evaluated for, by the name of the entry (`#pullScoped`).
    */
   readonly #scopedPulls = new Map<string, () => void>();
+  /**
+   * The names of `#scopedPulls` whose entry of a scope key may not be
+   * current, by that key: a change marked the slot of the entry
+   * (`#pullDue`), or the pull was registered after the key was first
+   * evaluated for.
+   */
+  readonly #pullsDue = new Map<string, Set<string>>();
+  /** The scope keys that `#pullScoped` was run for. */
+  readonly #pullsSeen = new Set<string>();
+  /**
+   * The names of `#scopedPulls` that have an entry compared on every pull
+   * (`Slot.always`): nothing marks it when what it depends on changes, so
+   * it is pulled for every key at every pass.
+   */
+  readonly #alwaysPulls = new Set<string>();
+  /**
+   * The stored text and the time of the last change of each entry whose
+   * value is a reference to documents its evaluation made
+   * (`#references`), whichever scope key it was last evaluated for: the
+   * reference is the same for every key, so an entry evaluated for a key
+   * for the first time is no change of it where it holds the same.
+   */
+  readonly #referenceStamps = new Map<
+    string,
+    { stored: string; changedAt: number }
+  >();
+
+  /** The pulls due for the scope key `scoped` (`#pullsDue`). */
+  #dueFor(scoped: string): Set<string> {
+    let due = this.#pullsDue.get(scoped);
+    if (due === undefined) {
+      due = new Set();
+      this.#pullsDue.set(scoped, due);
+    }
+    return due;
+  }
+
+  /**
+   * Notes that the entry of a slot that was marked may not be current for
+   * its scope key, where the entry is one `#pullScoped` brings up to date:
+   * for the key of the slot, and for every key where the slot is of none.
+   */
+  #pullDue(slot: Slot): void {
+    if (!this.#scopedPulls.has(slot.key)) return;
+    if (slot.scoped !== undefined) {
+      this.#dueFor(slot.scoped).add(slot.key);
+      return;
+    }
+    for (const scoped of this.#pullsSeen) this.#dueFor(scoped).add(slot.key);
+  }
+
+  /**
+   * The scope key of the evaluation of the entry `key` in progress: the
+   * narrowest scope it touched so far, or that the name was found to have
+   * before, for the key evaluated for.
+   */
+  #scopedNow(key: string): string | undefined {
+    const { scopes } = this.store;
+    if (scopes === undefined) return undefined;
+    const touched = scopes.touched;
+    const known = scopes.narrowed(`${this.id}\n${key}`);
+    const narrow = touched === undefined || (known !== undefined &&
+        !narrowerThan(touched, known))
+      ? known
+      : touched;
+    return narrow === undefined ? undefined : scopes.keyOf(narrow);
+  }
 
   /**
    * The kinds of the documents that hold what one evaluation derived, and
@@ -7836,12 +8028,13 @@ export class Instance {
    *
    * An entry whose evaluation touched a scope instance, or used an entry
    * of a scope key, is of that key. The entry another key was given is
-   * set aside before the evaluation and brought back when its key is
-   * evaluated for again, and is then compared with everything it read
-   * and used. The assembly of a collection is not set aside: its element
-   * table stands beside the entry, so it is formed again. An entry that
-   * was one for every key and is now of one counts as changed, so that
-   * what used it is evaluated again and is of a key as well.
+   * set aside before the evaluation, with its slot, which stays
+   * registered, so a change marks it while it is set aside; it is brought
+   * back when its key is evaluated for again, and is then current where
+   * nothing marked it. The assembly of a collection is not set aside: its
+   * element table stands beside the entry, so it is formed again. An entry
+   * that was one for every key and is now of one counts as changed, so
+   * that what used it is evaluated again and is of a key as well.
    */
   #ensure(
     key: string,
@@ -7896,7 +8089,17 @@ export class Instance {
         this.#markUsers(key);
       }
     }
+    const slot = this.#slots.get(key);
+    if (slot !== undefined) slot.scoped = scoped;
     if (context.size === 0 || reference) {
+      if (!this.#scopedPulls.has(key)) {
+        // A key evaluated for before the entry existed has none of it.
+        const acting = new Set([scopes.keyOf("user"), scopes.keyOf("session")]);
+        for (const seen of this.#pullsSeen) {
+          if (!acting.has(seen)) this.#dueFor(seen).add(key);
+        }
+        if (slot?.always === true) this.#alwaysPulls.add(key);
+      }
       this.#scopedPulls.set(key, () => {
         this.#ensure(
           key,
@@ -7922,26 +8125,38 @@ export class Instance {
     const scopes = this.store.scopes!;
     const held = this.#memo.get(key);
     if (held?.scoped !== undefined && !scopes.acting(held.scoped)) {
+      const slot = this.#slots.get(key);
       if (
         held.members === undefined && held.rows === undefined &&
         !this.#tables.has(key)
-      ) scopes.setAside(name, held);
-      this.#memo.delete(key);
-      const slot = this.#slots.get(key);
-      if (slot !== undefined) {
+      ) {
+        scopes.setAside(name, held);
+        if (slot !== undefined) this.#toAside(slot, held);
+      } else if (slot !== undefined) {
+        // An assembly is formed again for each key.
         this.#unregister(slot);
         slot.marked = false;
         slot.all = false;
         slot.suspects.clear();
         slot.reads.clear();
+        slot.scoped = undefined;
       }
+      this.#memo.delete(key);
     }
     if (this.#memo.has(key) || scopes.narrowed(name) === undefined) return;
     const back = scopes.takeBack<Entry>(name);
     if (back === undefined) return;
     this.#memo.set(key, back);
+    const aside = this.#asideSlots.get(key)?.get(back.scoped!);
+    if (aside !== undefined) {
+      // The slot stayed registered while the entry was set aside: what
+      // changed since marked it.
+      this.#fromAside(aside);
+      return;
+    }
     const slot = this.#slot(key);
     if (!this.#register(slot, back)) this.#setAlways(slot);
+    slot.scoped = back.scoped;
     // No change marked the entry while it was set aside: everything it
     // read and used is compared.
     back.checkedAt = undefined;
@@ -7993,18 +8208,44 @@ export class Instance {
   /**
    * Brings the entries that were found to be of a scope key up to date
    * for the key that is evaluated for: nothing else demands the entry of
-   * a key where what holds it by reference is current.
+   * a key where what holds it by reference is current. For a key evaluated
+   * for before, those are the entries a change marked since, for that key
+   * or for the space (`#pullsDue`), and those compared on every pull; for
+   * a key not evaluated for before, every one. So a derivation for one key
+   * visits the places whose inputs changed for that key, and not every
+   * row's place of every key.
    */
   #pullScoped(): void {
     const { scopes } = this.store;
     if (scopes === undefined) return;
-    for (const [key, pull] of [...this.#scopedPulls]) {
+    const keys = [scopes.keyOf("user"), scopes.keyOf("session")];
+    // A key not evaluated for before has no entry of any pull; a key
+    // evaluated for before has those whose entry a change may have left
+    // not current, and those compared on every pull.
+    let pulls: string[];
+    if (keys.some((scoped) => !this.#pullsSeen.has(scoped))) {
+      for (const scoped of keys) this.#pullsSeen.add(scoped);
+      pulls = [...this.#scopedPulls.keys()];
+    } else {
+      pulls = [
+        ...new Set([
+          ...this.#dueFor(keys[0]),
+          ...this.#dueFor(keys[1]),
+          ...this.#alwaysPulls,
+        ]),
+      ];
+    }
+    for (const key of pulls) {
+      for (const scoped of keys) this.#pullsDue.get(scoped)?.delete(key);
+      const pull = this.#scopedPulls.get(key);
+      if (pull === undefined) continue;
       if (this.#kept.has(key)) {
         this.counts.scopedPulls += 1;
         pull();
       } else {
         this.#scopedPulls.delete(key);
-        scopes.forget(`${this.id}\n${key}`);
+        this.#alwaysPulls.delete(key);
+        this.#forgetAside(key);
       }
     }
   }
@@ -8056,14 +8297,17 @@ export class Instance {
   }
 
   /**
-   * The reference to the place of the value of the output `index` in the
-   * scope instance of the document of the scoped values
-   * (`#scopedValues`), where the cone `host` evaluates is another one and
-   * the value was evaluated for one scope key, and nothing where it is
-   * one for every key (P451). The cone then depends on the reference,
-   * which is the same for every scope key: it is of no scope key on its
-   * account, and a read of what the reference leads to is a read of the
-   * scope instance, which makes the reader one of that key.
+   * The reference to the place of the value of the output `index`, under
+   * the element keys its cone has in the context of `host`, where the cone
+   * `host` evaluates is another one and the value was evaluated for one
+   * scope key, and nothing where it is one for every key (P451, P454). The
+   * place is a document of its own for each output and element keys
+   * (`#valueDocument`), with an instance for each scope key that evaluated
+   * the value. The cone then depends on the reference, which is the same
+   * for every scope key: it is of no scope key on its account, and a read
+   * of what the reference leads to is a read of the scope instance, which
+   * makes the reader one of that key. A row of a per-element construct
+   * that places such a value so stays a row of the space.
    */
   scopedValue(index: number, host: Host): unknown {
     const output = this.plan.outputs[index];
@@ -8073,16 +8317,69 @@ export class Instance {
     const value = this.valueOfOutput.get(index);
     if (value === undefined || !this.#values.has(value)) return undefined;
     const scopes = this.store.scopes!;
-    const place = [`${index}`];
-    if (!this.#placeScopes.has(JSON.stringify(["values", ...place]))) {
+    const within = this.collectionsOf(output.cone);
+    const keys = this.#keysIn(within, host.context);
+    if (keys.includes("?")) return undefined;
+    if (!this.#placeScopes.has(JSON.stringify(["values", index, ...keys]))) {
       const probed = scopes.framed(() => this.evaluated(value)(host.context))
         .value;
       if (probed.scoped === undefined) return undefined;
     }
-    return host.depend(
-      this.#scopedPlace(place, (inner) => inner.value(value), true),
-      [],
+    return host.depend(this.#valuePlace(index, value, keys, within), []);
+  }
+
+  /**
+   * The entry that stores the value `value` of the output `index`, under
+   * the element keys `keys` of the collections `within`, in the scope
+   * instance of its document for the scope key evaluated for: its value is
+   * the reference to that place, which is the same for every key. The
+   * entry is kept under the element keys, so it is dropped with them.
+   */
+  #valuePlace(
+    index: number,
+    value: number,
+    keys: readonly string[],
+    within: readonly number[],
+  ): Lazy {
+    const text = JSON.stringify(["values", index, ...keys]);
+    const key = `scoped ${text}`;
+    return (context) =>
+      this.#ensureReference(key, context, undefined, "value", (inner) => {
+        const scopes = this.store.scopes!;
+        const held = this.stored(inner.whole(inner.value(value)));
+        const before = this.#placeScopes.get(text);
+        const touched = scopes.touched ?? "user";
+        const scope = before === "session" ? before : touched;
+        if (before !== scope) {
+          this.#placeScopes.set(text, scope);
+          // The place moved to the instances of a narrower scope: each
+          // key stores its value there.
+          this.#staleAside(key);
+        }
+        const doc = scopedDocument(this.#valueDocument(index, keys), scope);
+        this.#putScoped(doc, [], held);
+        return new Ref(doc, []);
+      }, within);
+  }
+
+  /**
+   * The name, without a scope, of the document whose scope instances hold
+   * the value of the output `index` under the element keys `keys`, where a
+   * cone of another value placed it and it was evaluated for one scope key
+   * (`scopedValue`): one document for each output and element keys, as
+   * today's runtime keeps the result of a node of a row that reads a cell
+   * of a scope in a cell of its own for the row.
+   */
+  #valueDocument(index: number, keys: readonly string[]): string {
+    const { cone } = this.plan.outputs[index];
+    const id = this.#identifier(
+      "scoped value",
+      this.plan.cones[cone].within,
+      keys,
+      { output: index },
     );
+    this.root.#scopedValuesOf.set(id, { instance: this, output: index, keys });
+    return id;
   }
 
   /**
@@ -8143,9 +8440,8 @@ export class Instance {
   #scopedPlace(
     path: readonly string[],
     valueOf: (host: Host) => unknown,
-    values = false,
   ): Lazy {
-    const text = JSON.stringify(values ? ["values", ...path] : path);
+    const text = JSON.stringify(path);
     const key = `scoped ${text}`;
     return (context) =>
       this.#ensureReference(key, context, undefined, "value", (inner) => {
@@ -8158,12 +8454,9 @@ export class Instance {
           this.#placeScopes.set(text, scope);
           // The place moved to the instances of a narrower scope: each
           // key stores its value there.
-          scopes.staleAside(`${this.id}\n${key}`);
+          this.#staleAside(key);
         }
-        const doc = scopedDocument(
-          values ? this.#scopedValues() : this.#scopedOutputs(),
-          scope,
-        );
+        const doc = scopedDocument(this.#scopedOutputs(), scope);
         this.#putScoped(doc, path, value);
         return new Ref(doc, [...path]);
       });
@@ -8200,34 +8493,32 @@ export class Instance {
   }
 
   /**
-   * On the root: the instance whose values of a scope each document of
-   * `#scopedValues()` holds, by the name of the document without its
-   * scope.
+   * On the root: the instance, the output and the element keys whose value
+   * each document of `#valueDocument()` holds, by the name of the document
+   * without its scope.
    */
-  readonly #scopedValuesOf = new Map<string, Instance>();
+  readonly #scopedValuesOf = new Map<
+    string,
+    { instance: Instance; output: number; keys: readonly string[] }
+  >();
 
   /**
-   * The name, without a scope, of the document whose scope instances hold
-   * the values of this instance that a cone of another value placed and
-   * that were evaluated for one scope key, each at the number of its
-   * output (`scopedValue`, P451).
+   * The records of a write to a scope instance of the document of a value
+   * of a scope key (`#valueDocument`): the value of the output at the
+   * root, under the record of that output for its element keys, and each
+   * interim output of the same cone below it, under its own.
    */
-  #scopedValues(): string {
-    const id = identifierOf({ parent: this.id, type: "scoped values" });
-    this.root.#scopedValuesOf.set(id, this);
-    return id;
-  }
-
-  /**
-   * The records of a write to a scope instance of the document of the
-   * scoped values: the value of an output at the number of the output,
-   * under the record of that output, and each interim output of the same
-   * cone below it, under its own.
-   */
-  #valueWrites(doc: string, path: readonly string[]): PlanWrite[] {
-    const index = Number(path[0]);
-    const output = this.plan.outputs[index];
+  #valueWrites(
+    doc: string,
+    path: readonly string[],
+    place: { output: number; keys: readonly string[] },
+  ): PlanWrite[] {
+    const output = this.plan.outputs[place.output];
     if (output === undefined) return [];
+    const keyed = this.collectionsOf(output.cone).map((
+      collection,
+      at,
+    ): [number, string] => [collection, place.keys[at]]);
     const found: { output: number; at: string[] }[] = [];
     this.plan.outputs.forEach((other, number) => {
       if (
@@ -8235,7 +8526,7 @@ export class Instance {
       ) {
         return;
       }
-      const at = [path[0], ...other.path];
+      const at = other.path;
       const covers = at.length <= path.length
         ? at.every((segment, position) => segment === path[position])
         : path.every((segment, position) => segment === at[position]);
@@ -8245,12 +8536,16 @@ export class Instance {
       }
       found.push({
         output: number,
-        at: at.length < path.length ? [...path] : at,
+        at: at.length < path.length ? [...path] : [...at],
       });
     });
     return found.map(({ output, at }) => {
-      const write = this.#outputRecord(doc, output, at);
-      this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
+      const write = this.#outputRecord(doc, output, at, keyed);
+      this.root.#noteRecord(
+        this.#recordKey(output, [doc, ...at]),
+        this.id,
+        write,
+      );
       return write;
     });
   }
@@ -8441,8 +8736,15 @@ export class Instance {
       }
     }
     const stored = canonical(this.stored(value));
-    const changed = held === undefined || held.pending === true ||
-      held.stored !== stored;
+    // An entry whose value is a reference made by its evaluation, which is
+    // the same for every scope key, evaluated for a key for the first time
+    // is no change where it holds what the entry of another key held.
+    const stamp = held === undefined && this.#references.has(key)
+      ? this.#referenceStamps.get(key)
+      : undefined;
+    const changed = stamp !== undefined
+      ? stamp.stored !== stored
+      : held === undefined || held.pending === true || held.stored !== stored;
     // What a cone demanded through its write target wrote before the
     // reads that followed is what those reads saw. A read made before it
     // that it wrote at is stale, and the entry is evaluated again.
@@ -8476,8 +8778,13 @@ export class Instance {
       writers: host.writers,
       ...(failure === undefined ? {} : { error: failure }),
       evaluatedAt: ownWrite ? this.store.clock : readAt,
-      changedAt: changed ? this.store.clock : held.changedAt,
+      changedAt: changed
+        ? this.store.clock
+        : held?.changedAt ?? stamp!.changedAt,
     };
+    if (this.#references.has(key)) {
+      this.#referenceStamps.set(key, { stored, changedAt: entry.changedAt });
+    }
     this.#memo.set(key, entry);
     this.#keep(key, cone, within, context);
     if (within.length > 0 && this.#listed?.has(within[0]) === true) {
@@ -8540,8 +8847,9 @@ export class Instance {
       slot.all = true;
       slot.serial += 1;
       this.#nowDue();
+      this.#pullDue(slot);
     }
-    if (changed) this.#markUsers(key);
+    if (changed) this.#markUsers(key, this.#scopedNow(key));
   }
 
   /**
@@ -8549,14 +8857,18 @@ export class Instance {
    * used it: nothing marks them when what the entry depends on changes.
    */
   #setAlways(slot: Slot): void {
-    const entry = this.#memo.get(slot.key);
+    const entry = slot.aside ?? this.#memo.get(slot.key);
     if (entry !== undefined) entry.always = true;
     if (slot.always) return;
     slot.always = true;
     this.#alwaysCount += 1;
+    if (this.#scopedPulls.has(slot.key)) this.#alwaysPulls.add(slot.key);
     for (const user of this.#users.get(slot.key) ?? []) {
       const other = this.#slots.get(user);
       if (other !== undefined) this.#setAlways(other);
+    }
+    for (const other of [...this.#asideUsers.get(slot.key) ?? []]) {
+      this.#setAlways(other);
     }
   }
 
@@ -8572,6 +8884,9 @@ export class Instance {
     for (const reader of readers) {
       const slot = this.#slots.get(reader);
       if (slot !== undefined) this.#mark(slot);
+      for (const aside of this.#asideSlots.get(reader)?.values() ?? []) {
+        this.#mark(aside);
+      }
     }
   }
 
@@ -8680,6 +8995,13 @@ export class Instance {
         this.#unregister(slot);
         if (slot.always) this.#alwaysCount -= 1;
         this.#slots.delete(entry);
+      }
+      this.#forgetAside(entry);
+      this.#scopedPulls.delete(entry);
+      this.#alwaysPulls.delete(entry);
+      this.#referenceStamps.delete(entry);
+      if (entry.startsWith("scoped ")) {
+        this.#placeScopes.delete(entry.slice("scoped ".length));
       }
       this.#markUsers(entry);
       this.#markUsers(tableName(entry));
@@ -10515,7 +10837,6 @@ export class Instance {
         throw new RangeError("a derivation transaction that does not end");
       }
       const before = this.store.clock;
-      this.#pullScoped();
       // A collection index of the pattern body is brought up to date
       // first: that marks what looked up a bucket that changed, which
       // depends on no other part of the index.
@@ -10556,6 +10877,9 @@ export class Instance {
       // Each marker in the value is stored as the link to its stream,
       // wherever it is: no position is checked (ruling Z43).
       this.#storeResult(entry);
+      // After the collections are brought up to date: an entry kept under
+      // an element key that left is dropped with it, and is not pulled.
+      this.#pullScoped();
       // The instances that function bodies of this one made.
       // An instance of which nothing is marked holds what it held.
       for (const child of this.#children) {
@@ -11401,7 +11725,7 @@ export class Instance {
       ? (key: string) => key === scoped
       : scoped;
     // The entry of another scope key than those named is set aside.
-    this.store.scopes?.staleAside(`${this.id}\n${key}`, of);
+    this.#staleAside(key, of);
     if (of !== undefined && entry?.scoped !== undefined && !of(entry.scoped)) {
       return;
     }
@@ -14250,7 +14574,9 @@ export class Instance {
     const valued = this.store.scopes === undefined
       ? undefined
       : this.#scopedValuesOf.get(scopeOfDocument(doc).base);
-    if (valued !== undefined) return valued.#valueWrites(doc, path);
+    if (valued !== undefined) {
+      return valued.instance.#valueWrites(doc, path, valued);
+    }
     const writing = this.#writing;
     if (writing === undefined) return [];
     const keys = writing.instance.contextKeys(writing.host.context);
@@ -14852,8 +15178,17 @@ export class Instance {
     return none(index);
   }
 
-  /** The record of the output `output` of this instance at the path `at`. */
-  #outputRecord(doc: string, output: number, at: string[]): PlanWrite {
+  /**
+   * The record of the output `output` of this instance at the path `at`:
+   * of the cone instance of the element keys along the path, or of
+   * `keysOfPlace` where the document holds the value of those keys alone.
+   */
+  #outputRecord(
+    doc: string,
+    output: number,
+    at: string[],
+    keysOfPlace?: readonly [number, string][],
+  ): PlanWrite {
     const record = this.plan.outputs[output];
     // The path the output is stored at, which for the entry of an element
     // is below the kept output that holds the collection.
@@ -14865,7 +15200,9 @@ export class Instance {
     const stars = (stored?.path ?? record.path).flatMap((segment, index) =>
       segment === "*" ? [index] : []
     );
-    const pairs = this.#keysAlong(at, stars);
+    const pairs = keysOfPlace === undefined
+      ? this.#keysAlong(at, stars)
+      : [...keysOfPlace];
     const ownKeys = this.#keysFor(record.cone, pairs);
     const inputs = this.#inputsOf(record.cone, ownKeys);
     const result = this.#inputs.get(RESULT_INPUTS);
@@ -15743,10 +16080,9 @@ export class Instance {
       // that is no longer current.
       const { scopes } = store;
       const held = instance.#memo.get(key);
-      scopes?.staleAside(
-        `${instance.id}\n${key}`,
-        (scoped) => scopes.acting(scoped),
-      );
+      if (scopes !== undefined) {
+        instance.#staleAside(key, (scoped) => scopes.acting(scoped));
+      }
       if (
         scopes === undefined || held?.scoped === undefined ||
         scopes.acting(held.scoped)
@@ -15768,14 +16104,15 @@ export class Instance {
         }
       }
     }
+    // What stored a value in the scope instance of the document of that
+    // value alone stores it again, for the key the refused commit was of.
     const valued = scope === undefined
       ? undefined
       : root.#scopedValuesOf.get(base);
     if (valued !== undefined && store.scopes !== undefined) {
-      for (const text of valued.#placeScopes.keys()) {
-        for (const each of ["user", "session"] as const) {
-          valued.markStale(`scoped ${text}`, store.scopes.keyOf(each));
-        }
+      const text = JSON.stringify(["values", valued.output, ...valued.keys]);
+      for (const each of ["user", "session"] as const) {
+        valued.instance.markStale(`scoped ${text}`, store.scopes.keyOf(each));
       }
     }
     if (owner === undefined) {

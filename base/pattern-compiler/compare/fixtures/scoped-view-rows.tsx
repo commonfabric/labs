@@ -33,11 +33,11 @@ interface Output {
   call: Stream<{ name: string }>;
 }
 
-// `scoped-view.tsx` with the value of the scope `user` read in the body of
-// the `map` over an array of references as well: each row says whether the
-// acting user has a nickname, so the rows are of the scope `user`.
+// `scoped-view.tsx` with the value of the scope `session` read in the body
+// of the `map` over an array of references as well: each row says whether
+// the acting session has a nickname.
 export default pattern<{ items: Writable<Item[]> }, Output>(({ items }) => {
-  const nickname = new Writable.perUser<string>("");
+  const nickname = new Writable.perSession<string>("");
   const named = computed(() => nickname.get().length > 0);
   return {
     [UI]: (

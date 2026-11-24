@@ -58,6 +58,21 @@ export const scopeOfDocument = (
 export const scopeOfKey = (key: string): Scope =>
   key.startsWith("session:") ? "session" : "user";
 
+/**
+ * Whether a change of something of the scope key `changed` can change what
+ * an entry of the scope key `reader` was evaluated from: where either is of
+ * no key (the space), where the two are one key, and where `changed` is a
+ * principal's key of the scope `user` and `reader` a session of that
+ * principal, which reads the principal's instances.
+ */
+export const scopeKeyReaches = (
+  changed: string | undefined,
+  reader: string | undefined,
+): boolean =>
+  changed === undefined || reader === undefined || changed === reader ||
+  (changed.startsWith("user:") &&
+    reader.startsWith(`session:${changed.slice("user:".length)}:`));
+
 /** What `ScopeInstances` takes. */
 export type ScopeInstancesOptions = {
   /**
