@@ -32,7 +32,7 @@ function nameOffsetOf(doc: Document, name: string): number {
 }
 
 //
-// createSemantics: lazy build, prewarm, and degrade-to-null paths
+// createSemantics: lazy build and degrade-to-null paths
 //
 
 Deno.test("semantics: createSemantics returns a service for a single-section blob", () => {
@@ -44,20 +44,6 @@ Deno.test("semantics: createSemantics returns a service for a single-section blo
   const sem = createSemantics(blob, { cwd: CWD });
   assert(sem, "single-section blob still yields a service");
   assertEquals(sem!.typeAt(nameOffsetOf(doc, "s")), "number");
-});
-
-Deno.test("semantics: prewarm builds the program off the query path", () => {
-  // prewarm() runs build() ahead of the first real query; a subsequent type
-  // query then reuses the cached program and still answers.
-
-  const blob = `// transformed: /m.ts
-const value: string = "x";
-const echo = value;`;
-  const doc = parseDocument(blob);
-  const sem = createSemantics(blob, { cwd: CWD })!;
-  sem.prewarm();
-  sem.prewarm(); // idempotent: the cached program short-circuits build()
-  assertEquals(sem.typeAt(nameOffsetOf(doc, "echo")), "string");
 });
 
 Deno.test("semantics: a failed build latches, so later queries stay silent", () => {
@@ -297,8 +283,8 @@ Deno.test("semantics: classifies a resolved .tsx import (extensionOf Tsx)", () =
 import { comp } from "comp";
 const v = comp;`;
     const sem = createSemantics(blob, { cwd: root })!;
-    sem.prewarm();
     // The classification ran during module resolution without throwing.
+    sem.typeAt(blob.indexOf("comp;"));
     assertEquals(sem.typeAt(10_000_000), null);
   } finally {
     Deno.removeSync(root, { recursive: true });
@@ -344,9 +330,8 @@ Deno.test("semantics: classifies a resolved .json import (extensionOf Json)", ()
 import data from "data";
 const v = data;`;
     const sem = createSemantics(blob, { cwd: root })!;
-    sem.prewarm();
     // The point is that resolution + classification did not throw.
-    assert(sem, "service stays usable with a .json import resolved");
+    assertEquals(sem.typeAt(blob.indexOf("data;")), "{ value: number; }");
   } finally {
     Deno.removeSync(root, { recursive: true });
   }
@@ -377,8 +362,7 @@ const b = fromJs;`;
     const sem = createSemantics(blob, { cwd: root })!;
     // The .jsx and .js classifications ran during module resolution; the
     // service stays usable and queries do not throw.
-    sem.prewarm();
-    assertEquals(sem.typeAt(10_000_000), null);
+    assertEquals(sem.typeAt(blob.indexOf("fromJs;")), "2");
   } finally {
     Deno.removeSync(root, { recursive: true });
   }
@@ -610,16 +594,15 @@ Deno.test("diff semantics: a diff file read in another language types to null", 
   }
 });
 
-Deno.test("diff semantics: prewarm warms the diff program off the query path", () => {
+Deno.test("diff semantics: a definition on a line the diff shows maps back into the diff", () => {
   const { root, ws, done } = tempDiffRoot();
   try {
     const model = parseDiff(DIFF)!;
-    const { doc, maps } = buildDiffDocument(DIFF, model, ws);
+    const { maps } = buildDiffDocument(DIFF, model, ws);
     const sem = createDiffSemantics(DIFF, maps, { cwd: root })!;
-    sem.prewarm();
-    sem.prewarm(); // cached program short-circuits build()
-    const answer = doc.flatStructure.find((n) => n.name === "answer")!;
-    assertEquals(sem.typeAt(answer.nameOffset!), "number");
+    const [definition] = sem.definitionOf(DIFF.indexOf("double(21)"));
+    assertEquals(definition?.name, "double");
+    assertEquals(definition?.blobOffset, DIFF.indexOf("double(n: number)"));
   } finally {
     done();
   }
@@ -800,8 +783,8 @@ function throwingMaps(
 }
 
 Deno.test("diff semantics: typeAt swallows a throw from the offset map", () => {
-  // build() succeeds (real root files), then maps.toFile throws inside typeAt's
-  // try — the catch returns null rather than propagating.
+  // maps.toFile throws inside typeAt's try; the catch returns null rather
+  // than propagating.
 
   const { root, ws, done } = tempDiffRoot();
   try {
@@ -812,7 +795,6 @@ Deno.test("diff semantics: typeAt swallows a throw from the offset map", () => {
       throwingMaps(maps, { toFileThrows: true }),
       { cwd: root },
     )!;
-    sem.prewarm(); // build the program first, so the throw is post-build
     assertEquals(sem.typeAt(DIFF.indexOf("double(21)")), null);
   } finally {
     done();
@@ -902,7 +884,6 @@ Deno.test("diff semantics: fileLines rejects a path outside the workspace", () =
 Deno.test("semantics: SAMPLE blob types a pattern binding from a real subdir", () => {
   const doc = parseDocument(SAMPLE);
   const sem = createSemantics(SAMPLE, { cwd: join(CWD, "lib", "view") })!;
-  sem.prewarm();
   const t = sem.typeAt(nameOffsetOf(doc, "myPattern"));
   assert(t !== null, "commonfabric-derived type resolves from a subdir");
   assert(!t!.includes("import("), `no import-path prefix: ${t}`);

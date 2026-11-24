@@ -124,9 +124,14 @@ export interface Semantics {
    * show a definition that lives outside the document. Null when unreadable. */
   fileLines(filePath: string): readonly Line[] | null;
 
-  /** Build the backing program now (off the interactive path), so the first
-   * real query does not pay the one-time cost. Safe to call repeatedly. */
+  /** Start building the backing program in a worker, so that the calling
+   * thread stays free while it builds and the first real query does not pay
+   * the one-time cost. Safe to call repeatedly. */
   prewarm(): void;
+
+  /** End any worker {@link prewarm} started. Queries still answer afterwards,
+   * building the program on the calling thread, and `prewarm` does nothing. */
+  dispose(): void;
 }
 
 /** Options a language needs to build its semantic layer. */

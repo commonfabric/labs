@@ -1136,10 +1136,10 @@ export async function runPager(
     );
     draw();
     if (parses.length > 0) startParses();
-    // Warm the TypeScript program after the first frame is on screen, while the
-    // user is reading it and before any keypress arrives, so the first info card
-    // does not pay the one-time build cost on the interactive path.
-    if (semantics) deps.setTimer(() => semantics.prewarm(), 0);
+    // Start building the TypeScript program in a worker once the first frame
+    // is on screen, so that keys are answered while it builds and the first
+    // info card does not pay the one-time build cost.
+    semantics?.prewarm();
     while (!session.quit) {
       // A read that quitting interrupts is left unfinished, for the viewer is
       // closing.
@@ -1201,6 +1201,7 @@ export async function runPager(
       if (session.needsReparse) scheduleReparse();
     }
   } finally {
+    semantics?.dispose();
     stopParserListener();
     stopReveal();
     stopExpiry();

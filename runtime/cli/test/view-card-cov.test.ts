@@ -484,6 +484,7 @@ function fakeSemantics(
       typeof defs === "function" ? defs(offset) : defs,
     fileLines: () => null,
     prewarm: () => {},
+    dispose: () => {},
   };
 }
 

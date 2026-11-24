@@ -99,14 +99,15 @@ Deno.test("semantics: an un-discoverable config falls back to an empty import ma
 
 Deno.test("semantics: a build failure latches and every later query stays silent", () => {
   // The bad cwd makes the compiler host throw inside build(); the catch sets
-  // `failed = true`. prewarm() (the first build attempt) latches it; the
-  // following typeAt/definitionOf/fileLines calls hit the `if (failed)` short
-  // circuit and the `if (!prog)` guard, all returning their empty answers.
+  // `failed = true`. The first typeAt latches it; the following
+  // typeAt/definitionOf/fileLines calls hit the `if (failed)` short circuit
+  // and the `if (!prog)` guard, all returning their empty answers.
   const blob = `// transformed: /m.ts\nconst x = 1;\nconst y = x;`;
   const doc = parseDocument(blob);
   const sem = createSemantics(blob, { cwd: cwdThatThrows() })!;
-  sem.prewarm(); // first build(): host throws, failed latches
-  // Second build() (via typeAt) returns undefined immediately through `failed`.
+  // First build(): host throws, failed latches.
+  assertEquals(sem.typeAt(nameOffsetOf(doc, "x")), null);
+  // Second build() returns undefined immediately through `failed`.
   assertEquals(sem.typeAt(nameOffsetOf(doc, "y")), null);
   assertEquals(sem.definitionOf(nameOffsetOf(doc, "y")), []);
   // fileLines does not depend on the program, but the bad root still rejects
@@ -119,11 +120,10 @@ Deno.test("semantics: a build failure latches and every later query stays silent
 //
 
 Deno.test("semantics: typeAt swallows a throw raised while locating the section", () => {
-  // The program builds; then an offset that throws on numeric coercion makes
-  // `sectionAt` throw inside typeAt's try. The catch returns null.
+  // An offset that throws on numeric coercion makes `sectionAt` throw inside
+  // typeAt's try. The catch returns null.
   const blob = `// transformed: /m.ts\nconst x: number = 1;\nconst y = x;`;
   const sem = createSemantics(blob, { cwd: CWD })!;
-  sem.prewarm(); // build succeeds, so the throw is post-build inside the query
   assertEquals(sem.typeAt(offsetThatThrows()), null);
 });
 
@@ -132,7 +132,6 @@ Deno.test("semantics: definitionOf swallows a throw and caches the empty result"
   // the catch resets `out` to [], and the empty array is memoized.
   const blob = `// transformed: /m.ts\nconst x: number = 1;\nconst y = x;`;
   const sem = createSemantics(blob, { cwd: CWD })!;
-  sem.prewarm();
   const bad = offsetThatThrows();
   const first = sem.definitionOf(bad);
   assertEquals(first, [], "a throw during resolution yields an empty list");
