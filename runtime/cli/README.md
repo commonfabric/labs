@@ -3750,11 +3750,12 @@ required input and no default is a part whatever was asked, and the command
 names that input. Sharing then shares that version on **beta**: once the index's
 check passes it becomes the lineage's next numbered shared version (1, 2, 3…),
 which anyone with its link can open, and nobody finds in search or a listing.
-Past the index's daily limit it says when the limit resets, and running the same
-command then shares it again. The next step it prints is deploying the pattern
-with `cf piece new --from-index <id>`, or opening it in a loom with
-`/deploy index:<id>`. Once stable, a listed pattern moves from Unvetted to Main
-once its author opens it in a loom.
+Source unchanged since the version already shared makes no new version, and the
+command says `Already shared`. Past the index's daily limit it says when the
+limit resets, and running the same command then shares it again. The next step
+it prints is deploying the pattern with `cf piece new --from-index <id>`, or
+opening it in a loom with `/deploy index:<id>`. Once stable, a listed pattern
+moves from Unvetted to Main once its author opens it in a loom.
 
 `cf pattern stable <entry>` makes the newest shared version **stable**: what
 search, listings and a plain link give. It passed the check when it was shared,
