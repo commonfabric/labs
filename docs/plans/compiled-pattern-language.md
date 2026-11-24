@@ -6663,12 +6663,19 @@ is relitigated.
   not by a run. The boundary of the ruling: the path writes version-2
   envelopes, which a runtime from before version 2 refuses with
   `UnknownCfcMetadataVersionError`. The owner ruled the same day that this
-  is accepted: "don't worry about backwards compatibility". A runtime with
-  `compiledPatterns` on writes what a compiled piece commits through the
-  path, with no gate per space; an older runtime cannot read those
-  documents. The build spends no work on compatibility with older runtimes
-  or with data that earlier builds of the compiled path stored. Being built
-  on the branch `merge-attempt/serving-m6`.
+  is accepted: "don't worry about backwards compatibility". Built as P452
+  on the branch `merge-attempt/serving-m6`: the envelope version is a
+  setting of a transaction (`setCfcContentAddressedLabels`), and every
+  transaction of a compiled piece sets it, whether the runtime hands the
+  piece the transaction or the piece opens it. The runtime-wide option
+  `cfcContentAddressedLabels` keeps its default and governs today's path
+  alone, so turning `compiledPatterns` on is what makes a compiled piece
+  write version-2 envelopes. There is no gate per space and no safeguard
+  that keeps version-1 envelopes while an older runtime reads the space:
+  such a runtime cannot read what a compiled piece wrote, by the owner's
+  decision, and the registry entry of the option on that branch says so.
+  Version-1 envelopes that an earlier build of the compiled path stored are
+  rewritten at their next commit, and nothing else is done for them.
 
 ## Provisional decisions awaiting the owner's ratification
 
