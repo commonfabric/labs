@@ -8,8 +8,11 @@
  * `deno run -A --no-check base/pattern-compiler/compare/scope-cost.ts [rows] [users]`
  *
  * Each of `rows` and `users` is a list of sizes separated by commas. For
- * each pair the run prints one line of JSON per step, with the time and
- * the evaluations of the step summed over the principals:
+ * each pair the run prints one line of JSON per step, with the time, the
+ * evaluations and the entries of a scope key brought up to date because
+ * nothing else demands them (`scopedPulls`) of the step summed over the
+ * principals, and the scope instances the store holds after it, with their
+ * size as JSON:
  *
  * - `start`: the instance is derived once for each principal.
  * - `again`: it is derived once more for each, with nothing changed.
@@ -50,11 +53,25 @@ for (const rows of rowSizes.split(",").map(Number)) {
     );
     const stream = (name: string) =>
       instance.streams().find(({ path }) => path.join("/") === name)!.binding;
+    /** The scope instances the store holds, and their size as JSON. */
+    const scopeInstances = () => {
+      const held = [...instance.store.docs].filter(([, { kind }]) =>
+        kind === "scope instance"
+      );
+      return {
+        scopeInstances: held.length,
+        scopeInstanceBytes: held.reduce(
+          (sum, [, { value }]) => sum + (JSON.stringify(value) ?? "").length,
+          0,
+        ),
+      };
+    };
     /** Derives for each principal, and prints what that took. */
     const step = (name: string, before?: () => void) => {
       const evaluations = instance.counts.evaluations;
       const elements = instance.counts.elementEvaluations;
       const assemblies = instance.counts.assemblies;
+      const pulls = instance.counts.scopedPulls;
       const began = performance.now();
       before?.();
       for (let user = 0; user < users; user++) {
@@ -69,8 +86,10 @@ for (const rows of rowSizes.split(",").map(Number)) {
         evaluations: instance.counts.evaluations - evaluations,
         elementEvaluations: instance.counts.elementEvaluations - elements,
         assemblies: instance.counts.assemblies - assemblies,
+        scopedPulls: instance.counts.scopedPulls - pulls,
         setAside: instance.store.scopes?.asideCount ?? 0,
         documents: instance.store.docs.size,
+        ...scopeInstances(),
       }));
     };
     step("start");

@@ -291,6 +291,7 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
   // and has no claim of whose it is.
   // What the commits of the runtime changed: the documents, each counted
   // once for a commit, and the size of each as JSON after the commit.
+  let startedPiece: CompiledPiece | undefined;
   const changedByCommits = { documents: 0, bytes: 0 };
   runtime.storageManager.subscribe({
     // deno-lint-ignore no-explicit-any
@@ -306,11 +307,41 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         ).length;
         changedByCommits.documents += 1;
         changedByCommits.bytes += bytes;
-        changesListed?.push([`${address.id} ${address.scope}`, bytes]);
+        changesListed?.push([
+          `${address.id} ${address.scope} ${describedDocument(address.id)} ${
+            shapeOf(after)
+          }`,
+          bytes,
+        ]);
       }
       return undefined;
     },
   });
+  /**
+   * What the executor holds of the document of an entity, for the list of
+   * `SCALE_CHANGES`: its kind, or that it is none of the executor's, as a
+   * list document or a label document of the adapter is not.
+   */
+  const describedDocument = (entity: string): string => {
+    if (startedPiece === undefined) return "";
+    const doc = startedPiece.transactions.documentOf(entity);
+    return startedPiece.instance.store.docs.get(doc)?.kind ??
+      "not the executor's";
+  };
+  /**
+   * The shape of a stored document, for the list of `SCALE_CHANGES`: the
+   * members of its value, or the length of an array, with the size of the
+   * largest member.
+   */
+  const shapeOf = (after: unknown): string => {
+    const value = (after as { value?: unknown } | undefined)?.value;
+    if (Array.isArray(value)) return `[${value.length}]`;
+    if (typeof value !== "object" || value === null) return typeof value;
+    const sizes = Object.entries(value).map(([name, member]) =>
+      [name, (JSON.stringify(member) ?? "").length] as const
+    ).sort(([, a], [, b]) => b - a);
+    return `{${sizes.slice(0, 3).map(([name, size]) => `${name}:${size}`)}}`;
+  };
   const seeded = runtime.edit();
   const profile = runtime.getCell(space, "profile", undefined, seeded);
   profile.set(structuredClone(PROFILE) as never);
@@ -368,6 +399,7 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
     await server.close();
     throw error;
   }
+  startedPiece = piece;
   runtime.prepareTxForCommit(tx);
   const { error } = await tx.commit().settled;
   await runtime.scheduler.idleWithPendingCommits();
