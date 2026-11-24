@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import {
@@ -27,6 +28,56 @@ describe("semantics", () => {
       expect(program.typeAt("/m.ts", OFFSET_THAT_THROWS)).toBeNull();
       expect(program.definitionsAt("/m.ts", OFFSET_THAT_THROWS)).toEqual([]);
       expect(program.typeAt("/m.ts", TEXT.indexOf("y"))).toBe("number");
+    });
+
+    it("returns what the file a query names and its imports declare, whichever file was asked about before", () => {
+      // `user.ts` imports `dep.ts`, and reads a global that `declares.ts`
+      // declares without importing it.
+
+      const dir = Deno.makeTempDirSync();
+      try {
+        const user = join(dir, "user.ts");
+        const dep = join(dir, "dep.ts");
+        const declares = join(dir, "declares.ts");
+        const other = join(dir, "other.ts");
+        const userText = 'import { dep } from "./dep.ts";\n' +
+          "const a = dep;\nconst b = fromDeclares;\n";
+        const declaresText = "declare const fromDeclares: 1;\n" +
+          "const c = fromDeclares;\n";
+        Deno.writeTextFileSync(user, userText);
+        Deno.writeTextFileSync(dep, "export const dep: 3 = 3;\n");
+        Deno.writeTextFileSync(declares, declaresText);
+        Deno.writeTextFileSync(other, "const d = 4;\n");
+        const program = localProgram({
+          ...SPEC,
+          sections: [],
+          cwd: dir,
+          root: dir,
+          realRoots: [user, declares],
+        });
+        const atDep = userText.indexOf("dep;");
+        const atGlobal = userText.indexOf("fromDeclares");
+        const depDefinition = [{
+          name: "dep",
+          fileName: dep,
+          textSpan: { start: "export const ".length, length: 3 },
+        }];
+
+        expect(program.typeAt(user, atDep)).toBe("3");
+        expect(program.definitionsAt(user, atDep)).toEqual(depDefinition);
+        expect(program.typeAt(user, atGlobal)).toBeNull();
+        expect(program.definitionsAt(user, atGlobal)).toEqual([]);
+        expect(program.typeAt(declares, declaresText.lastIndexOf("from")))
+          .toBe("1");
+        expect(program.typeAt(user, atGlobal)).toBeNull();
+        expect(program.definitionsAt(user, atGlobal)).toEqual([]);
+        expect(program.definitionsAt(user, atDep)).toEqual(depDefinition);
+
+        // A file the spec does not name is never a root.
+        expect(program.typeAt(other, "const ".length)).toBeNull();
+      } finally {
+        Deno.removeSync(dir, { recursive: true });
+      }
     });
   });
 

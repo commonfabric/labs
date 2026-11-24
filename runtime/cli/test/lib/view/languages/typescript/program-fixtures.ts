@@ -19,7 +19,7 @@ export const SPEC: ProgramSpec = {
   libDir: undefined,
   cwd: Deno.cwd(),
   root: Deno.cwd(),
-  extraRoots: [],
+  realRoots: [],
 };
 
 /** Where the `x` that `y` reads is defined. */
