@@ -206,25 +206,52 @@ function argumentValue(info: PieceInfo): unknown {
 interface AnnotatedLink {
   id: string;
   path?: string[];
+  space?: string;
+  scope?: string;
 }
 
 /** How many links in a row {@link aliasTarget} follows to reach a value. */
 const ALIAS_HOPS = 16;
 
-/** The link `value` is, as `annotate` renders one, or `undefined`. */
-function annotatedLinkOf(value: unknown): AnnotatedLink | undefined {
+/**
+ * The link `value` is, as `annotate` renders one, or `undefined`. `where`
+ * names the value in the error thrown for a link this export cannot follow.
+ *
+ * Every read here is of the snapshot's own space, by id, at the space scope,
+ * so a link into another space or into a user's or a session's instance
+ * would read some other document than the one it names. Such a link is
+ * refused rather than followed, as is any link naming a space when the
+ * snapshot's file name carries no space DID to compare it with.
+ */
+function annotatedLinkOf(
+  value: unknown,
+  where: string,
+): AnnotatedLink | undefined {
   const link = (value as { $link?: Partial<AnnotatedLink> } | null)?.$link;
-  return typeof link?.id === "string"
-    ? { id: link.id, ...(link.path ? { path: link.path } : {}) }
-    : undefined;
+  if (typeof link?.id !== "string") return undefined;
+  if (link.space !== undefined && link.space !== spaceDid) {
+    throw new Error(
+      `${where} links into ${link.space}, and this export reads only ` +
+        (spaceDid === null
+          ? "the snapshot's space, whose file name names no space DID"
+          : spaceDid),
+    );
+  }
+  if (link.scope !== undefined && link.scope !== "space") {
+    throw new Error(
+      `${where} links into the ${link.scope} scope, and this export reads ` +
+        "only the space scope",
+    );
+  }
+  return { id: link.id, ...(link.path ? { path: link.path } : {}) };
 }
 
 /**
  * The value `start` reaches: its target document's value at its path,
  * following a link met on the way or at the end, up to {@link ALIAS_HOPS}
- * links in a row.
+ * links in a row. `where` names the field the alias is in.
  */
-function aliasTarget(start: AnnotatedLink): unknown {
+function aliasTarget(start: AnnotatedLink, where: string): unknown {
   let link = start;
   for (let hop = 0; hop < ALIAS_HOPS; hop++) {
     const at = getValueAt(space, { id: link.id });
@@ -233,7 +260,7 @@ function aliasTarget(start: AnnotatedLink): unknown {
     const path = link.path ?? [];
     let next: AnnotatedLink | undefined;
     for (let step = 0; step < path.length && next === undefined; step++) {
-      const met = annotatedLinkOf(value);
+      const met = annotatedLinkOf(value, where);
       if (met !== undefined) {
         next = { id: met.id, path: [...(met.path ?? []), ...path.slice(step)] };
       } else {
@@ -242,7 +269,7 @@ function aliasTarget(start: AnnotatedLink): unknown {
           : undefined;
       }
     }
-    next ??= annotatedLinkOf(value);
+    next ??= annotatedLinkOf(value, where);
     if (next === undefined) return value;
     link = next;
   }
@@ -255,10 +282,12 @@ function aliasTarget(start: AnnotatedLink): unknown {
  * how the store records a write that set it to another record's field, so
  * the value is the content. Only the record's own fields are resolved; a link
  * deeper in it, or one inside the value a field reaches, is left for the
- * caller's refusal.
+ * caller's refusal. `topicFid` names the topic in the error thrown for a link
+ * {@link annotatedLinkOf} refuses.
  */
 function resolveAliases(
   record: unknown,
+  topicFid: string,
   prefix: string,
   aliased: string[],
 ): unknown {
@@ -267,11 +296,12 @@ function resolveAliases(
   }
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    const link = annotatedLinkOf(value);
+    const where = `${topicFid} ${prefix}.${key}`;
+    const link = annotatedLinkOf(value, where);
     if (link === undefined) {
       out[key] = value;
     } else {
-      out[key] = aliasTarget(link);
+      out[key] = aliasTarget(link, where);
       aliased.push(`${prefix}.${key}`);
     }
   }
@@ -285,11 +315,12 @@ function resolveElement(
   element: unknown,
   aliased: string[],
 ): unknown {
-  const link = (element as { $link?: { id?: string } })?.$link;
+  const link = annotatedLinkOf(element, `${topicFid} ${field}[${index}]`);
   const resolved = resolveAliases(
-    link?.id
+    link !== undefined
       ? annotateFully(getValueAt(space, { id: link.id }).value)
       : element,
+    topicFid,
     `${field}[${index}]`,
     aliased,
   );
