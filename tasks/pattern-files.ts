@@ -11,6 +11,7 @@
 import { fromFileUrl } from "@std/path/from-file-url";
 import { join } from "@std/path/join";
 import { relative } from "@std/path/relative";
+import { currentPatternKey } from "@commonfabric/runner";
 import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
 
 /** The repository root, absolute, whatever directory a task was started in. */
@@ -268,17 +269,24 @@ export async function collectBaselineKeys(
  * A gone pattern is judged like any other, by whichever run is given its path,
  * so no run has to ask about the tree as a whole. The gate and the lanes that
  * divide it both build their lists here, so the two agree.
+ *
+ * A pattern that moved is not gone: its baselines stay under the keys it had,
+ * and are judged with it under the key it has now (`currentKey`, the runtime's
+ * table of moves by default). An accepted break names the key a pattern has
+ * now, so one naming a key the pattern moved from is reported as orphaned.
  */
 export async function collectCompatibilityPaths(
   files: readonly string[],
   baselinesDir: string,
   acceptedBreakPatterns: readonly string[],
+  currentKey: (key: string) => string = currentPatternKey,
 ): Promise<string[]> {
   const present = new Set(files.map((file) => patternKey(file)));
-  const recorded = new Set([
-    ...await collectBaselineKeys(baselinesDir),
-    ...acceptedBreakPatterns,
+  const gone = new Set([
+    ...(await collectBaselineKeys(baselinesDir)).filter((key) =>
+      !present.has(currentKey(key))
+    ),
+    ...acceptedBreakPatterns.filter((key) => !present.has(key)),
   ]);
-  const gone = [...recorded].filter((key) => !present.has(key));
-  return [...files, ...gone.map((key) => patternPath(key))];
+  return [...files, ...[...gone].map((key) => patternPath(key))];
 }

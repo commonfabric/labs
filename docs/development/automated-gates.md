@@ -153,7 +153,10 @@ Each of these gates fails CI on its own, and none of them run as part of
   rather than through `resolveLocalProgram`, which silently drops any data files
   the caller attached
 - `deno task check-baselines-append-only` — a pattern baseline that was deleted
-  rather than added to
+  rather than added to. Moving a baseline counts as deleting it, so a pattern
+  that moves leaves its baselines where they are: its move goes in
+  `runtime/runner/src/pattern-key-moves.ts`, and `deno task pattern-compat`
+  reads them under every key the pattern had
 - `deno task check-cause-assignments` — a change to how patterns are built
   that moves an anonymous cell of an in-tree pattern to a new
   `{ $generated: N }` number while the pattern's source stays the same. The runtime mints such a cell's id from

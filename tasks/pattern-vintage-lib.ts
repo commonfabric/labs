@@ -22,7 +22,7 @@ import { readOnlyArguments } from "./only-arguments.ts";
 
 import {
   currentPatternKey,
-  formerPatternKey,
+  formerPatternKeys,
   isStoredArgumentSchemaRefusal,
   resolveSystemPatternSource,
   type RuntimeProgram,
@@ -280,10 +280,13 @@ export function programAsRecorded(
   ) {
     return program;
   }
+  // A vintage recorded under `packages/` predates every move, so a module is
+  // renamed to the first key its pattern had.
+  const firstKey = (key: string) => formerPatternKeys(key).at(-1) ?? key;
   const rename = (name: string) =>
     name.startsWith(patternsPrefix)
       ? RECORDED_PATTERNS_PREFIX +
-        formerPatternKey(name.slice(patternsPrefix.length))
+        firstKey(name.slice(patternsPrefix.length))
       : name;
   // A relative specifier names a module by its position relative to the
   // importing module. When the move changed that relative position, the

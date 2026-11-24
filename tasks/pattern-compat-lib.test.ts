@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import type { JSONSchema } from "@commonfabric/runner";
+import { type JSONSchema, patternKeyMovesIn } from "@commonfabric/runner";
 import {
   acceptedBreakKey,
   type Baseline,
@@ -487,6 +487,40 @@ describe("baseline store", () => {
         "patterns/system/gone.tsx",
         "patterns/system/removed.tsx",
       ]);
+    });
+  });
+
+  it("reads a moved pattern's baselines under every key it had, and lists it once", async () => {
+    await withTree(async ({ baselines }) => {
+      // `a.tsx` moved to `apps/a/a.tsx`, then to `apps/a/main.tsx`, and its
+      // baselines stayed where each was recorded.
+      const moves = patternKeyMovesIn({
+        "a.tsx": "apps/a/a.tsx",
+        "apps/a/a.tsx": "apps/a/main.tsx",
+      });
+      for (
+        const [key, at] of [
+          ["a.tsx", "2026-01-01T00:00:00Z"],
+          ["apps/a/a.tsx", "2026-02-01T00:00:00Z"],
+          ["apps/a/main.tsx", "2026-03-01T00:00:00Z"],
+        ]
+      ) {
+        await writeBaseline(baselines, key, contractOf(), new Date(at));
+      }
+
+      const labels =
+        (await readBaselines(baselines, "apps/a/main.tsx", moves.formers))
+          .map((baseline) => baseline.label.slice(0, 8));
+      const files = ["patterns/apps/a/main.tsx"];
+      const paths = await collectCompatibilityPaths(
+        files,
+        baselines,
+        [],
+        moves.current,
+      );
+
+      expect(labels).toEqual(["20260101", "20260201", "20260301"]);
+      expect(paths).toEqual(["patterns/apps/a/main.tsx"]);
     });
   });
 

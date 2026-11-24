@@ -20,7 +20,11 @@
  * files it read off disk.
  */
 
-import type { JSONSchema, Pattern } from "@commonfabric/runner";
+import {
+  formerPatternKeys,
+  type JSONSchema,
+  type Pattern,
+} from "@commonfabric/runner";
 import { validateSchemaDefinition } from "@commonfabric/runner/cfc";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
@@ -279,8 +283,31 @@ export function checkPattern(
 // than only against the real `patterns` layout.
 //
 
-/** Read every recorded contract for a pattern. Absent directory → none. */
+/**
+ * Read every recorded contract for a pattern: those recorded under `key`, and
+ * those recorded under each key it had before it moved (`formerKeys`, the
+ * runtime's table of moves by default), since a piece made at an old key rolls
+ * forward to the new one. A baseline is never moved, so a pattern's move
+ * deletes none. Absent directories → none.
+ */
 export async function readBaselines(
+  baselinesDir: string,
+  key: string,
+  formerKeys: (key: string) => readonly string[] = formerPatternKeys,
+): Promise<Baseline[]> {
+  const baselines: Baseline[] = [];
+  for (const recordedKey of [key, ...formerKeys(key)]) {
+    for (
+      const baseline of await readBaselinesUnder(baselinesDir, recordedKey)
+    ) {
+      baselines.push(baseline);
+    }
+  }
+  return baselines.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** The contracts recorded under one key. Absent directory → none. */
+async function readBaselinesUnder(
   baselinesDir: string,
   key: string,
 ): Promise<Baseline[]> {
