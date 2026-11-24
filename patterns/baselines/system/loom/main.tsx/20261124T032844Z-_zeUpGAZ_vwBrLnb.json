@@ -526,7 +526,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "V82e_y06vox7ryk0sks6TvP2OF2Lxyzneh-aCxZwMYk",
+              "moduleIdentity": "hcWN_RlaYAI_ltyVIkzfSCXMPQy_ugqcq6oGtUpA6f4",
               "path": [
                 "admitPanel"
               ]
@@ -554,7 +554,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "V82e_y06vox7ryk0sks6TvP2OF2Lxyzneh-aCxZwMYk",
+              "moduleIdentity": "hcWN_RlaYAI_ltyVIkzfSCXMPQy_ugqcq6oGtUpA6f4",
               "path": [
                 "admitPanel"
               ]
@@ -576,7 +576,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/participants.tsx",
-              "moduleIdentity": "GFX715RAPzMr3jT7aZw2Qo4OnkE2ns2UIP7VU1hWhy8",
+              "moduleIdentity": "u3Dhr1jvGbd4wij4bRCvkboM_5Qp14EFFr2z1GuQGVs",
               "path": [
                 "addParticipant"
               ]
@@ -1533,7 +1533,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "V82e_y06vox7ryk0sks6TvP2OF2Lxyzneh-aCxZwMYk",
+              "moduleIdentity": "hcWN_RlaYAI_ltyVIkzfSCXMPQy_ugqcq6oGtUpA6f4",
               "path": [
                 "admitPanel"
               ]
@@ -1558,7 +1558,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "V82e_y06vox7ryk0sks6TvP2OF2Lxyzneh-aCxZwMYk",
+              "moduleIdentity": "hcWN_RlaYAI_ltyVIkzfSCXMPQy_ugqcq6oGtUpA6f4",
               "path": [
                 "admitPanel"
               ]
@@ -2032,7 +2032,7 @@
           "stream",
           "opaque"
         ],
-        "description": "Lists the sender in the Loom: adds the sender's own `#profile` to\n`participants` through `addParticipant`. A host that admits its user to\nthe Loom sends it when they join and on each open."
+        "description": "Lists the sender in the Loom: adds the sender's own `#profile` to\n`participants` through `addParticipant`. Nothing is listed while that\nprofile is unresolved, so a host that admits its user to the Loom sends it\nwhen they join, on each open, and again while they are missing from\n`participants`."
       },
       "meeting": {
         "$ref": "#/$defs/MeetingAssociation"
