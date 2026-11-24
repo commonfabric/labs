@@ -150,19 +150,8 @@ export function diffSource(
       return blameRoot;
     });
   };
-  // The counts read the old files' colored lines, which change as parses
-  // finish in the background, so they are computed again when one does.
-  let countContextText: string | undefined;
-  let countContextParses: number | undefined;
-  let countContexts: readonly DiffCountFileContext[] = [];
-  const diffCountContexts = (text: string) => {
-    if (text !== countContextText || pending?.finished !== countContextParses) {
-      countContextText = text;
-      countContextParses = pending?.finished;
-      countContexts = buildDiffCountContexts(ws, edit, text);
-    }
-    return countContexts;
-  };
+  const diffCountContexts = (text: string) =>
+    buildDiffCountContexts(ws, edit, text);
 
   // No file on disk backs this diff (nothing resolved or verified): read-only.
   // A deletion of an entire file has no new-side lines, but its empty workspace
@@ -543,6 +532,11 @@ export function diffSource(
   };
 }
 
+/**
+ * The count context of each file in `text`. Each complete side is highlighted
+ * when it is asked for, and kept only by the caller, so that counting a diff
+ * that names many files holds one file's highlighting at a time.
+ */
 function buildDiffCountContexts(
   ws: DiffWorkspace,
   edit: DiffEdit,
@@ -554,16 +548,15 @@ function buildDiffCountContexts(
   const decided = editedLanguages(edit.languages, text, model, ws);
   return model.files.map((file, fileIndex) => {
     const languages = decided[fileIndex];
-    const oldLines = edit.oldFileLines(fileIndex) ?? undefined;
-    const newText = oldLines
-      ? reconstructNewSide(file, oldLines, raw, model.lines)
-      : undefined;
-    const newLines = newText === undefined
-      ? undefined
-      : languages.newLanguage.highlightLines(
-        newText,
-        file.newPath ?? file.oldPath,
-      );
+    const oldLines = () => edit.oldFileLines(fileIndex) ?? undefined;
+    const newLines = () => {
+      const old = oldLines();
+      return old &&
+        languages.newLanguage.highlightLines(
+          reconstructNewSide(file, old, raw, model.lines),
+          file.newPath ?? file.oldPath,
+        );
+    };
     return { languages, oldLines, newLines };
   });
 }
