@@ -11,7 +11,6 @@ import {
   type CurrencySliceRecord,
   dropUnreadCurrencyImports,
   forgetCurrencySource,
-  isUnderivedDocument,
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
@@ -1810,107 +1809,23 @@ describe("currency-index", () => {
         .toBe("of:piece");
     });
 
-    it("returns the one piece recorded as writing a document whose id is no computed one", () => {
-      store(0, [record("of:piece", { writes: ["of:element"] })]);
+    it("returns `undefined` for a document that is no computed one, though one piece is recorded as writing it", () => {
+      store(0, [record("of:piece", { writes: ["of:argument"] })]);
 
-      expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:element" }))
-        .toBe("of:piece");
+      expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:argument" }))
+        .toBeUndefined();
     });
 
-    it("returns `undefined` for a document that no piece, or more than one, is recorded as writing", () => {
+    it("returns `undefined` for a computed document that no piece, or more than one, is recorded as writing", () => {
       store(0, [
-        record("of:piece", { writes: ["computed:shared", "of:shared"] }),
-        record("of:other", { writes: ["computed:shared", "of:shared"] }),
+        record("of:piece", { writes: ["computed:shared"] }),
+        record("of:other", { writes: ["computed:shared"] }),
       ]);
 
       expect([
         selectCurrencyDeriver(engine, { space: SPACE, id: "computed:shared" }),
-        selectCurrencyDeriver(engine, { space: SPACE, id: "of:shared" }),
         selectCurrencyDeriver(engine, { space: SPACE, id: "computed:none" }),
-        selectCurrencyDeriver(engine, { space: SPACE, id: "of:none" }),
-      ]).toEqual([undefined, undefined, undefined, undefined]);
-    });
-
-    it("returns `undefined` for a cell a piece owns and does not write", () => {
-      store(0, [record("of:piece", { owned: ["of:state"] })]);
-
-      expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:state" }))
-        .toBeUndefined();
-    });
-  });
-
-  describe("isUnderivedDocument()", () => {
-    const underived = (id: string) =>
-      isUnderivedDocument(engine, { space: SPACE, id });
-
-    it("returns `true` for a document clients wrote that no record names", () => {
-      write("of:data");
-      store(0, [record("of:piece", { reads: [input("of:data")] })]);
-
-      expect(underived("of:data")).toBe(true);
-    });
-
-    it("returns `false` for a document whose id says a computation derives it", () => {
-      write("computed:value");
-
-      expect(underived("computed:value")).toBe(false);
-    });
-
-    it("returns `false` for a document a recorded piece writes", () => {
-      write("of:element");
-      store(0, [record("of:piece", { writes: ["of:element"] })]);
-
-      expect(underived("of:element")).toBe(false);
-    });
-
-    it("returns `false` for a document a recorded slice read as one a computation writes", () => {
-      // The recording runtime knows a document as derived while a computation
-      // registered there writes it, whether or not any record names that
-      // computation's piece.
-      write("of:element");
-      store(0, [record("of:reader", { reads: [derived("of:element")] })]);
-
-      expect(underived("of:element")).toBe(false);
-    });
-
-    describe("for a document a serving loop's derivation wrote", () => {
-      let holder: string;
-
-      beforeEach(() => {
-        setServerExecutionConfig(true);
-        holder = executionLeaseHolder(`service:${SPACE}`);
-        engine.executionLeases.acquire(SPACE, holder);
-      });
-
-      afterEach(() => {
-        resetServerExecutionConfig();
-      });
-
-      it("returns `false` after that derivation, though clients wrote it before", () => {
-        write("of:element");
-        expect(underived("of:element")).toBe(true);
-        localSeq += 1;
-
-        applyWaveCommit(engine, {
-          sessionId: holder,
-          space: SPACE,
-          commitClass: "derived",
-          holder,
-          commit: {
-            localSeq,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "set",
-              id: "of:element",
-              value: { value: { n: localSeq } },
-            }],
-          },
-          annotations: [{ op: 0 }],
-          waveBasis: { basisSeq: serverSeq(engine), rebasedHeads: [] },
-        });
-
-        expect(underived("of:element")).toBe(false);
-      });
+      ]).toEqual([undefined, undefined]);
     });
   });
 

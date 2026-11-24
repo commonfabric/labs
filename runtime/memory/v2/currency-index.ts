@@ -641,12 +641,6 @@ WHERE branch = :branch AND slice = :slice AND piece = :piece
   AND entity_space = :space AND entity = :entity
   AND entity_scope_key = :entity_scope_key
 `),
-  selectReadAsDerived: engine.prepare(`
-SELECT 1 AS found FROM currency_read INDEXED BY idx_currency_read_entity
-WHERE branch = :branch AND entity_space = :space AND entity = :entity
-  AND derived = 1
-LIMIT 1
-`),
   selectForeignReads: engine.prepare(`
 SELECT entity_space, entity, entity_scope_key FROM currency_read
 WHERE branch = :branch AND slice = :slice AND piece = :piece
@@ -2462,41 +2456,18 @@ export const selectCurrencyWriters = (
 };
 
 /**
- * The piece of `space` that derives the document `id`: the one piece whose
- * record says it writes the document, at any instance of it. `undefined`
- * when the records of no piece or of several say they write it.
+ * The piece of `space` that derives the `computed:` document `id`: the one
+ * piece whose record says it writes the document, at any instance of it.
+ * `undefined` when `id` names no computed document, or when the records of
+ * no piece or of several say they write it.
  */
 export const selectCurrencyDeriver = (
   engine: Engine,
   options: { space: string; id: string },
 ): string | undefined => {
+  if (!options.id.startsWith(COMPUTED_ID_PREFIX)) return undefined;
   const writers = selectCurrencyWriters(engine, options);
   return writers.length === 1 ? writers[0] : undefined;
-};
-
-/**
- * Whether nothing the index or the store holds says that a computation
- * writes the document `id` of `space`: its id is no `computed:` one, no
- * piece's record says it writes it, no recorded slice read it as a document
- * a computation writes, and no serving loop's derivation wrote its shared
- * instance. Such a document holds what clients wrote, and nothing derives
- * it.
- */
-export const isUnderivedDocument = (
-  engine: Engine,
-  options: { space: string; id: string },
-): boolean => {
-  const { id, space } = options;
-  if (id.startsWith(COMPUTED_ID_PREFIX)) return false;
-  const { branch, statements } = contextFor(engine, space);
-  return statements.selectWriters.get({ branch, id }) === undefined &&
-    statements.selectReadAsDerived.get({ branch, space, entity: id }) ===
-      undefined &&
-    statements.selectDerivationOfInstance.get({
-        branch,
-        id,
-        scope_key: SPACE_SLICE,
-      }) === undefined;
 };
 
 /**

@@ -6299,8 +6299,8 @@ export class SpaceServer implements TransactionSealDestination {
     }
     // ONE changed-doc collection for the whole pass, opened BEFORE the
     // judgment and the pull below rather than per root inside it. A root the
-    // judgment found leads to no piece is parked on what the store held when
-    // it was judged. The pull is what registers each root's watch, and a
+    // judgment found a load starts no piece from is parked on what the store
+    // held when it was judged. The pull is what registers each root's watch, and a
     // registered watch is what lets the traversal read from the replica
     // instead of fetching, so between the two a root's reading is only as
     // current as frame delivery has made it. The terminal arm's invalidation
@@ -6357,8 +6357,8 @@ export class SpaceServer implements TransactionSealDestination {
           this.#rearmSeqsUnderRetry.delete(key);
           this.#rearmSeqsAwaitingFollow.delete(key);
         }
-        for (const key of judged.underived) {
-          this.#parkUnderivedRoot(key, rootKeys, changedDocs);
+        for (const key of judged.plain) {
+          this.#parkPlainRoot(key, rootKeys, changedDocs);
         }
       }
       this.#armCurrencyExpiry();
@@ -7405,17 +7405,17 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
-   * Helper for `#loadDemandedStructure()`, which parks the root `key` that a
-   * judgment found to be a document that leads to no piece and that nothing
-   * derives, as its structure load would park it: terminal, watching the
-   * document alone, so that a commit to the document re-arms the load. The
-   * load reads the same document through the replica and finds no
-   * back-link to follow and no pattern pointer, so it would start nothing
-   * and observe nothing else. A commit to the document admitted since the
-   * pass opened `changedDocs` may postdate what the judgment read, and
-   * leaves the root in `rootKeys` to be loaded.
+   * Helper for `#loadDemandedStructure()`, which parks the space-scoped root
+   * `key` that a judgment found to be a document a structure load starts no
+   * piece from, as that load would park it: terminal, watching the document
+   * alone, so that any commit to the document, by a client or by another
+   * serving loop, re-arms the load. The load reads the same document through
+   * the replica, finds no back-link to follow and no pattern pointer, and
+   * parks it watching that document alone. A commit to the document
+   * admitted since the pass opened `changedDocs` may postdate what the
+   * judgment read, and leaves the root in `rootKeys` to be loaded.
    */
-  #parkUnderivedRoot(
+  #parkPlainRoot(
     key: string,
     rootKeys: Map<string, { id: string; scope: CellScope }>,
     changedDocs: ReadonlyMap<string, number>,

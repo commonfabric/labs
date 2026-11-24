@@ -28,6 +28,7 @@ import {
   isCapable,
   isDeletionTombstone,
 } from "../acl.ts";
+import { asPatternIdentityRef } from "../../runner/src/meta-seam.ts";
 import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   type BranchCreateRequest,
@@ -176,7 +177,6 @@ import {
   dropUnreadCurrencyImports,
   forgetCurrencyImports,
   forgetCurrencySource,
-  isUnderivedDocument,
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
@@ -424,12 +424,18 @@ const CURRENCY_ROOT_HOPS_MAX = 10;
 const isComputedId = (id: string): boolean => id.startsWith("computed:");
 
 /**
- * Whether `document`, a stored document, is one a structure load starts no
- * piece from: it carries neither a `result` back-link nor a pattern pointer.
+ * Whether `document`, the stored space instance of a document, is one a
+ * structure load of it starts no piece from and finishes reading at: it is
+ * absent, or it carries no `result` field and no pattern pointer. The
+ * pattern pointer is tested with `asPatternIdentityRef()`, the test the
+ * load itself applies. A `result` field counts whatever it holds, so a
+ * document whose `result` holds no link is not plain, though a load of it
+ * may start nothing.
  */
 const isPlainDocument = (document: EntityDocument | null): boolean =>
-  document !== null && !("result" in document) &&
-  !("patternIdentity" in document);
+  document === null ||
+  (!("result" in document) &&
+    asPatternIdentityRef(document.patternIdentity) === undefined);
 
 /**
  * How many times the change behind a trigger may come back to a space before
@@ -13542,13 +13548,10 @@ export class Server {
    * being read, so one a session names at an instance narrower than the
    * space, which the space may hold no instance of, is judged too.
    *
-   * A root whose stored document carries neither a back-link nor a pattern
-   * pointer is one a structure load starts no piece from. One that one
-   * recorded piece writes is judged as that piece, with the root's own
-   * instance among the ones the piece is to answer for. One that nothing
-   * derives (`isUnderivedDocument()`) is judged as no piece and returned in
-   * `underived`: the store holds what clients wrote to it, and a load of it
-   * would find no piece to start.
+   * A root that is no `computed:` document and whose stored space instance
+   * is absent or carries neither a `result` field nor a pattern pointer
+   * (`isPlainDocument()`) is one a structure load starts no piece from,
+   * whatever writes it. It is judged as no piece and returned in `plain`.
    *
    * A root may rest on a slice that read another space. Each space read by
    * a slice the demand rows are resolved under is followed first: one that
@@ -13561,7 +13564,7 @@ export class Server {
    * upstream of them alone.
    *
    * @returns The roots that pass, each with the piece it was judged as, the
-   * roots that nothing derives, the roots that are held, the reads that keep
+   * roots a load starts no piece from, the roots that are held, the reads that keep
    * a held root or a running piece stale upstream, each with the piece to
    * start for it, how many roots each reason refused, the slices marked
    * since `space`'s serving loop last asked, and the earliest time a slice
@@ -13586,11 +13589,10 @@ export class Server {
     servable: Array<{ root: string; piece: string; origins: string[] }>;
 
     /**
-     * The roots whose stored document leads to no piece and that nothing
-     * derives, absent where there is none. A structure load of one would
-     * find no piece to start.
+     * The roots a structure load starts no piece from (`isPlainDocument()`),
+     * absent where there is none.
      */
-    underived?: string[];
+    plain?: string[];
 
     held: Array<{ root: string; piece: string; readers: string[] }>;
     upstream: CurrencyUpstreamRead[];
@@ -13617,31 +13619,19 @@ export class Server {
       return { servable: [], held: [], upstream: [], ...found() };
     }
 
-    /**
-     * The roots whose shared instance is a document that leads to no piece
-     * and that nothing derives (`isUnderivedDocument()`).
-     */
-    const underived = new Set<string>();
-
-    /**
-     * The roots judged as the one piece recorded as writing them, and not
-     * as a piece their back-links reach. A load of such a root starts no
-     * piece, so its own instance is among the ones that piece answers for.
-     */
-    const written = new Set<string>();
+    /** The roots a structure load starts no piece from. */
+    const plain = new Set<string>();
 
     /**
      * The recorded piece `root` leads to: the one piece recorded as deriving
      * it where it is a computed document, or else the piece its back-links
-     * reach, if they reach one. A document that carries neither a back-link
-     * nor a pattern pointer leads to the one piece recorded as writing it,
-     * or, where nothing derives it, to none and is noted in `underived`.
+     * reach, if they reach one. A root that is no computed document and
+     * whose stored space instance is plain leads to none, and is noted in
+     * `plain`.
      */
     const pieceOf = (root: string): string | undefined => {
-      if (isComputedId(root)) {
-        const deriver = selectCurrencyDeriver(engine, { space, id: root });
-        if (deriver !== undefined) return deriver;
-      }
+      const deriver = selectCurrencyDeriver(engine, { space, id: root });
+      if (deriver !== undefined) return deriver;
       let id = root;
       for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
         if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
@@ -13651,13 +13641,8 @@ export class Server {
           id,
           scopeKey: "space",
         });
-        if (id === root && isPlainDocument(document)) {
-          const writer = selectCurrencyDeriver(engine, { space, id });
-          if (writer !== undefined) {
-            written.add(root);
-            return writer;
-          }
-          if (isUnderivedDocument(engine, { space, id })) underived.add(root);
+        if (id === root && !isComputedId(root) && isPlainDocument(document)) {
+          plain.add(root);
           return undefined;
         }
         const link = document === null
@@ -13674,13 +13659,13 @@ export class Server {
     for (const root of roots) {
       const piece = pieceOf(root);
       if (piece !== undefined) pieces.set(root, piece);
-      else if (!underived.has(root)) {
+      else if (!plain.has(root)) {
         refused["no-record"] = (refused["no-record"] ?? 0) + 1;
       }
     }
     /** What every return carries besides what the index judged. */
     const unjudged = () => ({
-      ...(underived.size > 0 && { underived: [...underived] }),
+      ...(plain.size > 0 && { plain: [...plain] }),
       ...found(),
     });
     if (pieces.size === 0 && running.length === 0) {
@@ -13711,9 +13696,6 @@ export class Server {
           };
         }
       }
-      // A root judged as the piece recorded as writing it is answered for by
-      // that piece, whether or not a session's row names its instance.
-      for (const root of written) yield { id: root, scopeKey: SPACE_SLICE };
     };
     const slices = new Set<string>([SPACE_SLICE]);
     for (const { scopeKey } of rows()) {

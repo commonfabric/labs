@@ -313,21 +313,30 @@ one. A computed document is judged at any scope, so a viewer's own instance
 of one can pass, and a root that passes is left unstarted under `skip` and
 `start-upstream` as below.
 
-A space-scoped document that carries neither a back-link nor a pattern
-pointer, as the elements and views a list renders do, is one a load starts
-no piece from. The judgment reads it as the one piece the index records as
-writing it, with the root's own instance among the instances that piece is
-to vouch for, so an overwrite of it, which marks the writer's slice, and a
-record that no longer vouches for it both refuse the root. Where nothing
-derives such a document, the judgment returns it as **underived**: no
-record names it as written, no recorded slice read it as a document a
-computation writes, and no serving loop's derivation wrote its shared
-instance. The store holds what clients wrote to it, and a load would find
-no piece to start, so under `skip` and `start-upstream` the loop parks it
-as that load would: terminal, watching the document, so that a commit to
-it, one that gives it a back-link, a pattern pointer or a derived value
-among them, brings the load. A commit admitted while the judgment ran
-leaves it to be loaded at once. `currency.underived` counts such roots.
+A space-scoped root that is no `computed:` document, and whose stored
+document is absent or carries neither a `result` field nor a pattern
+pointer, is one a load starts no piece from: the load reads that document,
+finds no back-link to follow and no pattern pointer, and parks the root
+watching the document. The elements and views a list renders are such
+documents. The judgment tests the pattern pointer with the function the
+load tests it with (`asPatternIdentityRef()`), and returns such a root as
+**plain**, whatever writes it. Under `skip` and `start-upstream` the loop
+parks a plain root as that load would, without the load: terminal, watching
+the document, so that a commit to it, one that gives it a back-link or a
+pattern pointer among them, brings the load. A commit admitted while the
+judgment ran leaves it to be loaded at once. Under `record` it is loaded.
+`currency.plainRoots` counts such roots under every mode. A root demanded
+at a scope narrower than the space is not judged so and is loaded, since its
+load reads the instance at that scope before the space's.
+
+Since no load of a plain root starts a piece, whether its stored value is
+current changes nothing the loop does for it, and the judgment does not
+ask. A document a recorded piece maintains is brought up to date when that
+piece runs. One written by something the index cannot account for, such as
+a client or a lift's write through `Writable.for(...).set()`, is read as the
+store holds it until its writer runs for some other reason: that staleness
+is accepted in preference to the work of finding and starting a writer for
+each such document.
 
 The store can serve a root when:
 
@@ -706,13 +715,13 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
   which records a source origin, always starts.** An origin is followed
   through one result document.
 - **A document a load starts no piece from is brought up to date only by
-  a start of its writer or of a piece that encloses its writer.** A root
-  judged as its writer is loaded when the judgment refuses it, and when a
-  mark of the writer re-arms it, and the load starts nothing. Where the
+  a start of its writer or of a piece that encloses its writer.** Its root
+  is plain and parked, and nothing starts the writer for it. Where the
   writer's own result is demanded, or the writer is beneath a demanded
-  root, as each row of a board is beneath the board, that root is refused
-  for the same mark and its start runs the writer. Where neither is
-  demanded, nothing starts the writer, with the index or without it.
+  root, as each row of a board is beneath the board, a change to the
+  writer's inputs refuses that root and its start runs the writer. Where
+  neither is demanded, a client reads what the store holds of the document,
+  with the index or without it.
 - **A piece with no computation of its own has no record.** A pattern that
   only instantiates others registers no computation under its own result
   document, so no snapshot is taken of it, and a root that leads to it is
@@ -720,9 +729,8 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
   computes. The documents a lift writes through `Writable.for(...).set()`,
-  one for each element of the list it returns, are written that way: a
-  root that names one is refused as `no-record` and loaded each tenure.
-  The run's own writes cannot supply the rows, since a run that computes
+  one for each element of the list it returns, are written that way, and a
+  root that names one is plain. The run's own writes cannot supply the rows, since a run that computes
   what a document already holds writes nothing to it.
   [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
   under "Computations that run without demand", is the plan for it and for
@@ -899,14 +907,16 @@ of which exist:
 28. A piece that an enclosing piece's start instantiates for a viewer who
     demands nothing of it keeps its record, and the store can still serve
     its root to the viewer it was recorded for.
-29. A root that carries neither a back-link nor a pattern pointer is judged
-    as the one piece recorded as writing it, and refused where two pieces
-    are recorded as writing it, where that piece is marked, where it does
-    not vouch for the root's instance, and where a client overwrote it. One
-    nothing derives is returned as underived, and one a serving loop's
-    derivation wrote is not (`runtime/memory/test/v2-server-currency.test.ts`).
-    Under `skip` the loop parks an underived root unloaded, and loads it
-    once a client commits to it (`space-server-currency.test.ts`).
+29. A root that is no `computed:` document and whose stored document is
+    absent or carries neither a `result` field nor a pattern pointer is
+    returned as plain, whether nothing derives it, a serving loop's
+    derivation wrote it, or one recorded piece writes it, marked or not; a
+    `computed:` root never is (`runtime/memory/test/v2-server-currency.test.ts`).
+    Under `skip` the loop parks a plain root unloaded, including an element
+    a lift writes whose recorded writer is marked and a document the space
+    holds no instance of; loads it once a client commits to it, and at once
+    where that commit was admitted while the judgment ran; and loads a root
+    demanded at a narrower scope (`space-server-currency.test.ts`).
 
 ## Related
 
