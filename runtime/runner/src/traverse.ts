@@ -4833,6 +4833,12 @@ type CombinatorWalk =
      * (`#landingOf()`): `null` where the options cannot be narrowed by it.
      */
     landing?: Landing | null;
+
+    /**
+     * The link the value is, as the traversal of an option parses it, once an
+     * option has asked: `null` where it does not parse.
+     */
+    pointerLink?: NormalizedFullLink | null;
   }
   & (
     | {
@@ -4854,9 +4860,6 @@ type CombinatorWalk =
  * are narrowed by (`SchemaObjectTraverser.#landingOf()`).
  */
 type Landing = {
-  /** The link, as the traversal of an option parses it. */
-  readonly pointerLink: NormalizedFullLink;
-
   /** The value at the end of the chain of links, which is not a link. */
   readonly value: FabricValue;
 
@@ -6312,8 +6315,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
    * option is held to that value only where traversing the link under it
    * comes to traverse the value: it matches whatever the link leads to where
    * it mints a handle from the link, where it caps the scope of the links it
-   * follows, where the link's target is one the tracker already covers for
-   * it, and where the link resolves to nothing (`#landingOf()`).
+   * follows, where the link leads into another space, where the option is
+   * typed `unknown`, where the link's target is one the tracker already
+   * covers for it, and where the link resolves to nothing (`#landingOf()`).
+   * Only the last of those resolves the link.
    */
   #linkedBranchMatches(
     walk: CombinatorWalk,
@@ -6331,7 +6336,29 @@ export class SchemaObjectTraverser<V extends FabricValue>
     if (
       prepared?.capsFollowScope ?? isCellScope(schemaFollowScopeCap(merged))
     ) return true;
-    const landing = this.#landingOf(walk);
+    // Whatever keeps the option without the link's target is decided before
+    // the link is resolved, so that an `anyOf` none of whose options follows
+    // the link reads nothing of the target.
+    const { doc } = walk;
+    if (walk.pointerLink === undefined) {
+      walk.pointerLink = parseLink(doc.value, doc.address) ?? null;
+    }
+    const { pointerLink } = walk;
+    if (pointerLink === null || pointerLink.space !== doc.address.space) {
+      return true;
+    }
+    // A position typed `unknown` answers for whatever value is there.
+    if (isUnknownValueSchema(merged)) return true;
+    // A link whose target the tracker covers for the option is not followed:
+    // the option matches it as it stands.
+    if (
+      this.traverseCells && pointerLink.id !== doc.address.id &&
+      this.isLinkedDocumentCovered(doc.address, pointerLink, {
+        path: doc.address.path,
+        schema: merged,
+      })
+    ) return true;
+    const landing = this.#landingOf(walk, pointerLink);
     if (landing === null) return true;
     // The option's traversal lands under its schema combined with each
     // link's in turn, which is the option's own schema where no link
@@ -6340,9 +6367,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
     for (const linkSchema of landing.linkSchemas) {
       landed = combineSchemaForLink(landed, linkSchema);
     }
-    // A position typed `unknown` answers for whatever value is there.
     if (isUnknownValueSchema(landed)) return true;
-    const matches = prepared !== undefined && landed === merged
+    return prepared !== undefined && landed === merged
       ? preparedBranchAdmits(
         prepared,
         landing.value,
@@ -6350,14 +6376,6 @@ export class SchemaObjectTraverser<V extends FabricValue>
         landing.valueIsRecord,
       )
       : canBranchMatch(landed, landing.value, this.#holdsCellsToShape);
-    // A link whose target the tracker covers for the option is not followed:
-    // the option matches it as it stands.
-    return matches || this.traverseCells &&
-        landing.pointerLink.id !== walk.doc.address.id &&
-        this.isLinkedDocumentCovered(walk.doc.address, landing.pointerLink, {
-          path: walk.doc.address.path,
-          schema: merged,
-        });
   }
 
   /**
@@ -6378,11 +6396,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
    * link carries a schema, which leaves every option's record apart from
    * the `anyOf`'s.
    */
-  #landingOf(walk: CombinatorWalk): Landing | null {
+  #landingOf(
+    walk: CombinatorWalk,
+    pointerLink: NormalizedFullLink,
+  ): Landing | null {
     if (walk.landing !== undefined) return walk.landing;
     const { doc } = walk;
-    const pointerLink = parseLink(doc.value, doc.address);
-    if (pointerLink === undefined) return walk.landing = null;
     const coverageDecides = this.traverseCells &&
       pointerLink.scope !== undefined;
     if (coverageDecides && pointerLink.schema !== undefined) {
@@ -6417,7 +6436,6 @@ export class SchemaObjectTraverser<V extends FabricValue>
       this.context.onTrackedDoc?.(key, selector, source, "walked");
     }
     return walk.landing = {
-      pointerLink,
       value,
       actualType: getJsonType(value),
       valueIsRecord: isObjectOrArray(value),

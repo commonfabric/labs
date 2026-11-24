@@ -469,6 +469,33 @@ describe("traverse-anyof-links", () => {
     });
   });
 
+  describe("a link no option follows", () => {
+    it("reads nothing of a target in another space", () => {
+      const schema: JSONSchema = internSchema<JSONSchema>({
+        type: "object",
+        properties: {
+          child: { anyOf: [{ type: "unknown" }, { asCell: ["opaque"] }] },
+        },
+      });
+      const docs = {
+        [ROOT]: {
+          child: {
+            "/": {
+              [LINK_V1_TAG]: {
+                id: "of:child",
+                path: [],
+                space: "did:null:other",
+              },
+            },
+          },
+        },
+        "of:child": "text",
+      };
+      const { reads } = expectSameWalk(docs, schema, false);
+      expect(reads.filter((read) => read.startsWith("of:child"))).toEqual([]);
+    });
+  });
+
   describe("oneOf", () => {
     it("traverses a linked value under every option", () => {
       const schema: JSONSchema = {
