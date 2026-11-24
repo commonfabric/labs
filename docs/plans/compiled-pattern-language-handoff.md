@@ -48,8 +48,8 @@ The work after it is on two branches:
    with a `wish` has scoped state, so under the serving loop with resume 71
    corpus pieces are found current where the trunk finds 80.
 2. `claude/compiled-pattern-serving-m6` is the one branch not merged. The
-   attempt is the branch `merge-attempt/serving-m6` (head `364a53722e`, notes
-   982 to 985), cut from the merged branch. One test of the serving branch fails
+   attempt is the branch `merge-attempt/serving-m6` (head `223bd9d007`, notes
+   982 to 995), cut from the merged branch. One test of the serving branch fails
    there, for a defect of the trunk that the merge exposed and did not
    create (below).
 
@@ -67,8 +67,8 @@ at a wake and a restore that dropped another principal's memo entry; a wake
 by units that left no row of a list stored in documents), so a merge is not
 finished when the conflicts are gone.
 
-**What blocks the last merge, and what it showed** (notes 982 to 985 on
-`merge-attempt/serving-m6`, head `364a53722e`). The gates pass there except
+**What blocks the last merge, and what it showed** (notes 982 to 995 on
+`merge-attempt/serving-m6`, head `223bd9d007`). The gates pass there except
 one case of `test/compiled/`, the first item below.
 
 - *A commit whose label table would expand past 16 MB is sent with its
@@ -113,14 +113,46 @@ one case of `test/compiled/`, the first item below.
   on the serving branch). Open: a scoped output still holds all rows in one
   document (about 175 KB more per send at 100 messages); the plan to store
   it per row, as today's runtime does, is note 985.
-- *Not diagnosed: an edit of a Topics title follows the board on the
-  merged code.* The piece spends 120 to 134 ms at 1,000 topics and 239 to
-  285 ms at 2,000 for 8 evaluations and 4 records, where the serving
-  branch alone measured 17 to 68 ms for the second client; a create gives
-  20,000 to 46,000 records in its second run and is refused one to three
-  times. The agent's guess, not confirmed, is that the board's session
-  state makes the piece derive once per principal and session (the open
-  item of note 892). This is the first thing to diagnose.
+- *A view that reads one value of a scope is stored whole, once per scope
+  key, and compared whole at every change of a row* (notes 990 to 995; not
+  fixed). This is why an edit of a Topics title follows the board on every
+  tree that holds the scopes round (`75ad91d5f9`..`f315960774`); the
+  resume by units, write integrity and the list documents have no part in
+  it. The board's view reads `hasProfile`, which reads the `#profile` wish
+  of the scope `user`, so the whole `[UI]` entry is of that scope:
+  `Instance.scopedOutput` and `#scopedPlace` store the tree, with the cards
+  of the `map` over the array of topic references settled into it, in each
+  principal's scope instance (171 KB at 100 topics, 1.69 MB at 1,000,
+  3.39 MB at 2,000), and `#putScoped` compares it member by member. The
+  counts of an edit are constant (8 evaluations, 4 records, 3
+  derivations); the piece's own time is 29 to 32, 237 to 260 and 437 to
+  495 ms at those sizes, and the second client reads the edit after 0.3,
+  2.2 and 4 to 5.6 s, most of it the label sync and the client's handling
+  of the scope instance. Today's runtime makes a node of its own for the
+  expression that reads the scoped value, and the result of the `map`
+  stays a cell of the space. The plan (note 993, A): the crate plans an
+  expression of a view that reads an output or slot of a scope as a value
+  of its own, and `Host.output` hands any cone a reference to the scoped
+  place, so the view's cone stays of the space. The space positions then
+  no longer join the label of the scoped value, which is a deferred CFC
+  question. A reproduction for the first test is under
+  `work/r19-topics-edit/outside/`.
+- *Fixed for one case (P450): the runs of one pass for several sessions
+  read the result of an instance a handler made before its first
+  derivation committed,* which refused a Topics create one to three times
+  and gave every record of the board again (20,297 records at 1,000
+  topics). `CompiledPiece.#madePending` holds the piece's other runs from
+  deriving until the transaction of the run that made the first derivation
+  ends. Today's runtime has no counterpart of this mechanism; it is a
+  consequence of deriving once per session (note 892's open item), and one
+  refusal per create remains. Test `made-session.test.ts`.
+- *Not built:* a session no client holds any more is still derived at
+  every change; the serving runtime's own identity keeps a copy of the
+  scoped view that nothing reads.
+- *Not diagnosed:* a create at 100 topics threw `TypeMismatchError` in
+  `RuntimeTransactions.change` from `#storeResult` once and did not
+  reproduce; 3 of about 24 serving runs went idle before the load (note
+  931), two of them on the serving branch alone.
 
 Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
