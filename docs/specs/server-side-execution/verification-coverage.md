@@ -3334,14 +3334,16 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   carried actor counts as that actor's demand in the foreign space. The
   demand names the actor and is not the reading space's own, since a
   per-actor derivation of the foreign space runs only for a demand that
-  names its actor. BUILT for a loop that keeps the currency index, where
-  one memory server holds both spaces (serving-loop.md §3b;
+  names its actor. BUILT for a loop that keeps the currency index in the
+  `record` or `start-upstream` mode, where one memory server holds both
+  spaces (serving-loop.md §3b;
   `Server.setCarriedDemand`, `SpaceServer`'s `#syncCarriedDemand`; pinned
   in `runtime/memory/test/v2-server-carried-demand.test.ts` and, for a
   foreign per-actor instance read under two actors who hold no session
   in the foreign space, in
   `runtime/runner/test/executor/space-server-carried-demand.test.ts`).
-  Owed: a loop that keeps no index, and a foreign space another memory
+  Owed: a loop that keeps no index or keeps it in the `skip` mode, which
+  is the toolshed default, and a foreign space another memory
   server holds (`docs/plans/stored-output-currency-across-spaces.md`,
   "Demand across spaces", step 5). Trigger for both: the first pattern whose
   correctness rests on a revocation taking effect without a re-pull, or

@@ -687,6 +687,14 @@ describe("StoreCurrency", () => {
         stats = emptyServingLoopStats();
       });
 
+      it("carries demand in every mode but `skip`", () => {
+        expect(
+          (["record", "skip", "start-upstream"] as const).map((mode) =>
+            loop(mode).carriesDemand
+          ),
+        ).toEqual([true, false, true]);
+      });
+
       it("holds no root under `skip`, counts the root as refused for `stale-upstream`, and names nothing to demand", async () => {
         const currency = loop("skip");
 

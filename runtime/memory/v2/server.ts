@@ -13591,6 +13591,7 @@ export class Server {
      * find no piece to start.
      */
     underived?: string[];
+
     held: Array<{ root: string; piece: string; readers: string[] }>;
     upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;

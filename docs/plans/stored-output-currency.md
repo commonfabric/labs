@@ -48,17 +48,17 @@ index. The names are `CURRENCY_INDEX_MODES` in
 - `record`: the loop records and judges, and starts every demanded piece
   ("Checking it before relying on it").
 - `skip`, a toolshed's default: the loop leaves unstarted a root the record
-  proves current ("What the demand pass does with it"), and does nothing
-  else on a judgment. This answers the first of the two problems above and
-  not the second.
+  proves current ("What the demand pass does with it"), does nothing else
+  on a judgment, and carries no demand, into another space or its own. This
+  answers the first of the two problems above and not the second.
 - `start-upstream`: a root the record proves current is left unstarted, as
   under `skip`. Where a root is stale only through what is upstream of it,
   the loop leaves it unloaded and starts the pieces upstream, and it does
   the same for a running piece that is stale that way ("Starting what is
   stale upstream"). This answers the second problem too.
 
-The two levels differ in that one case, so a deployment can run `skip`
-without the upstream starts. Under `skip` a root that is stale only upstream
+The two levels differ in the upstream starts and in the demand the loop
+carries, so a deployment can run `skip` without either. Under `skip` a root that is stale only upstream
 is treated as a root the judgment refuses: its piece starts, and derives
 from what the store holds of the pieces upstream, as a loop with no index
 derives it. "Known limits" says what that leaves.
@@ -636,12 +636,17 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
   reads the result with the watermark past the change: the second problem
   this plan opens with stands as it does with no index. A stored value is
   not served as current on that account, since the piece starts and its
-  record stays marked. `start-upstream` lifts the limit. Two things `skip`
-  keeps are not part of it: a started piece's reads in another space carry
-  demand there
-  ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)),
-  and a run withdrawn for a scoped instance its writer has not produced
-  demands that instance.
+  record stays marked. `start-upstream` lifts the limit. `skip` carries no
+  demand either, so two more things stand as they do with no index. A
+  started piece's reads in another space demand nothing there
+  ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)):
+  the piece that writes what was read starts only for a demand of its own,
+  and the reading piece derives from what that store holds, which the
+  reading space's judgment then holds stale. And a run withdrawn for a
+  scoped instance its writer has not produced for the run's viewer demands
+  nothing: the writer produces the instance only for a demand of its own,
+  and until it does, the run stays withdrawn and the viewer reads what the
+  store holds of the run's output.
 - **Under `start-upstream`, a running piece that is refused for good is
   judged and given up on repeatedly.** When every record of a running piece
   leaves it stale and no piece upstream can clear it, the loop judges it and
@@ -701,13 +706,13 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
   which records a source origin, always starts.** An origin is followed
   through one result document.
 - **A document a load starts no piece from is brought up to date only by
-  a start of a piece that encloses its writer.** A root judged as its
-  writer is loaded when the judgment refuses it, and when a mark of the
-  writer re-arms it, and the load starts nothing. Where the writer is
-  beneath a demanded root, as each row of a board is beneath the board,
-  that root is refused for the same mark and its start runs the writer.
-  Where no demanded root encloses the writer, nothing starts it, with the
-  index or without it.
+  a start of its writer or of a piece that encloses its writer.** A root
+  judged as its writer is loaded when the judgment refuses it, and when a
+  mark of the writer re-arms it, and the load starts nothing. Where the
+  writer's own result is demanded, or the writer is beneath a demanded
+  root, as each row of a board is beneath the board, that root is refused
+  for the same mark and its start runs the writer. Where neither is
+  demanded, nothing starts the writer, with the index or without it.
 - **A piece with no computation of its own has no record.** A pattern that
   only instantiates others registers no computation under its own result
   document, so no snapshot is taken of it, and a root that leads to it is

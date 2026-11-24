@@ -421,6 +421,53 @@ describe("SpaceServer", () => {
         await reads(alice, result, "c:b:1");
       });
 
+      /**
+       * Stands the pieces up with the one between computing for each
+       * viewer, changes the first piece's input, and has the setup client
+       * watch the piece between, which starts it for that client alone.
+       * Alice then watches the last piece, whose run for her reads her own
+       * instance of the output of the piece between.
+       */
+      const watchLastPastPerUserMiddle = async (mode: CurrencyIndexMode) => {
+        const { roots, input, resultSchema } = await standUpAndPark(
+          mode,
+          MIDDLE_PER_USER_PROGRAM,
+        );
+        await changeInput(input, 20);
+        const setup = openRuntime(setupSigner);
+        const middle = setup.getCell<{ b: string }>(
+          space,
+          "currency upstream middle result",
+        );
+        await middle.sync();
+        middle.sink(() => {});
+        await awaitEach(cycles, () => serves(roots.middle));
+        await host!.whenQuiescent();
+        const { alice, result } = await watchLast(resultSchema);
+        await awaitEach(cycles, () => serves(roots.last));
+        return { alice, result };
+      };
+
+      for (const mode of ["start-upstream", "record"] as const) {
+        it(`has the piece between run for a viewer it has not produced an instance for, which a run of the last piece for her was withdrawn for, under \`${mode}\``, async () => {
+          const { alice, result } = await watchLastPastPerUserMiddle(mode);
+
+          await reads(alice, result, "c:b:2");
+          expect(host!.stats().currency.carried).toBeGreaterThan(0);
+        });
+      }
+
+      it("carries no demand for a viewer's instance the piece between has not produced, which a run of the last piece for her was withdrawn for, under `skip`", async () => {
+        // A loop that keeps no index carries none either, and leaves the
+        // run withdrawn the same way.
+
+        const { result } = await watchLastPastPerUserMiddle("skip");
+        await host!.whenQuiescent();
+
+        expect(host!.stats().currency.carried).toBe(0);
+        expect(result.key("c").get()).toBeUndefined();
+      });
+
       it("starts the last piece alone, on what the store holds of the piece before it, when an input of the first changed, under `skip`", async () => {
         const { roots, input, resultSchema } = await standUpAndPark("skip");
         await changeInput(input, 20);
