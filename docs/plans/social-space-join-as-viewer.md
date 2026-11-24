@@ -34,10 +34,12 @@ would write the event into the root. The roster adds a profile once, so the
 send on each open is harmless for a listed member, and it lists a guest who
 joined before this existed.
 
-The bar is that the owner sees the guest's name without the guest reloading.
-While the guest's profile is missing from `participants`, Web Weaver sends it
-again; a first send can be lost if the serving runtime has not yet loaded the
-guest's home.
+The bar is that the owner sees the guest's name without the guest reloading,
+and a browser test now holds Web Weaver to it. A first send could be lost if the
+serving runtime has not yet loaded the guest's home; the test shows it landing
+on a fresh join, so Web Weaver sends again only on the guest's next visit. If a
+lost first send shows up, Web Weaver re-sends when `participants` changes and
+still lacks the guest, not on a timer.
 
 ### 1. The Loom root exports `joinAsViewer`
 
