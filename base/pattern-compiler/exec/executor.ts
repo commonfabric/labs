@@ -2192,6 +2192,16 @@ export class Host {
       const placed = instance.scopedOutput(index, this);
       if (placed !== undefined) return placed;
     }
+    // So does the cone of another value: a value of a scope key that a
+    // cone of the space places, or reads through the reference, leaves
+    // the cone of the space (P451).
+    if (
+      this.key !== RESULT && instance.store.scopes !== undefined &&
+      this.context.size === 0 && output.cone !== this.cone
+    ) {
+      const placed = instance.scopedValue(index, this);
+      if (placed !== undefined) return placed;
+    }
     return this.#output(index, output);
   }
 
@@ -7956,6 +7966,36 @@ export class Instance {
   }
 
   /**
+   * The reference to the place of the value of the output `index` in the
+   * scope instance of the document of the scoped values
+   * (`#scopedValues`), where the cone `host` evaluates is another one and
+   * the value was evaluated for one scope key, and nothing where it is
+   * one for every key (P451). The cone then depends on the reference,
+   * which is the same for every scope key: it is of no scope key on its
+   * account, and a read of what the reference leads to is a read of the
+   * scope instance, which makes the reader one of that key.
+   */
+  scopedValue(index: number, host: Host): unknown {
+    const output = this.plan.outputs[index];
+    if (output.path.includes("*") || output.collection !== undefined) {
+      return undefined;
+    }
+    const value = this.valueOfOutput.get(index);
+    if (value === undefined || !this.#values.has(value)) return undefined;
+    const scopes = this.store.scopes!;
+    const place = [`${index}`];
+    if (!this.#placeScopes.has(JSON.stringify(["values", ...place]))) {
+      const probed = scopes.framed(() => this.evaluated(value)(host.context))
+        .value;
+      if (probed.scoped === undefined) return undefined;
+    }
+    return host.depend(
+      this.#scopedPlace(place, (inner) => inner.value(value), true),
+      [],
+    );
+  }
+
+  /**
    * The stored form of a reference to the rows of the assembled
    * collection `reference` that stands at the path `at` of the result,
    * where the assembly is of a scope key, and nothing where it is one for
@@ -8013,8 +8053,9 @@ export class Instance {
   #scopedPlace(
     path: readonly string[],
     valueOf: (host: Host) => unknown,
+    values = false,
   ): Lazy {
-    const text = JSON.stringify(path);
+    const text = JSON.stringify(values ? ["values", ...path] : path);
     const key = `scoped ${text}`;
     return (context) =>
       this.#ensureReference(key, context, undefined, "value", (inner) => {
@@ -8029,7 +8070,10 @@ export class Instance {
           // key stores its value there.
           scopes.staleAside(`${this.id}\n${key}`);
         }
-        const doc = scopedDocument(this.#scopedOutputs(), scope);
+        const doc = scopedDocument(
+          values ? this.#scopedValues() : this.#scopedOutputs(),
+          scope,
+        );
         this.#putScoped(doc, path, value);
         return new Ref(doc, [...path]);
       });
@@ -8054,6 +8098,62 @@ export class Instance {
     const id = identifierOf({ parent: this.id, type: "scoped outputs" });
     this.root.#scopedOutputsOf.set(id, this);
     return id;
+  }
+
+  /**
+   * On the root: the instance whose values of a scope each document of
+   * `#scopedValues()` holds, by the name of the document without its
+   * scope.
+   */
+  readonly #scopedValuesOf = new Map<string, Instance>();
+
+  /**
+   * The name, without a scope, of the document whose scope instances hold
+   * the values of this instance that a cone of another value placed and
+   * that were evaluated for one scope key, each at the number of its
+   * output (`scopedValue`, P451).
+   */
+  #scopedValues(): string {
+    const id = identifierOf({ parent: this.id, type: "scoped values" });
+    this.root.#scopedValuesOf.set(id, this);
+    return id;
+  }
+
+  /**
+   * The records of a write to a scope instance of the document of the
+   * scoped values: the value of an output at the number of the output,
+   * under the record of that output, and each interim output of the same
+   * cone below it, under its own.
+   */
+  #valueWrites(doc: string, path: readonly string[]): PlanWrite[] {
+    const index = Number(path[0]);
+    const output = this.plan.outputs[index];
+    if (output === undefined) return [];
+    const found: { output: number; at: string[] }[] = [];
+    this.plan.outputs.forEach((other, number) => {
+      if (
+        other.cone !== output.cone || other.kept || other.path.includes("*")
+      ) {
+        return;
+      }
+      const at = [path[0], ...other.path];
+      const covers = at.length <= path.length
+        ? at.every((segment, position) => segment === path[position])
+        : path.every((segment, position) => segment === at[position]);
+      if (!covers) return;
+      if (at.length > path.length && this.store.peek(doc, at) === undefined) {
+        return;
+      }
+      found.push({
+        output: number,
+        at: at.length < path.length ? [...path] : at,
+      });
+    });
+    return found.map(({ output, at }) => {
+      const write = this.#outputRecord(doc, output, at);
+      this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
+      return write;
+    });
   }
 
   /**
@@ -14048,6 +14148,10 @@ export class Instance {
       ? undefined
       : this.#scopedOutputsOf.get(scopeOfDocument(doc).base);
     if (scoped !== undefined) return scoped.#outputWrites(doc, path, splice);
+    const valued = this.store.scopes === undefined
+      ? undefined
+      : this.#scopedValuesOf.get(scopeOfDocument(doc).base);
+    if (valued !== undefined) return valued.#valueWrites(doc, path);
     const writing = this.#writing;
     if (writing === undefined) return [];
     const keys = writing.instance.contextKeys(writing.host.context);
@@ -15562,6 +15666,16 @@ export class Instance {
       for (const text of scoped.#placeScopes.keys()) {
         for (const each of ["user", "session"] as const) {
           scoped.markStale(`scoped ${text}`, store.scopes.keyOf(each));
+        }
+      }
+    }
+    const valued = scope === undefined
+      ? undefined
+      : root.#scopedValuesOf.get(base);
+    if (valued !== undefined && store.scopes !== undefined) {
+      for (const text of valued.#placeScopes.keys()) {
+        for (const each of ["user", "session"] as const) {
+          valued.markStale(`scoped ${text}`, store.scopes.keyOf(each));
         }
       }
     }

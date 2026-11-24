@@ -218,6 +218,8 @@ installFakeClock({
     "compiled-serving-principals",
     // The same, for an instance a handler made, which two sessions demand.
     "made-session",
+    // The same, for a rendered tree that two principals read.
+    "scoped-view",
   ],
 });
 
