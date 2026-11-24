@@ -1387,8 +1387,7 @@ executing:
   carries nothing either: its pieces derive from what the source holds,
   and its judgment holds a slice that read an instance there stale until
   the source's index proves the instance current. The set is replaced when
-  it changes
-  and withdrawn at a park. The memory server admits a row only for a live
+  it changes and withdrawn at a park. The memory server admits a row only for a live
   client session on it that names an actor. Where that actor holds READ on
   the space carried into, by the check a named scoped read passes
   (protocol.md §2), the row is the actor's pair's. Where the actor does
