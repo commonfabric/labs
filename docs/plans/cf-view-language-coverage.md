@@ -31,7 +31,11 @@ which covers OpenTofu and Terraform configuration, variable definitions files,
 backend configuration files, and dependency lock files, has syntax highlighting
 and a structure tree of blocks and of the attributes that define values, which
 are those at a file's top level and in `locals` blocks; a string's
-interpolations and template directives are code inside the string. Java
+interpolations and template directives are code inside the string. C, C++, and
+CUDA have syntax highlighting and a structure tree of functions, declarations,
+named types, type aliases, and macros, and of C++'s namespaces and classes. A
+`.h` header, which C and C++ both write, uses a mode that claims neither dialect
+and parses with the C++ grammar until an explicit language names one. Java
 properties files, ProGuard and R8 keep rules, and XML, which covers Android
 manifests and resources, SVG, and Apple property lists, have syntax
 highlighting; properties files list their keys, and XML lists its elements.
@@ -67,18 +71,18 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Swift, Kotlin, Rust, TOML, HCL, and shell run on Tree-sitter through a
-shared, language-neutral adapter, which Go and HTML will use as well. Java
-properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org mode, Lean,
-and ignore files use focused scanners.
+Python, Swift, Kotlin, Rust, TOML, HCL, shell, C, and C++ run on Tree-sitter
+through a shared, language-neutral adapter, which Go and HTML will use as well.
+Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org mode,
+Lean, and ignore files use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, Lean,
-shell, makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode,
-directive configuration, ignore-file, and diff support to honest handling of
-every textual syntax in the active `commonfabric` repositories.
+shell, C, C++, CUDA, makefile, Java properties, INI, ProGuard, Git attributes,
+XML, Org mode, directive configuration, ignore-file, and diff support to honest
+handling of every textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -184,15 +188,15 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 650 shipped lines; 200 for a later grammar |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 650 shipped lines; 200 for a later grammar |
 | Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
@@ -252,6 +256,23 @@ HCL-scaled figures; for the re-color it gives the range of every estimate. The
 re-color is probably over its maximum, for the reason under "Rust over its
 re-color maximum". Rust is over the unpacked-dependency maximum, for the reason
 under "Rust over its unpacked-dependency maximum".
+
+The C++ / C column is the
+[November 2026 C-family measurement](../history/packages/cli/cf-view-c-family-2026-11.md),
+made in two rounds, each between two TOML control runs, on a machine whose load
+had fallen to one-minute averages of 60 and then 20. Its timings are TOML's
+recorded 95th percentiles multiplied by the ratio of the language's median to
+TOML's in the round whose controls stayed within 1.29 times TOML's recorded
+medians; a third round on the final code put C++ at 78.5, 39.8, 44.1, and 25.4
+ms. CUDA and headers use the C++ figures. The direct measurements behind the
+overruns below are in the report. C++ is over its initialization and re-color
+maximums, and at its document-parse maximum, for the reason under "C++ over its
+initialization and re-color maximums". The byte and source figures are both
+grammars' together. The owned source serves the C grammar and the C++ grammar,
+and is over the maximum even for two later grammars, for the reason under "C and
+C++ over their owned-source maximum". C++ and C are over the unpacked-dependency
+maximum, for the reason under "C and C++ over their unpacked-dependency
+maximum".
 
 The binary build leaves out every directory of a grammar package except the
 one holding its WebAssembly grammar, such as generated C source and native
@@ -459,6 +480,66 @@ second implementation for structure. The comparison therefore keeps the
 dependency, and the maximums stay where they are. A change that lowers the
 adapter's cost for each capture is the way to bring Rust inside, as it is for
 Kotlin.
+
+#### C and C++ over their unpacked-dependency maximum
+
+The official C and C++ grammars' packages are 8.55 and 40.43 MiB unpacked,
+48.98 MiB together, against a 10 MiB maximum for a later grammar. Their
+WebAssembly grammars, which the pager loads, are 0.59 and 3.28 MiB; the rest is
+generated C source, native builds, and bindings, which the binary build leaves
+out. The C++ package depends on the C package, so the C package is in the
+dependency cache whichever grammar C uses.
+
+The overrun starts the comparison under "Reconsidering the dependency". No
+focused C or C++ implementation exists, and one would need a second
+implementation for structure, as the parser decision found for the other
+source languages. The comparison therefore keeps the dependency. Packages
+holding only the WebAssembly builds, as Swift and Kotlin use, would bring C and
+C++ inside the maximum.
+
+#### C++ over its initialization and re-color maximums
+
+C++ initialized in 73 and 86 ms at the 95th percentile in two rounds, against a
+75 ms maximum, and in an estimated 84.7 ms scaled against the TOML control. In
+the same session it took 4 percent longer than Swift, whose own median there
+was above the 95th percentile its report recorded. It re-colored after one edit
+in 28 and 34 ms at the 95th percentile, against 25, and in an estimated
+22.5 ms, and parsed a document in 60 and 49 ms, against 50, and in an estimated
+38.5 ms. CUDA and headers use the C++ grammar
+and share its figures. C is inside every timing maximum by its estimates; its
+re-color measured 25 and 26 ms at the 95th percentile directly, in rounds whose
+TOML control re-colored 1.2 to 1.8 times as slowly as recorded.
+
+Initialization is the C++ grammar's size and its highlight query's
+compilation, which takes about 37 ms of processor time against Swift's 28;
+the query already shares parents and alternatives among its patterns, which cut
+that cost by about half. The overruns start the comparison under
+"Reconsidering the dependency". No focused C++ implementation exists, and one
+would give up the structure tree or need a second implementation for it. The
+comparison therefore keeps the dependency. A cheaper query, with fewer patterns
+that constrain a node's parent, is the way to bring initialization inside, at
+the cost of coloring fewer declared names.
+
+#### C and C++ over their owned-source maximum
+
+The C-family grammar module measures 532 physical lines of owned source, for
+the C grammar and the C++ grammar together, against 200 lines for each later
+grammar. 159 of them are the two highlight queries, which tell declared names
+from called ones, parameters from other bindings, and declaring keywords from
+control keywords, as the other languages' queries do, and which name CUDA's
+qualifiers and a parser's recovered keywords. The rest find each declaration's
+name through C's declarators, which nest pointers, arrays, references,
+parentheses, and function parameter lists around it, and label macro-defined
+definitions, conversion operators, and template members.
+
+The overrun starts the comparison under "Reconsidering the dependency". No
+focused C or C++ implementation exists. One would have to lex both languages,
+raw strings and the preprocessor included, and would need a second
+implementation for structure, as the parser decision found for the other
+source languages. The focused Python scanner that this plan replaced took 863
+lines for highlighting alone, which suggests that a focused implementation of
+two larger languages would not be smaller than these 532 lines. The comparison
+therefore keeps the dependency.
 
 #### Reconsidering the dependency
 
@@ -1060,12 +1141,74 @@ without claiming the unrelated gVisor and Infra configurations.
 
 ## Stage 12: systems-language group
 
-- [ ] Add C, C++, headers, and CUDA.
+- [x] Add C, C++, headers, and CUDA.
 - [ ] Add assembly and linker scripts.
 - [ ] Add Protocol Buffers and protobuf text format.
 - [ ] Add Packetdrill.
-- [ ] Use a neutral C-family mode for ambiguous headers until project context
-  establishes the dialect.
+- [x] Use a neutral C-family mode for ambiguous headers.
+- [ ] Establish an ambiguous header's dialect from its project, in direct files
+  and diffs.
+- [ ] Color C-family macro bodies, and read through the annotation macros that
+  the grammars cannot parse, such as `class GTEST_API_ Foo`.
+
+C, C++, headers, and CUDA are implemented ahead of the rest of this stage. A
+November 13, 2026 read of the local checkouts of the organization's
+repositories found 469 C-family files in 5 repositories: 464 on gVisor's
+`cfc_v2` branch, which are 353 `.cc`, 85 `.h`, 22 `.c`, and 4 `.cu` files, and
+one or two each in Labs, Loom, Infra, and the `commonfabric-weaver` repository.
+The six months before the read hold 12 path-change events on C-family paths: 4
+in gVisor, 3 each in Labs and `commonfabric-weaver`, and 1 each in Infra and
+Loom. The read also found three Objective-C files, named `.m`, in Infra, which
+no item in this plan covers.
+
+C runs on the Tree-sitter adapter with the official
+[`tree-sitter/tree-sitter-c`](https://github.com/tree-sitter/tree-sitter-c)
+grammar, and C++, CUDA, and headers with the official
+[`tree-sitter/tree-sitter-cpp`](https://github.com/tree-sitter/tree-sitter-cpp)
+grammar; each npm package ships its WebAssembly build. A lowercase `.c` selects
+C. `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`, `.tcc`, and an
+uppercase `.C`, which compilers read as C++, select C++, and `.cu` and `.cuh`
+select CUDA. The CUDA grammar attaches its WebAssembly
+build to its GitHub releases but no npm package carries it, so CUDA uses the
+C++ grammar, with CUDA's qualifiers, such as `__global__`, colored as keywords.
+That grammar reads a kernel launch's `<<<` and `>>>` as shift operators around
+a region it could not parse. C keeps its own grammar because the C++ grammar
+cannot parse C that uses C++'s keywords as names, such as `int template = 1;`
+or `this->next`, and because the C grammar initializes in about half the time.
+
+A `.h` header selects a mode named `c-family-header`, which claims neither
+dialect and parses with the C++ grammar. That grammar reads the declarations C
+headers usually make: over the 86 surveyed headers, 12 of them written in C, it
+could not parse 0.25 percent of lines, against 20.32 percent for the C grammar.
+It cannot parse C that uses one of C++'s keywords as a name, which none of the
+surveyed headers does. Selection reads a name and a source, not the project
+around them, so for now only an explicit language names a header's dialect, and
+the explicit language options apply to piped source alone: a header piped with
+`--language c` is colored as C, and a header named on the command line or in a
+diff is colored with the C++ grammar. Establishing the dialect from the project
+is an open item above.
+
+Structure covers functions and their prototypes, each name declared at a file's
+top level and in types, named structures, unions, enumerations, and classes,
+typedefs and `using` aliases, macros, and namespaces. A member of a class, and a
+qualified definition such as `FileDescriptor::reset`, is a method, indexed under
+its own name. A definition that a macro expands to, such as Google Test's
+`TEST_F(Suite, Name) {`, is labeled with the whole macro call. The highlight
+query colors a defined or called name qualified by one or two scopes, such as
+`std::chrono::now`; one qualified by three or more is an identifier, because
+each further level makes the C++ grammar's query costlier to compile.
+
+A coverage check over the 469 files found every file reconstructed exactly. The
+grammars could not parse part of 71 files, covering 0.46 percent of lines,
+mostly at macros they cannot see through: eBPF `section("maps")` annotations,
+register variables bound to named registers with `asm`, and classes declared
+through annotation macros, which the structure tree then lists as variables
+without their members. 0.22 percent of characters other than white space have
+no token class, almost all of them in macro bodies, which both grammars leave
+as one unparsed token. The item above about macro bodies and annotation macros
+covers both. Fixtures come from gVisor and Labs. The
+[November 2026 C-family measurement](../history/packages/cli/cf-view-c-family-2026-11.md)
+records the costs and the coverage check.
 
 Completion gate: every systems-language family in the active gVisor branch
 passes direct-file and diff fixtures.

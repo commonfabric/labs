@@ -1217,6 +1217,14 @@ export class SpaceServer implements TransactionSealDestination {
   readonly #originFollowsSettled = new Set<string>();
 
   /**
+   * The result documents, by `originFollowKey()`, of the pieces that adopted
+   * new source when this tenure followed their origin. A root the store
+   * could serve that rests on one is loaded, so the piece starts on the
+   * source it adopted.
+   */
+  readonly #movedOrigins = new Set<string>();
+
+  /**
    * Every wave a seal has opened and no commit has finished: what a
    * `sealsCommitted` barrier waits on. A wave leaves when its post-commit
    * step has run, whatever its outcome, when it is discarded empty, or at
@@ -6315,6 +6323,14 @@ export class SpaceServer implements TransactionSealDestination {
             ...judged.held.filter((key) => !released.has(key)),
           ]
         ) {
+          // A root that rests on a piece whose origin moved is loaded, and
+          // one whose origin this tenure has yet to follow is left unloaded
+          // meanwhile: what the store holds of it is what a client reads
+          // until the follow ends either way.
+          if (this.#originMoved(judged.origins.get(key))) {
+            this.#currency.load(key);
+            continue;
+          }
           rootKeys.delete(key);
           // A re-arm the judgment did not bear out leaves no retry owed.
           this.#pendingStructureLoads.delete(key);
@@ -7936,8 +7952,32 @@ export class SpaceServer implements TransactionSealDestination {
   };
 
   /**
+   * Helper for the demand pass, which has the origin of each of `pieces`
+   * followed where this tenure has not (§3e): the pieces a root the store
+   * can serve rests on that record a source origin. A piece left unstarted
+   * is one no start follows the origin of.
+   *
+   * @returns Whether one of them adopted new source when its origin was
+   * followed.
+   */
+  #originMoved(pieces: readonly string[] | undefined): boolean {
+    let moved = false;
+    for (const piece of pieces ?? []) {
+      const root: OwningRootAddress = {
+        space: this.#options.space,
+        id: piece as URI,
+        scope: "space",
+      };
+      if (this.#movedOrigins.has(originFollowKey(root))) moved = true;
+      else this.#originFollowed(root);
+    }
+    return moved;
+  }
+
+  /**
    * Follow the origin of a piece this tenure is about to start for the first
-   * time (§3e), beside the loop's cycles rather than inside one: the
+   * time, or to leave unstarted (§3e), beside the loop's cycles rather than
+   * inside one: the
    * reconciler's compile seals the candidate's closure into the wave open
    * when it finishes, and its adopting direct commit waits for that wave to
    * commit (`Runtime.sealsCommitted`), so a cycle awaiting the follow would
@@ -7957,6 +7997,7 @@ export class SpaceServer implements TransactionSealDestination {
       return runtime.sourceReconciler.reconcile(cell);
     }).then(
       (outcome) => {
+        if (outcome === "updated") this.#movedOrigins.add(key);
         logger.debug("origin-followed", () => [
           `space ${this.#options.space}: followed the origin of ${root.id} ` +
           `before its first start (${outcome})`,
@@ -9453,6 +9494,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#followedOrigins.clear();
     this.#originFollowsInFlight.clear();
     this.#originFollowsSettled.clear();
+    this.#movedOrigins.clear();
     this.#rearmedAwaitingSettle.clear();
     this.#rearmSeqsUnderRetry.clear();
     this.#rearmSeqsAwaitingFollow.clear();

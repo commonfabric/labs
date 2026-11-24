@@ -1283,5 +1283,61 @@ describe("SpaceReplica", () => {
         expect(replicaOver().markedSplices()).toBe(false);
       });
     });
+
+    describe("invitesRevisionWatchable()", () => {
+      /**
+       * A replica whose session sits on a connection to a server that
+       * advertises `spaceInvitesRevision` as `advertised` says, on the branch
+       * `branch` forks (the default branch when it is absent).
+       */
+      const replicaAdvertising = async (
+        advertised: boolean,
+        branch?: string,
+      ) => {
+        const replica = replicaOver({
+          createSession: async () => {
+            const { client, session } = branch === undefined
+              ? await mount()
+              : await mountOver(
+                MemoryV2Client.loopback(server),
+                space,
+                service,
+                { branch, forkBranch: true },
+              );
+            if (branch !== undefined) cleanups.push(() => client.close());
+            const connection: SessionConnection = {
+              serverFlags: {
+                ...client.serverFlags!,
+                spaceInvitesRevision: advertised,
+              },
+              delivered: () => client.delivered(),
+              close: () => client.close(),
+            };
+            return { session, client: connection };
+          },
+        });
+        await replica.ensureSession();
+        return replica;
+      };
+
+      it("returns `true` for a session on the default branch of a server that advertises the revision document", async () => {
+        const replica = await replicaAdvertising(true);
+        expect(replica.invitesRevisionWatchable()).toBe(true);
+      });
+
+      it("returns `false` for a session on a server that does not advertise it", async () => {
+        const replica = await replicaAdvertising(false);
+        expect(replica.invitesRevisionWatchable()).toBe(false);
+      });
+
+      it("returns `false` for a session on a branch, whose document stays as the fork found it, though its server advertises it", async () => {
+        const replica = await replicaAdvertising(true, "invites-fork");
+        expect(replica.invitesRevisionWatchable()).toBe(false);
+      });
+
+      it("returns `false` before a session exists", () => {
+        expect(replicaOver().invitesRevisionWatchable()).toBe(false);
+      });
+    });
   });
 });

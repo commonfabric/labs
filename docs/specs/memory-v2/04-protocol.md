@@ -124,6 +124,7 @@ If the server accepts the protocol, it returns:
     "patternLifecycleScopes": true,
     "servedRequests": true,
     "spaceInvites": true,
+    "spaceInvitesRevision": true,
     "branches": true,
     "syncCrossingsV1": true,
     "watchRemoveV1": true,
@@ -453,6 +454,23 @@ invitation links name, since an invitation's code verifier is bound to that
 origin. It defaults to `false` when absent: a client then sends no
 `space.invite` request, and administers invitations some other way or not at
 all. Only the server advertises it, and a client's `hello` leaves it out.
+
+`spaceInvitesRevision` advertises that the server's invitation service moves a
+space's invitation ledger revision document, `of:space-invites-revision`, on
+the space's default branch in the transaction that changes the ledger, and
+tells the server's own sessions on the space of the move
+([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
+It is build-inherent, whether or not the server also advertises
+`spaceInvites`, since the ledger also changes through the host's HTTP routes.
+A session on the default branch learns of each change to the ledger by
+watching the document, on a deployment that runs a space's invitations in the
+process that holds its sessions; a session on another branch sees the document
+as it stood at the fork. A client reads the flag on the connection its session is on, and
+again when that session is replaced on reconnect, since the server it reaches
+then may not advertise it. It defaults to `false` when absent: such a server
+writes no such document, and a client that wants to learn of a change to the
+ledger it did not make reads the ledger again itself. Only the server
+advertises it, and a client's `hello` leaves it out.
 
 `spaceKind` advertises that the server seals the kind a space's genesis commit
 declares, and reports it in the result of every `session.open` it admits
@@ -886,6 +904,7 @@ interface HelloMessage {
     patternLifecycleScopes?: boolean;
     servedRequests?: boolean;
     spaceInvites?: boolean;
+    spaceInvitesRevision?: boolean;
     spaceKind?: boolean;
     // INV-16.
     instanceNameMark?: boolean;

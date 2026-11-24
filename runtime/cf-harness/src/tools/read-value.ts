@@ -282,11 +282,14 @@ export const readValueTool: HarnessToolDefinition<
         }
         // The pieces that enclose it start first, as they do for an open,
         // so a nested instance derives from what they derive now.
-        await startWithInputSources(
-          runtime,
-          piece,
-          () => runtime.startWithCommit(piece),
-        );
+        const started = await startWithInputSources(runtime, piece, {
+          awaitSetupCommit: true,
+        });
+        if (!started) {
+          return fail(
+            `${entry.token} holds a value its piece derives, and the piece could not be started here: its start was superseded or it was stopped`,
+          );
+        }
         await runtime.idle();
       }
       // A link at the position itself is followed, so a piece's field reads

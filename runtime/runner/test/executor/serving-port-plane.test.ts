@@ -286,7 +286,11 @@ describe("serving-port-plane", () => {
       bridge.onRequest("server.judgeCurrencyRoots", (params) => {
         asked.push(params);
         return {
-          servable: [{ root: "of:argument", piece: "of:piece" }],
+          servable: [{
+            root: "of:argument",
+            piece: "of:piece",
+            origins: ["of:piece"],
+          }],
           held: [{
             root: "of:held",
             piece: "of:reader",
@@ -320,7 +324,11 @@ describe("serving-port-plane", () => {
           running: ["of:running"],
         }),
       ).toEqual({
-        servable: [{ root: "of:argument", piece: "of:piece" }],
+        servable: [{
+          root: "of:argument",
+          piece: "of:piece",
+          origins: ["of:piece"],
+        }],
         held: [{
           root: "of:held",
           piece: "of:reader",

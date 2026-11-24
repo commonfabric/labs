@@ -8,6 +8,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { IN_PLACE_PARSE_BUDGET, parse } from "../lib/view/backgroundparse.ts";
 import { markdownLanguage } from "../lib/view/languages/markdown/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
@@ -183,6 +184,42 @@ Deno.test("buildPreparedView: a rename loads the parser of the side left behind"
     ),
     "the removed side kept its Python coloring",
   );
+});
+
+Deno.test("buildPreparedView: deferring parses leaves a large complete file for later", async () => {
+  // The test runs in this package's directory, whose files the diff's
+  // workspace reads. This one is larger than the budget parsed at once.
+  const path = "runtime/cli/lib/view/session.ts";
+  const text = Deno.readTextFileSync("lib/view/session.ts");
+  assert(text.length > IN_PLACE_PARSE_BUDGET, "the file is past the budget");
+  const diff = [
+    `diff --git a/${path} b/${path}`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    "@@ -1 +1 @@",
+    "-/** old */",
+    `+${text.split("\n")[0]}`,
+    "",
+  ].join("\n");
+
+  const deferred = await buildPreparedView(
+    diff,
+    undefined,
+    undefined,
+    {},
+    true,
+  );
+  const whole = await buildPreparedView(diff);
+
+  assertEquals(
+    deferred.parses.map(({ kind, fileName }) => [kind, fileName]),
+    [["document", Deno.realPathSync("lib/view/session.ts")], ["lines", path]],
+  );
+  assertEquals(whole.parses, []);
+  for (const job of deferred.parses) {
+    job.finish(parse(job.kind, job.language, job.text, job.fileName));
+  }
+  assertEquals(deferred.editSource.parse(diff), whole.doc);
 });
 
 Deno.test("buildView: a shebang selects an extensionless source and its editor", () => {
