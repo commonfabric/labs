@@ -15,8 +15,8 @@ requesters.
 ## Complexity Assessment
 
 - **Tier:** Intermediate
-- **Reference exemplars:** `apps/contacts/contact-book.tsx` (multiple entity
-  types, admin CRUD, list management), `apps/habit-tracker/habit-tracker.tsx`
+- **Reference exemplars:** `apps/contacts/main.tsx` (multiple entity
+  types, admin CRUD, list management), `apps/habit-tracker/main.tsx`
   (date-based records, per-day derived views)
 - **Rationale:** The pattern manages three related entity types with
   cross-references, computes derived availability state across dates, implements

@@ -206,7 +206,7 @@ lift/computed or at pattern-body level rather than inside a handler.
 
 ## Activity Log Pattern
 
-The Activity Log (`patterns/apps/activity-log/activity-log.tsx`) is a structured
+The Activity Log (`patterns/apps/activity-log/main.tsx`) is a structured
 event stream for recording agent actions. Log events incrementally as you work —
 not in one batch at the end.
 
@@ -309,7 +309,7 @@ for x in p:
 
 ---
 
-## Agent Piece (`patterns/apps/agent/agent.tsx`)
+## Agent Piece (`patterns/apps/agent/main.tsx`)
 
 Each agent is a piece in the space with its own cells for directive, learned
 state, and lifecycle. Deploy one per agent in the space.

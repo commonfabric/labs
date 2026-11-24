@@ -9,13 +9,13 @@ books; use disposable demonstration data rather than private reading history.
 Closing this gap is gated on server-side execution and reader authorization.
 
 This pair demonstrates a personal reading shelf and a recommendation invitation.
-Start with `library.tsx`. Its agent uses the reader's Loom context to suggest
-books they may have read and authors they may like. The shelf also accepts
-manual books and authors. These are suggestions to review, not verified reading
-history.
+Start with `library/main.tsx`, the shelf. Its agent uses the reader's Loom
+context to suggest books they may have read and authors they may like. The shelf
+also accepts manual books and authors. These are suggestions to review, not
+verified reading history.
 
 The shelf composes `shared-invitation.tsx`; both live in the same dedicated
-space. `main.tsx` remains an independent invitation entrypoint for pieces that
+space. `invitation.tsx` remains an independent invitation entry for pieces that
 use it. **Ask for recommendations** makes the invitation and its sharing
 controls available. The native sharing dialog previews the exact shelf snapshot
 and its destination. Confirming publishes that copy to the invitation's shared
@@ -42,7 +42,7 @@ its sender and the originator.
 
 For a two-person demonstration:
 
-1. In a dedicated demo space, open `library.tsx`, add a book and favorite author
+1. In a dedicated demo space, open `library/main.tsx`, add a book and favorite author
    or run its agent, and click **Ask for recommendations**. Confirm the native
    snapshot preview, then click **Open recommendation invitation**. The shelf
    and invitation stay in that space.
@@ -144,7 +144,7 @@ selection changes without a live model:
 ```bash
 deno task cf test \
   patterns/apps/recommend-a-book/library.test.tsx \
-  patterns/apps/recommend-a-book/main.test.tsx \
+  patterns/apps/recommend-a-book/invitation.test.tsx \
   patterns/apps/recommend-a-book/shared-invitation.test.tsx \
   patterns/apps/recommend-a-book/views.test.tsx \
   --cfc-enforcement-mode enforce-strict --cfc-flow-labels persist

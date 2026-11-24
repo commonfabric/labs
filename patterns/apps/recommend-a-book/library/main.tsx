@@ -15,14 +15,14 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { type Book, type LibrarySeed, SeedLibrary } from "./agents.tsx";
-import type { InvitationOutput as PreviousInvitationOutput } from "./main.tsx";
+import { type Book, type LibrarySeed, SeedLibrary } from "../agents.tsx";
+import type { InvitationOutput as PreviousInvitationOutput } from "../invitation.tsx";
 import Invitation, {
   type LibrarySlot,
   type SharedInvitationOutput,
-} from "./shared-invitation.tsx";
-import { type ReaderPrivate } from "./privacy.tsx";
-import { LibraryView, type Profile } from "./views.tsx";
+} from "../shared-invitation.tsx";
+import { type ReaderPrivate } from "../privacy.tsx";
+import { LibraryView, type Profile } from "../views.tsx";
 
 /** The shelf combines agent suggestions with the reader's own additions. */
 export interface LibraryOutput {

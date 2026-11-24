@@ -21,6 +21,38 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "agent/": "apps/agent/",
   "annotation-manager.tsx": "apps/annotation-manager/annotation-manager.tsx",
   "annotation.tsx": "apps/annotation/annotation.tsx",
+  "apps/activity-log/activity-log.tsx": "apps/activity-log/main.tsx",
+  "apps/agent/agent.tsx": "apps/agent/main.tsx",
+  "apps/annotation-manager/annotation-manager.tsx":
+    "apps/annotation-manager/main.tsx",
+  "apps/assumption-surfacer/assumption-surfacer.tsx":
+    "apps/assumption-surfacer/main.tsx",
+  "apps/bookmarks/bookmarks.tsx": "apps/bookmarks/main.tsx",
+  "apps/calendar/calendar.tsx": "apps/calendar/main.tsx",
+  "apps/cheeseboard/cheeseboard.tsx": "apps/cheeseboard/main.tsx",
+  "apps/codenames-helper/codenames-helper.tsx":
+    "apps/codenames-helper/main.tsx",
+  "apps/contacts/contact-book.tsx": "apps/contacts/main.tsx",
+  "apps/deep-research/deep-research.tsx": "apps/deep-research/main.tsx",
+  "apps/food-recipe/food-recipe.tsx": "apps/food-recipe/main.tsx",
+  "apps/habit-tracker/habit-tracker.tsx": "apps/habit-tracker/main.tsx",
+  "apps/image-analysis/image-analysis.tsx": "apps/image-analysis/main.tsx",
+  "apps/meal-orchestrator/meal-orchestrator.tsx":
+    "apps/meal-orchestrator/main.tsx",
+  "apps/recommend-a-book/library.tsx": "apps/recommend-a-book/library/main.tsx",
+  "apps/recommend-a-book/main.test.tsx":
+    "apps/recommend-a-book/invitation.test.tsx",
+  "apps/recommend-a-book/main.tsx": "apps/recommend-a-book/invitation.tsx",
+  "apps/redactor/vault.tsx": "apps/redactor/main.tsx",
+  "apps/reward-spinner/reward-spinner.tsx": "apps/reward-spinner/main.tsx",
+  "apps/self-improving-classifier/self-improving-classifier.tsx":
+    "apps/self-improving-classifier/main.tsx",
+  "apps/shopping-list/shopping-list.tsx": "apps/shopping-list/main.tsx",
+  "apps/smart-rubric/smart-rubric.tsx": "apps/smart-rubric/main.tsx",
+  "apps/star-chart/star-chart.tsx": "apps/star-chart/main.tsx",
+  "apps/store-mapper/store-mapper.tsx": "apps/store-mapper/main.tsx",
+  "apps/story-weaver/story-weaver.tsx": "apps/story-weaver/main.tsx",
+  "apps/weekly-calendar/weekly-calendar.tsx": "apps/weekly-calendar/main.tsx",
   "aside.tsx": "examples/aside/aside.tsx",
   "base/": "apps/base/",
   "battleship/": "showcase/battleship/",

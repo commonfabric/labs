@@ -22,7 +22,7 @@ import {
   clickButton,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import FoodRecipe from "./food-recipe.tsx";
+import FoodRecipe from "./main.tsx";
 import {
   formatQuantity,
   formatTiming,

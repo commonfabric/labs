@@ -46,7 +46,7 @@ import AssumptionSurfacer, {
   updateFor,
   userText,
   withRecorded,
-} from "./assumption-surfacer.tsx";
+} from "./main.tsx";
 
 const FOLLOW_UP = "Make it work in a browser";
 

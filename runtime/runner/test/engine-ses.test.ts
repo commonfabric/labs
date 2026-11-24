@@ -523,7 +523,7 @@ describe("Engine in SES mode", () => {
     );
     const sourcePath = fromFileUrl(
       new URL(
-        "../../../patterns/apps/self-improving-classifier/self-improving-classifier.tsx",
+        "../../../patterns/apps/self-improving-classifier/main.tsx",
         import.meta.url,
       ),
     );

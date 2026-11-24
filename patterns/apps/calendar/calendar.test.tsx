@@ -28,7 +28,7 @@ import {
   styleOf,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Calendar, { formatDate } from "./calendar.tsx";
+import Calendar, { formatDate } from "./main.tsx";
 
 const isElementWithText = (text: string) => (node: unknown): boolean =>
   propsOf(node) !== undefined && hasExactText(node, text);

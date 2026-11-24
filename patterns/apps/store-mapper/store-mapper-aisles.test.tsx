@@ -23,7 +23,7 @@ import {
   textContent,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
-import { AislesTab, ExtractedAisleResults } from "./store-mapper.tsx";
+import { AislesTab, ExtractedAisleResults } from "./main.tsx";
 
 // The model fails the sign photo's aisle extraction.
 export const llmMocks = [
