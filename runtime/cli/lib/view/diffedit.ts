@@ -928,58 +928,82 @@ function hunkFooting(
   downFrom: number;
   room: HunkRoom;
 } | null {
-  if (file.newPath === undefined) return null;
-  const absPath = ws.resolve(file.newPath);
-  if (!absPath) return null;
-  const content = cache?.file(absPath)?.fileText ?? ws.read(absPath);
+  const content = newSideText(ws, cache, file);
   if (content === null) return null;
-  const fileLines = content.split("\n");
-  const fileLineEndings = fileContentLines(content).map((line) => line.ending);
-  const fileLen = fileLines.length > 0 && fileLines[fileLines.length - 1] === ""
-    ? fileLines.length - 1
-    : fileLines.length;
-
-  // File-range coordinates come from the save map (the original new-file range,
-  // which an inserted line does not extend), not the display `@@` counts (which
-  // an insert grows past the file range). Insertion positions and the global
-  // index come from the parse. Clamp how far context may grow by the
-  // neighboring hunks of the SAME file, so an expansion never overlaps another
-  // hunk's file range — that would splice the two ranges into each
-  // other (silently dropping edits or duplicating lines) and malform the diff.
   const range = hunks[index];
   if (!range) return null;
-  const rangeStart = spliceStart(range);
-  const rangeEnd = rangeStart + range.newCount;
-  const sameFile = hunks.filter((hunk, otherIndex) =>
-    otherIndex !== index && hunk.absPath === range.absPath
-  );
-  const prev = sameFile
-    .filter((hunk) => spliceStart(hunk) + hunk.newCount <= rangeStart)
-    .sort((a, b) =>
-      spliceStart(b) + b.newCount - (spliceStart(a) + a.newCount)
-    )[0] ??
-    null;
-  const next = sameFile
-    .filter((hunk) => spliceStart(hunk) >= rangeEnd)
-    .sort((a, b) => spliceStart(a) - spliceStart(b))[0] ?? null;
-  const prevEnd = prev ? spliceStart(prev) + prev.newCount : 0;
-  const downFrom = rangeEnd;
-  const nextStart = next ? spliceStart(next) : fileLen;
+  const fileLineEndings = fileContentLines(content).map((line) => line.ending);
   return {
-    fileLines,
+    fileLines: content.split("\n"),
     fileLineEndings,
     fileHasTrailingNewline: content.endsWith("\n"),
     range,
+    ...hunkRoom(range, hunks, fileLineEndings.length),
+  };
+}
+
+/** The workspace text of the new side of `file`, or null when it has none. */
+function newSideText(
+  ws: DiffWorkspace,
+  cache: WorkspaceCache | undefined,
+  file: DiffModel["files"][number],
+): string | null {
+  if (file.newPath === undefined) return null;
+  const absPath = ws.resolve(file.newPath);
+  if (!absPath) return null;
+  return cache?.file(absPath)?.fileText ?? ws.read(absPath);
+}
+
+/** How far the new-side range of `range` could grow each way in its file of
+ * `fileLen` lines, given the other hunks among `hunks` that name the same file,
+ * and the line it grows down from. */
+function hunkRoom(
+  range: MutableHunk,
+  hunks: readonly MutableHunk[],
+  fileLen: number,
+): { downFrom: number; room: HunkRoom } {
+  // File-range coordinates come from the save map (the original new-file range,
+  // which an inserted line does not extend), not the display `@@` counts (which
+  // an insert grows past the file range). Clamp how far context may grow by the
+  // neighboring hunks of the SAME file, so an expansion never overlaps another
+  // hunk's file range — that would splice the two ranges into each
+  // other (silently dropping edits or duplicating lines) and malform the diff.
+  const rangeStart = spliceStart(range);
+  const downFrom = rangeStart + range.newCount;
+  let prevEnd = 0;
+  let nextStart: number | undefined;
+  for (const hunk of hunks) {
+    if (hunk === range || hunk.absPath !== range.absPath) continue;
+    const start = spliceStart(hunk);
+    const end = start + hunk.newCount;
+    if (end <= rangeStart) prevEnd = Math.max(prevEnd, end);
+    if (start >= downFrom) nextStart = Math.min(nextStart ?? start, start);
+  }
+  return {
     downFrom,
     room: {
       up: Math.max(0, rangeStart - prevEnd),
-      down: Math.max(0, nextStart - downFrom),
+      down: Math.max(0, (nextStart ?? fileLen) - downFrom),
       // Nothing left is the file running out only where the range reaches its
       // edge; otherwise it is the neighboring hunk in the way.
       atFileTop: rangeStart <= 0,
       atFileBottom: downFrom >= fileLen,
     },
   };
+}
+
+/** How many lines `content` holds, not counting the empty string after a final
+ * newline. */
+function fileLineCount(content: string): number {
+  let count = content.length === 0 || content.endsWith("\n") ? 0 : 1;
+  for (
+    let at = content.indexOf("\n");
+    at >= 0;
+    at = content.indexOf("\n", at + 1)
+  ) {
+    count++;
+  }
+  return count;
 }
 
 /** The hunk `line` sits in, with its file and its index across the whole diff. */
@@ -1002,7 +1026,8 @@ function hunkAt(model: DiffModel, line: number): {
 }
 
 /** How much context each hunk of `current` could still reveal, keyed by the line
- * its header sits on. */
+ * its header sits on. Each file is read and its lines counted once, and each
+ * hunk is compared only with the hunks of its own file. */
 function expandRoom(
   ws: DiffWorkspace,
   cache: WorkspaceCache | undefined,
@@ -1012,12 +1037,29 @@ function expandRoom(
   const out = new Map<number, HunkRoom>();
   const model = parseDiff(current);
   if (!model) return out;
+  const byFile = Map.groupBy(hunks, (hunk) => hunk.absPath);
+  const lineCounts = new Map<string | undefined, number | null>();
+  const lineCount = (file: DiffModel["files"][number]): number | null => {
+    if (!lineCounts.has(file.newPath)) {
+      const content = newSideText(ws, cache, file);
+      lineCounts.set(
+        file.newPath,
+        content === null ? null : fileLineCount(content),
+      );
+    }
+    return lineCounts.get(file.newPath) ?? null;
+  };
   let gi = 0;
   for (const f of model.files) {
     for (const h of f.hunks) {
-      const footing = hunkFooting(ws, cache, hunks, f, gi);
-      if (footing) out.set(h.headerLine, footing.room);
-      gi++;
+      const range = hunks[gi++];
+      const fileLen = range ? lineCount(f) : null;
+      if (fileLen !== null) {
+        out.set(
+          h.headerLine,
+          hunkRoom(range, byFile.get(range.absPath) ?? [], fileLen).room,
+        );
+      }
     }
   }
   return out;

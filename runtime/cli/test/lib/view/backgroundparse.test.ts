@@ -9,6 +9,7 @@ import {
   type ParseResult,
   type ParseWorkerAnswer,
   type ParseWorkerMessage,
+  parseWorkerReceiver,
   PendingParses,
   workerParser,
 } from "../../../lib/view/backgroundparse.ts";
@@ -56,14 +57,17 @@ function job(
   };
 }
 
-/** Every outcome a worker parse of `jobs` delivers, once each job has one. */
+/** Every outcome a worker parse of `jobs` delivers, once each job has one,
+ * calling `delivered` as each delivery begins. */
 function parseAll(
   jobs: readonly ParseJob[],
   startWorker?: () => Worker,
+  delivered: () => void = () => {},
 ): Promise<ParseOutcome[]> {
   const outcomes: ParseOutcome[] = [];
   const { promise, resolve } = Promise.withResolvers<ParseOutcome[]>();
   workerParser(jobs, (batch) => {
+    delivered();
     for (const outcome of batch) outcomes.push(outcome);
     if (outcomes.length === jobs.length) resolve(outcomes);
   }, startWorker);
@@ -72,10 +76,32 @@ function parseAll(
 
 /** Starts the parse worker. */
 function parseWorker(): Worker {
-  return new Worker(
-    new URL("../../../lib/view/parseworker.ts", import.meta.url),
-    { type: "module" },
-  );
+  return new RecordingWorker();
+}
+
+/** The parse worker, recording the kinds of the messages it is sent and when
+ * it is ended. */
+class RecordingWorker extends Worker {
+  readonly sent: string[] = [];
+  readonly ended = Promise.withResolvers<void>();
+  terminations = 0;
+
+  constructor() {
+    super(new URL("../../../lib/view/parseworker.ts", import.meta.url), {
+      type: "module",
+    });
+  }
+
+  override postMessage(message: ParseWorkerMessage): void {
+    this.sent.push(message.kind);
+    super.postMessage(message);
+  }
+
+  override terminate(): void {
+    this.terminations++;
+    super.terminate();
+    this.ended.resolve();
+  }
 }
 
 describe("backgroundparse", () => {
@@ -331,43 +357,60 @@ describe("backgroundparse", () => {
     });
 
     it("ends the worker once every job has an outcome", async () => {
-      const ended = Promise.withResolvers<void>();
+      const worker = new RecordingWorker();
 
-      await parseAll([job("lines", typescript, SOURCE)], () => {
-        const worker = parseWorker();
-        const terminate = worker.terminate.bind(worker);
-        worker.terminate = () => {
-          terminate();
-          ended.resolve();
-        };
-        return worker;
-      });
+      await parseAll([job("lines", typescript, SOURCE)], () => worker);
 
-      await ended.promise;
+      await worker.ended.promise;
+    });
+
+    it("lets the worker send each answer after the one before has been delivered", async () => {
+      const worker = new RecordingWorker();
+      const seen: string[][] = [];
+
+      await parseAll(
+        [SOURCE, EDITED, SOURCE].map((text) => job("lines", typescript, text)),
+        () => worker,
+        () => seen.push([...worker.sent]),
+      );
+
+      expect(seen).toEqual([
+        ["parse"],
+        ["parse", "next"],
+        ["parse", "next", "next"],
+      ]);
+      expect(worker.sent).toEqual(["parse", "next", "next"]);
     });
 
     it("delivers nothing once stopped", () => {
       const delivered: ParseOutcome[] = [];
-      let terminated = 0;
+      const worker = new RecordingWorker();
 
       const stop = workerParser(
         [job("document", typescript, SOURCE)],
         (outcomes) => {
           for (const outcome of outcomes) delivered.push(outcome);
         },
-        () => {
-          const worker = parseWorker();
-          const terminate = worker.terminate.bind(worker);
-          worker.terminate = () => {
-            terminated++;
-            terminate();
-          };
-          return worker;
-        },
+        () => worker,
       );
       stop();
 
-      expect(terminated).toBe(1);
+      expect(worker.terminations).toBe(1);
+      expect(delivered).toEqual([]);
+    });
+
+    it("delivers nothing when the worker fails after it was stopped", () => {
+      const delivered: (readonly ParseOutcome[])[] = [];
+      let worker: Worker | undefined;
+
+      const stop = workerParser(
+        [job("lines", typescript, SOURCE)],
+        (outcomes) => delivered.push(outcomes),
+        () => worker = parseWorker(),
+      );
+      stop();
+      worker?.dispatchEvent(new ErrorEvent("error", { message: "Too late." }));
+
       expect(delivered).toEqual([]);
     });
 
@@ -391,6 +434,7 @@ describe("backgroundparse", () => {
         worker.onmessage = (event: MessageEvent<ParseWorkerAnswer>) =>
           answer.resolve(event.data);
         const message: ParseWorkerMessage = {
+          kind: "parse",
           requests: [{
             index: 7,
             kind: "lines",
@@ -401,42 +445,78 @@ describe("backgroundparse", () => {
         };
         worker.postMessage(message);
 
-        expect((await answer.promise).outcomes).toEqual([{
+        expect((await answer.promise).outcome).toEqual({
           kind: "failed",
           index: 7,
           failure: 'No language is named "no-such-language".',
-        }]);
+        });
       } finally {
         worker.terminate();
       }
     });
+  });
 
-    it("sends a batch once it has parsed about as much source as the budget", async () => {
-      const worker = parseWorker();
-      try {
-        const batches: number[][] = [];
-        const done = Promise.withResolvers<void>();
-        worker.onmessage = (event: MessageEvent<ParseWorkerAnswer>) => {
-          batches.push(event.data.outcomes.map(({ index }) => index));
-          if (batches.flat().length === 3) done.resolve();
-        };
-        const large = "x".repeat(IN_PLACE_PARSE_BUDGET);
-        const message: ParseWorkerMessage = {
-          requests: [SOURCE, large, SOURCE].map((text, index) => ({
-            index,
-            kind: "lines",
-            languageId: "plain-text",
-            text,
-            fileName: undefined,
-          })),
-        };
-        worker.postMessage(message);
-        await done.promise;
+  describe("parseWorkerReceiver()", () => {
+    it("sends one answer for each message received, holding the next until a message lets it", async () => {
+      const outcomes = [0, 1, 2].map(() =>
+        Promise.withResolvers<ParseOutcome>()
+      );
+      const sends = [0, 1, 2].map(() => Promise.withResolvers<void>());
+      const sent: number[] = [];
+      const receive = parseWorkerReceiver(
+        ({ outcome }) => {
+          sent.push(outcome.index);
+          sends[outcome.index].resolve();
+        },
+        ({ index }) => outcomes[index].promise,
+      );
+      const finish = (index: number) => {
+        outcomes[index].resolve({ kind: "failed", index, failure: "" });
+        // The receiver awaited this outcome before the caller does, so it has
+        // sent the outcome by the time the caller resumes, unless it is held.
+        return outcomes[index].promise;
+      };
 
-        expect(batches).toEqual([[0, 1], [2]]);
-      } finally {
-        worker.terminate();
-      }
+      receive({
+        kind: "parse",
+        requests: [0, 1, 2].map((index) => ({
+          index,
+          kind: "lines",
+          languageId: "plain-text",
+          text: SOURCE,
+          fileName: undefined,
+        })),
+      });
+      await finish(0);
+      await sends[0].promise;
+      await finish(1);
+      const held = [...sent];
+      receive({ kind: "next" });
+      await sends[1].promise;
+      receive({ kind: "next" });
+      await finish(2);
+      const sentAtOnce = [...sent];
+
+      expect(held).toEqual([0]);
+      expect(sentAtOnce).toEqual([0, 1, 2]);
+    });
+
+    it("throws when given a second `parse` message", () => {
+      const receive = parseWorkerReceiver(() => {});
+      receive({ kind: "parse", requests: [] });
+
+      expect(() => receive({ kind: "parse", requests: [] })).toThrow(
+        "A parse worker takes one `parse` message, before any `next`.",
+      );
+      expect(() => receive({ kind: "next" })).not.toThrow();
+    });
+
+    it("throws when given a `next` message before the `parse` message", () => {
+      const receive = parseWorkerReceiver(() => {});
+
+      expect(() => receive({ kind: "next" })).toThrow(
+        "A parse worker takes one `parse` message, before any `next`.",
+      );
     });
   });
 
