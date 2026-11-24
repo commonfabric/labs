@@ -152,10 +152,12 @@ counting as its length and a record as its number of members, and the default
 is 1,000,000. A direct client holds each request to the advertised limit in
 place of the default: it stages a watch set in parts that fit it, and refuses,
 unsent, a commit that does not. The client measures a request by the values it
-writes out, and the server by the slots those values stand for, so the two
-agree on a dense array and differ on a sparse one: a commit whose array holds
-few values at indices past the limit passes the client and is refused by the
-server on receipt. A client that does not read the field keeps to the default,
+writes out, and the server by the slots those values stand for, and the two
+counts differ. The client counts values that fill no slot, the request's root
+among them, so it can refuse a dense request at the limit that the server would
+read. A sparse array's absent places count for the server alone, so a commit
+whose array holds few values at indices past the limit passes the client and is
+refused by the server on receipt. A client that does not read the field keeps to the default,
 which a server's limit is never below. A `messageSlots` that is not a safe
 integer at or above the default fails the handshake. A routed connection takes
 its bounds from the router instead (`routerFrameSlots`,
