@@ -1,0 +1,1 @@
+{"date":"2026-11-23","from":{"k":"unit","s":"cli","n":"pager: the semantics prewarm once the first frame is drawn, not before"},"to":{"k":"unit","s":"cli","n":"pager: the semantics prewarm once the first frame is drawn, and are disposed on exit"}}

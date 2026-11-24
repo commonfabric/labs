@@ -5803,7 +5803,8 @@ export class Session {
         this.#buffer.lineEndingProvenance(),
       ),
     );
-    this.#semantics = undefined; // the old service was for the previous file
+    this.#semantics?.dispose(); // the old service was for the previous file
+    this.#semantics = undefined;
     this.#mode = "normal";
     this.#cursorOn = false;
     this.#overlay = null;

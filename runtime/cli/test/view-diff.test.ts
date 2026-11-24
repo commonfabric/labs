@@ -1612,6 +1612,7 @@ ${removed}
   const sem: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: () => null,
     definitionOf: (offset) => {
       lookedUp.push(offset);

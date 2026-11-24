@@ -280,6 +280,18 @@ export class BuildConfig {
     return this.#path("runtime", "cli", "lib", "view", "parseworker.ts");
   }
 
+  cliProgramWorkerPath() {
+    return this.#path(
+      "runtime",
+      "cli",
+      "lib",
+      "view",
+      "languages",
+      "typescript",
+      "programworker.ts",
+    );
+  }
+
   fusePackagePath() {
     return this.#path("runtime", "fuse");
   }
@@ -309,6 +321,7 @@ export class BuildConfig {
       this.cliEntryPath(),
       this.cliMultiUserTestWorkerPath(),
       this.cliParseWorkerPath(),
+      this.cliProgramWorkerPath(),
       this.fusePackagePath(),
       ...COMPILE_FINGERPRINT_INPUTS.map((input) =>
         this.#path(...input.split("/"))
@@ -349,6 +362,9 @@ export class BuildConfig {
           // The worker `cf view` parses a diff's large files in, which the
           // compile does not follow either.
           this.cliParseWorkerPath(),
+          // The worker `cf view` builds its TypeScript program in, which the
+          // compile does not follow either.
+          this.cliProgramWorkerPath(),
           // The build metadata `runtime/cli/lib/build-info.ts` reads.
           this.cliEnvPath(),
         ];

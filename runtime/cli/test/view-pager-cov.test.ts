@@ -759,9 +759,10 @@ Deno.test("pager: background parse outcomes that arrive after the viewer closes 
   assertEquals(writes.length, written, "nothing was drawn");
 });
 
-Deno.test("pager: the semantics prewarm once the first frame is drawn, not before", async () => {
+Deno.test("pager: the semantics prewarm once the first frame is drawn, and are disposed on exit", async () => {
   let prewarmed = 0;
   let writesWhenPrewarmed = 0;
+  let disposed = 0;
   const semantics = {
     typeAt: () => null,
     definitionOf: () => [],
@@ -770,15 +771,17 @@ Deno.test("pager: the semantics prewarm once the first frame is drawn, not befor
       prewarmed++;
       writesWhenPrewarmed = writes.length;
     },
+    dispose: () => {
+      disposed++;
+    },
   };
-  const { deps, writes } = makeFake({
-    steps: [{ fireTimers: true }, { eof: true }],
-  });
+  const { deps, writes } = makeFake({ steps: [{ eof: true }] });
 
   await runPager(DOC, OPTS, semantics, undefined, deps);
 
   assertEquals(prewarmed, 1);
   assert(writesWhenPrewarmed > 0, "the first frame was drawn first");
+  assertEquals(disposed, 1);
 });
 
 Deno.test("pager: background parses that fail say so and leave their files plain", async () => {
