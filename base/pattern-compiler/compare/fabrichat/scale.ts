@@ -45,8 +45,9 @@
  * and its size as JSON after the commit, largest first (`changes`).
  *
  * With `SCALE_BASIS` set, the arm `runner` prints after the timed sends of
- * `room` what the basis of the piece holds: its size as JSON and the
- * documents it lists, counted by kind and scope (`basis`).
+ * `room` what the basis of the piece holds: the size as JSON of its
+ * document and of the parts of its list of the documents the piece made,
+ * and those documents, counted by kind and scope (`basis`).
  *
  * With `SCALE_CPU_PROFILE` set to the path of a file, the timed sends of
  * `room` and the event of `home` are sampled and the profile is written
@@ -94,7 +95,11 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "../../../../runtime/runner/src/cfc/ui-contract.ts";
-import { basisDocumentOf } from "../../../../runtime/runner/src/compiled/basis.ts";
+import {
+  basisDocumentOf,
+  basisMadePartDocumentOf,
+  basisPartsOf,
+} from "../../../../runtime/runner/src/compiled/basis.ts";
 import { listenCompiledServingMemoryServer } from "../../../../runtime/runner/src/compiled/serving-memory-server.deno.ts";
 import { compiledPiecesOf } from "../../../../runtime/runner/src/compiled/serving.ts";
 import { setUpCompiledPiece } from "../../../../runtime/runner/src/compiled/setup.ts";
@@ -236,8 +241,9 @@ type Started = {
   /** The counts of `SCALE_TRACE` since the last call. */
   trace?: () => Record<string, number>;
   /**
-   * What the basis of the piece holds, for `SCALE_BASIS`: its size as
-   * JSON, and the documents it lists, counted by the kind the executor
+   * What the basis of the piece holds, for `SCALE_BASIS`: the size as
+   * JSON of its document and of the parts of its list of the documents
+   * the piece made, and those documents, counted by the kind the executor
    * holds each as and by scope. Absent for the executor in memory.
    */
   basis?: () => Record<string, unknown>;
@@ -537,10 +543,13 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
     },
     basis: () => {
       const { id } = result.getAsNormalizedFullLink();
-      const held = piece.transactions.heldOwn(basisDocumentOf(id)) as
-        | { documents?: Record<string, number> }
-        | undefined;
-      const listed = Object.keys(held?.documents ?? {});
+      const held = piece.transactions.heldOwn(basisDocumentOf(id));
+      const parts = basisPartsOf(held, "made").map((part) =>
+        piece.transactions.heldOwn(basisMadePartDocumentOf(id, part)) as
+          | Record<string, number>
+          | undefined
+      );
+      const listed = parts.flatMap((part) => Object.keys(part ?? {}));
       const kinds: Record<string, number> = {};
       for (const doc of listed) {
         const scope = doc.includes("~")
@@ -554,6 +563,10 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       }
       return {
         bytes: (JSON.stringify(held) ?? "").length,
+        partBytes: parts.reduce(
+          (sum, part) => sum + (JSON.stringify(part) ?? "").length,
+          0,
+        ),
         documents: listed.length,
         kinds,
       };
