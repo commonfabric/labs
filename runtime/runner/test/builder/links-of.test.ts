@@ -5,13 +5,23 @@ import { Identity } from "@commonfabric/identity";
 
 import { linksOf } from "../../src/builder/links-of.ts";
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
+import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
+import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
+import { txToReactivityLog } from "../../src/scheduler.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("links-of");
 const space = signer.did();
+
+/** The schema of a row a list links. */
+const rowSchema = {
+  type: "object",
+  properties: { badge: { type: "string" } },
+  required: ["badge"],
+} as const satisfies JSONSchema;
 
 describe("linksOf()", () => {
   let runtime: Runtime;
@@ -43,9 +53,12 @@ describe("linksOf()", () => {
     }
   };
 
-  /** Stores `value` at the document `cause` names, and returns its cell. */
-  const seed = async (cause: string, value: unknown) => {
-    const cell = runtime.getCell<unknown>(space, cause);
+  /**
+   * Stores `value` at the document `cause` names, and returns its cell, read
+   * under `schema` where one is given.
+   */
+  const seed = async (cause: string, value: unknown, schema?: JSONSchema) => {
+    const cell = runtime.getCell<unknown>(space, cause, schema);
     const tx = runtime.edit();
     cell.withTx(tx).set(value);
     expect((await tx.commit().settled).error).toBeUndefined();
@@ -71,6 +84,54 @@ describe("linksOf()", () => {
       idOf(list),
     ]);
     expect(cells?.[2].getAsNormalizedFullLink().path).toEqual(["2"]);
+  });
+
+  it("returns cells that read the values their links name, and the value an element holds", async () => {
+    const row = await seed("row", { badge: "" }, rowSchema);
+    const list = await seed("list", [row, "plain"]);
+
+    const cells = callIn(list);
+
+    expect(cells?.[0].key("badge").get()).toBe("");
+    expect(cells?.[1].get()).toBe("plain");
+  });
+
+  it("returns cells that write as the links the list holds", async () => {
+    // A cell written into a slot stores its own schema on the link. Each
+    // cell has to carry the schema the list's link declares, or a reader of
+    // the written link reads the row under a schema the row never had.
+    const row = await seed("row", { badge: "" }, rowSchema);
+    const list = await seed("list", [row]);
+    const copy = runtime.getCell<unknown>(space, "copy");
+
+    const cells = callIn(list) ?? [];
+    const tx = runtime.edit();
+    copy.withTx(tx).set([...cells]);
+    expect((await tx.commit().settled).error).toBeUndefined();
+
+    const linkAt = (cell: Cell<unknown>) => {
+      const { id, path, schema } = parseLink(
+        (cell.getRaw() as unknown[])[0],
+        cell,
+      )!;
+      return { id, path, schema };
+    };
+    expect(linkAt(copy)).toEqual(linkAt(list));
+  });
+
+  it("reads the list's document and none of the documents its links name", async () => {
+    const row = await seed("row", { badge: "" }, rowSchema);
+    const chained = await seed("chained", undefined);
+    const tx = runtime.edit();
+    chained.withTx(tx).setRaw(row.getAsLink());
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const list = await seed("list", [row, chained]);
+
+    callIn(list);
+
+    const { reads, shallowReads } = txToReactivityLog(openTxs.at(-1)!);
+    expect([...new Set([...reads, ...shallowReads].map(({ id }) => id))])
+      .toEqual([idOf(list)]);
   });
 
   it("returns no cells for a target that holds no list, and `undefined` for a target of `undefined`", async () => {

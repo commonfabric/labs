@@ -3935,7 +3935,10 @@ export declare function resultOwnerOf<T>(
  * whether or not the profiles have loaded, so a handler can keep, reorder or
  * drop them, and `spaceOf()` can name each one's space. An element that holds
  * a value reads as a cell at that element; a `target` holding no list reads
- * as none, and `undefined` as `undefined`. It can be called where
+ * as none, and `undefined` as `undefined`. Each cell carries the schema its
+ * link stores, and one at an element holding a value carries none, so a read
+ * through a cell reads the value it names, and a cell written into another
+ * list stores the same link this one holds. It can be called where
  * `principalOf()` can; calling it in a pattern body throws, and a list that
  * cannot be read throws too.
  */
