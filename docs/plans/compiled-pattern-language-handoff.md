@@ -23,7 +23,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-topics` | `compiled-pattern-topics-merge` | The crate on the corpus of `main`, Topics on the executor | #10016 |
 | `claude/compiled-pattern-runner-m3` | `compiled-pattern-m3` | The trunk of the build: milestones 3 to 6 merged, the store with frozen values, a resume by units | #10140 |
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
-| `claude/compiled-pattern-sandbox-m5` | none while the merge attempt is checked out in `compiled-pattern-m5`; check it out there when that round ends | The merged branch: the trunk head, the carried fixes, the runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes, write integrity | none |
+| `claude/compiled-pattern-sandbox-m5` | none while the merge attempt is checked out in `compiled-pattern-m5`; check it out there when that round ends | The merged branch: the trunk head, the carried fixes, the runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes, write integrity | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | `compiled-pattern-m5` | The merged branch with the serving branch merged into it; every gate passes | none |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -54,8 +54,9 @@ The work after it is on two branches:
    full on both storages, since the labels of a compiled piece are written
    through the content-addressed path (Z95, P452). The merged branch
    `claude/compiled-pattern-sandbox-m5` is fast-forwarded to it, so both
-   names hold every branch of the build. Moving the trunk of #10140 to it
-   is the owner's decision.
+   names hold every branch of the build. The owner chose a stacked pull
+   request over moving the trunk: #10183 has the merged branch as its head
+   and the trunk of #10140 as its base.
 
 The merged branch becomes the trunk once the serving branch is in. For a
 merge: resolve the textual conflicts, then check the places where both
