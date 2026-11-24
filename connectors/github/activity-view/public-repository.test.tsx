@@ -71,7 +71,7 @@ export const llmMocks = [
   },
   {
     when: { lastMessageContains: "Another change" },
-    error: "Summary service unavailable",
+    text: "The team shipped another change.",
   },
 ];
 
@@ -128,12 +128,11 @@ export default pattern(() => {
     return text.includes("Could not load commits: HTTP 403") &&
       !text.includes("No commits found") && !text.includes(SUMMARY);
   });
-  const assert_keeps_commits_when_summary_fails = assert(() => {
+  const assert_replaces_fetch_failure_with_new_activity = assert(() => {
     const text = textContent(repository[UI]);
-    return text.includes("Could not summarize commits:") &&
-      text.includes("Summary service unavailable") &&
+    return text.includes("The team shipped another change.") &&
       text.includes("Another change") &&
-      !text.includes("Could not load commits") &&
+      !text.includes(SUMMARY) && !text.includes("Could not") &&
       !text.includes("No commits found");
   });
   const assert_empty_response_is_not_a_failure = assert(() => {
@@ -162,7 +161,7 @@ export default pattern(() => {
       { assertion: assert_shows_fetch_failure },
       { action: selectOther },
       { settle: true },
-      { assertion: assert_keeps_commits_when_summary_fails },
+      { assertion: assert_replaces_fetch_failure_with_new_activity },
       { action: selectEmpty },
       { settle: true },
       { assertion: assert_empty_response_is_not_a_failure },
