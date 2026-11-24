@@ -937,13 +937,14 @@ export async function runPager(
   };
 
   // A push that fails, unless the server refused it, can be tried again, as
-  // when the network failed it, asking first as the failed push would have.
-  // The push dialog's output goes on from how the failed push ended.
-  const pushFailed = (output: string, confirmed: boolean) => {
+  // when the network failed it, asking first as the failed push would have,
+  // and keeping to the default branch it kept to. The push dialog's output
+  // goes on from how the failed push ended.
+  const pushFailed = (output: string, confirmed: boolean, main?: string) => {
     if (!pushRefused(output)) {
       retry = {
         label: RETRY_PUSH,
-        run: () => startBranchPush(true, confirmed),
+        run: () => startBranchPush(true, confirmed, main),
       };
     }
   };
@@ -1004,7 +1005,7 @@ export async function runPager(
         io,
         controller.signal,
         (branch, url) => pushed(io, branch, url, controller.signal),
-        (output) => pushFailed(output, confirmed),
+        (output) => pushFailed(output, confirmed, main),
         confirmed
           ? undefined
           : (branch, remote, main) =>

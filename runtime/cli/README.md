@@ -822,13 +822,13 @@ names, and fails when it names none. `P` refuses to push `origin`'s default
 branch, and refuses when `origin` names no default branch or cannot be asked
 which it is. It asks `origin`'s server which branch that is, with
 `git ls-remote --symref`, when a push starts, before any question below, and
-shows what git prints only when that fails. The push that the question confirms
-uses that answer rather than asking again. Asking is a connection to `origin` of
-its own, which can mean one more passphrase prompt or security key touch. The
-viewer asks the server because the `refs/remotes/origin/HEAD` that git sets when
-it clones stays as it is when the default branch changes. It also refuses a
-checkout not on a branch, and refuses when git started the viewer as its pager
-for a different repository.
+shows what git prints only when that fails. The push that the question confirms,
+and any retry of it, uses that answer rather than asking again. Asking is a
+connection to `origin` of its own, which can mean one more passphrase prompt or
+security key touch. The viewer asks the server because the
+`refs/remotes/origin/HEAD` that git sets when it clones stays as it is when the
+default branch changes. It also refuses a checkout not on a branch, and refuses
+when git started the viewer as its pager for a different repository.
 
 The push and land dialogs draw what the viewer says in bright text, and the
 names it mentions, such as a branch, a repository, a commit, or a pull request's

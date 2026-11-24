@@ -2973,7 +2973,7 @@ describe("view-push", () => {
         );
       });
 
-      it("pushes again without asking whether to push when Retry push follows a confirmed push that failed", async () => {
+      it("pushes again without asking whether to push, or asking origin's server again for its default branch, when Retry push follows a confirmed push that failed", async () => {
         let asks = 0;
         const ran: string[] = [];
         const harness = pagerHarness(() => {
@@ -3012,7 +3012,7 @@ describe("view-push", () => {
         ]);
 
         expect(ran).toEqual([PUSH_FEATURE, PUSH_FEATURE]);
-        expect(asks).toBe(2);
+        expect(asks).toBe(1);
       });
 
       it("says what pushing would do and which pull request is open, pushing nothing until Push, which continues the dialog", async () => {
