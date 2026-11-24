@@ -15,7 +15,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/nested-fold.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:586724396666788ed6f7933e5d6292ce02b4e3acd14b1d412a45e27430a7cbf1\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => (($h.v($h.slot(2)) !== (\"\"))));\n}\n$rt.element(0, ($h) => (($h.v($h.at($h.output(0), [\"length\"])) > (0))));\n}\nreturn $rt.thunk(($h) => (({ busy: $h.output(2) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:586724396666788ed6f7933e5d6292ce02b4e3acd14b1d412a45e27430a7cbf1\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => (($h.v($h.slot(2)) !== (\"\"))));\n}\n$rt.element(0, ($h) => (($h.v($h.output(0, [\"length\"])) > (0))));\n}\nreturn $rt.thunk(($h) => (({ busy: $h.output(2) })));\n});"
             }
           ],
           "outputsBelow": [],

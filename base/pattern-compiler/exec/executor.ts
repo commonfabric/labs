@@ -2003,8 +2003,15 @@ export class Host {
     this.#instance = instance;
   }
 
-  /** The value of a slot, or its reference for an `identity` slot. */
-  slot(index: number, rest: string[] = []): unknown {
+  /**
+   * The value of a slot, or its reference for an `identity` slot, or of
+   * the path `rest` below it. For the slot of the chosen child of a
+   * `pick`, at `*`, the first segment of `rest` is the key the pick chose
+   * and stands in the place of `*`, so that the read is of that child
+   * alone; with no `rest` it yields every child of the container (ES
+   * §2.2).
+   */
+  slot(index: number, rest: readonly unknown[] = []): unknown {
     const instance = this.#instance;
     if (
       this.cone !== undefined &&
@@ -2013,21 +2020,22 @@ export class Host {
       instance.counts.slotsNotListed += 1;
     }
     const slot = instance.plan.slots[index];
-    // The slot of the chosen child of a `pick`, at `*`, yields every
-    // child of the container (ES §2.2).
-    const path = slot.path[slot.path.length - 1] === "*" && rest.length === 0
-      ? slot.path.slice(0, -1)
-      : slot.path;
-    this.demand(slot.root, [...path, ...rest]);
+    const children = slot.path[slot.path.length - 1] === "*";
+    const path = children ? slot.path.slice(0, -1) : slot.path;
+    const below = rest.map((segment) => `${segment}`);
+    this.demand(slot.root, [...path, ...below]);
     const from = this.reads.length;
     const found = this.at(
-      instance.rootOf(slot.root, this, [...path, ...rest]),
-      [...path, ...rest],
+      instance.rootOf(slot.root, this, [...path, ...below]),
+      [...path, ...below],
     );
     // Where nothing is stored, a slot reads as the default of the place
-    // (ES §2.2): the default its schema declares.
-    const schema = path === slot.path
-      ? rest.reduce(schemaBelow, instance.schemaOf(slot.schema))
+    // (ES §2.2): the default its schema declares, which for the slot of
+    // the chosen child is that of the child.
+    const schema = !children
+      ? below.reduce(schemaBelow, instance.schemaOf(slot.schema))
+      : below.length > 0
+      ? below.slice(1).reduce(schemaBelow, instance.schemaOf(slot.schema))
       : undefined;
     if (slot.observes === "identity") {
       // A stream that is an input of the pattern is a reference like any
@@ -2182,15 +2190,19 @@ export class Host {
     };
   }
 
-  /** The value of an entry of `Plan.outputs`. */
-  output(index: number): unknown {
+  /**
+   * The value of an entry of `Plan.outputs`, or what it holds at `path`.
+   * A reader of a path of the value a value function computes depends on
+   * what the value holds there and on nothing else of it (`dependAt`).
+   */
+  output(index: number, path?: readonly unknown[]): unknown {
     const instance = this.#instance;
     const output = instance.plan.outputs[index];
     // The result holds a reference in the place of an output that was
     // evaluated for one scope key.
     if (this.key === RESULT && instance.store.scopes !== undefined) {
       const placed = instance.scopedOutput(index, this);
-      if (placed !== undefined) return placed;
+      if (placed !== undefined) return this.#below(placed, path);
     }
     // So does the cone of another value: a value of a scope key that a
     // cone of the space places, or reads through the reference, leaves
@@ -2203,13 +2215,22 @@ export class Host {
       output.cone !== this.cone
     ) {
       const placed = instance.scopedValue(index, this);
-      if (placed !== undefined) return placed;
+      if (placed !== undefined) return this.#below(placed, path);
     }
-    return this.#output(index, output);
+    return this.#output(index, output, path);
+  }
+
+  /** What `value` holds at `path`, and `value` itself for no path. */
+  #below(value: unknown, path: readonly unknown[] | undefined): unknown {
+    return path === undefined ? value : this.at(value, path);
   }
 
   /** `output()`, for an output that is given as it was evaluated. */
-  #output(index: number, output: Plan["outputs"][number]): unknown {
+  #output(
+    index: number,
+    output: Plan["outputs"][number],
+    path: readonly unknown[] | undefined,
+  ): unknown {
     const instance = this.#instance;
     if (
       this.cone !== undefined && output.cone !== this.cone &&
@@ -2230,19 +2251,25 @@ export class Host {
       // then holds the reference, and the buckets that changed are stored
       // by themselves (`Instance.#storeIndex`).
       const handle = new IndexHandle(output.collection, this.context);
-      return this.cone === undefined &&
+      return this.#below(
+        this.cone === undefined &&
           instance.bucketRecordOf(output.collection) === undefined
-        ? this.settled(handle)
-        : handle;
+          ? this.settled(handle)
+          : handle,
+        path,
+      );
     }
     if (output.collection !== undefined) {
       // The result of a construct that assembles rows is held by
       // reference until something observes it.
-      return assemblesRows(
-          instance.plan.collections[output.collection].construct,
-        )
-        ? instance.assembledBy(output.collection, this.context)
-        : this.depend(instance.assembled(output.collection));
+      return this.#below(
+        assemblesRows(
+            instance.plan.collections[output.collection].construct,
+          )
+          ? instance.assembledBy(output.collection, this.context)
+          : this.depend(instance.assembled(output.collection)),
+        path,
+      );
     }
     const value = instance.valueOfOutput.get(index);
     if (value === undefined) {
@@ -2250,7 +2277,7 @@ export class Host {
         entry.output === index
       );
       if (below !== undefined) {
-        return this.at(this.value(below.value), below.path);
+        return this.value(below.value, [...below.path, ...(path ?? [])]);
       }
       throw new Unsupported(
         `an output that no value function computes: output ${index}, ${
@@ -2258,6 +2285,7 @@ export class Host {
         }`,
       );
     }
+    if (path !== undefined && path.length > 0) return this.value(value, path);
     const held = this.value(value);
     if (Array.isArray(held)) {
       instance.returnedWhole.set(held, {
@@ -2268,9 +2296,15 @@ export class Host {
     return held;
   }
 
-  /** The value a value function computes, by the value's number. */
-  value(value: number): unknown {
-    return this.depend(this.#instance.evaluated(value));
+  /**
+   * The value a value function computes, by the value's number, or what
+   * it holds at `path`, on which alone the reader then depends.
+   */
+  value(value: number, path?: readonly unknown[]): unknown {
+    const entry = this.#instance.evaluated(value);
+    return path === undefined || path.length === 0
+      ? this.depend(entry)
+      : this.dependAt(entry, path);
   }
 
   /** The evaluation that the host was made for has ended. */
@@ -2345,6 +2379,17 @@ export class Host {
    */
   depend(entry: Lazy, path?: readonly string[]): unknown {
     return this.dependEntry(entry, path).value;
+  }
+
+  /**
+   * What `entry` holds at `path`, which the evaluation depends on alone:
+   * an evaluation of the entry that leaves what it holds there as it was
+   * evaluates nothing here, as a write of another member of a stored
+   * record evaluates nothing that read one member.
+   */
+  dependAt(entry: Lazy, path: readonly unknown[]): unknown {
+    const segments = path.map((segment) => `${segment}`);
+    return this.at(this.dependEntry(entry, segments).value, segments);
   }
 
   dependEntry(entry: Lazy, path?: readonly string[]): Entry {

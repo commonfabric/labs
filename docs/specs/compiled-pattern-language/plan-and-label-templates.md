@@ -13895,16 +13895,17 @@ this document made.
     binds the child slots of a `pick` over a container slot to the
     chosen path, and the value function reports the key in its result
     (`execution-and-storage.md` §2.2). The function has to read the
-    child before it returns, and `host.slot` takes a slot index and no
-    key. *Assumed,* with the prototype: the function is handed every
-    child of the container at the paths and classes of the child slots,
-    and reads the one at its key. The label is the `pick` node's all the
-    same, instantiated at the chosen child alone, and the cone is stale
-    when the chosen child changed, by the comparison section 3.18 has
-    for a container another cone computed. The cost is that the read
-    loads every child. The alternative gives the host a function that
-    takes the choice point and the key and binds the child slots before
-    it returns. `execution-and-storage.md` owns the host interface.
+    child before it returns. *Provisional (decision P453 of the
+    prototype):* the function passes the key it chose to `host.slot`,
+    which reads that child alone at the path and class of the child
+    slot, and a member read of a container another cone computed passes
+    the whole path to `host.output`. The label is the `pick` node's all
+    the same, instantiated at the chosen child alone, and the cone is
+    stale when the chosen child changed, by the comparison section 3.18
+    has for a container another cone computed, and not when another
+    child changed. Handing the function every child, the assumption
+    before P453, loads every child and makes the cone stale on a change
+    of any of them. `execution-and-storage.md` owns the host interface.
 47. **The record of `wish`.** Section 3.19 makes a `wish` one
     `Operation` of a kind of its own: its operands are stored by write
     edges with target `request`, its result is read through slots with

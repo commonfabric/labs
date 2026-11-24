@@ -661,14 +661,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         // The container of a `pick`: the cone lists the slot of the
         // chosen child, at `*`, and "`host.slot` of such a slot returns
         // every child of the container" (ES §2.2).
-        let children = listed.iter().find(|slot| {
-            let (other, at, ..) = &slots[**slot];
-            other == root
-                && at.len() == path.len() + 1
-                && at.starts_with(path)
-                && at.last().is_some_and(|last| last == "*")
-        });
-        if let Some(slot) = children {
+        if let Some(slot) = self.children_slot(root, path) {
             return format!("$h.slot({slot})");
         }
         let cone = self.cone.map(|cone| self.generator.finished.position[cone]);
@@ -679,20 +672,75 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         format!("$h.read({}, {})", root_json(root), path_json(path))
     }
 
+    /// The slot of the chosen child of a `pick` whose container is the
+    /// path `path` of `root`: the slot the cone lists at `*` below it.
+    fn children_slot(&self, root: &Root, path: &[String]) -> Option<usize> {
+        let slots = &self.generator.finished.slots;
+        self.generator
+            .listed(self.cone)
+            .iter()
+            .find(|slot| {
+                let (other, at, ..) = &slots[**slot];
+                other == root
+                    && at.len() == path.len() + 1
+                    && at.starts_with(path)
+                    && at.last().is_some_and(|last| last == "*")
+            })
+            .copied()
+    }
+
     fn output_code(&mut self, value: usize, path: &[String]) -> String {
-        let base = match self.generator.finished.output_of.get(&(value, Vec::new())) {
-            Some(output) => format!("$h.output({output})"),
+        let path = path
+            .iter()
+            .map(|segment| json!(segment).to_string())
+            .collect();
+        self.output_code_at(value, path)
+    }
+
+    /// The code that reads a path of a value the instance computed, each
+    /// segment of the path as code: `$h.output` or `$h.value` given the
+    /// path, so that the reader depends on what the value holds there and
+    /// on nothing else of it.
+    fn output_code_at(&mut self, value: usize, path: Vec<String>) -> String {
+        let (call, index) = match self.generator.finished.output_of.get(&(value, Vec::new())) {
+            Some(output) => ("output", *output),
             None => {
                 if !self.generator.interim.contains(&value) {
                     self.generator.interim.push(value);
                 }
-                format!("$h.value({value})")
+                ("value", value)
             }
         };
         if path.is_empty() {
-            base
+            format!("$h.{call}({index})")
         } else {
-            format!("$h.at({base}, {})", path_json(path))
+            format!("$h.{call}({index}, [{}])", path.join(", "))
+        }
+    }
+
+    /// A member read below `place`, whose object reads as `code`, as one
+    /// read of the path with `key` after it, where `code` is the read of a
+    /// path of a value the instance computed or of the children of a
+    /// container: the reader then depends on that member alone, and not
+    /// on every member of the value or of the container.
+    fn keyed_read(&mut self, place: &Place, code: &str, key: &str) -> Option<String> {
+        match place {
+            Place::Value(value, path) => {
+                let mut path: Vec<String> = path
+                    .iter()
+                    .map(|segment| json!(segment).to_string())
+                    .collect();
+                if self.output_code_at(*value, path.clone()) != code {
+                    return None;
+                }
+                path.push(key.to_string());
+                Some(self.output_code_at(*value, path))
+            }
+            Place::Slot(root, path) => {
+                let slot = self.children_slot(root, path)?;
+                (code == format!("$h.slot({slot})")).then(|| format!("$h.slot({slot}, [{key}])"))
+            }
+            _ => None,
         }
     }
 
@@ -1568,9 +1616,12 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     fn member(&mut self, object: &Expression<'a>, key: String, want: Want) -> Option<String> {
         match self.place_of(object) {
             None | Some(Place::Const) => None,
-            Some(_) => {
+            Some(place) => {
                 let object = self.render(object, Want::Pass);
-                Some(Self::wanted(want, format!("$h.at({object}, [{key}])")))
+                let read = self
+                    .keyed_read(&place, &object, &key)
+                    .unwrap_or_else(|| format!("$h.at({object}, [{key}])"));
+                Some(Self::wanted(want, read))
             }
         }
     }

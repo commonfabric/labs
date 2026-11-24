@@ -46,7 +46,9 @@
               "output": 6
             }
           ],
-          "valuesWithoutOutput": []
+          "valuesWithoutOutput": [
+            1
+          ]
         },
         "line": 18,
         "name": "default",

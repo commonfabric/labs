@@ -114,7 +114,10 @@
               "output": 3
             }
           ],
-          "valuesWithoutOutput": []
+          "valuesWithoutOutput": [
+            5,
+            7
+          ]
         },
         "line": 9,
         "name": "default",

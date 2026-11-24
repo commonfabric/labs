@@ -104,6 +104,78 @@ export const P = pattern<{ secret: string }>(({ secret }) => {
 }
 
 #[test]
+fn a_member_read_of_a_value_of_another_cone_is_one_read_of_the_path_with_the_key() {
+    let (plan, code) = emitted(
+        r#"import { computed, pattern } from "commonfabric";
+interface Item { key: string; title: string }
+export const P = pattern<{ items: Item[] }>(({ items }) => {
+  const facts = computed(() => {
+    const places: Record<string, { replies: number }> = {};
+    for (const item of items) places[item.key] = { replies: 1 };
+    return { count: items.length, places };
+  });
+  return {
+    count: facts.count,
+    rows: items.map((item) => ({ replies: facts.places[item.key]?.replies ?? 0 })),
+  };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let output = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .position(|output| output["collection"].is_null())
+        .expect("the output of `facts`");
+    // A static path, and a static path with a key that a pick chooses:
+    // the reader depends on what `facts` holds there alone.
+    assert!(
+        text.contains(&format!("$h.output({output}, [\"count\"])")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("$h.output({output}, [\"places\", $h.pick(0, ")),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&format!("$h.at($h.output({output}), ")),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_member_read_of_a_stored_record_by_a_key_reads_the_chosen_child_alone() {
+    let (plan, code) = emitted(
+        r#"import { pattern } from "commonfabric";
+interface Item { key: string; title: string }
+export const P = pattern<{ items: Item[]; places: Record<string, { replies: number }> }>(
+  ({ items, places }) => ({
+    rows: items.map((item) => ({ replies: places[item.key]?.replies ?? 0 })),
+  }),
+);
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let children = plan["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .position(|slot| slot["path"] == json!(["places", "*"]) && slot["observes"] == "shape")
+        .expect("the slot of the chosen child");
+    assert!(
+        text.contains(&format!("$h.slot({children}, [$h.pick(0, ")),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&format!("$h.at($h.slot({children})")),
+        "{text}"
+    );
+}
+
+#[test]
 fn types_are_removed_and_the_function_of_a_pattern_is_left_out() {
     let (plan, code) = emitted(
         r#"import { handler, pattern, Writable } from "commonfabric";
@@ -979,7 +1051,7 @@ fn outputs_without_a_function(code: &Value) -> Vec<u64> {
     let mut missing: Vec<u64> = text
         .split("$h.output(")
         .skip(1)
-        .filter_map(|rest| rest.split(')').next()?.parse().ok())
+        .filter_map(|rest| rest.split([')', ',']).next()?.parse().ok())
         .filter(|output| !computed.contains(output))
         .collect();
     missing.sort_unstable();
