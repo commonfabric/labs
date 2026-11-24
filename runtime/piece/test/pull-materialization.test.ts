@@ -1478,29 +1478,86 @@ describe("piece pull materialization", () => {
       ])
     ).toThrow(/comments\.1\.author\.pictureBlob/);
 
-    // An element that holds a link is not plain input of the piece's own:
-    // what the link reaches may be another piece's, so the element keeps the
-    // proof without the policy whatever that value is.
-    const row = runtime.getCell(
-      pieces.getSpace(),
-      "pushed-row-" + crypto.randomUUID(),
+    // A link inside an element is followed where setup's validation follows
+    // it: to more of the piece's own plain input. The Topics shape is a
+    // comment whose author is the author object of an earlier comment.
+    const overElement = async (
+      value: unknown,
+      destination: JSONSchema = candidate,
+      priorArgumentSchema: JSONSchema = prior,
+    ) => {
+      const element = runtime.getCell(
+        pieces.getSpace(),
+        "pushed-element-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        element.withTx(tx).set(value as never);
+      });
+      await runtime.editWithRetry((tx) => {
+        base.withTx(tx).set({ createdBy: ada, comments: [element] });
+      });
+      const stored = base.getRaw() as { comments: unknown[] };
+      // Guard the premise: the element holds a SERIALIZED link.
+      expect(JSON.stringify(element.getRaw())).toContain("link@1");
+      return () =>
+        assertSuppliedLinkSchemasCompatible(
+          [{ path: ["comments", 0], value: stored.comments[0] }],
+          destination,
+          base,
+          pieces,
+          { priorArgumentSchema, linksPreservedVerbatim: true },
+        );
+    };
+    expect(
+      await overElement({ author: comment.key("author"), body: "second" }),
+    ).not.toThrow();
+    expect(await overElement(comment)).not.toThrow();
+
+    // What a link inside an element reaches is not the piece's own plain
+    // input when it carries a contract of its own, when it is in another
+    // space, or when the candidate reads the link's position as a handle.
+    // Each keeps the proof without the policy.
+    const commentPiece = await pieces.runPersistent(
+      trustPattern(runtime, {
+        argumentSchema: { type: "object", properties: {} },
+        resultSchema: {
+          type: "object",
+          properties: { author: authorWith({}), body: { type: "string" } },
+          required: ["body"],
+        },
+        result: { author: ada, body: "third" },
+        nodes: [],
+      }),
+      {},
+      undefined,
+      { start: true },
+    );
+    expect(
+      await overElement({ author: commentPiece.key("author"), body: "x" }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    const elsewhere = runtime.getCell(
+      await runtime.createSpace(),
+      "comment-elsewhere-" + crypto.randomUUID(),
     );
     await runtime.editWithRetry((tx) => {
-      row.withTx(tx).set(comment);
+      elsewhere.withTx(tx).set({ author: ada, body: "fourth" });
     });
-    await runtime.editWithRetry((tx) => {
-      base.withTx(tx).set({ createdBy: ada, comments: [row] });
-    });
-    const rowRaw = base.getRaw() as { comments: unknown[] };
-    expect(isLink(row.getRaw())).toBe(true);
-    expect(() =>
-      assertSuppliedLinkSchemasCompatible(
-        [{ path: ["comments", 0], value: rowRaw.comments[0] }],
-        candidate,
-        base,
-        pieces,
-        { priorArgumentSchema: prior, linksPreservedVerbatim: true },
-      )
+    expect(
+      await overElement({ author: elsewhere.key("author"), body: "x" }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    const heldAuthor = (author: JSONSchema): JSONSchema =>
+      argumentWith({
+        ...(author as Record<string, unknown>),
+        asCell: ["cell"],
+      } as JSONSchema);
+    expect(
+      await overElement(
+        { author: comment.key("author"), body: "x" },
+        heldAuthor(authorWith({ pictureBlob: blob })),
+        heldAuthor(authorWith({})),
+      ),
     ).toThrow(/comments\.0\.author\.pictureBlob/);
   });
 
@@ -6595,6 +6652,67 @@ describe("piece pull materialization", () => {
     );
     await expect(elsewhere.controller.setPattern(candidate())).rejects.toThrow(
       /input link at other/,
+    );
+  });
+
+  it("names a new optional field over a pushed element that links into the piece's own plain input", async () => {
+    // A pushed element can hold a link to another of the piece's pushed
+    // elements, as a comment whose author is the author object of an earlier
+    // comment does. Setup reads through such a link, in the input document's
+    // own space and scope, so the stored value behind it decides the update.
+    const version = (by: string) =>
+      compiledItemHolderProgram(by, `by?: { name: string; ${by} };`);
+    const holderOver = async (pictureBlob: unknown) => {
+      const compiled = await runtime.patternManager.compilePattern(
+        version(""),
+        { space: pieces.getSpace() },
+      );
+      const piece = await pieces.runPersistent(
+        compiled,
+        {},
+        "linked-element-holder-" + crypto.randomUUID(),
+        { start: true },
+      );
+      await runtime.idle();
+      const earlier = runtime.getCell(
+        pieces.getSpace(),
+        "earlier-item-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        earlier.withTx(tx).set({
+          title: "a",
+          by: { name: "Ada", pictureBlob },
+        });
+      });
+      const later = runtime.getCell(
+        pieces.getSpace(),
+        "later-item-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        later.withTx(tx).set({ title: "b", by: earlier.key("by") });
+      });
+      const argument = pieces.getArgument(piece);
+      await runtime.editWithRetry((tx) => {
+        argument.withTx(tx).asSchema(undefined as never).key("items" as never)
+          .set([later] as never);
+      });
+      await runtime.idle();
+      // Guard the premise: the later element's `by` is a SERIALIZED link, and
+      // the list reaches the earlier element only through it.
+      expect(isLink((later.getRaw() as { by: unknown }).by)).toBe(true);
+      return new PieceController(pieces, piece);
+    };
+    const candidate = () => version("pictureBlob?: number;");
+
+    const fits = await holderOver(42);
+    await fits.setPattern(candidate());
+    expect(await fits.result.get()).toMatchObject({ count: 1 });
+
+    // The same link reaching a value the candidate cannot read: refused, by
+    // setup's validation of the stored input.
+    const misfits = await holderOver("legacy");
+    await expect(misfits.setPattern(candidate())).rejects.toThrow(
+      /do not match the candidate schema[^]*pictureBlob/,
     );
   });
 

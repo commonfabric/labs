@@ -2510,23 +2510,75 @@ function provePreservedContracts(
 }
 
 /**
+ * The most links {@link holdsOwnPlainInput} follows from one element. An
+ * element that links into another is one deep; the bound ends a chain a write
+ * built on purpose.
+ */
+const MAX_OWN_INPUT_DEPTH = 8;
+
+/**
  * Whether what `linkedCell` holds is input that setup's validation of the
  * stored input reads in full: a value present in this transaction, in the
- * input document's own space and scope, holding no link of its own. Setup
- * validates such a value against the candidate and refuses one the candidate
- * cannot read, which is what keeps the piece-evolution policy sound for it.
- * Setup does not read a value in another space or scope, and a value behind a
- * further link may be another piece's.
+ * input document's own space and scope, in which every link leads to more of
+ * the same. Setup validates such a value against the candidate and refuses
+ * one the candidate cannot read, which is what keeps the piece-evolution
+ * policy sound for it.
+ *
+ * A link inside the value is followed where setup follows it: at a position
+ * the candidate reads as a value, which `readsAsValue` decides from the path
+ * below the link being proved, to a document that carries no contract of its
+ * own. Setup reads only the top level behind a position typed as a cell
+ * handle and does not read a value in another space or scope, and a document
+ * with a contract is another piece's.
  */
 function holdsOwnPlainInput(
   linkedCell: Cell<unknown>,
   baseCell: Cell<unknown>,
+  pieces: PiecesController,
+  readsAsValue: (path: readonly (string | number)[]) => boolean,
 ): boolean {
-  const target = linkedCell.getAsNormalizedFullLink();
   const base = baseCell.getAsNormalizedFullLink();
-  if (target.space !== base.space || target.scope !== base.scope) return false;
-  const stored = linkedCell.getRaw();
-  return stored !== undefined && suppliedLinks(stored).length === 0;
+  const visited = new Set<string>();
+  const plain = (
+    cell: Cell<unknown>,
+    path: readonly (string | number)[],
+    depth: number,
+  ): boolean => {
+    const at = cell.getAsNormalizedFullLink();
+    if (at.space !== base.space || at.scope !== base.scope) return false;
+    // A value already being read is judged where it was first met.
+    const key = JSON.stringify([at.id, at.path, path]);
+    if (visited.has(key)) return true;
+    visited.add(key);
+    const stored = cell.getRaw();
+    if (stored === undefined) return false;
+    for (const nested of suppliedLinks(stored)) {
+      const nestedPath = [...path, ...nested.path];
+      if (depth === MAX_OWN_INPUT_DEPTH || !readsAsValue(nestedPath)) {
+        return false;
+      }
+      let holder = cell;
+      for (const segment of nested.path) {
+        holder = holder.key(segment as keyof unknown) as Cell<unknown>;
+      }
+      let target: Cell<unknown>;
+      try {
+        target = pieces.runtime.getCellFromLink(
+          { ...parseLinkOrThrow(nested.value, holder), schema: undefined },
+          undefined,
+          cellTx(linkedCell),
+        );
+      } catch {
+        return false;
+      }
+      if (
+        durableSourceContract(target, pieces) !== undefined ||
+        !plain(target, nestedPath, depth + 1)
+      ) return false;
+    }
+    return true;
+  };
+  return plain(linkedCell, [], 0);
 }
 
 /**
@@ -2727,7 +2779,25 @@ export function assertSuppliedLinkSchemasCompatible(
       options.linksPreservedVerbatim === true &&
       options.destinationIsStream !== true &&
       linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
-      holdsOwnPlainInput(linkedCell, baseCell);
+      holdsOwnPlainInput(linkedCell, baseCell, pieces, (below) => {
+        // A position the candidate reads as a value has no outer Cell
+        // wrapper. One it cannot place is not read as anything.
+        try {
+          return localizeUniformOuter(
+            deriveTargetContracts(
+              destinationSchema,
+              options.destinationRoot ?? destinationSchema,
+              false,
+              basePath,
+              [...suppliedLink.path, ...below],
+              displayPath,
+            ),
+            "destination Cell constraints disagree",
+          ).outer === undefined;
+        } catch {
+          return false;
+        }
+      });
     if (preservedOuter === undefined) {
       // When the contract is also unchanged, the proof can only refuse what
       // new-link default insertion refuses, and a link carried over byte for
