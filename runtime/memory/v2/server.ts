@@ -13086,15 +13086,18 @@ export class Server {
 
   /**
    * Tells each armed reader of `space` that registered an instance whose
-   * row moved since its pull, once, and disarms it. Called after each
-   * change to `space`'s currency index, whose rows are current by then.
+   * row moved since its pull, once, and disarms it, and shortens the arming
+   * of each reader armed for longer than `space` may now be rested on.
+   * Called after each change to `space`'s currency index, whose rows are
+   * current by then.
    */
   #tellCurrencyReaders(space: string, engine: Engine.Engine): void {
     try {
       this.#tellArmedCurrencyReaders(space, engine);
     } finally {
-      // The index changed, and a reader may have been disarmed: either can
-      // change which demand carried into `space` stands.
+      // The index changed, and a reader may have been disarmed or had its
+      // arming shortened: each can change which demand carried into `space`
+      // stands.
       this.#refreshCarriedDemand(space);
     }
   }
@@ -13119,15 +13122,44 @@ export class Server {
     }
     // A reader armed for longer than `space` now holds was told a later
     // time, or none, by a pull made before a slice here was recorded as
-    // expiring sooner.
+    // expiring sooner, or before `space` was armed with a space it reads
+    // for a limited time.
     const until = this.#currencyRestsUntil(space, engine);
-    if (until === undefined) return;
-    for (const [reader, entry] of [...armed]) {
+    if (until !== undefined) this.#shortenCurrencyArmings(space, until);
+  }
+
+  /**
+   * Shortens to `until` the arming of each reader armed with `space` for
+   * longer, and tells that reader, once `space` may be rested on only until
+   * then. Nothing in `space` moved, so the reader stays armed and pulls
+   * nothing, and its loop judges again, which returns it that time.
+   * Disarming it instead would have it pull again, and where it is read
+   * back by `space`, round a circle of spaces, the trigger would disarm
+   * `space` in turn, whose pull would arm the reader for longer again: the
+   * circle would go round with nothing moving in it, and never yield. A
+   * reader shortened may itself be rested on only until `until`, so its own
+   * readers are shortened in turn, which ends at the first space whose
+   * readers are armed until then or sooner.
+   *
+   * @returns Whether a reader of `space` was shortened. The caller brings
+   * the demand carried into `space` into line.
+   */
+  #shortenCurrencyArmings(space: string, until: number): boolean {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined) return false;
+    const shortened: string[] = [];
+    for (const [reader, entry] of armed) {
       if (entry.until !== undefined && entry.until <= until) continue;
-      armed.delete(reader);
-      this.#triggerCurrencyReader(reader);
-      this.#queueFollowForCarriedDemand(reader, space);
+      armed.set(reader, { ...entry, until });
+      shortened.push(reader);
     }
+    for (const reader of shortened) {
+      this.#notifyCurrencyChanged(reader);
+      if (this.#shortenCurrencyArmings(reader, until)) {
+        this.#refreshCarriedDemand(reader);
+      }
+    }
+    return shortened.length > 0;
   }
 
   /**

@@ -511,8 +511,15 @@ again, which marks the expired slice in the source and returns what is
 downstream of it as stale. The time a judgment returns is the same one for
 its own space, so the loop of a space that reads an expiring slice two
 spaces along sets its timer for that slice. A record stored in a space that
-makes that time earlier, or gives it one where it had none, tells each
-space armed with it for longer, which pulls again.
+makes that time earlier, or gives it one where it had none, shortens the
+arming of each space armed with it for longer to that time, and tells it,
+so that its loop judges again and sets its timer for the earlier time.
+Nothing in the space moved, so the reading space stays armed and pulls
+nothing, and the spaces armed with it are shortened in turn. Disarming it
+would not do: where the two read each other, round a circle of spaces, the
+trigger would disarm the space the time came from, the pulls that followed
+could arm the reading space for longer again, and the circle would go round
+with nothing moving in it.
 
 ## Computations that run without demand
 
