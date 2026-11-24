@@ -262,22 +262,6 @@ describe("CFRadioGroup", () => {
       ]);
     });
 
-    it("gives the group's name to radios with none, and leaves a radio's own name", async () => {
-      const group = Object.assign(new CFRadioGroup(), { name: "size" });
-      const own = Object.assign(new CFRadio(), { value: "a", name: "mine" });
-      const unnamed = Object.assign(new CFRadio(), { value: "b" });
-      group.append(own, unnamed);
-      await mount(group);
-
-      expect([own.name, unnamed.name]).toEqual(["mine", "size"]);
-    });
-
-    it("names no radio while the group has no name", async () => {
-      const { radios } = await groupWith({}, ["small"]);
-
-      expect(radios[0].name).toBe("");
-    });
-
     it("disables every radio while the group is disabled, and enables again only the ones it disabled", async () => {
       const { group, radios } = await groupWith({}, ["small", "medium"]);
       radios[1].disabled = true;

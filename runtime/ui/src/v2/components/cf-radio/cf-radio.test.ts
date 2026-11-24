@@ -81,7 +81,6 @@ describe("CFRadio", () => {
       const { element } = await radioWith({
         checked: true,
         disabled: true,
-        name: "size",
       });
 
       expect([...circle(element).classList]).toEqual([

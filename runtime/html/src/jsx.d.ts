@@ -4313,7 +4313,6 @@ interface CFRadioAttributes<T> extends CFHTMLAttributes<T> {
   "checked"?: boolean | CellLike<boolean>;
   "disabled"?: boolean | CellLike<boolean>;
   "value"?: string | CellLike<string>;
-  "name"?: string | CellLike<string>;
   "oncf-change"?: EventHandler<{ checked: boolean; value: string }>;
 }
 

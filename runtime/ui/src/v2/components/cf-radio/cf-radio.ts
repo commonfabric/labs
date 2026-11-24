@@ -8,7 +8,6 @@ import { BaseElement } from "../../core/base-element.ts";
  *
  * @attr {boolean} checked - Whether the radio button is checked
  * @attr {boolean} disabled - Whether the radio button is disabled
- * @attr {string} name - Radio button group name (required for grouping)
  * @attr {string} value - The value of the radio button (required)
  * @attr {boolean} required - Whether the radio button is required
  *
@@ -17,8 +16,10 @@ import { BaseElement } from "../../core/base-element.ts";
  * @fires cf-change - Fired when the radio button state changes with detail: { checked, value }
  *
  * @example
- * <cf-radio name="option" value="yes" checked>Yes</cf-radio>
- * <cf-radio name="option" value="no">No</cf-radio>
+ * <cf-radio-group>
+ *   <cf-radio value="yes">Yes</cf-radio>
+ *   <cf-radio value="no">No</cf-radio>
+ * </cf-radio-group>
  *
  * @note Use within cf-radio-group, which handles the arrow keys and the
  * selection among its radios, and makes them one Tab stop. A radio outside a
@@ -124,20 +125,17 @@ export class CFRadio extends BaseElement {
     checked: { type: Boolean, reflect: true },
     disabled: { type: Boolean, reflect: true },
     value: { type: String },
-    name: { type: String },
   };
 
   declare checked: boolean;
   declare disabled: boolean;
   declare value: string;
-  declare name: string;
 
   constructor() {
     super();
     this.checked = false;
     this.disabled = false;
     this.value = "";
-    this.name = "";
   }
 
   override connectedCallback() {
