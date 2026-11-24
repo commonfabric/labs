@@ -51,16 +51,17 @@ index. The names are `CURRENCY_INDEX_MODES` in
   proves current ("What the demand pass does with it"), and does nothing
   else on a judgment. This answers the first of the two problems above and
   not the second.
-- `start-upstream`: what `skip` does, and where a root or a running piece is
-  stale only through what is upstream of it, the loop starts the pieces
-  upstream ("Starting what is stale upstream"). This answers the second
-  problem too.
+- `start-upstream`: a root the record proves current is left unstarted, as
+  under `skip`. Where a root is stale only through what is upstream of it,
+  the loop leaves it unloaded and starts the pieces upstream, and it does
+  the same for a running piece that is stale that way ("Starting what is
+  stale upstream"). This answers the second problem too.
 
-Each level acts on a subset of what the next acts on, so a deployment can
-run `skip` without the upstream starts. Under `skip` a root that is stale
-only upstream is treated as a root the judgment refuses: its piece starts,
-and derives from what the store holds of the pieces upstream, as a loop with
-no index derives it. "Known limits" says what that leaves.
+The two levels differ in that one case, so a deployment can run `skip`
+without the upstream starts. Under `skip` a root that is stale only upstream
+is treated as a root the judgment refuses: its piece starts, and derives
+from what the store holds of the pieces upstream, as a loop with no index
+derives it. "Known limits" says what that leaves.
 
 ## The design
 
