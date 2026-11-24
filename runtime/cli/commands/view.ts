@@ -12,24 +12,24 @@ uses, so blocks, closures, schemas, type positions and Common Fabric builders
 (pattern/lift/handler/…) are colored exactly as the compiler sees them.
 Markdown, JSON, JSONC, YAML, Python, Go, Swift, Kotlin, Rust, TOML, HCL,
 Starlark, Bazel rc, Lean, C, C++, CUDA, shell, makefile, Java properties, INI,
-ProGuard, Git attributes and XML files use syntax highlighting selected from
-language metadata, as do Go's 'go.mod', 'go.work', 'go.sum' and 'go.work.sum'
-files, Lean's 'lean-toolchain' files, and Git, Docker and Bazel ignore files.
-Kotlin covers Gradle's '.gradle.kts' build scripts, HCL covers OpenTofu and
-Terraform configuration, Starlark covers Bazel's BUILD, '.bzl' and '.bazel'
-files, '.bazelrc' files use the Bazel rc language, a '.h' header is colored with
-the C++ grammar unless piped with '--language c', shell covers Bash and POSIX
-shell, makefiles color their recipes as shell, INI covers Ansible configuration
-and inventories, and XML covers Android manifests and resources, SVG and Apple
-property lists. Python interpreter shebangs select Python, 'swift' and 'xcrun
-swift' shebangs select Swift, 'kotlin' shebangs select Kotlin, 'sh', 'bash',
-'dash' and 'ash' shebangs select shell, and 'make' and 'gmake' shebangs select
-the makefile language. Node, Deno and Bun shebangs select the TypeScript and
-JavaScript language family. For a name no language claims, source that starts
-with an XML declaration ('<?xml'), after any byte order mark, selects XML. Known
-binary filenames, NUL-containing input and invalid UTF-8 select the binary
-language. Its rendered view is a read-only hex dump with control pictures for
-bytes that have no printable ASCII character.
+Graphviz DOT, ProGuard, Git attributes and XML files use syntax highlighting
+selected from language metadata, as do Go's 'go.mod', 'go.work', 'go.sum' and
+'go.work.sum' files, Lean's 'lean-toolchain' files, and Git, Docker and Bazel
+ignore files. Kotlin covers Gradle's '.gradle.kts' build scripts, HCL covers
+OpenTofu and Terraform configuration, Starlark covers Bazel's BUILD, '.bzl' and
+'.bazel' files, '.bazelrc' files use the Bazel rc language, a '.h' header is
+colored with the C++ grammar unless piped with '--language c', shell covers Bash
+and POSIX shell, makefiles color their recipes as shell, INI covers Ansible
+configuration and inventories, and XML covers Android manifests and resources,
+SVG and Apple property lists. Python interpreter shebangs select Python, 'swift'
+and 'xcrun swift' shebangs select Swift, 'kotlin' shebangs select Kotlin, 'sh',
+'bash', 'dash' and 'ash' shebangs select shell, and 'make' and 'gmake' shebangs
+select the makefile language. Node, Deno and Bun shebangs select the TypeScript
+and JavaScript language family. For a name no language claims, source that
+starts with an XML declaration ('<?xml'), after any byte order mark, selects
+XML. Known binary filenames, NUL-containing input and invalid UTF-8 select the
+binary language. Its rendered view is a read-only hex dump with control pictures
+for bytes that have no printable ASCII character.
 Filename-free compiler output keeps TypeScript highlighting when its
 transformed-module header identifies it. Other unnamed source and named files
 with unrecognized syntax remain plain text. Piped source can select syntax

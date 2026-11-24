@@ -159,6 +159,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "json-lines",
+    // Quoted strings joined by `:` read in DOT as nodes and their ports, and
+    // DOT colors a port as JSON Lines colors a key.
+    highlightingPeers: ["dot"],
     surveyRepository: "labs",
     surveyCommit: "69fcd7efa983a143d1fbe0bc8167b0a6a9be6835",
     surveyPath: "tasks/test-identity-aliases.jsonl",
@@ -969,10 +972,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "properties",
-    // A shell or make variable assignment, an HCL attribute, and an INI key are
-    // each a `name=value` line, and shell, make, HCL, and INI color the name as
-    // properties files color their keys.
-    highlightingPeers: ["hcl", "shell", "make", "ini"],
+    // A shell or make variable assignment, an HCL or DOT attribute, and an INI
+    // key are each a `name=value` line, and shell, make, HCL, DOT, and INI
+    // color the name as properties files color their keys.
+    highlightingPeers: ["hcl", "shell", "make", "ini", "dot"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "b457431c6f5e32305a2e6feb7901f8d05a9b2f6e",
     surveyPath: "android/gradle/wrapper/gradle-wrapper.properties",
@@ -996,12 +999,13 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "ini",
-    // An INI `name=value` line is a valid make assignment, and make colors
-    // the name as INI colors its keys. An Ansible inventory host line is also
-    // a Git attributes line, whose attributes color as the host's variables.
-    // Rust reads the host line as an expression ending in a field access, and
-    // colors the field, which is the host's variable, as INI colors it.
-    highlightingPeers: ["make", "gitattributes", "rust"],
+    // An INI `name=value` line is a valid make assignment and a valid DOT
+    // attribute, and make and DOT color the name as INI colors its keys. An
+    // Ansible inventory host line is also a Git attributes line, whose
+    // attributes color as the host's variables. Rust reads the host line as an
+    // expression ending in a field access, and colors the field, which is the
+    // host's variable, as INI colors it.
+    highlightingPeers: ["make", "dot", "gitattributes", "rust"],
     surveyRepository: "infra",
     surveyCommit: "cfe4ac630b0b1e223d57bed12ae02fa6c53b9eb2",
     surveyPath: "ansible/rapids-inventory.ini",
@@ -1020,6 +1024,22 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "ansible_user", className: "propertyName" },
     afterEvidence: { text: "ansible_user", className: "propertyName" },
     incompleteEvidence: { text: "ansible_user", className: "propertyName" },
+  },
+  {
+    languageId: "dot",
+    surveyRepository: "gvisor",
+    surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
+    surveyPath: "pkg/sentry/kernel/g3doc/run_states.dot",
+    before: new URL("./dot-gvisor/before.dot", import.meta.url),
+    after: new URL("./dot-gvisor/after.dot", import.meta.url),
+    incomplete: new URL("./dot-gvisor/incomplete.dot", import.meta.url),
+    selection: {
+      filenames: ["pkg/sentry/kernel/g3doc/run_states.dot", "space.gv"],
+      aliases: ["dot", "graphviz", "gv"],
+    },
+    beforeEvidence: { text: "subgraph", className: "storageKeyword" },
+    afterEvidence: { text: "subgraph", className: "storageKeyword" },
+    incompleteEvidence: { text: "subgraph", className: "storageKeyword" },
   },
   {
     languageId: "proguard",
@@ -1091,8 +1111,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "gitattributes",
     // A pattern followed by one `name=value` attribute is also an Ansible
     // inventory host line, whose variable INI colors as Git attributes color
-    // the attribute.
-    highlightingPeers: ["ini"],
+    // the attribute. A `name=value` attribute is also a DOT attribute, whose
+    // value DOT colors as Git attributes color the attribute's value.
+    highlightingPeers: ["ini", "dot"],
     surveyRepository: "loom",
     surveyCommit: "f788015adc43cc8d7b3b3bb7f50f2066428a6dbc",
     surveyPath: "src/.gitattributes",

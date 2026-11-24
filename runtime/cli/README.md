@@ -516,11 +516,11 @@ uses this fixture mechanism at both postures.
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, shell,
-makefile, Java properties, INI, ProGuard, XML, and Org mode files use their own
-highlighting. A lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`,
-`.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and
-`.cuh` select CUDA. C++ and CUDA share one grammar, which colors CUDA's
-qualifiers, such as `__global__`, as keywords. C and C++ both write `.h`
+makefile, Java properties, INI, Graphviz DOT, ProGuard, XML, and Org mode files
+use their own highlighting. A lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`,
+`.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase `.C` select C++;
+and `.cu` and `.cuh` select CUDA. C++ and CUDA share one grammar, which colors
+CUDA's qualifiers, such as `__global__`, as keywords. C and C++ both write `.h`
 headers, so a `.h` file is colored in a mode that claims neither dialect, using
 the C++ grammar, which reads the declarations C headers usually make; a C header
 that uses one of C++'s keywords, such as `new`, as a name is colored as C when
@@ -679,6 +679,13 @@ workspace files, `go.mod` and `go.work`, have a language of their own, whose
 structure tree lists each directive and the lines of its block. So do Go
 checksum files, `go.sum` and `go.work.sum`, whose structure tree lists each
 module over the lines that name it.
+
+Graphviz DOT covers graph descriptions named `.dot` or `.gv`. The DOT that
+`cf inspect graph --dot` and `cf piece map --format dot` print can be piped into
+`cf view --language dot`. Each ID is colored by what it names: a graph, an
+attribute, an attribute's value, a port, or a node. The structure tree lists
+graphs and subgraphs, with the nodes that node statements declare in each. A
+node that only an edge names is not listed.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
