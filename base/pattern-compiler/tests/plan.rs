@@ -5539,3 +5539,34 @@ export const P = pattern<{ items: Writable<Item[]>; names: string[] }>(({ items,
         assert_eq!(selecting, 1, "the cone that selects, of {collection}");
     }
 }
+
+/// P454: a `computed` whose body is promoted, written as the value of a
+/// member of the record a callback returns, that reads a value of a scope
+/// narrower than the space, is a cone of its own per element key, as an
+/// operator expression there is; one that reads nothing of a scope is
+/// expression code of the element's cone. Over an array of plain values in
+/// place.
+#[test]
+fn a_promoted_computed_of_a_row_that_reads_a_value_of_a_scope_is_a_value_of_its_own() {
+    let analysis = program(
+        r#"import { Writable, computed, pattern } from "commonfabric";
+export const P = pattern<{ notes: Writable<{ text: string }[]> }>(({ notes }) => {
+  const picked = new Writable.perUser<string>("");
+  const rows = notes.map((note) => ({
+    text: note.text,
+    mine: computed(() => note.text === picked.get()),
+    long: computed(() => note.text.length > 3),
+  }));
+  return { rows };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let cones = plan["cones"].as_array().expect("cones");
+    let within: Vec<&str> = cones
+        .iter()
+        .filter(|cone| cone["within"] == json!([{ "element": 0 }]))
+        .map(|cone| cone["entry"].as_str().expect("an entry"))
+        .collect();
+    assert_eq!(within.len(), 2, "the cones of the element: {within:?}");
+}

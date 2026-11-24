@@ -280,10 +280,12 @@ describe("a per-element construct whose body reads state of the scope `user`", (
     expect(instance.counts.elementEvaluations).toBe(before);
   });
 
-  // An appended note adds one row. The rows of a principal are put into
-  // that principal's instance member by member where they differ: the rows
-  // that stayed are not written again, so they give no record again.
-  it("writes the added row of a principal's rows and no row that stayed", () => {
+  // An appended note adds one row, which is of the space: what it says of
+  // the acting user is the value of a cone of its own, stored in the
+  // instance of each principal of a document of its own for the row
+  // (P454, P455). The places of the rows that stayed are not written
+  // again, so they give no record again.
+  it("writes the place of the added row for a principal and no place of a row that stayed", () => {
     send("ann", "pick", { text: "two" });
     resultOf("ann");
     const written: string[] = [];
@@ -310,26 +312,25 @@ describe("a per-element construct whose body reads state of the scope `user`", (
       "four",
     ]);
 
-    expect(written).toEqual(["rows splice 3 0"]);
+    expect(written).toEqual([""]);
   });
 
-  it("stores the rows of each principal in the instance of that principal", () => {
+  it("stores what each row says of a principal in the instances of that principal, and the rows in the result", () => {
     send("ann", "pick", { text: "two" });
     resultOf("ann");
     resultOf("bob");
 
-    // The outputs of a scope are in the instances of a document of their
-    // own, at the paths they have in the result.
+    // Each value of a scope a row places is in the instances of a document
+    // of its own for the row, and the row holds a link of that scope.
     const held = (principal: string) =>
-      JSON.stringify(
-        [...instance.store.docs].filter(([doc, { kind }]) =>
-          kind === "scope instance" && doc.endsWith(`~user:${principal}`)
-        ).map(([, document]) => document),
-      );
-    expect(held("ann")).toContain('"mine":true');
-    expect(held("bob")).not.toContain('"mine":true');
-    expect(JSON.stringify(instance.store.docs.get("result"))).not.toContain(
-      '"mine"',
+      [...instance.store.docs].filter(([doc, { kind }]) =>
+        kind === "scope instance" && doc.endsWith(`~user:${principal}`)
+      ).map(([, document]) => document.value);
+    expect(held("ann").filter((value) => value === true).length).toBe(1);
+    expect(held("bob").filter((value) => value === true).length).toBe(0);
+    expect(held("ann").length).toBe(3);
+    expect(JSON.stringify(instance.store.docs.get("result"))).toContain(
+      '"mine":{"$link"',
     );
   });
 });

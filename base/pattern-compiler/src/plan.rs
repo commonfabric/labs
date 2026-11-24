@@ -2917,22 +2917,41 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// body of a per-element construct the cone has one instance per
     /// element key, as the element's own cone has (P454), so a row that
     /// places the value stays a row of the space.
-    fn hoisted_scope(&self, expression: &Expression<'a>) -> bool {
+    fn hoisted_scope(&mut self, expression: &Expression<'a>) -> bool {
         if self.hoisting || self.cone.is_none() {
             return false;
         }
-        if !matches!(
-            unwrap(expression),
+        // A `computed` whose body is promoted is its expression, which
+        // would otherwise be expression code of the cone around it.
+        let read = match unwrap(expression) {
             Expression::ConditionalExpression(_)
-                | Expression::LogicalExpression(_)
-                | Expression::BinaryExpression(_)
-                | Expression::UnaryExpression(_)
-                | Expression::TemplateLiteral(_)
-        ) {
-            return false;
-        }
+            | Expression::LogicalExpression(_)
+            | Expression::BinaryExpression(_)
+            | Expression::UnaryExpression(_)
+            | Expression::TemplateLiteral(_) => expression,
+            Expression::CallExpression(call)
+                if self.resolver.api_callee(self.module, call).as_deref() == Some("computed") =>
+            {
+                let Some(function) = call
+                    .arguments
+                    .first()
+                    .and_then(Argument::as_expression)
+                    .and_then(FunctionLike::of)
+                else {
+                    return false;
+                };
+                if self.record_at(self.module, function.span().start).is_some() {
+                    return false;
+                }
+                match function.expression_body() {
+                    Some(body) => body,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        };
         let mut names = NamesRead::default();
-        oxc_ast_visit::Visit::visit_expression(&mut names, expression);
+        oxc_ast_visit::Visit::visit_expression(&mut names, read);
         let mut seen = HashSet::new();
         names.0.iter().any(|name| {
             self.env

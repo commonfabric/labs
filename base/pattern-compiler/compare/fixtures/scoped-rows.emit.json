@@ -24,7 +24,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/scoped-rows.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst pick = $rt.data(handler(\n  (event, { picked }) => {\n    picked.set(event.text);\n  },\n));\nconst post = $rt.data(handler(\n  (event, { notes }) => {\n    notes.push({ text: event.text });\n  },\n));\n\n\nconst $default = $rt.data((pattern(\n  \"sha256:a8c36815b28f6ebbe094ffb393e147a3478a38871b1a8b83e831fc725356228e\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ text: $h.slot(3), mine: ($h.v($h.slot(1)) === $h.v($h.slot(2))) })));\n}\n{\n$rt.element(1, ($h) => ($h.slot(4)));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(0), plain: $h.output(4), pick: $h.stream(0), post: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { picked }) => {\n    picked.set(event.text);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { notes }) => {\n    notes.push({ text: event.text });\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst pick = $rt.data(handler(\n  (event, { picked }) => {\n    picked.set(event.text);\n  },\n));\nconst post = $rt.data(handler(\n  (event, { notes }) => {\n    notes.push({ text: event.text });\n  },\n));\n\n\nconst $default = $rt.data((pattern(\n  \"sha256:a8c36815b28f6ebbe094ffb393e147a3478a38871b1a8b83e831fc725356228e\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.value(1, ($h) => (($h.v($h.slot(1)) === $h.v($h.slot(2)))));\n$rt.element(0, ($h) => (({ text: $h.slot(3), mine: $h.output(0) })));\n}\n{\n$rt.element(1, ($h) => ($h.slot(4)));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(1), plain: $h.output(5), pick: $h.stream(0), post: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { picked }) => {\n    picked.set(event.text);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { notes }) => {\n    notes.push({ text: event.text });\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -37,17 +37,19 @@
               "cone": 0
             },
             {
-              "cone": 0
-            },
-            {
-              "collection": 0,
               "cone": 0,
+              "function": true,
               "output": 0
             },
             {
-              "collection": 1,
+              "collection": 0,
               "cone": 1,
-              "output": 4
+              "output": 1
+            },
+            {
+              "collection": 1,
+              "cone": 2,
+              "output": 5
             }
           ],
           "valuesWithoutOutput": []
@@ -248,6 +250,26 @@
             {
               "at": {
                 "file": "compare/fixtures/scoped-rows.tsx",
+                "start": 1071
+              },
+              "bodies": [],
+              "entry": "mine",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1,
+                2
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scoped-rows.tsx",
                 "start": 1023
               },
               "bodies": [],
@@ -255,8 +277,6 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                1,
-                2,
                 3
               ],
               "within": [
@@ -288,43 +308,24 @@
           ],
           "constraints": [],
           "dynamicReads": [],
-          "edges": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 1,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            }
+          ],
           "operations": [],
           "outputs": [
             {
-              "collection": 0,
               "cone": 0,
               "constraints": [],
-              "kept": true,
-              "path": [
-                "rows"
-              ],
-              "template": {
-                "op": "slot",
-                "slot": 0
-              }
-            },
-            {
-              "cone": 0,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "rows",
-                "*"
-              ],
-              "template": {
-                "op": "const"
-              }
-            },
-            {
-              "cone": 0,
-              "constraints": [],
-              "kept": true,
-              "path": [
-                "rows",
-                "*",
-                "mine"
-              ],
+              "interim": "mine",
+              "kept": false,
+              "path": [],
               "template": {
                 "by": {
                   "expression": true
@@ -343,7 +344,46 @@
               }
             },
             {
-              "cone": 0,
+              "collection": 0,
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "mine"
+              ],
+              "template": {
+                "op": "output",
+                "output": 0
+              }
+            },
+            {
+              "cone": 1,
               "constraints": [],
               "kept": true,
               "path": [
@@ -358,7 +398,7 @@
             },
             {
               "collection": 1,
-              "cone": 1,
+              "cone": 2,
               "constraints": [],
               "kept": true,
               "path": [
@@ -370,7 +410,7 @@
               }
             },
             {
-              "cone": 1,
+              "cone": 2,
               "constraints": [],
               "kept": true,
               "path": [
