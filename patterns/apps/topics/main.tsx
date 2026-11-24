@@ -575,36 +575,36 @@ export interface CardSource {
 }
 
 /**
- * How many cards the board shows: the most recently active topics, up to this
- * many.
+ * How many cards a session shows at first, and how many each press of "Show
+ * more…" adds: the most recently active topics, a page at a time.
  *
- * Every card is an instance of the card list's mapped sub-pattern, and a
- * browser rendering the list watches each instance. Under server execution
- * each watched instance is demand, so the server starts every card, and the
- * topic it links to, for every viewer. Unbounded, that is the whole board per
- * viewer: on a copy of the team's board at 3,441 topics, one viewer took a
- * serving worker past its 8 GB heap limit, and with the cards bounded here it
- * settled at 2.6 GB with the board open in two tabs. Older topics are reached
- * by number or by search.
+ * Every card a session shows is an instance of the card list's mapped
+ * sub-pattern, and a browser rendering the list watches each instance. Under
+ * server execution each watched instance is demand, so the server starts every
+ * card, and the topic it links to, for every viewer. Unbounded, that is the
+ * whole board per viewer: on a copy of the team's board at 3,441 topics, one
+ * viewer took a serving worker past its 8 GB heap limit. So a session starts
+ * at one page and holds more only once it asks for them, and what it asks for
+ * grows no other session's list.
  */
-export const CARD_LIMIT = 200;
+export const CARD_PAGE = 50;
 
 /**
- * The topics whose cards the board shows: the `limit` most recently active of
- * `read`, most recently active first. The order is `activityOrderOf()`'s.
+ * `read`, most recently active first, in `activityOrderOf()`'s order. Topics
+ * equally recently active keep their order in `read`.
  */
-export function cardsToShow<T extends { value: CardSource }>(
+export function byActivity<T extends { value: CardSource }>(
   read: readonly T[],
-  limit: number = CARD_LIMIT,
 ): T[] {
-  return [...read]
-    .sort((a, b) => activityOrderOf(b.value) - activityOrderOf(a.value))
-    .slice(0, limit);
+  return [...read].sort((a, b) =>
+    activityOrderOf(b.value) - activityOrderOf(a.value)
+  );
 }
 
 /**
- * The cards' rows, the `CARD_LIMIT` most recently active first, from the
- * topics as cells.
+ * The rows of every card the board can show, most recently active first, from
+ * the topics as cells. A session shows the first of them, as many as
+ * `cardsShown()` says.
  *
  * Each topic is read ONCE, into a plain value, and sorted and rendered from
  * that: reading through the reactive array costs a link resolution per read,
@@ -633,7 +633,7 @@ export function cardRowsOf(
     if (value) read.push({ topic, value });
   }
   const rows: unknown[] = [];
-  for (const { topic, value } of cardsToShow(read)) {
+  for (const { topic, value } of byActivity(read)) {
     rows.push(
       Writable.for<CardRow>(topic).set({
         topic,
@@ -649,10 +649,59 @@ export function cardRowsOf(
   return rows as CardRow[];
 }
 
+/**
+ * Every card's row, derived once for the whole board. It reads nothing of any
+ * session, so it runs at space scope, once per change to the board, and every
+ * session's page is a prefix of what it returns.
+ */
 const cardRowsByActivity = lift(
   (
     { rows }: { rows: ReadonlyCell<CardSource>[] | Default<[]> },
   ): CardRow[] => cardRowsOf(Array.from(rows)),
+);
+
+/**
+ * How many cards a session shows, out of the `count` the board has: as many
+ * as it asked for, `shown`, and never more than there are. A session that has
+ * not asked yet shows one page, and its `shown` may read as `undefined` until
+ * the page it starts at has been stored.
+ */
+export function cardsShown(count: number, shown: number | undefined): number {
+  return Math.min(count, shown ?? CARD_PAGE);
+}
+
+/**
+ * The session's cards: the first `cardsShown()` of every card's row.
+ *
+ * It takes the board's rows as CELLS, as the board-wide derivations take the
+ * topics: it reads the list of rows and follows each link to its row, and
+ * reads none of the topics behind them. A cell always writes as a link, so
+ * what it returns holds the same rows, as links. The cards map keys each card
+ * by its row's link, so a card keeps the identity the board-wide derivation
+ * gave it wherever its row moves. The list is the session's, as the count it
+ * reads is, and the cards mapped from it are stored per session with it, so
+ * no session's choice replaces another's.
+ */
+export const shownCardRows = lift(
+  (
+    { rows, shown }: {
+      rows: ReadonlyCell<CardRow>[] | Default<[]>;
+      shown: number | undefined;
+    },
+  ): PerSession<CardRow[]> => {
+    const listed: unknown[] = Array.from(rows);
+    return listed.slice(0, cardsShown(listed.length, shown)) as CardRow[];
+  },
+);
+
+/** Whether the board has more cards than the session shows. */
+const hasMoreCardsOf = lift(
+  (
+    { rows, shown }: {
+      rows: unknown[] | Default<[]>;
+      shown: number | undefined;
+    },
+  ): boolean => cardsShown(rows.length, shown) < rows.length,
 );
 
 /**
@@ -824,8 +873,19 @@ export const submitProfileTopic = handler<void, {
   newTitle.set("");
 });
 
+/** Shows another page of cards, in the session that asked for it. */
+const showMoreCards = handler<void, { shown: Writable<number> }>(
+  (_, { shown }) => {
+    shown.set((shown.get() ?? CARD_PAGE) + CARD_PAGE);
+  },
+);
+
 export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   const newTitle = new Writable.perSession("");
+  // How many cards this session shows. The board is read most recently active
+  // first, so a session that wants older topics asks for them a page at a
+  // time, and no other session's list grows with it.
+  const shown = new Writable.perSession(CARD_PAGE);
 
   // `.length` alone is what makes this cheap: the shrunk schema declares
   // `items: unknown`, so counting the board expands no topic. Reaching past
@@ -833,8 +893,18 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // puts the whole board back in the read.
   const topicCount = topics.get().length;
   // Derived once for the whole board: the strings each card renders, so the
-  // card map mints nothing of its own beyond its two conditionals.
+  // card map mints nothing of its own beyond its two conditionals. Every
+  // session's page is a prefix of these rows, so no session runs the
+  // board-wide walk for itself.
+  //
+  // The binding's name is the name of the document the rows are stored in,
+  // and a deployed board holds that document at space scope, where this run
+  // writes it. The session's page reads the session's count, so it is stored
+  // under a name of its own rather than this one.
   const cards = cardRowsByActivity({ rows: topics });
+  const shownCards = shownCardRows({ rows: cards, shown });
+  const hasMoreCards = hasMoreCardsOf({ rows: cards, shown });
+  const showMore = showMoreCards({ shown });
   // Derived once for the whole board; every topic reads its own row out of it.
   //
   // The binding's name is the name of the document the rows are stored in.
@@ -856,7 +926,6 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // identity; no topic reads it.
   const table = namesTable({ names });
   const hasNoTopics = topicCount === 0;
-  const cardsAreCapped = topicCount > CARD_LIMIT;
 
   // Browser authorship comes from the current viewer's canonical Profile.
   // CLI streams below remain wish-free: agents sign each mutation in the
@@ -970,7 +1039,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
           </cf-vstack>
 
           <cf-vstack gap="2" padding="4">
-            {cards.map((card) => (
+            {shownCards.map((card) => (
               <cf-card>
                 <cf-hstack gap="3" align="center">
                   {card.badge
@@ -1000,12 +1069,15 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
               </cf-card>
             ))}
 
-            {cardsAreCapped
+            {hasMoreCards
               ? (
-                <cf-text variant="caption" tone="muted">
-                  Showing up to {CARD_LIMIT} of {topicCount}{" "}
-                  topics, most recently active first.
-                </cf-text>
+                <cf-button
+                  id="show-more-cards"
+                  variant="secondary"
+                  onClick={showMore}
+                >
+                  Show more…
+                </cf-button>
               )
               : null}
 
