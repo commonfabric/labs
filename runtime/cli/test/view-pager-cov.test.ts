@@ -731,6 +731,58 @@ Deno.test("pager: background parses rebuild the document each time a batch of so
   );
 });
 
+Deno.test("pager: background parses end once the document is built from the last of them", async () => {
+  const jobs: ParseJob[] = ["x", "y"].map((text) => ({
+    kind: "lines",
+    language: plainTextLanguage,
+    text,
+    fileName: undefined,
+    finish: () => {},
+    fail: () => {},
+  }));
+  let builds = 0;
+  const source = {
+    label: "big.diff",
+    editable: false,
+    parse: () => {
+      builds++;
+      return DOC;
+    },
+    save: () => "Nothing to save.",
+  };
+  const ended: number[] = [];
+  const endedAtDelivery: number[] = [];
+  const delivered = Promise.withResolvers<void>();
+  const { deps } = makeFake({
+    steps: [{ wait: delivered.promise }, { eof: true }],
+    parseInBackground: (_parses, deliver) => {
+      queueMicrotask(() => {
+        for (const index of jobs.keys()) {
+          endedAtDelivery.push(ended.length);
+          deliver([{
+            kind: "parsed",
+            index,
+            result: { kind: "lines", lines: [] },
+          }]);
+        }
+        delivered.resolve();
+      });
+      return () => {};
+    },
+  });
+
+  await runPager(
+    DOC,
+    { ...OPTS, parses: jobs, parsesEnded: () => ended.push(builds) },
+    undefined,
+    source,
+    deps,
+  );
+
+  assertEquals(endedAtDelivery, [0, 0], "nothing ended before the last");
+  assertEquals(ended, [builds], "they ended once, after the last build");
+});
+
 Deno.test("pager: background parse outcomes that arrive after the viewer closes change nothing", async () => {
   const { doc, source, jobs } = pendingDiff();
   let deliver: ((outcomes: ParseOutcome[]) => void) | undefined;
@@ -883,6 +935,7 @@ Deno.test("pager: background parses stop once the viewer opens another file", as
   const opened = parseDocument("export const other = 1;\n");
   let deliver: ((outcomes: ParseOutcome[]) => void) | undefined;
   let stopped = 0;
+  let ended = 0;
   let stoppedBeforeTheBatch = 0;
   const fileOpened = Promise.withResolvers<void>();
   const { deps, writes } = makeFake({
@@ -932,12 +985,19 @@ Deno.test("pager: background parses stop once the viewer opens another file", as
     },
   });
 
-  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+  await runPager(
+    doc,
+    { ...OPTS, parses: jobs, parsesEnded: () => ended++ },
+    undefined,
+    source,
+    deps,
+  );
 
   assert(
     writes.some((frame) => frame.includes("other = 1")),
     "the viewer shows the opened file",
   );
+  assertEquals(ended, 1, "the parses ended once");
   assertEquals(
     stoppedBeforeTheBatch,
     1,

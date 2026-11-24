@@ -2253,7 +2253,7 @@ function reparse(
       }
       : {}),
   };
-  return build(editedWorkspace, cache?.without(statefulEdits.keys()));
+  return build(editedWorkspace, cache?.editing(statefulEdits.keys()));
 }
 
 function writeWorkspaceFile(

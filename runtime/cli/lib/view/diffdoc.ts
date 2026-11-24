@@ -525,13 +525,23 @@ interface FileMapping {
  * built last. A build reuses a section whose text and languages are unchanged,
  * wherever in the diff it now sits, and reads no workspace file that an
  * earlier build read. Every other complete-file parse lives only as long as
- * the build that made it.
+ * the build that made it, apart from the background parses that {@link
+ * waitedOn} names.
  */
 export class WorkspaceCache {
   #files = new Map<string, WorkspaceFile>();
   #sections = new Map<ViewMode, ReadonlyMap<string, BuiltSection>>();
   #recentParses: ReadonlyMap<string, LoadedFile> = new Map();
   #lines?: TextLines;
+
+  /**
+   * The cache that a cache {@link editing} made records its builds in, and the
+   * files it reads afresh.
+   */
+  #origin?: {
+    readonly cache: WorkspaceCache;
+    readonly absPaths: ReadonlySet<string>;
+  };
 
   /**
    * Returns the lines of `text`, which a build of the same text as the last
@@ -555,9 +565,16 @@ export class WorkspaceCache {
     return this.#files.get(absPath);
   }
 
-  /** Records `file` as the workspace copy of `absPath`, and returns it. */
+  /**
+   * Records `file` as the workspace copy of `absPath`, and returns it. A cache
+   * that {@link editing} made also records it in the cache it was made from,
+   * unless it reads `absPath` afresh.
+   */
   rememberFile(absPath: string, file: WorkspaceFile): WorkspaceFile {
     this.#files.set(absPath, file);
+    if (this.#origin && !this.#origin.absPaths.has(absPath)) {
+      this.#origin.cache.rememberFile(absPath, file);
+    }
     return file;
   }
 
@@ -586,8 +603,33 @@ export class WorkspaceCache {
   }
 
   /**
+   * Returns the keys of the background parses that the sections of the latest
+   * build in each view mode were built without, except those of a section
+   * that the latest build in the other view mode used as built with every
+   * parse it reads. A cache that {@link editing} made answers for the cache it
+   * records its builds in.
+   */
+  waitedOn(): ReadonlySet<string> {
+    if (this.#origin) return this.#origin.cache.waitedOn();
+    const latest = Array.from(this.#sections.values());
+    const waited = new Set<string>();
+    for (const sections of latest) {
+      for (const [key, section] of sections) {
+        if (
+          latest.every((other) => other.get(key)?.waitingOn.length !== 0)
+        ) {
+          for (const parse of section.waitingOn) waited.add(parse);
+        }
+      }
+    }
+    return waited;
+  }
+
+  /**
    * Records what a build in `viewMode` used: its `sections`, and the
-   * `recentParses` of the section it built last, when it built one.
+   * `recentParses` of the section it built last, when it built one. A cache
+   * that {@link editing} made also records in the cache it was made from the
+   * sections of every file it does not read afresh.
    */
   rememberBuild(
     viewMode: ViewMode,
@@ -596,6 +638,19 @@ export class WorkspaceCache {
   ): void {
     this.#sections.set(viewMode, sections);
     if (recentParses) this.#recentParses = recentParses;
+    if (this.#origin) {
+      const { cache, absPaths } = this.#origin;
+      const fresh = ([, section]: [string, BuiltSection]) =>
+        section.absPath !== null && absPaths.has(section.absPath);
+      cache.rememberBuild(
+        viewMode,
+        new Map([
+          ...Array.from(cache.sections(viewMode)).filter(fresh),
+          ...Array.from(sections).filter((entry) => !fresh(entry)),
+        ]),
+        undefined,
+      );
+    }
   }
 
   /** Forgets the workspace copy of `absPath` and everything built from it,
@@ -619,14 +674,20 @@ export class WorkspaceCache {
     );
   }
 
-  /** Returns a new cache holding what this one does, except `absPaths`. */
-  without(absPaths: Iterable<string>): WorkspaceCache {
+  /**
+   * Returns a cache for builds that read `absPaths` afresh, as when those
+   * files have unsaved edits. It holds what this one does, except those
+   * files, and records in this one the sections its builds make of every
+   * other file.
+   */
+  editing(absPaths: Iterable<string>): WorkspaceCache {
     const copy = new WorkspaceCache();
     copy.#files = new Map(this.#files);
     copy.#sections = new Map(this.#sections);
     copy.#recentParses = this.#recentParses;
     copy.#lines = this.#lines;
-    for (const absPath of absPaths) copy.forget(absPath);
+    copy.#origin = { cache: this, absPaths: new Set(absPaths) };
+    for (const absPath of copy.#origin.absPaths) copy.forget(absPath);
     return copy;
   }
 }
@@ -1540,6 +1601,7 @@ export function buildDiffDocument(
     oldFileLines.push(section.oldFileLines);
   }
   cache.rememberBuild(viewMode, used, recentParses);
+  pending?.keepOnly(cache.waitedOn());
 
   const flatStructure = flattenStructure(structure);
 
