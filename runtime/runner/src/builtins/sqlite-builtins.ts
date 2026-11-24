@@ -889,7 +889,7 @@ export function sqliteDatabase(
   inputsCell: Cell<any>,
   sendResult: (tx: IExtendedStorageTransaction, result: any) => void,
   _addCancel: (cancel: () => void) => void,
-  cause: Cell<any>[],
+  cause: unknown,
   parentCell: Cell<any>,
   runtime: Runtime,
   outputBinding?: NormalizedFullLink,

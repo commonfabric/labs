@@ -277,9 +277,12 @@ describe({
 
         const handle = await deriveAtSpot({ tables: { other: notes } });
 
-        expect(handle.id).toBe(ownId(earlier));
-        expect(handle.tables).toEqual({ notes, other: notes });
-        expect(handle.rev).toBe(3);
+        expect(handle).toEqual({
+          id: ownId(earlier),
+          tables: { notes, other: notes },
+          scope: "space",
+          rev: 3,
+        });
       });
 
       it("mints its own handle when the one the output spot links to is another piece's", async () => {
