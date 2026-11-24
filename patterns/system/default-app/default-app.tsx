@@ -24,7 +24,6 @@ import {
 
 import {
   addParticipant,
-  joinAsViewer,
   type ParticipantProfile,
   type ParticipantRoster,
   rosterProfiles,
@@ -85,12 +84,6 @@ export interface PiecesListOutput {
 
   /** Adds a labeled profile to `participants` once. */
   addParticipant: Stream<{ profile: ParticipantProfile }>;
-
-  /**
-   * Lists the sender in the space: adds the sender's own `#profile` to
-   * `participants`, as the "Join this space" button does.
-   */
-  joinAsViewer: Stream<void>;
 }
 
 const removePiece = handler<
@@ -176,6 +169,24 @@ const addPiece = handler<
   pieceRegistry.addUnique(piece);
 });
 
+/**
+ * Adds the viewer's `#profile` to the roster, through `join` so that the
+ * roster's one writer makes the write. Does nothing until the profile
+ * document reads as present: an unresolved profile arrives as an empty cell,
+ * and linking it would record no profile at all.
+ */
+const joinAsViewer = handler<
+  void,
+  {
+    join: Stream<{ profile: ParticipantProfile }>;
+    profile: ParticipantProfile | undefined;
+  }
+>((_, { join, profile }) => {
+  const target = profile?.resolveAsCell();
+  if (target === undefined || target.get() === undefined) return;
+  join.send({ profile: target });
+});
+
 // Retained stream cell for existing default-app roots. Events have no effect.
 const retiredAction = handler<unknown, Record<string, never>>(() => {});
 
@@ -197,7 +208,6 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   );
   const join = addParticipant({ roster: participants });
   const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
-  const joinSelf = joinAsViewer({ join, profile: viewerProfile.result });
   const viewerName = wish<string>({ query: "#profileName" });
   // The name string is empty when no profile resolved, whereas a presence
   // test on the profile cell reads an absent profile as present.
@@ -364,7 +374,10 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                     <cf-button
                       size="sm"
                       disabled={!hasProfile}
-                      onClick={joinSelf}
+                      onClick={joinAsViewer({
+                        join,
+                        profile: viewerProfile.result,
+                      })}
                     >
                       Join this space
                     </cf-button>
@@ -438,6 +451,5 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
     participants: roster,
     members: membersForUser,
     addParticipant: join,
-    joinAsViewer: joinSelf,
   };
 });
