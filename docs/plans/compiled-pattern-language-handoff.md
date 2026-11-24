@@ -23,16 +23,19 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-topics` | `compiled-pattern-topics-merge` | The crate on the corpus of `main`, Topics on the executor | #10016 |
 | `claude/compiled-pattern-runner-m3` | `compiled-pattern-m3` | The trunk of the build: milestones 3 to 6 merged, the store with frozen values, a resume by units | #10140 |
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
-| `claude/compiled-pattern-sandbox-m5` | none while the merge attempt is checked out in `compiled-pattern-m5`; check it out there when that round ends | The merged branch: the trunk head, the carried fixes, the runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes, write integrity | #10183, stacked on #10140 |
-| `merge-attempt/serving-m6` | `compiled-pattern-m5` | The merged branch with the serving branch merged into it; every gate passes | none |
+| `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
+| `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
+| `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
 | `claude/compiled-pattern-topics-runs` | `compiled-pattern-topics-runs` | The measured Topics boards; the serving branch is merged into it for measurements (local) | none |
 
-Four pull requests against `main` came out of the work and are independent
-of the experimental option: #10142, #10145, #10146 and #10147. Each is on a
-branch of its own cut from `main`. The owner's instruction of 2026-11-23
-(Z89) is to open one for any significant fix to today's runtime.
+Five pull requests against `main` came out of the work and are independent
+of the experimental option, all merged: #10142, #10145, #10146 and #10147,
+and #10184, which stops a memory server's currency arming from cycling
+between two spaces that read each other (the stall of the
+`fabrichat-deleted-room` test on `main`). The owner's instruction of
+2026-11-23 (Z89) is to open one for any significant fix to today's runtime.
 
 ## What is not merged
 
@@ -56,7 +59,9 @@ The work after it is on two branches:
    `claude/compiled-pattern-sandbox-m5` is fast-forwarded to it, so both
    names hold every branch of the build. The owner chose a stacked pull
    request over moving the trunk: #10183 has the merged branch as its head
-   and the trunk of #10140 as its base.
+   and the trunk of #10140 as its base. Round twenty's two executor fixes
+   and their notes (1011 to 1015) are carried onto it from
+   `claude/fabrichat-row-rights-68447f`.
 
 The merged branch becomes the trunk once the serving branch is in. For a
 merge: resolve the textual conflicts, then check the places where both
@@ -72,9 +77,47 @@ at a wake and a restore that dropped another principal's memo entry; a wake
 by units that left no row of a list stored in documents), so a merge is not
 finished when the conflicts are gone.
 
-**What the last merge showed, and what is open on it** (notes 982 to 1010
-on `merge-attempt/serving-m6`, head `31d73441f8`).
+**What the last merge showed, and what is open on it** (notes 982 to 1015
+on `claude/compiled-pattern-sandbox-m5`; notes 1011 to 1015 are round
+twenty).
 
+- *Scaling, open and the largest defect on FabriChat: with its rows
+  deriving, a send stores both session documents whole, so a room of 1,000
+  messages cannot be seeded.* Every FabriChat figure taken before round
+  twenty, on this branch and probably on the serving branch alone (which
+  has the same defect and the same row code), was of a room whose message
+  rows were all in an error state: a body handed each row of a `map` over
+  an array of references could not resolve the row's reference (note
+  1011). The send at 100 messages counted 148 records, 32 evaluations and
+  19 documents of 525 to 532 KB, and the dump held 206 error values, one
+  per row in each of two session documents. With the rows deriving, a send
+  gives 148 records, 49 evaluations, 29 evaluations of element bodies and
+  33 documents of 2.35 MB at 100 messages, and 11.0 MB at 500; the two
+  session documents hold every row and are stored whole at each send. At
+  1,000 messages the seed was refused with `MessageTooLargeError` after 30
+  minutes at 27 GB resident. The fix is plan (b) of note 1007: the per-row
+  form of a scoped read inside the body of a per-element construct, with
+  places pulled only where their inputs changed for the acting scope key.
+- *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
+  `Executor.#invoke` handed a body a plain value where an `identity` entry
+  of `Body.computed` reached each row through `*`, so a body that resolved
+  the row's reference failed; it now hands a handle at each row and reads
+  nothing of what it names (test `body-argument.test.ts`, over an array of
+  references and over an array of plain values in place). A read of one
+  member of a value another cone computes, by a static path or by a key,
+  depended on the whole value, and a `pick` over a container read the whole
+  container; it now depends on that member alone (P453, emitted as one call
+  carrying the path: `$h.output(n, path)`, `$h.value(n, path)`,
+  `$h.slot(n, [key])`). Over an array of plain values in place, at 10 and
+  100 members, adding a member no row reads evaluates 0 element bodies
+  where it evaluated 10 and 100, and writing one row's member evaluates 1
+  (test `member-read.test.ts`). In FabriChat a send evaluates 29 to 31
+  element bodies at 100 and at 500 messages where it evaluated 131 to 133
+  and 531 to 533; the time barely moves, because storing the two session
+  documents dominates it. Open: a read of a path below the result of a
+  `map` or `filter` still depends on the whole result; two CFC questions
+  (note 1015) on the label of a `pick`'s container and of a reader whose
+  member did not change.
 - *Closed by Z95 (P452): a commit whose label table would expand past
   16 MB was sent with its labels inline and refused as too large.* This is
   a defect of today's runtime that a compiled piece reaches first: a
@@ -122,14 +165,14 @@ on `merge-attempt/serving-m6`, head `31d73441f8`).
   `Instance.#putScoped` now splices the run of positions that differs. A
   FabriChat send at 100 messages gave 188 records after this fix and
   before P451 (688 to 698 before the fix, 189 on the serving branch), and
-  gives 148 after P451. Open: a scoped output still holds all rows in one
-  document, so bytes and time of a send follow the room. FabriChat's
+  gives 148 after P451, with the rows deriving as well (round twenty). Open:
+  a scoped output still holds all rows in one document, so bytes and time
+  of a send follow the room; the figures with the rows deriving are in the
+  first item of this list. The figures recorded here earlier for
   `messageRights` (a `map` over the array of message references with a
-  `PerSession` output) at 10, 100 and 1,000 messages: scope instances of
-  79 to 90 KB, 575 to 587 KB and 5.54 MB; 59 to 61, 148 and 148 records per
-  send; 101 to 110 KB, 525 to 532 KB and 3.86 MB changed per send; 68 to
-  72 ms, 160 to 170 ms and 1.39 to 1.60 s per send. The plan to store it
-  per row is note 985, and per row and scope key note 1007.
+  `PerSession` output) at 10, 100 and 1,000 messages were of rows in an
+  error state and no longer stand. The plan to store it per row is note
+  985, and per row and scope key note 1007.
 - *Fixed (P451, which the owner agreed with on 2026-11-24, Z94; notes 990
   to 1002): a view that read one value of a scope was stored whole, once
   per scope key.* The board's view reads `hasProfile`, which reads the
@@ -214,10 +257,13 @@ Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
 and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integrity, P410 and
 P411 specification review; P420 to P425 resume by units, fourth round; P390
-to P394 serving, round fifteen. Note
+to P394 serving, round fifteen; P450 to P453 the merges and rounds nineteen
+and twenty (the next is P454). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
-and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving. The plan documents hold decisions up to
+and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
+1015 the merges and the rounds after them on the merged branch (the next is
+1016). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
@@ -293,7 +339,11 @@ that branch.
 932). The owner's rule that a send does not grow with the room is not met:
 at the head `c0e0a41014` a send on the runner path takes 66 to 72 ms at 10
 messages, 197 to 207 at 100 and 829 to 892 at 1,000, about 0.75 ms and
-1.3 KB per message held. Built in round fifteen: the record of a place a
+1.3 KB per message held. These figures were probably of rows in an error
+state (the branch has the defect of note 1012 and the same row code; not
+checked there); with the rows deriving on the merged branch the bytes of a
+send are about 23 KB per message held (first item under "What the last
+merge showed"). Built in round fifteen: the record of a place a
 comparison left as it was is not given again (P390, `exec/inputs-digest.ts`;
 88 to 90 records per send); the window construct `xs.last(n)` and
 `xs.first(n)` (P391), which an append moves by one splice over an array of
