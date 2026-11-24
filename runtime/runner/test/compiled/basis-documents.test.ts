@@ -40,8 +40,8 @@ const itemsSchema = {
 // references, each with a handler of its own and a value of the scope
 // `session` that the row places (P455), and an event that adds an item in
 // a document the piece makes. The piece has documents of a scope, so it
-// resumes whole (note 892), and its basis lists the documents it made
-// that a resume reads as stored.
+// resumes whole (note 892), and its basis lists the documents it made,
+// spread over the parts of the list (P457).
 describe("the basis of a piece whose rows each have a stream and a place of the scope `session`", () => {
   let signer: Identity;
   let space: MemorySpace;
@@ -225,13 +225,15 @@ describe("the basis of a piece whose rows each have a stream and a place of the 
     };
   };
 
-  it("lists no more documents for an added item at 100 items than at 10, and is resumed from with every row", async () => {
+  it("writes, for an added item, the parts of the list that name what it made and not the whole list, and is resumed from with every row", async () => {
     const small = await run(10);
     const large = await run(100);
 
-    // The documents the further item made, in a part of the list of its
-    // own; a part holds about one in 256 of the documents listed.
-    expect(large.listed - small.listed).toBeLessThanOrEqual(2);
+    // Each added item makes three documents: its own, the entity of its
+    // row's stream and its row's place. At 100 items the piece has made
+    // about 300, and a part of the list holds about one in 256 of them.
+    expect(small.listed).toBeLessThanOrEqual(6);
+    expect(large.listed).toBeLessThan(30);
     expect(large.shown.length).toBe(101);
     expect(large.resumed).toEqual(large.shown);
     expect(small.resumed).toEqual(small.shown);

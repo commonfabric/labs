@@ -54,16 +54,11 @@ export type StoredBasis = {
   inputs: Record<string, number>;
   recent: string[];
   /**
-   * The documents of the space the piece made that are no rows, spread
-   * over the documents of the parts of the list by `basisPartOf`: a resume
-   * brings each into the replica before the executor is started, since the
-   * stored result links to some of them by no link a sync follows. The
-   * entities of streams and the documents of a scope narrower than the
-   * space are not listed: a piece that has documents of a scope resumes
-   * whole, and its derivation writes the marker of each stream it holds
-   * and the instance of each document of a scope for the key it acts for
-   * again, where the sync of a list would bring the instance of the
-   * identity of the resuming runtime alone (provisional decision P457).
+   * The documents the piece made that are no rows, the entities of its
+   * streams among them, spread over the documents of the parts of the list
+   * by `basisPartOf` (provisional decision P457): a resume brings each into
+   * the replica before the executor is started, since the stored result
+   * links to some of them by no link a sync follows.
    */
   documents?: Record<string, 1>;
 };

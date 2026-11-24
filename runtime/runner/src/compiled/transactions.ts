@@ -443,9 +443,8 @@ export type SourceObserver = {
   /** The commit of a handed transaction was refused or taken back. */
   refused(tx: IExtendedStorageTransaction): void;
   /**
-   * The executor made a document of the space that is neither a row nor
-   * the result document. The entity of a stream and a document of a scope
-   * are not reported: a resume derives each again.
+   * The executor made a document that is neither a row nor the result
+   * document, or the adapter made the entity of a stream.
    */
   made(doc: string): void;
 };
@@ -2370,11 +2369,7 @@ export class RuntimeTransactions implements TransactionHooks {
       // written.
       this.#documents.add(doc);
       this.#created.push(doc);
-      // A document of a scope is derived again by a resume for each key,
-      // and is no document the basis lists (`StoredBasis.documents`).
-      if (doc !== this.#owner && cellScopeOf(doc) === "space") {
-        this.#sources?.made(doc);
-      }
+      if (doc !== this.#owner) this.#sources?.made(doc);
       // The executor makes the result document of a resumed instance empty
       // and derives into it, and the storage keeps what it holds until a
       // path of the derivation differs.
@@ -4950,6 +4945,7 @@ export class RuntimeTransactions implements TransactionHooks {
     if (!this.#streams.has(entity)) {
       this.#streams.set(entity, stream);
       this.#createdStreams.push(entity);
+      this.#sources?.made(entity);
       this.#open().writeValueOrThrow(
         { space: this.#space, id: entity, path: [], scope: "space" },
         { $stream: true },
