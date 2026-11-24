@@ -12,8 +12,11 @@ import {
   isAbsentPathError,
   isStoredLink,
   normalizeFid,
+  type ProgressLine,
   publishedBoardSources,
   recreatedDocument,
+  type RecreateSteps,
+  recreateTopics,
   retiredKeys,
   storedLink,
   type TopicExportRow,
@@ -648,6 +651,174 @@ describe("topics-rehearsal-lib", () => {
           recreated,
         )
       ).toThrow("of:fid1:old-1 references.0 is not a link");
+    });
+  });
+
+  describe("recreateTopics", () => {
+    /** The export's topics `old-1` to `old-<count>`, numbered from 1. */
+    const exportOf = (count: number): [string, TopicExportRow][] =>
+      Array.from({ length: count }, (_, at) => [String(at + 1), {
+        fid: `of:fid1:old-${at + 1}`,
+        patternIdentity: "pattern",
+        argumentId: "argument",
+        content: { title: `t${at + 1}`, comments: [], links: [] },
+        rawArgument: { title: `t${at + 1}` },
+      }]);
+
+    /**
+     * A fresh board, which numbers each topic it creates one past the topics
+     * it holds, and a progress file. `steps` records each create and write in
+     * `calls`. With `interrupted`, the first create lands on the board and
+     * then fails before its progress line is written, as an interrupted run
+     * does.
+     */
+    function freshBoard({ interrupted = false } = {}) {
+      const held = new Map<string, string>();
+      const progress = new Map<string, string>();
+      const lines: ProgressLine[] = [];
+      const calls: string[] = [];
+      let interrupt = interrupted;
+      const steps: RecreateSteps = {
+        create: (name) => {
+          const number = String(held.size + 1);
+          if (number !== name) {
+            return Promise.reject(new Error(`numbered ${number}, not ${name}`));
+          }
+          const id = `of:fid1:new-${number}`;
+          held.set(number, id);
+          calls.push(`create ${name}`);
+          if (interrupt) {
+            interrupt = false;
+            return Promise.reject(new Error("interrupted"));
+          }
+          return Promise.resolve(id);
+        },
+        record: (line) => {
+          lines.push(line);
+          progress.set(line.from, line.to);
+          return Promise.resolve();
+        },
+        write: (id) => {
+          calls.push(`write ${id}`);
+          return Promise.resolve();
+        },
+      };
+      return { held, progress, lines, calls, steps };
+    }
+
+    it("records a topic an interrupted run created, rather than creating it again", async () => {
+      const topics = exportOf(2);
+      const board = freshBoard({ interrupted: true });
+      await expect(
+        recreateTopics(
+          topics,
+          board.progress,
+          board.held,
+          Infinity,
+          board.steps,
+        ),
+      ).rejects.toThrow("interrupted");
+      board.calls.length = 0;
+
+      const counts = await recreateTopics(
+        topics,
+        board.progress,
+        board.held,
+        Infinity,
+        board.steps,
+      );
+      expect(counts).toEqual({ reconciled: 1, created: 1, written: 2 });
+      expect(board.calls).toEqual([
+        "create 2",
+        "write of:fid1:new-1",
+        "write of:fid1:new-2",
+      ]);
+      expect(board.lines).toEqual([
+        { name: "1", from: "of:fid1:old-1", to: "of:fid1:new-1" },
+        { name: "2", from: "of:fid1:old-2", to: "of:fid1:new-2" },
+      ]);
+    });
+
+    it("bounds both passes to the topics numbered up to the limit, so a rerun goes on from there", async () => {
+      const topics = exportOf(4);
+      const board = freshBoard();
+      const run = async (limit: number) => {
+        board.calls.length = 0;
+        await recreateTopics(
+          topics,
+          board.progress,
+          board.held,
+          limit,
+          board.steps,
+        );
+        return [...board.calls];
+      };
+      expect(await run(2)).toEqual([
+        "create 1",
+        "create 2",
+        "write of:fid1:new-1",
+        "write of:fid1:new-2",
+      ]);
+      expect(await run(2)).toEqual([
+        "write of:fid1:new-1",
+        "write of:fid1:new-2",
+      ]);
+      expect(await run(4)).toEqual([
+        "create 3",
+        "create 4",
+        "write of:fid1:new-1",
+        "write of:fid1:new-2",
+        "write of:fid1:new-3",
+        "write of:fid1:new-4",
+      ]);
+    });
+
+    it("throws, before any write, for a board holding a number the export lacks", async () => {
+      const board = freshBoard();
+      board.held.set("1", "of:fid1:new-1");
+      board.held.set("2", "of:fid1:other");
+      await expect(
+        recreateTopics(
+          exportOf(1),
+          board.progress,
+          board.held,
+          Infinity,
+          board.steps,
+        ),
+      ).rejects.toThrow("2");
+      expect(board.calls).toEqual([]);
+      expect(board.lines).toEqual([]);
+    });
+
+    it("throws, before any write, for a progress file the board disagrees with", async () => {
+      const board = freshBoard();
+      board.held.set("1", "of:fid1:new-1");
+      board.progress.set("of:fid1:old-1", "of:fid1:elsewhere");
+      await expect(
+        recreateTopics(
+          exportOf(1),
+          board.progress,
+          board.held,
+          Infinity,
+          board.steps,
+        ),
+      ).rejects.toThrow("of:fid1:elsewhere");
+      expect(board.calls).toEqual([]);
+    });
+
+    it("throws, before any write, for a recorded topic the board does not hold", async () => {
+      const board = freshBoard();
+      board.progress.set("of:fid1:old-1", "of:fid1:new-1");
+      await expect(
+        recreateTopics(
+          exportOf(1),
+          board.progress,
+          board.held,
+          Infinity,
+          board.steps,
+        ),
+      ).rejects.toThrow("of:fid1:new-1");
+      expect(board.calls).toEqual([]);
     });
   });
 

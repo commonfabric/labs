@@ -26,20 +26,29 @@
  *
  * 1. Each topic is created with its title. `--progress` records each
  *    created topic, old reference and new, as one line of JSON, so a run
- *    that stopped is finished by running it again with the same file.
+ *    that stopped is finished by running it again with the same file. A run
+ *    that stopped after a create and before its line was written leaves a
+ *    topic the file does not record, so each run first reads which numbers
+ *    the board's namespace holds and records any topic the file lacks,
+ *    rather than creating it again.
  * 2. Each topic's input document takes the export's fields: the title, body,
  *    comments and links, creation and activity times and authors, its number,
  *    and its `mentioned` list and the destinations of its `references` (the
  *    body's `[Label][key]` mentions) with every topic of the old board
  *    replaced by the topic recreated from it. A mention of anything else is
- *    kept as it was. The `board` and `mentionable` links `addTopic` wrote are kept, and
- *    the inputs only an earlier topic pattern declared are left out. The pass
- *    writes the same fields each time it runs.
+ *    kept as it was. The `board` and `mentionable` links `addTopic` wrote are
+ *    kept, and the inputs only an earlier topic pattern declared are left
+ *    out. The pass writes the same fields each time it runs.
  *
- * `--limit` stops each pass after that many topics, for a rehearsal on a few.
+ * `--limit` bounds both passes to the topics numbered 1 to that count, for a
+ * rehearsal on a few. Running again with a larger count goes on from there,
+ * and writes the earlier topics' documents again, so that their mentions of
+ * the topics it creates point at those.
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { parseLink } from "@commonfabric/runner";
 import {
   executePieceCallable,
   loadPieces,
@@ -50,17 +59,11 @@ import { parseCellSelectionOptions } from "../runtime/cli/lib/cell-selection.ts"
 import { newSessionId } from "../runtime/cli/lib/session.ts";
 import {
   normalizeFid,
-  recreatedDocument,
+  type ProgressLine,
+  recreateTopics,
   type TopicExportRow,
   type TopicsExport,
 } from "./topics-rehearsal-lib.ts";
-
-/** One line of the progress file: a topic and the one recreated from it. */
-interface ProgressLine {
-  name: string;
-  from: string;
-  to: string;
-}
 
 /**
  * What a create's readback selects: the number, and the topic as an address.
@@ -119,13 +122,42 @@ const deps = { loadPieces: () => Promise.resolve(pieces) };
 const boardConfig: PieceConfig = { ...spaceConfig, piece: board };
 const session = newSessionId();
 
-const created = await readProgress(progressPath);
-
-// Pass 1: create each topic through the board, in number order.
 let made = 0;
-for (const [name, topic] of topics) {
-  if (made >= limit) break;
-  if (created.has(topic.fid)) continue;
+const counts = await recreateTopics(
+  topics,
+  await readProgress(progressPath),
+  await heldTopics(board),
+  limit,
+  {
+    create: createTopic,
+    record: (line) =>
+      Deno.writeTextFile(progressPath, JSON.stringify(line) + "\n", {
+        append: true,
+      }),
+    write: writeFields,
+  },
+);
+if (counts.reconciled > 0) {
+  console.log(
+    `recorded ${counts.reconciled} topic(s) an earlier run created and did ` +
+      "not record",
+  );
+}
+console.log(`pass 1: created ${counts.created}`);
+console.log(`pass 2: wrote ${counts.written} documents`);
+await pieces.synced();
+await pieces.dispose();
+Deno.exit(0);
+
+/**
+ * Files `topic` through the board's `addTopic` with its title, and returns the
+ * address of the topic created. Throws when the board numbers it other than
+ * `name`.
+ */
+async function createTopic(
+  name: string,
+  topic: TopicExportRow,
+): Promise<string> {
   const title = typeof topic.content.title === "string" &&
       topic.content.title.trim()
     ? topic.content.title
@@ -149,31 +181,41 @@ for (const [name, topic] of topics) {
         "the board is not the fresh board this run was started on",
     );
   }
-  const to = createdTopicId(result.topic);
-  const line: ProgressLine = { name, from: topic.fid, to };
-  await Deno.writeTextFile(progressPath, JSON.stringify(line) + "\n", {
-    append: true,
-  });
-  created.set(topic.fid, to);
   made++;
   if (made % 100 === 0) console.error(`created ${made}`);
+  return createdTopicId(result.topic);
 }
-console.log(`pass 1: created ${made}, ${created.size} recorded in all`);
 
-// Pass 2: write each recreated topic's document.
-let written = 0;
-for (const [name, topic] of topics) {
-  if (written >= limit) break;
-  const to = created.get(topic.fid);
-  if (to === undefined) continue;
-  await writeFields(to, recreatedDocument(topic, name, created));
-  written++;
-  if (written % 100 === 0) console.error(`wrote ${written}`);
+/**
+ * The namespace of the board `boardId`, each number to the topic it names, as
+ * the address `addTopic` returns for it. Read from the links the namespace
+ * stores, so no topic is read.
+ */
+async function heldTopics(boardId: string): Promise<Map<string, string>> {
+  const boardPiece = await pieces.get(boardId, false);
+  const argument = pieces.getArgument(boardPiece.getCell()).key("names");
+  await argument.sync();
+  const names = argument.resolveAsCell();
+  await names.sync();
+  const raw = names.getRaw();
+  const held = new Map<string, string>();
+  if (raw === undefined) return held;
+  if (!isObjectNotArray(raw)) {
+    throw new Error(
+      `the board's namespace is not a map: ${describeFailure(raw)}`,
+    );
+  }
+  for (const [name, entry] of Object.entries(raw)) {
+    const link = parseLink(entry, names);
+    if (link === undefined) {
+      throw new Error(
+        `the board's namespace holds ${name} as something other than a link`,
+      );
+    }
+    held.set(name, link.id);
+  }
+  return held;
 }
-console.log(`pass 2: wrote ${written} documents`);
-await pieces.synced();
-await pieces.dispose();
-Deno.exit(0);
 
 /**
  * Writes each of `fields` into the input document of the topic `id`, at its

@@ -759,6 +759,138 @@ export function recreatedDocument(
   return doc;
 }
 
+/** One line of a `topics-recreate.ts` progress file. */
+export interface ProgressLine {
+  /** The exported topic's number, which the recreated topic has as well. */
+  name: string;
+
+  /** The exported topic. */
+  from: string;
+
+  /** The topic recreated from it, as the address `addTopic` returns. */
+  to: string;
+}
+
+/** What {@link recreateTopics} does to the board and the progress file. */
+export interface RecreateSteps {
+  /**
+   * Files `topic` through the board's `addTopic`, which numbers it `name`,
+   * and returns the address of the topic it created.
+   */
+  create(name: string, topic: TopicExportRow): Promise<string>;
+
+  /** Appends `line` to the progress file. */
+  record(line: ProgressLine): Promise<void>;
+
+  /** Writes `fields` into the input document of the topic `id`. */
+  write(id: string, fields: Record<string, unknown>): Promise<void>;
+}
+
+/** What one {@link recreateTopics} run did. */
+export interface RecreateCounts {
+  /** Topics the board held that the progress file did not record. */
+  reconciled: number;
+
+  /** Topics created through the board's `addTopic`. */
+  created: number;
+
+  /** Topics whose input document was written. */
+  written: number;
+}
+
+/**
+ * The progress lines a recreate run is missing: one for each topic the board
+ * holds that `recorded` does not, which is a topic a run created and stopped
+ * before recording. `topics` is the export's topics as number and row, in
+ * number order; `recorded` maps each exported topic to the topic recreated
+ * from it; `held` maps each number the board's namespace holds to the topic
+ * it names.
+ *
+ * The board numbers the topics it creates densely from 1, and a run creates
+ * them in number order, so the topic the board holds under a number is the
+ * one created from the exported topic with that number. Throws where the
+ * board and the progress file cannot both describe this run: a number the
+ * export does not have, or a recorded topic the board holds under no number
+ * or under another topic's.
+ */
+export function unrecordedCreates(
+  topics: readonly (readonly [string, TopicExportRow])[],
+  recorded: ReadonlyMap<string, string>,
+  held: ReadonlyMap<string, string>,
+): ProgressLine[] {
+  const exported = new Map(topics);
+  for (const name of held.keys()) {
+    if (!exported.has(name)) {
+      throw new Error(
+        `the board holds a topic numbered ${name}, which the export does not ` +
+          "have; the board is not the fresh board this run was started on",
+      );
+    }
+  }
+  const missing: ProgressLine[] = [];
+  for (const [name, topic] of topics) {
+    const to = recorded.get(topic.fid);
+    const holds = held.get(name);
+    if (to !== undefined && to !== holds) {
+      throw new Error(
+        `the progress file records ${topic.fid} as ${to}, and the board ` +
+          `holds ${holds ?? "no topic"} under its number ${name}; the ` +
+          "progress file is not this board's",
+      );
+    }
+    if (to === undefined && holds !== undefined) {
+      missing.push({ name, from: topic.fid, to: holds });
+    }
+  }
+  return missing;
+}
+
+/**
+ * Recreates `topics`, the export's topics as number and row in number order,
+ * on a fresh board through `steps`, in the two passes `topics-recreate.ts`
+ * describes. `recorded` is the progress file, each exported topic to the
+ * topic recreated from it, and `held` is the board's namespace, each number to
+ * the topic it names; a topic the board holds and the progress file does not
+ * is recorded first, as {@link unrecordedCreates} finds it, rather than
+ * created again.
+ *
+ * Both passes cover the topics numbered 1 to `limit`, so a run stopped at any
+ * point is finished by running it again with the same limit, and a run with a
+ * larger one goes on from there. Pass 2 writes each of those documents again
+ * on every run, which also points their mentions at topics created since.
+ */
+export async function recreateTopics(
+  topics: readonly (readonly [string, TopicExportRow])[],
+  recorded: ReadonlyMap<string, string>,
+  held: ReadonlyMap<string, string>,
+  limit: number,
+  steps: RecreateSteps,
+): Promise<RecreateCounts> {
+  const created = new Map(recorded);
+  const counts: RecreateCounts = { reconciled: 0, created: 0, written: 0 };
+  for (const line of unrecordedCreates(topics, recorded, held)) {
+    await steps.record(line);
+    created.set(line.from, line.to);
+    counts.reconciled++;
+  }
+  const selected = topics.slice(0, limit);
+  for (const [name, topic] of selected) {
+    if (created.has(topic.fid)) continue;
+    const to = await steps.create(name, topic);
+    await steps.record({ name, from: topic.fid, to });
+    created.set(topic.fid, to);
+    counts.created++;
+  }
+  for (const [name, topic] of selected) {
+    await steps.write(
+      created.get(topic.fid)!,
+      recreatedDocument(topic, name, created),
+    );
+    counts.written++;
+  }
+  return counts;
+}
+
 /** The path below any node where a `$link` marker appears, or null. Used to
  * refuse an export that would silently record a reference as content. */
 export function findLink(node: unknown, path = "$"): string | null {
