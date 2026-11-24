@@ -757,7 +757,13 @@ describe("optional-wish-availability", () => {
       "../connectors/github/activity-view/main.tsx",
       { repoUrl: "https://github.com/example/donuts" },
     );
+    const failedFetch = textOf(subject.key("$UI"));
+    expect(failedFetch).toContain("GitHub refused");
+    expect(failedFetch).not.toContain("No commits found");
+    await runtime.editWithRetry((tx) => commits.withTx(tx).set([]));
+    await runtime.idle();
     expect(textOf(subject.key("$UI"))).toContain("No commits found");
+    expect(textOf(subject.key("$UI"))).not.toContain("GitHub refused");
     await runtime.editWithRetry((tx) =>
       commits.withTx(tx).set([{
         sha: "abc",
@@ -770,6 +776,7 @@ describe("optional-wish-availability", () => {
     );
     await runtime.idle();
     expect(textOf(subject.key("$UI"))).toContain("Add glaze");
+    expect(textOf(subject.key("$UI"))).toContain("Summary refused");
     expect(textOf(subject.key("$UI"))).not.toContain("Generating summary...");
     await runtime.editWithRetry((tx) =>
       summary.withTx(tx).setRaw(UNAVAILABLE_SYNCING)
@@ -782,6 +789,7 @@ describe("optional-wish-availability", () => {
     );
     await runtime.idle();
     expect(textOf(subject.key("$UI"))).toContain("Glaze is available.");
+    expect(textOf(subject.key("$UI"))).not.toContain("Summary refused");
     expect(textOf(subject.key("$UI"))).toContain("Add glaze");
   });
 

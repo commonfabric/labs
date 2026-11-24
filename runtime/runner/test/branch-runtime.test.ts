@@ -32,13 +32,13 @@ export default pattern<{ count: number }>(({ count }) => ({
 
 const fetcherPath = "/api/patterns/system/fetcher.tsx";
 const fetcherSource =
-  `import { fetchText, handler, pattern, Writable } from 'commonfabric';
+  `import { fetchText, handler, pattern, resultOf, Writable } from 'commonfabric';
 const setUrl = handler<{ url: string }, { url: Writable<string> }>(
   (event, { url }) => { url.set(event.url); },
 );
 export default pattern<{ url: string }>(({ url }) => {
   const fetched = fetchText({ url });
-  return { text: fetched.result, setUrl: setUrl({ url }) };
+  return { text: resultOf(fetched), setUrl: setUrl({ url }) };
 });`;
 
 describe("branch-runtime", () => {
