@@ -6920,11 +6920,14 @@ const parseHelloOk = (
   ) {
     return null;
   }
+  // A server's limit is never below the default, so a lower one is not a
+  // limit any server was given.
   const messageSlots = message.messageSlots;
   if (
     messageSlots !== undefined &&
     (typeof messageSlots !== "number" ||
-      !Number.isSafeInteger(messageSlots) || messageSlots <= 0)
+      !Number.isSafeInteger(messageSlots) ||
+      messageSlots < MAX_UNTRUSTED_MESSAGE_SLOTS)
   ) {
     return null;
   }

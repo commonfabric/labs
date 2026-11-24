@@ -75,7 +75,20 @@ describe("client-message-slots", () => {
   });
 
   for (
-    const limit of [null, false, true, 0, -1, 1.5, 2 ** 53, "2000000", {}, []]
+    const limit of [
+      null,
+      false,
+      true,
+      0,
+      -1,
+      1,
+      MAX_UNTRUSTED_MESSAGE_SLOTS - 1,
+      MAX_UNTRUSTED_MESSAGE_SLOTS + 0.5,
+      2 ** 53,
+      "2000000",
+      {},
+      [],
+    ]
   ) {
     it(`rejects the invalid advertised slot limit ${JSON.stringify(limit)}`, async () => {
       await expect(connect({ transport: await peer(limit) })).rejects.toThrow(

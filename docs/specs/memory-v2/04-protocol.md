@@ -151,10 +151,14 @@ connection's client. A slot is a place a value fills or leaves absent, an array
 counting as its length and a record as its number of members, and the default
 is 1,000,000. A direct client holds each request to the advertised limit in
 place of the default: it stages a watch set in parts that fit it, and refuses,
-unsent, a commit that does not. A client that does not read the field keeps to
-the default, which a server's limit is never below. A `messageSlots` that is
-not a positive safe integer fails the handshake. A routed connection takes its
-bounds from the router instead (`routerFrameSlots`,
+unsent, a commit that does not. The client measures a request by the values it
+writes out, and the server by the slots those values stand for, so the two
+agree on a dense array and differ on a sparse one: a commit whose array holds
+few values at indices past the limit passes the client and is refused by the
+server on receipt. A client that does not read the field keeps to the default,
+which a server's limit is never below. A `messageSlots` that is not a safe
+integer at or above the default fails the handshake. A routed connection takes
+its bounds from the router instead (`routerFrameSlots`,
 [routed Mode A](routed-mode-a.md)).
 
 `stableExpressionResultIds` declares the expression result identity contract:
