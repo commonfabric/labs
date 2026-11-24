@@ -1,0 +1,1 @@
+{"date":"2026-11-23","from":{"k":"unit","s":"runner","n":"serving-memory-server > policyFromEnvironment() > takes the currency index mode from the literals `record` and `skip` alone"},"to":{"k":"unit","s":"runner","n":"serving-memory-server > policyFromEnvironment() > takes the currency index mode from the literals `record` and `skip`, and none from a value that names no mode"}}

@@ -28,6 +28,11 @@ import {
   DEFAULT_FLUSH_DEADLINE_MS,
 } from "@commonfabric/runner/executor/space-server";
 import {
+  CURRENCY_INDEX_MODES,
+  type CurrencyIndexMode,
+  currencyIndexModeOf,
+} from "@commonfabric/runner/executor/store-currency";
+import {
   SERVING_RUNTIME_EXPERIMENTAL,
   servingRuntimeFactory,
 } from "@commonfabric/runner/executor/serving-runtime";
@@ -89,6 +94,14 @@ let route: RoutedPlane | undefined;
  * space). An operator-tunable posture, not a spec constant. */
 export const DEFAULT_MAX_OUTSTANDING_EFFECTS = 16;
 
+/**
+ * The mode a toolshed keeps the currency index in where
+ * `SERVER_EXECUTION_CURRENCY_INDEX` names none (serving-loop.md §1): a piece
+ * its record proves current is left unstarted, and nothing is started
+ * upstream of a stale one.
+ */
+export const DEFAULT_CURRENCY_INDEX: CurrencyIndexMode = "skip";
+
 /** The longest delay `setTimeout()` honors, in milliseconds. */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -102,7 +115,7 @@ export type ServerExecutionEnvPolicy = {
   storeReadThrough?: boolean;
   overlapWaveCommit?: boolean;
   parkedRuntimeRetentionMs?: number;
-  currencyIndex?: "record" | "skip";
+  currencyIndex?: CurrencyIndexMode;
   currencyEpoch?: string;
 };
 
@@ -133,8 +146,8 @@ export type ServerExecutionEnvPolicy = {
  * - the currency index (`SpaceServerPolicy.currencyIndex`,
  *   SERVER_EXECUTION_CURRENCY_INDEX) defaults to `defaultCurrencyIndex`,
  *   and to none where that is not given; the literal `off` keeps none,
- *   `record` and `skip` select a mode, and anything else warns and keeps the
- *   default. Its epoch (`SpaceServerPolicy.currencyEpoch`) is
+ *   the name of a mode (`CURRENCY_INDEX_MODES`) selects it, and anything
+ *   else warns and keeps the default. Its epoch (`SpaceServerPolicy.currencyEpoch`) is
  *   SERVER_EXECUTION_CURRENCY_EPOCH as written, or else
  *   `DEFAULT_CURRENCY_EPOCH`, which no build or process decides.
  *
@@ -148,7 +161,7 @@ export type ServerExecutionEnvPolicy = {
 export function serverExecutionPolicyFromEnv(
   envGet: EnvReader,
   warn: (message: string) => void = (message) => console.warn(message),
-  defaultCurrencyIndex?: "record" | "skip",
+  defaultCurrencyIndex?: CurrencyIndexMode,
 ): ServerExecutionEnvPolicy {
   /** A strictly non-negative decimal integer, or undefined for anything
    * else (garbage, sign, fraction, exponent — `parseInt` would accept
@@ -251,15 +264,17 @@ export function serverExecutionPolicyFromEnv(
   }
   const currencyRaw = readRaw("SERVER_EXECUTION_CURRENCY_INDEX");
   let currencyIndex = defaultCurrencyIndex;
-  if (currencyRaw === "record" || currencyRaw === "skip") {
-    currencyIndex = currencyRaw;
+  const currencyNamed = currencyIndexModeOf(currencyRaw);
+  if (currencyNamed !== undefined) {
+    currencyIndex = currencyNamed;
   } else if (currencyRaw === "off") {
     currencyIndex = undefined;
   } else if (currencyRaw !== undefined) {
     warn(
       "Server-execution v2: ignoring SERVER_EXECUTION_CURRENCY_INDEX=" +
-        `${JSON.stringify(currencyRaw)} (expected "record", "skip" or ` +
-        `"off"); the currency index stays ${
+        `${JSON.stringify(currencyRaw)} (expected ${
+          CURRENCY_INDEX_MODES.map((mode) => `"${mode}"`).join(", ")
+        } or "off"); the currency index stays ${
           defaultCurrencyIndex === undefined
             ? "OFF"
             : `"${defaultCurrencyIndex}"`
@@ -281,6 +296,33 @@ export function serverExecutionPolicyFromEnv(
     ...(currencyIndex !== undefined ? { currencyIndex } : {}),
     ...(currencyIndex !== undefined ? { currencyEpoch } : {}),
   };
+}
+
+/** What each currency index mode has a serving loop do, for the log. */
+const CURRENCY_INDEX_EFFECT: Record<CurrencyIndexMode, string> = {
+  record: "records and judges, and starts every demanded piece",
+  skip: "leaves unstarted a piece its record proves current, and starts " +
+    "nothing upstream of a stale one",
+  "start-upstream": "leaves unstarted a piece its record proves current, " +
+    "and starts the pieces upstream of one that is stale only through them",
+};
+
+/**
+ * The line a starting serving host logs of the currency index mode in
+ * force, `mode`, or of keeping no index where it is `undefined`.
+ */
+function currencyIndexReport(mode: CurrencyIndexMode | undefined): string {
+  const byDefault = `default is "${DEFAULT_CURRENCY_INDEX}"`;
+  if (mode === undefined) {
+    return "Server-execution v2: currency index OFF by " +
+      "SERVER_EXECUTION_CURRENCY_INDEX=off (every demanded piece starts; " +
+      `${byDefault})`;
+  }
+  return `Server-execution v2: currency index "${mode}" ` +
+    (mode === DEFAULT_CURRENCY_INDEX
+      ? "(the default)"
+      : `by SERVER_EXECUTION_CURRENCY_INDEX (${byDefault})`) +
+    `: ${CURRENCY_INDEX_EFFECT[mode]}`;
 }
 
 /**
@@ -620,18 +662,12 @@ export function startServerExecutionHost(options: {
         "production default is ON)",
     );
   }
-  const policy = serverExecutionPolicyFromEnv(envGet, undefined, "skip");
-  if (policy.currencyIndex !== "skip") {
-    console.log(
-      policy.currencyIndex === undefined
-        ? "Server-execution v2: currency index OFF by " +
-          "SERVER_EXECUTION_CURRENCY_INDEX=off (every demanded piece " +
-          'starts; default is "skip")'
-        : "Server-execution v2: currency index records and judges, and " +
-          "starts every demanded piece, by " +
-          'SERVER_EXECUTION_CURRENCY_INDEX=record (default is "skip")',
-    );
-  }
+  const policy = serverExecutionPolicyFromEnv(
+    envGet,
+    undefined,
+    DEFAULT_CURRENCY_INDEX,
+  );
+  console.log(currencyIndexReport(policy.currencyIndex));
   if (
     policy.currencyEpoch !== undefined &&
     policy.currencyEpoch !== DEFAULT_CURRENCY_EPOCH

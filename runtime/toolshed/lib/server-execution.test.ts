@@ -33,6 +33,7 @@ import type {
   ServedRegistrationPreparation,
 } from "@commonfabric/piece/ops";
 import { DEFAULT_CURRENCY_EPOCH } from "@commonfabric/runner/executor/space-server";
+import type { CurrencyIndexMode } from "@commonfabric/runner/executor/store-currency";
 
 const envOf = (values: Record<string, string | undefined>) => (name: string) =>
   values[name];
@@ -193,7 +194,7 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings[0]).toContain("SERVER_EXECUTION_OVERLAP_COMMIT");
   });
 
-  it("returns the currency index mode for `record` and `skip`, with its epoch, and no mode for anything else", () => {
+  it("returns the currency index mode for `record` and `skip`, with its epoch, and no mode for `off` or a value that names none", () => {
     const warnings: string[] = [];
     const policyWith = (env: Record<string, string>) =>
       serverExecutionPolicyFromEnv(
@@ -229,6 +230,32 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_INDEX");
   });
 
+  it("returns the `start-upstream` mode for that literal, and names each value it accepts in the warning for any other", () => {
+    const warnings: string[] = [];
+    const policyWith = (mode: string) =>
+      serverExecutionPolicyFromEnv(
+        envOf({
+          SERVER_EXECUTION_CURRENCY_INDEX: mode,
+          SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
+        }),
+        (m) => warnings.push(m),
+      );
+
+    expect(policyWith("start-upstream")).toEqual({
+      currencyIndex: "start-upstream",
+      currencyEpoch: DEFAULT_CURRENCY_EPOCH,
+      storeReadThrough: true,
+    });
+    expect(warnings).toEqual([]);
+    for (const unknown of ["start_upstream", "upstream", "SKIP", "skip "]) {
+      expect(policyWith(unknown)).toEqual({ storeReadThrough: true });
+    }
+    expect(warnings).toHaveLength(4);
+    expect(warnings[0]).toContain(
+      'expected "record", "skip", "start-upstream" or "off"',
+    );
+  });
+
   it("returns the `skip` mode under the default epoch, with no warning, for `skip` with no epoch named", () => {
     const warnings: string[] = [];
     for (const epoch of [undefined, ""]) {
@@ -257,7 +284,7 @@ describe("serverExecutionPolicyFromEnv", () => {
 
     const policyWith = (
       env: Record<string, string>,
-      defaultCurrencyIndex?: "record" | "skip",
+      defaultCurrencyIndex?: CurrencyIndexMode,
     ) =>
       serverExecutionPolicyFromEnv(envOf(env), () => {}, defaultCurrencyIndex);
     expect(policyWith({}, "skip").currencyEpoch).toBe("default");
@@ -995,6 +1022,40 @@ describe("startServerExecutionHost's report of its policy knobs", () => {
     );
     expect(logged.some((line) => line.includes("flush deadline grows")))
       .toBe(false);
+  });
+
+  it("reports the currency index mode in force, for the default and for each value the variable selects", async () => {
+    const reported = async (knobs: Record<string, string>) =>
+      (await reportFor(knobs)).logged.filter((line) =>
+        line.includes("currency index ") && !line.includes("epoch")
+      );
+
+    expect(await reported({})).toEqual([
+      expect.stringContaining('currency index "skip" (the default)'),
+    ]);
+    expect(await reported({ SERVER_EXECUTION_CURRENCY_INDEX: "skip" }))
+      .toEqual([
+        expect.stringContaining('currency index "skip" (the default)'),
+      ]);
+    expect(
+      await reported({ SERVER_EXECUTION_CURRENCY_INDEX: "start-upstream" }),
+    ).toEqual([
+      expect.stringContaining(
+        'currency index "start-upstream" by SERVER_EXECUTION_CURRENCY_INDEX',
+      ),
+    ]);
+    expect(await reported({ SERVER_EXECUTION_CURRENCY_INDEX: "record" }))
+      .toEqual([
+        expect.stringContaining(
+          'currency index "record" by SERVER_EXECUTION_CURRENCY_INDEX',
+        ),
+      ]);
+    expect(await reported({ SERVER_EXECUTION_CURRENCY_INDEX: "off" }))
+      .toEqual([
+        expect.stringContaining(
+          "currency index OFF by SERVER_EXECUTION_CURRENCY_INDEX=off",
+        ),
+      ]);
   });
 
   it("reports the overlapped wave commit only when it is on", async () => {
