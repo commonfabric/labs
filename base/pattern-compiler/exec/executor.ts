@@ -2194,10 +2194,13 @@ export class Host {
     }
     // So does the cone of another value: a value of a scope key that a
     // cone of the space places, or reads through the reference, leaves
-    // the cone of the space (P451).
+    // the cone of the space (P451). An evaluation that is no cone, as an
+    // assembly or the place of an output in a scope instance, is given the
+    // value.
     if (
       this.key !== RESULT && instance.store.scopes !== undefined &&
-      this.context.size === 0 && output.cone !== this.cone
+      this.context.size === 0 && this.cone !== undefined &&
+      output.cone !== this.cone
     ) {
       const placed = instance.scopedValue(index, this);
       if (placed !== undefined) return placed;

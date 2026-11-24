@@ -204,3 +204,75 @@ describe("a rendered tree that reads a value of the scope `user` in two places, 
     expect(JSON.stringify(sizes[1].view.children?.[2])).toContain("renamed!");
   });
 });
+
+// `fixtures/scoped-source.tsx`: a `map` over the result of a `computed` that
+// reads state of the scope `user`, an array of plain values the `computed`
+// generates. The assembly of the collection reads its source as the value
+// it is: the reference to a scoped place is given to the cone of another
+// value alone, and an assembly is none.
+describe("a `map` over the result of a `computed` of the scope `user`", () => {
+  it("gives each principal the rows of the notes it did not hide", async () => {
+    let acting = "ann";
+    const instance = new Instance(
+      await artifact("scoped-source"),
+      { notes: { $link: { doc: "notes", path: [] } } },
+      {
+        documents: [{
+          id: "notes",
+          kind: "notes",
+          value: [{ text: "one" }, { text: "two" }, { text: "three" }],
+        }],
+        scopes: {
+          keyOf: (scope: Scope) =>
+            scope === "user" ? `user:${acting}` : `session:${acting}:s`,
+        },
+      },
+    );
+    const rowsOf = (principal: string): string[] => {
+      acting = principal;
+      instance.settle();
+      return (instance.result() as { rows: string[] }).rows;
+    };
+    rowsOf("ann");
+    acting = "bob";
+    const binding = instance.streams().find(({ path }) =>
+      path.join("/") === "hide"
+    )!;
+    instance.send(binding.binding, { text: "two" });
+
+    expect(rowsOf("bob")).toEqual(["one!", "three!"]);
+    expect(rowsOf("ann")).toEqual(["one!", "two!", "three!"]);
+  });
+});
+
+// `fixtures/scoped.tsx`: `summary` is an output of the result that reads
+// state of the scope `user`. The place of an output of the result in the
+// scope instance holds its value, which the entry of that place evaluates
+// outside every cone; only the cone of another value is given the
+// reference to a scoped place (`Host.output`).
+describe("an output of the result of the scope `user`", () => {
+  it("holds its value, and no reference to another scoped place, in the scope instance", async () => {
+    let acting = "ann";
+    const instance = new Instance(
+      await artifact("scoped"),
+      { notes: { $link: { doc: "notes", path: [] } } },
+      {
+        documents: [{ id: "notes", kind: "notes", value: ["one"] }],
+        scopes: {
+          keyOf: (scope: Scope) =>
+            scope === "user" ? `user:${acting}` : `session:${acting}:s`,
+        },
+        wishes: () => ({ result: { name: `the profile of ${acting}` } }),
+      },
+    );
+    instance.settle();
+    acting = "bob";
+    instance.settle();
+
+    const summaries = [...instance.store.docs]
+      .filter(([, { kind }]) => kind === "scope instance")
+      .map(([, { value }]) => (value as { summary?: unknown }).summary)
+      .filter((summary) => summary !== undefined);
+    expect(summaries.sort()).toEqual(["nobody reads 1", "nobody reads 1"]);
+  });
+});
