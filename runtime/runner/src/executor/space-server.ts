@@ -465,8 +465,9 @@ export type SpaceServerPolicy = {
    * it. `record` loads every root regardless and counts the roots the store
    * could have served, and the pieces a judgment was wrong about
    * (`currency.falseClean`). `skip` leaves a root the store can serve
-   * unloaded and its piece unstarted, until an input marks the piece or a
-   * session's demand reaches an instance it does not vouch for (§1). Unset,
+   * unloaded and its piece unstarted, until an input marks the piece, a
+   * slice that read a clock expires (`currency.expiryWakes`), or a session's
+   * demand reaches an instance it does not vouch for (§1). Unset,
    * nothing is recorded or judged. The toolshed bootstrap reads
    * SERVER_EXECUTION_CURRENCY_INDEX.
    */

@@ -525,7 +525,8 @@ wrong.
   during a deployment, trust each other's records in the same way, and so
   does a toolshed run from source across an edit to the runtime. Under
   `record`, a piece whose stored output the running build computes
-  otherwise is counted in `currency.falseClean` when it starts.
+  otherwise is counted in `currency.falseClean` when the record of the
+  cycle that started it is stored.
 - **A piece is recorded only after a cycle that ran it settled.** A piece
   served before the index was on starts on its first demand.
 - **A slice is marked whole.** A computation that is not live when a record
