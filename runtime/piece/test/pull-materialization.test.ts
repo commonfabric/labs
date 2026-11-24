@@ -1574,6 +1574,55 @@ describe("piece pull materialization", () => {
       ),
     ).toThrow(/comments\.0\.author\.pictureBlob/);
 
+    // A path that starts in the piece's own data can cross a link partway
+    // into a document in another space. Setup reads one document at a time
+    // and stops there, so the element is not read in full.
+    const crossing = runtime.getCell(
+      pieces.getSpace(),
+      "crossing-comment-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      crossing.withTx(tx).set({ kept: elsewhere });
+    });
+    expect(
+      await overElement({
+        author: crossing.key("kept").key("author"),
+        body: "x",
+      }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // A link to another piece's input is a link to that piece's data, as a
+    // link to its result is.
+    expect(
+      await overElement({
+        author: pieces.getArgument(commentPiece).key("author"),
+        body: "x",
+      }),
+    ).toThrow(/comments\.0\.author/);
+
+    // A position whose handle wrappers the candidate cannot settle is not
+    // known to be read as a value.
+    const eitherScope = (author: JSONSchema): JSONSchema =>
+      argumentWith({
+        anyOf: [
+          {
+            ...(author as Record<string, unknown>),
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+          {
+            ...(author as Record<string, unknown>),
+            asCell: [{ kind: "cell", scope: "space" }],
+          },
+        ],
+      } as JSONSchema);
+    expect(
+      await overElement(
+        { author: comment.key("author"), body: "x" },
+        eitherScope(authorWith({ pictureBlob: blob })),
+        eitherScope(authorWith({})),
+      ),
+    ).toThrow(/comments\.0\.author/);
+
     const heldAuthor = (author: JSONSchema): JSONSchema =>
       argumentWith({
         ...(author as Record<string, unknown>),

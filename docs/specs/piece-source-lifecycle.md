@@ -873,9 +873,12 @@ reads as a value, and reaches a document that meets these conditions in turn and
 carries no contract of its own, as a pushed comment whose author is an earlier
 comment's author does. Stored-argument validation reads such a document in
 full, so a stored value the candidate cannot read still refuses the update. A
-handle, a document in another space or scope, a labeled document, and a document
-that links to anything else keep the proof without the policy. A labeled
-document's value is not read to decide this, as validation does not read it.
+handle, a document in another space or scope, a labeled document, a document
+that belongs to a piece, and a document that links to anything else keep the
+proof without the policy. Deciding this reads what validation reads and no more:
+each document on the way is read one hop at a time, a labeled document's value
+and a piece's are not read, and a position whose handle wrappers the candidate
+cannot settle is not taken for a value.
 
 Whether an automatic origin update runs these comparisons turns on one
 question: did anything gate the release that produced the candidate?

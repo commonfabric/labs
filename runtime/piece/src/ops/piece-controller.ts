@@ -48,6 +48,7 @@ import {
   type MemorySpace,
   mergeSchemaDefaults,
   NAME,
+  type NormalizedFullLink,
   type NormalizedLink,
   normalizePieceSourceOrigin,
   overlayUnreadableLinkPlaceholders,
@@ -65,6 +66,7 @@ import {
   type PieceSourceTransitionBaseline,
   preparePieceSourceTransitionBaseline,
   readResultSchemaMeta,
+  readStoredLinkChainRaw,
   resolveCellPath,
   resolveLink,
   type Runtime,
@@ -2518,23 +2520,53 @@ function provePreservedContracts(
 const MAX_OWN_INPUT_DEPTH = 8;
 
 /**
+ * Whether the document `link` is in belongs to a piece: it carries a result
+ * schema, a `result` backlink, or a pattern identity, in its own scope's
+ * metadata or the space's. Only metadata is read.
+ */
+function carriesPieceMetadata(
+  link: NormalizedFullLink,
+  pieces: PiecesController,
+  tx: IExtendedStorageTransaction,
+): boolean {
+  const scopes = link.scope === "space"
+    ? [link.scope]
+    : [link.scope, "space"] as const;
+  return scopes.some((scope) => {
+    const root = pieces.runtime.getCellFromLink(
+      { ...link, path: [], schema: undefined, scope },
+      undefined,
+      tx,
+    );
+    return root.getMetaRaw("schema") !== undefined ||
+      root.getMetaRaw("result") !== undefined ||
+      getPatternIdentityRef(root) !== undefined;
+  });
+}
+
+/**
  * Whether what `linkedCell` holds is input that setup's validation of the
- * stored input reads in full: a value present in this transaction, in a
- * document that is the input's own data by the runner's rule
+ * stored input reads in full: a value present in this transaction, in
+ * documents that are the input's own data by the runner's rule
  * (`isStoredArgumentOwnData`: the input document's own space and scope, and
- * no confidentiality label), in which every link leads to more of the same.
- * Setup validates such a value against the candidate and refuses one the
- * candidate cannot read, which is what keeps the piece-evolution policy sound
- * for it. The rule is asked before a document's value is read, so a labeled
- * document is not read here either.
+ * no confidentiality label) and belong to no piece, in which every link
+ * leads to more of the same. Setup validates such a value against the
+ * candidate and refuses one the candidate cannot read, which is what keeps
+ * the piece-evolution policy sound for it.
+ *
+ * Every document is read as setup reads it, one hop at a time
+ * (`readStoredLinkChainRaw`), and the rule is asked of each before its value
+ * is read: a path that starts in the input's own data can cross a link into
+ * another document partway, and neither a labeled document nor a piece's is
+ * read here. A document that belongs to a piece is told by its metadata
+ * alone ({@link carriesPieceMetadata}), since recovering its contract can
+ * read its owner's result.
  *
  * A link inside the value is followed where setup follows it: at a position
  * the candidate reads as a value, which `readsAsValue` decides from the path
- * below the link being proved, to a document that carries no contract of its
- * own. Setup reads only the top level behind a position typed as a cell
- * handle and does not read a value in another space or scope or one that
- * stores a confidentiality label, and a document with a contract is another
- * piece's.
+ * below the link being proved. Setup reads only the top level behind a
+ * position typed as a cell handle. Links that lead back to a value on the
+ * way to itself reach nothing for setup to read.
  */
 function holdsOwnPlainInput(
   linkedCell: Cell<unknown>,
@@ -2542,55 +2574,60 @@ function holdsOwnPlainInput(
   pieces: PiecesController,
   readsAsValue: (path: readonly (string | number)[]) => boolean,
 ): boolean {
-  const base = baseCell.getAsNormalizedFullLink();
+  const home = baseCell.getAsNormalizedFullLink();
   const tx = cellTx(linkedCell) ?? pieces.runtime.readTx();
+  const ownPlainDocument = (link: NormalizedFullLink) =>
+    isStoredArgumentOwnData(tx, link, home) &&
+    !carriesPieceMetadata(link, pieces, tx);
   // Values judged plain, and the values on the way to the one being judged.
   const judged = new Set<string>();
   const reading = new Set<string>();
   const plain = (
-    cell: Cell<unknown>,
+    start: NormalizedFullLink,
     path: readonly (string | number)[],
     depth: number,
   ): boolean => {
-    const at = cell.getAsNormalizedFullLink();
-    if (!isStoredArgumentOwnData(tx, at, base)) return false;
+    const read = readStoredLinkChainRaw(tx, start, new Set(), ownPlainDocument);
+    if (
+      read.outside === true || read.cyclic === true ||
+      read.value === undefined
+    ) return false;
+    const at = read.base;
     const key = JSON.stringify([at.id, at.path, path]);
-    // Links that lead back to a value on the way here reach no value for
-    // setup to read. One reached a second way was judged where it was met.
     if (reading.has(key)) return false;
     if (judged.has(key)) return true;
-    const stored = cell.getRaw();
-    if (stored === undefined) return false;
     reading.add(key);
-    for (const nested of suppliedLinks(stored)) {
+    const holder = pieces.runtime.getCellFromLink(
+      { ...at, schema: undefined },
+      undefined,
+      tx,
+    );
+    for (const nested of suppliedLinks(read.value)) {
       const nestedPath = [...path, ...nested.path];
       if (depth === MAX_OWN_INPUT_DEPTH || !readsAsValue(nestedPath)) {
         return false;
       }
-      let holder = cell;
+      let from = holder;
       for (const segment of nested.path) {
-        holder = holder.key(segment as keyof unknown) as Cell<unknown>;
+        from = from.key(segment as keyof unknown) as Cell<unknown>;
       }
-      let target: Cell<unknown>;
+      let target: NormalizedFullLink;
       try {
         target = pieces.runtime.getCellFromLink(
-          { ...parseLinkOrThrow(nested.value, holder), schema: undefined },
+          { ...parseLinkOrThrow(nested.value, from), schema: undefined },
           undefined,
-          cellTx(linkedCell),
-        );
+          tx,
+        ).getAsNormalizedFullLink();
       } catch {
         return false;
       }
-      if (
-        durableSourceContract(target, pieces) !== undefined ||
-        !plain(target, nestedPath, depth + 1)
-      ) return false;
+      if (!plain(target, nestedPath, depth + 1)) return false;
     }
     reading.delete(key);
     judged.add(key);
     return true;
   };
-  return plain(linkedCell, [], 0);
+  return plain(linkedCell.getAsNormalizedFullLink(), [], 0);
 }
 
 /**
@@ -2792,10 +2829,12 @@ export function assertSuppliedLinkSchemasCompatible(
       options.destinationIsStream !== true &&
       linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
       holdsOwnPlainInput(linkedCell, baseCell, pieces, (below) => {
-        // A position the candidate reads as a value has no outer Cell
-        // wrapper. One it cannot place is not read as anything.
+        // A position the candidate reads as a value localizes without an
+        // issue and has no outer Cell wrapper. One whose wrappers it cannot
+        // settle, or that it cannot place, is not known to be read as a
+        // value.
         try {
-          return localizeUniformOuter(
+          const localized = localizeUniformOuter(
             deriveTargetContracts(
               destinationSchema,
               options.destinationRoot ?? destinationSchema,
@@ -2805,7 +2844,9 @@ export function assertSuppliedLinkSchemasCompatible(
               displayPath,
             ),
             "destination Cell constraints disagree",
-          ).outer === undefined;
+          );
+          return localized.issue === undefined &&
+            localized.outer === undefined;
         } catch {
           return false;
         }
