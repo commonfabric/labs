@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The Topics content-safety drill: deploy a board, seed it, snapshot the
 # store, export, clobber a topic the worst way a bad migration would, restore
-# it, and prove the restore byte-exact — the loop
+# it, prove the restore byte-exact, and recreate the export on a fresh board
+# the way a board migrates to a new board pattern — the loop
 # docs/history/plans/topics-migration-rehearsal.md's "restore drill" section makes
 # part of every clean rehearsal pass, runnable as one command.
 #
@@ -281,6 +282,56 @@ deno run --allow-run --allow-read --allow-env \
   --piece "$TOPIC" --api-url "$API_URL" 2> /dev/null |
   grep -q "nothing to restore" &&
   ok "second restore is a no-op" || bad "second restore was not a no-op"
+
+step "recreate the export on a fresh board"
+# A board is migrated by recreating its topics on a board deployed fresh:
+# `topics-recreate.ts` files each exported topic through the new board's
+# `addTopic`, in number order, and then writes the export's content into it.
+# The recreated topic is a new piece, so it is found through the progress
+# file the run writes, which pairs each exported topic with its new one.
+"${CF[@]}" piece new -q "$REPO_ROOT/patterns/apps/topics/main.tsx" \
+  --root "$REPO_ROOT" --space "$SPACE" --api-url "$API_URL" \
+  > "$WORK/deploy2.out" 2> "$WORK/deploy2.err"
+FRESH="$(grep -xE 'fid1:[A-Za-z0-9_-]+' "$WORK/deploy2.out" | head -1)"
+[ -n "$FRESH" ] && ok "fresh board deployed: $FRESH" || {
+  bad "fresh board deploy produced no bare fid line on stdout"
+  cat "$WORK/deploy2.err" >&2
+}
+deno run -A "$REPO_ROOT/scripts/topics-recreate.ts" "$WORK/export.json" \
+  --board "$FRESH" --space "$SPACE" --api-url "$API_URL" \
+  --agent-name drill --progress "$WORK/recreate.jsonl" \
+  > "$WORK/recreate.log" 2>&1 &&
+  ok "recreate exited zero" || {
+  bad "recreate failed"
+  cat "$WORK/recreate.log" >&2
+}
+RECREATED="$(jq -r 'select(.name == "1") | .to' "$WORK/recreate.jsonl" 2> /dev/null)"
+[ -n "$RECREATED" ] && ok "the topic was recreated as number 1: $RECREATED" ||
+  bad "the progress file names no recreated topic 1"
+"${CF[@]}" cell get -q --piece "$RECREATED" --space "$SPACE" \
+  --api-url "$API_URL" body --input > "$WORK/recreated-body.json" 2> /dev/null
+jq -e --slurpfile live "$WORK/recreated-body.json" \
+  '.topics[0].content.body == $live[0]' "$WORK/export.json" > /dev/null &&
+  ok "recreated body byte-exact" || bad "recreated body differs from export"
+RECREATED_COMMENTS="$(
+  "${CF[@]}" cell get -q --piece "$RECREATED" --space "$SPACE" \
+    --api-url "$API_URL" comments --input 2> /dev/null | jq 'length'
+)"
+[ "$RECREATED_COMMENTS" = "2" ] && ok "both comments recreated" ||
+  bad "recreated comments: $RECREATED_COMMENTS"
+"${CF[@]}" cell get -q --piece "$RECREATED" --space "$SPACE" \
+  --api-url "$API_URL" createdBy --input > "$WORK/recreated-author.json" \
+  2> /dev/null
+jq -e --slurpfile live "$WORK/recreated-author.json" \
+  '.topics[0].content.createdBy == $live[0]' "$WORK/export.json" > /dev/null &&
+  ok "recreated topic keeps its author, not the run's" ||
+  bad "recreated author differs from export: $(cat "$WORK/recreated-author.json")"
+deno run -A "$REPO_ROOT/scripts/topics-recreate.ts" "$WORK/export.json" \
+  --board "$FRESH" --space "$SPACE" --api-url "$API_URL" \
+  --agent-name drill --progress "$WORK/recreate.jsonl" 2> /dev/null |
+  grep -q "pass 1: created 0" &&
+  ok "a second recreate creates nothing" ||
+  bad "a second recreate created topics again"
 
 step "the namespace verbs' own results"
 # `backfillNames` returns the names it wrote. Asserted here rather than in a

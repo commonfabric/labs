@@ -202,16 +202,97 @@ function argumentValue(info: PieceInfo): unknown {
   return annotateFully(at.value);
 }
 
+/** A link as `annotate` renders it. */
+interface AnnotatedLink {
+  id: string;
+  path?: string[];
+}
+
+/** How many links in a row {@link aliasTarget} follows to reach a value. */
+const ALIAS_HOPS = 16;
+
+/** The link `value` is, as `annotate` renders one, or `undefined`. */
+function annotatedLinkOf(value: unknown): AnnotatedLink | undefined {
+  const link = (value as { $link?: Partial<AnnotatedLink> } | null)?.$link;
+  return typeof link?.id === "string"
+    ? { id: link.id, ...(link.path ? { path: link.path } : {}) }
+    : undefined;
+}
+
+/**
+ * The value `start` reaches: its target document's value at its path,
+ * following a link met on the way or at the end, up to {@link ALIAS_HOPS}
+ * links in a row.
+ */
+function aliasTarget(start: AnnotatedLink): unknown {
+  let link = start;
+  for (let hop = 0; hop < ALIAS_HOPS; hop++) {
+    const at = getValueAt(space, { id: link.id });
+    if (!at.exists) throw new Error(`${link.id} does not exist`);
+    let value: unknown = annotateFully(at.value);
+    const path = link.path ?? [];
+    let next: AnnotatedLink | undefined;
+    for (let step = 0; step < path.length && next === undefined; step++) {
+      const met = annotatedLinkOf(value);
+      if (met !== undefined) {
+        next = { id: met.id, path: [...(met.path ?? []), ...path.slice(step)] };
+      } else {
+        value = typeof value === "object" && value !== null
+          ? (value as Record<string, unknown>)[path[step]]
+          : undefined;
+      }
+    }
+    next ??= annotatedLinkOf(value);
+    if (next === undefined) return value;
+    link = next;
+  }
+  throw new Error(`the links from ${start.id} run past ${ALIAS_HOPS} in a row`);
+}
+
+/**
+ * Replaces each field of `record` that holds a link with the value the link
+ * reaches, and adds `<prefix>.<field>` to `aliased` for each. Such a field is
+ * how the store records a write that set it to another record's field, so
+ * the value is the content. Only the record's own fields are resolved; a link
+ * deeper in it, or one inside the value a field reaches, is left for the
+ * caller's refusal.
+ */
+function resolveAliases(
+  record: unknown,
+  prefix: string,
+  aliased: string[],
+): unknown {
+  if (typeof record !== "object" || record === null || Array.isArray(record)) {
+    return record;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const link = annotatedLinkOf(value);
+    if (link === undefined) {
+      out[key] = value;
+    } else {
+      out[key] = aliasTarget(link);
+      aliased.push(`${prefix}.${key}`);
+    }
+  }
+  return out;
+}
+
 function resolveElement(
   topicFid: string,
   field: string,
   index: number,
   element: unknown,
+  aliased: string[],
 ): unknown {
   const link = (element as { $link?: { id?: string } })?.$link;
-  const resolved = link?.id
-    ? annotateFully(getValueAt(space, { id: link.id }).value)
-    : element;
+  const resolved = resolveAliases(
+    link?.id
+      ? annotateFully(getValueAt(space, { id: link.id }).value)
+      : element,
+    `${field}[${index}]`,
+    aliased,
+  );
   const deeper = findLink(resolved);
   if (deeper) {
     throw new Error(
@@ -237,6 +318,7 @@ const topics: TopicExportRow[] = [];
 const unclassified = new Set<string>();
 let commentTotal = 0;
 let linkTotal = 0;
+let aliasedTotal = 0;
 for (const info of topicInfos) {
   const raw = argumentValue(info) as Record<string, unknown>;
   const content = { comments: [], links: [] } as TopicContent;
@@ -251,14 +333,16 @@ for (const info of topicInfos) {
     }
     if (value !== undefined) content[field] = value;
   }
+  const aliased: string[] = [];
   for (const field of LINKED_ARRAY_FIELDS) {
     const elements = Array.isArray(raw[field]) ? raw[field] as unknown[] : [];
     const resolved: unknown[] = [];
     for (let i = 0; i < elements.length; i++) {
-      resolved.push(resolveElement(info.id, field, i, elements[i]));
+      resolved.push(resolveElement(info.id, field, i, elements[i], aliased));
     }
     content[field] = resolved;
   }
+  aliasedTotal += aliased.length;
   for (const field of Object.keys(raw)) {
     if (!CLASSIFIED_FIELDS.has(field)) unclassified.add(field);
   }
@@ -270,6 +354,7 @@ for (const info of topicInfos) {
     argumentId: info.input?.id ?? "",
     content,
     rawArgument: raw,
+    ...(aliased.length > 0 ? { aliased } : {}),
   });
 }
 
@@ -314,6 +399,12 @@ console.log(
   `topics: ${topics.length}  comments: ${commentTotal}  links: ${linkTotal}`,
 );
 console.log(`topic pattern identities: ${identities.join(", ")}`);
+if (aliasedTotal > 0) {
+  console.log(
+    `note: ${aliasedTotal} record field(s) linked another record's value and ` +
+      "are recorded as that value; each topic's `aliased` names them",
+  );
+}
 if (unclassified.size > 0) {
   console.log(
     `note: unclassified authored fields, carried raw and restored ` +

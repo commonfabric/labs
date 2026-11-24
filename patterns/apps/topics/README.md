@@ -211,6 +211,22 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   declares it. The restore tooling (`scripts/topics-rehearsal-lib.ts`) relinks
   `board` as it does `mentionable`, and retires `boardCrossrefs` and
   `boardCrossrefIndex` on a topic that no longer declares them.
+- **An existing board moves to this pattern by being recreated.** Its space is
+  exported from a snapshot with `scripts/topics-export.ts`, a board is deployed
+  fresh from `main.tsx`, and `scripts/topics-recreate.ts` files every exported
+  topic through the new board's `addTopic`, in number order, and then writes the
+  export's content into it: title, body, comments, links, creation and activity
+  times, authors, and its `mentioned` list, pointed at the recreated topics. The
+  export's numbers run densely from 1, so each topic keeps its number. Each
+  recreated topic is a new piece, wired to the new board by its create, so none
+  of the old topics' wiring has to be carried across, and the board's collection
+  holds every topic from its create onward. The old board and topics are left as
+  they were.
+
+  Moving the topics in place does not work for all of them: a topic that
+  `addTopic` linked straight to the old board's computed `crossrefIndex` refuses
+  the new `topic.tsx` ("readonly capability cannot be exposed as an ordinary
+  alias"), which was 17 of the team board's 3,281.
 - **Authoring: cf-code-editor in the Edit→Save draft flow.** The editor binds
   the session-local `bodyDraft` (never live to the shared string — whole-value
   conflict semantics hold) with `@`-mention autocomplete over `mentionable`, and

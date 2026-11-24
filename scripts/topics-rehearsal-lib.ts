@@ -268,6 +268,11 @@ export interface TopicExportRow {
   /** The argument document exactly as stored, links unresolved — the
    * forensic copy. Restore consumes `content`, never this. */
   rawArgument: unknown;
+
+  /** The fields inside `content`'s records that held a link to another
+   * record's value and are recorded as that value, such as
+   * `comments[1].author`. Absent when there were none. */
+  aliased?: string[];
 }
 
 export interface TopicsExport {
