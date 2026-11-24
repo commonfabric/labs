@@ -363,8 +363,9 @@ interface TopicsOutput {
   naming: NamingDeclaration;
   // Returns { topic, name } — the piece it created and the number it allocated
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
-  // Adds every topic of the `topics` input to the collection; returns
-  // { adopted }; idempotent
+  // Adds the topics of the `topics` input from position `from`, at most
+  // `count` (200 at most and by default), to the collection; returns
+  // { adopted, next }, where `next` is absent at the end; idempotent
   adoptTopics: Stream<AdoptTopicsEvent, AdoptTopicsResult>;
   // Adopts the same way, then numbers every member the namespace lacks and
   // asks each unnumbered topic to store its number; returns

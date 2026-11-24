@@ -21,8 +21,8 @@
  *
  * This binds the input and does nothing else. Adding the topics to the
  * collection is the board's own `adoptTopics` verb, which reads the board's
- * list, and is run once after every topic is on the pattern that declares
- * `board`.
+ * list a batch at a time, and is run, from position 0 until it returns no
+ * `next`, after every topic is on the pattern that declares `board`.
  */
 
 import {

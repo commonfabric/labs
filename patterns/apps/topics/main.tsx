@@ -160,17 +160,42 @@ export interface BackfillNamesEvent {
   agentName: string;
 }
 
-/** What `adoptTopics` takes: the agent running it. */
+/**
+ * How many listed topics one `adoptTopics` call adopts at most.
+ *
+ * Every adopted topic is read and written in the call's one transaction: its
+ * mirrored fields, and up to seven database statements. On a copy of the
+ * team's board, adopting its 3,281 topics in one transaction kept a serving
+ * worker busy past the 60 seconds its host waits for a message, so the host
+ * ended the worker and ran the call again in the next one, without end. A
+ * batch of this size is a small fraction of that.
+ */
+export const ADOPT_BATCH = 200;
+
+/** What `adoptTopics` takes: the agent running it, and which listed topics. */
 export interface AdoptTopicsEvent {
   /** The agent running the step, checked as `addTopic` checks it. */
   agentName: string;
+
+  /** The position in the board's list to adopt from: 0 when absent, and the
+   * `next` of the previous call after that. */
+  from?: number;
+
+  /** How many listed topics to adopt, from 1 to `ADOPT_BATCH`; `ADOPT_BATCH`
+   * when absent. */
+  count?: number;
 }
 
 /** What `adoptTopics` returns. */
 export interface AdoptTopicsResult {
-  /** How many listed topics the run added to the collection, counting those
+  /** How many listed topics the call added to the collection, counting those
    * the collection already held, whose rows it refreshed. */
   adopted: number;
+
+  /** The position to pass as `from` to adopt the topics after these. Absent
+   * once the call has reached the end of the list, which is the finished
+   * state. */
+  next?: number;
 }
 
 /**
@@ -652,21 +677,27 @@ export const submitProfileTopic = handler<void, {
 });
 
 /**
- * Adds every topic of `listed` to `board`, and returns how many there were.
- * Adding one the collection holds already refreshes its rows. An entry with
- * nothing behind it is passed over.
+ * Adds the topics of `listed` from position `from`, at most `count` of them,
+ * to `board`. Returns how many it added and, unless it reached the end of the
+ * list, the position after the last one. Adding one the collection holds
+ * already refreshes its rows. An entry with nothing behind it is passed over.
  */
 function adoptListed(
-  listed: { get(): readonly (TopicDemand | undefined)[] },
+  listed: { get(): readonly unknown[] },
   board: TopicBoard,
-): number {
+  from = 0,
+  count = Infinity,
+): AdoptTopicsResult {
+  const entries = listed.get();
+  const end = Math.min(entries.length, from + count);
   let adopted = 0;
-  for (const topic of listed.get()) {
+  for (let at = from; at < end; at++) {
+    const topic = entries[at];
     if (!topic) continue;
     board.add("topics", topic);
     adopted++;
   }
-  return adopted;
+  return end < entries.length ? { adopted, next: end } : { adopted };
 }
 
 /** What the handlers that create a topic are bound to. */
@@ -689,6 +720,16 @@ interface BoardAdoptState {
 
   /** The topics the board held as a list. */
   topics: Writable<TopicDemand[] | Default<[]>>;
+}
+
+/** What `adoptTopics` is bound to. */
+interface AdoptTopicsState {
+  /** The board's collection, which each listed topic is added to. */
+  board: TopicBoard;
+
+  /** The topics the board held as a list, each as a reference: a call reads
+   * the list to find its batch, and reading it reads no topic. */
+  topics: ReadonlyCell<ReadonlyCell<TopicDemand>[] | Default<[]>>;
 }
 
 /** Files a topic: the number, the create and the add, in one transaction. */
@@ -743,14 +784,23 @@ const addTopicHandler = handler<
 /** Adds every topic the board held as a list to its collection. */
 const adoptTopicsHandler = handler<
   AdoptTopicsEvent,
-  BoardAdoptState,
+  AdoptTopicsState,
   AdoptTopicsResult
 >(
-  ({ agentName }, { board, topics }) => {
+  ({ agentName, from = 0, count = ADOPT_BATCH }, { board, topics }) => {
     if (!topicAuthorFromAgent(agentName)) {
       rejectMutation("adoptTopics", "agentName must be non-blank");
     }
-    return { adopted: adoptListed(topics, board) };
+    if (!Number.isInteger(from) || from < 0) {
+      rejectMutation("adoptTopics", "from must be a non-negative integer");
+    }
+    if (!Number.isInteger(count) || count < 1 || count > ADOPT_BATCH) {
+      rejectMutation(
+        "adoptTopics",
+        `count must be an integer from 1 to ${ADOPT_BATCH}`,
+      );
+    }
+    return adoptListed(topics, board, from, count);
   },
 );
 

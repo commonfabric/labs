@@ -2,7 +2,7 @@
  * Rejection-path tests for the Topics mutating verbs (verb contract rule 4,
  * docs/plans/pattern-verb-contract.md: rejection is a value, never a silent
  * no-op). Every action here makes a verb throw, so the runtime errors are
- * required (`expectRuntimeErrors: 37` — exact count, so a rejection quietly
+ * required (`expectRuntimeErrors: 42` — exact count, so a rejection quietly
  * reverting to a silent return fails the suite); each assertion then verifies
  * the write did NOT land. Happy and legacy paths live in topics.test.tsx — including the UI
  * composer wrappers, whose silent guards are correct behavior (an empty draft
@@ -16,7 +16,7 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import Topics, { type TopicDemand } from "./main.tsx";
+import Topics, { ADOPT_BATCH, type TopicDemand } from "./main.tsx";
 import Topic, { type TopicComment, type TopicLink } from "./topic.tsx";
 
 export default pattern(() => {
@@ -76,6 +76,29 @@ export default pattern(() => {
   // is a mutation nobody is accountable for.
   const action_backfill_unsigned = action(() => {
     legacyBoard.backfillNames.send({ agentName: "   " });
+  });
+
+  // adoptTopics: blank agentName, and a batch it does not take. A call adopts
+  // at most `ADOPT_BATCH` topics from a position in the list, so a count
+  // outside 1 to `ADOPT_BATCH` and a position that is not a non-negative
+  // integer are refused rather than read as some other batch.
+  const action_adopt_unsigned = action(() => {
+    legacyBoard.adoptTopics.send({ agentName: "   " });
+  });
+  const action_adopt_no_topics = action(() => {
+    legacyBoard.adoptTopics.send({ agentName: "Sol", count: 0 });
+  });
+  const action_adopt_past_the_batch = action(() => {
+    legacyBoard.adoptTopics.send({
+      agentName: "Sol",
+      count: ADOPT_BATCH + 1,
+    });
+  });
+  const action_adopt_from_before_the_list = action(() => {
+    legacyBoard.adoptTopics.send({ agentName: "Sol", from: -1 });
+  });
+  const action_adopt_from_between_positions = action(() => {
+    legacyBoard.adoptTopics.send({ agentName: "Sol", from: 0.5 });
   });
 
   // One topic that already stores a number, for `recordName`'s permanence
@@ -440,11 +463,11 @@ export default pattern(() => {
 
   return {
     // Every rejection below MUST surface as a thrown handler error —
-    // thirty-seven throwing actions, thirty-seven runtime errors. The exact count
+    // forty-two throwing actions, forty-two runtime errors. The exact count
     // means a
     // single verb quietly reverting to a silent early-return fails this suite;
     // the no-write assertions then prove the throw also blocked the write.
-    expectRuntimeErrors: 37,
+    expectRuntimeErrors: 42,
     [TESTS]: [
       { action: action_seed_topic },
       { assertion: assert_seeded },
@@ -457,6 +480,16 @@ export default pattern(() => {
       { action: action_file_an_unnamed_topic },
       { action: action_backfill_unsigned },
       { assertion: assert_unnamed_topic_went_unnamed },
+      { action: action_adopt_unsigned },
+      { assertion: assert_legacy_board_empty },
+      { action: action_adopt_no_topics },
+      { assertion: assert_legacy_board_empty },
+      { action: action_adopt_past_the_batch },
+      { assertion: assert_legacy_board_empty },
+      { action: action_adopt_from_before_the_list },
+      { assertion: assert_legacy_board_empty },
+      { action: action_adopt_from_between_positions },
+      { assertion: assert_legacy_board_empty },
       { action: action_record_non_name },
       { action: action_record_second_number },
       { assertion: assert_numbers_unwritten },

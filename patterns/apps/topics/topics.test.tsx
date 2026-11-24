@@ -1131,6 +1131,32 @@ export default pattern(() => {
     (strangerTopic.referencedBy ?? []).length === 0
   );
 
+  // --- adoptTopics: a call adopts one batch of the list ---
+
+  // A board whose list holds three topics, adopted two at a time: the first
+  // call adopts the first two, and the second, starting at the `next` the
+  // first returned, adopts the third. A call that ignored its count would
+  // adopt all three at once and fail the first assertion.
+  const pagedListed = new Writable<TopicDemand[]>([]);
+  const pagedBoard = Topics({ topics: pagedListed });
+  const action_paged_board_adopts_two = action(() => {
+    pagedListed.set([
+      Topic({ title: "Paged one", board: pagedBoard.board }),
+      Topic({ title: "Paged two", board: pagedBoard.board }),
+      Topic({ title: "Paged three", board: pagedBoard.board }),
+    ]);
+    pagedBoard.adoptTopics.send({ agentName: "Sol", count: 2 });
+  });
+  const assert_paged_board_holds_two = assert(() =>
+    pagedBoard.topicCount === 2
+  );
+  const action_paged_board_adopts_the_rest = action(() => {
+    pagedBoard.adoptTopics.send({ agentName: "Sol", from: 2, count: 2 });
+  });
+  const assert_paged_board_holds_three = assert(() =>
+    pagedBoard.topicCount === 3
+  );
+
   // --- setTitle: the rename verb, direct interface only ---
 
   const action_rename_direct_topic = action(() => {
@@ -1338,6 +1364,10 @@ export default pattern(() => {
       { assertion: assert_keyed_unmention_drops_one_backlink },
       { render: strangerTopic[UI] },
       { assertion: assert_unlisted_topic_has_no_backlinks },
+      { action: action_paged_board_adopts_two },
+      { assertion: assert_paged_board_holds_two },
+      { action: action_paged_board_adopts_the_rest },
+      { assertion: assert_paged_board_holds_three },
       { action: action_rename_direct_topic },
       { assertion: assert_renamed_with_attribution },
       { render: directTopic[UI] },

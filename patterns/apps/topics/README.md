@@ -189,11 +189,21 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   card keeps only the two conditionals it cannot precompute: the badge and the
   snippet line are present or absent.
 - **A board that held its topics as a list adopts them.** The `topics` input is
-  read by two verbs and by nothing else. `adoptTopics` adds every listed topic
-  to the collection, and `backfillNames` does the same before it numbers them.
-  `backfillNames` numbers the topics the collection holds as well, which is
-  every topic of a board that never kept a list. Until one of them has run, such
-  a board shows no topics.
+  read by two verbs and by nothing else. `adoptTopics` adds listed topics to the
+  collection, at most `ADOPT_BATCH` (200) a call: it takes the position to start
+  from, `from`, and returns `next`, the position to call it with again, until a
+  call returns none. `backfillNames` adds every listed topic before it numbers
+  them, and numbers the topics the collection holds as well, which is every
+  topic of a board that never kept a list. Until one of them has run, such a
+  board shows no topics.
+
+  The batch bounds one transaction. Each adopted topic costs a read of its
+  mirrored fields and up to seven database statements in the call's transaction,
+  and on a copy of the team's board, adopting all 3,281 topics in one call kept
+  a serving worker busy past the 60 seconds its host waits, so the host ended
+  the worker and ran the call again, without end. `backfillNames` adopts the
+  whole list in its one transaction, so a large board adopts through
+  `adoptTopics` first.
 
   A topic filed before the board held a collection also has nothing bound to its
   `board` input, so it shows no backlinks. `scripts/topics-bind-board.ts` links
