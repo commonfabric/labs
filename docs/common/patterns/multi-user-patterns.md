@@ -337,6 +337,15 @@ this me?" with `equals()` on the stored profile cell (or the entry reference) â€
 never by comparing the mutable, non-unique display name. The live demo
 `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx` is the reference implementation.
 
+The system social-space roots (the Loom root and the default app) take this
+step as a stream of their own, `joinAsViewer`: an empty event that adds the
+sender's own `#profile` to the participant roster through the root's
+`addParticipant`. A host that admits its user to a social space (on redeeming
+an invitation, accepting an offer, or opening a space they already belong to)
+sends it rather than writing the roster itself. The roster adds a profile
+once, so sending it on every open is harmless, and lists a member whose earlier
+join came before their profile resolved.
+
 ### Ownership and authorship
 
 "Who created this / who wrote this" is identity too. For display, snapshot the
