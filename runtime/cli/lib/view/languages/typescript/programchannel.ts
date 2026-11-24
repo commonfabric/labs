@@ -79,8 +79,8 @@ export interface ProgramWorkerMessage<Spec, Port = MessagePort> {
   readonly port: Port;
 }
 
-// The values of the state word.
-const STARTING = 0;
+// The values of the state word, besides the 0 it starts at, which says the
+// worker has not yet said it is serving.
 const SERVING = 1;
 const ANSWERED = 2;
 const FAILED = 3;
