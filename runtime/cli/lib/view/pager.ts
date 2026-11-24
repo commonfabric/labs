@@ -18,9 +18,9 @@ import {
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { CSI, term } from "./ansi.ts";
 import {
-  IN_PLACE_PARSE_BUDGET,
   type ParseJob,
   type ParseOutcome,
+  recolorBatch,
   workerParser,
 } from "./backgroundparse.ts";
 import { type BlameRunner, blameRunner } from "./blame.ts";
@@ -479,10 +479,11 @@ export async function runPager(
   // The complete files whose parses the view left are shown as plain text,
   // and parse in the background while keys keep arriving, while the status
   // bar shows how much of their source has been parsed. The document is
-  // parsed again and drawn each time the source parsed in the background has
-  // at least doubled, and grown by at least the in-place budget, since the
-  // document was last parsed again, and once more when every parse has ended. The parses stop when the
-  // viewer closes, or when opening another file ends the progress.
+  // parsed again and drawn each time a batch of source has finished parsing
+  // since it was last parsed again, and once more when every parse has ended.
+  // Parsing it again builds only the file sections whose parses finished, so
+  // the batch bounds how long that takes. The parses stop when the viewer
+  // closes, or when opening another file ends the progress.
   const parses = options.parses ?? [];
   let stopParses: (() => void) | undefined;
   const endParses = (message?: string) => {
@@ -496,6 +497,7 @@ export async function runPager(
     let parsed = 0;
     let shown = 0;
     let unfinished = parses.length;
+    const batch = recolorBatch(session.doc.text.length);
     const failures: string[] = [];
     const deliver = (outcomes: readonly ParseOutcome[]) => {
       if (cleanedUp) return;
@@ -518,7 +520,7 @@ export async function runPager(
         if (unfinished > 0) {
           session.showHighlightProgress(parsed / Math.max(1, total));
           // The spinner's next frame draws the gauge.
-          if (parsed - shown < Math.max(IN_PLACE_PARSE_BUDGET, shown)) return;
+          if (parsed - shown < batch) return;
           shown = parsed;
           session.reparse({ force: true });
         } else {

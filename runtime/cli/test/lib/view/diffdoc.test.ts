@@ -13,7 +13,7 @@ import {
   type Language,
   languageForFile,
 } from "../../../lib/view/languages/language.ts";
-import type { ViewMode } from "../../../lib/view/model.ts";
+import type { Span, ViewMode } from "../../../lib/view/model.ts";
 
 const FILES = new Map([
   ["/ws/a.ts", "export function alpha() {\n  return 2;\n}\n"],
@@ -277,6 +277,69 @@ describe("diffdoc", () => {
         ]);
         expect(edit.oldFileLines(2)).toBe(null);
       });
+    });
+  });
+
+  describe("completeFileLine()", () => {
+    const plain = { text: "+a = 1", spans: [], bg: "add" as const };
+    const fileSpans: Span[] = [
+      { col: 0, text: "a", cls: "identifier" },
+      { col: 1, text: " = ", cls: "whitespace" },
+      { col: 4, text: "1", cls: "number" },
+    ];
+
+    it("shows the complete file's spans one column past the marker", () => {
+      const line = _internal.completeFileLine(plain, "+a = 1", fileSpans);
+
+      expect(line?.text).toBe("+a = 1");
+      expect(line?.bg).toBe("add");
+      expect(line?.spans).toEqual([
+        { col: 0, text: "+", cls: "diffAdd" },
+        { col: 1, text: "a", cls: "identifier" },
+        { col: 2, text: " = ", cls: "whitespace" },
+        { col: 5, text: "1", cls: "number" },
+      ]);
+    });
+
+    it("keeps a carriage return the diff added as whitespace", () => {
+      const line = _internal.completeFileLine(plain, "+a = 1\r", fileSpans);
+
+      expect(line?.spans.at(-1)).toEqual({
+        col: 6,
+        text: "\r",
+        cls: "whitespace",
+      });
+    });
+
+    it("shows a byte order mark the decoding removed as whitespace", () => {
+      const line = _internal.completeFileLine(
+        plain,
+        "+\uFEFFa = 1",
+        fileSpans,
+      );
+
+      expect(line?.spans.slice(0, 3)).toEqual([
+        { col: 0, text: "+", cls: "diffAdd" },
+        { col: 1, text: "\uFEFF", cls: "whitespace" },
+        { col: 2, text: "a", cls: "identifier" },
+      ]);
+    });
+
+    it("returns null for spans that leave more of the line than a carriage return", () => {
+      expect(_internal.completeFileLine(plain, "+a = 12", fileSpans)).toBe(
+        null,
+      );
+      expect(_internal.completeFileLine(plain, "+a = 1\r\r", fileSpans))
+        .toBe(null);
+    });
+
+    it("keeps spans set on it in place of its own", () => {
+      const line = _internal.completeFileLine(plain, "+a = 1", fileSpans)!;
+      const replacement: Span[] = [{ col: 0, text: "+a = 1", cls: "plain" }];
+
+      line.spans = replacement;
+
+      expect(line.spans).toBe(replacement);
     });
   });
 
