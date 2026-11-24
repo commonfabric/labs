@@ -819,10 +819,16 @@ that summary in the status line. Quit (`Q`) closes the viewer, first offering to
 save any unsaved edits. Git asks nothing on the terminal while the viewer holds
 it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
 names, and fails when it names none. `P` refuses to push `origin`'s default
-branch, and refuses when `origin` names no default branch
-(`git remote set-head origin --auto` finds it). It also refuses a checkout not
-on a branch, and refuses when git started the viewer as its pager for a
-different repository.
+branch, and refuses when `origin` names no default branch or cannot be asked
+which it is. It asks `origin`'s server which branch that is, with
+`git ls-remote --symref`, when a push starts, before any question below, and
+shows what git prints only when that fails. The push that the question confirms,
+and any retry of it, uses that answer rather than asking again. Asking is a
+connection to `origin` of its own, which can mean one more passphrase prompt or
+security key touch. The viewer asks the server because the
+`refs/remotes/origin/HEAD` that git sets when it clones stays as it is when the
+default branch changes. It also refuses a checkout not on a branch, and refuses
+when git started the viewer as its pager for a different repository.
 
 The push and land dialogs draw what the viewer says in bright text, and the
 names it mentions, such as a branch, a repository, a commit, or a pull request's
@@ -852,9 +858,12 @@ button is the default, so Enter does nothing until a button has the focus, and
 pressing `P` again does not push.
 
 When git fails to push or is aborted, as it can when the network is unreliable,
-a Retry push button (`P`) pushes again, unless git says the push was rejected,
-or GitHub says the account has no permission to push, which pushing again cannot
-change. Each later push's output follows the earlier one's in the same dialog.
+or does not learn which branch is `origin`'s default, a Retry push button (`P`)
+starts the push again, unless git says the push was rejected, or GitHub says the
+account has no permission to push, which pushing again cannot change. The retry
+asks before pushing, as `P` does, unless the question had confirmed the push
+that failed. Each later push's output follows the earlier one's in the same
+dialog.
 
 Once the push succeeds, the settings say what happens next, and the radio
 buttons under "Pull requests" choose one of the four ways below. The first and
@@ -865,10 +874,10 @@ succeeds, including one that had nothing new to push, unless the branch already
 has an open pull request, which they look for as `L` does, below. The pull
 request goes to the GitHub repository of the remote named `upstream`, `github`,
 or `origin`, whichever is the first to name one, and merges into that remote's
-default branch, from the branch on `origin`. Its title and description are the
-subject and the rest of the message of the branch's oldest commit that the
-default branch, as last fetched, does not have, leaving out merges and commits
-whose changes that branch already has.
+default branch, as its server names it then, from the branch on `origin`. Its
+title and description are the subject and the rest of the message of the
+branch's oldest commit that the default branch, as last fetched, does not have,
+leaving out merges and commits whose changes that branch already has.
 
 - "Just push, and link to them": the summary gives the page's address, which the
   status line makes a link for terminals that open links.
