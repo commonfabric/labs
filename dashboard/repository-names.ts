@@ -1,9 +1,9 @@
 /**
  * Maps the names, as "owner/name", that renamed repositories had before to the
- * names they have now. A renamed repository keeps its runs and commits under
- * its new name, so a name that enters the dashboard from outside, or from a
- * file it wrote before the rename, is mapped to the current name where it is
- * read, and names are compared as they are everywhere else.
+ * names they have now. GitHub reports a renamed repository under its new name,
+ * so only names the dashboard did not get from GitHub just now are mapped,
+ * where they are read: its configuration, and files it wrote before the
+ * rename. Names are compared as they are everywhere else.
  */
 
 /** Each renamed repository's current name, by a name it had before, in lower case. */
