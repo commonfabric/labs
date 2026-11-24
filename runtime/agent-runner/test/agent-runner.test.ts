@@ -1688,6 +1688,21 @@ describe("agent runner", () => {
           (value) => value?.sequence === sequence,
         );
         await visible.sync();
+        // The reader is a client of its own, so the record's new pointer
+        // reaches it on its own schedule. Wait until its copy points at this
+        // report, reading the pointer alone: the report's content is what
+        // the ceiling may withhold, and a read of it would throw here.
+        const milestoneId = milestone.getAsNormalizedFullLink().id;
+        await waitForCellValue<{ progress?: Cell<unknown> }>(
+          reader,
+          visible.asSchema({
+            type: "object",
+            properties: { progress: { asCell: ["cell"] } },
+          }),
+          (record) =>
+            record?.progress?.resolveAsCell().getAsNormalizedFullLink().id ===
+              milestoneId,
+        );
         if (readable) {
           expect(await message.pull()).toBe(text);
           expect(message.get()).toBe(text);
