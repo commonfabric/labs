@@ -13,6 +13,7 @@ import type {
 
 const SOURCE = { repo: "owner/repo", workflow: "ci.yml" };
 const OTHER = { repo: "owner/other", workflow: "ci.yml" };
+const RENAMED = { repo: "commonfabric/cfs", workflow: "ci.yml" };
 
 function ganttJob(name: string): CachedCiGanttJob {
   return {
@@ -145,6 +146,20 @@ describe("ci-gantt-detail", () => {
         it("returns null for the same attempt of another repository", async () => {
           await store.write(SOURCE, 10, 1, [ganttJob("Check")]);
           expect(await store.read(OTHER, 10, 1)).toBeNull();
+        });
+
+        it("returns the jobs an attempt was written with under a name its repository had before", async () => {
+          await Deno.mkdir(`${directory}/detail`);
+          await Deno.writeFile(
+            `${directory}/detail/commonfabric%2Floom.ci%2Eyml.10.1.json`,
+            await gzipped(
+              JSON.stringify({ version: 1, jobs: [ganttJob("Check")] }),
+            ),
+          );
+          expect((await store.read(RENAMED, 10, 1))?.[0].name).toBe("Check");
+          expect(
+            await store.read({ ...RENAMED, repo: "commonfabric/loom-scripts" }, 10, 1),
+          ).toBeNull();
         });
 
         it("returns null for content it cannot use", async () => {
@@ -309,6 +324,29 @@ describe("ci-gantt-detail", () => {
             "owner%2Fother.ci%2Eyml.1.1.json",
             "owner%2Frepo.ci%2Eyml.10.1.json",
             "owner%2Frepo.ci%2Eyml.12.2.json",
+          ]);
+        });
+
+        it("removes the attempts the keep set does not name under every name their repository has had", async () => {
+          const compressed = await gzipped(
+            JSON.stringify({ version: 1, jobs: [ganttJob("Check")] }),
+          );
+          await Deno.mkdir(`${directory}/detail`);
+          for (const runId of [10, 11]) {
+            await Deno.writeFile(
+              `${directory}/detail/commonfabric%2Floom.ci%2Eyml.${runId}.1.json`,
+              compressed,
+            );
+          }
+          await store.write(RENAMED, 12, 1, [ganttJob("Check")]);
+          await store.write(SOURCE, 11, 1, [ganttJob("Check")]);
+
+          await store.prune(RENAMED, [attempt(10), attempt(12)]);
+
+          expect(await names()).toEqual([
+            "commonfabric%2Fcfs.ci%2Eyml.12.1.json",
+            "commonfabric%2Floom.ci%2Eyml.10.1.json",
+            "owner%2Frepo.ci%2Eyml.11.1.json",
           ]);
         });
 

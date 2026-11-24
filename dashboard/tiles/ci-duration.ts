@@ -1,7 +1,7 @@
 /**
  * Reports the median wall-clock time of recent successful pull request CI
- * runs, with a trend sparkline. One factory builds the labs, loom, and weaver
- * instances against their own repository and workflow. The labs and loom
+ * runs, with a trend sparkline. One factory builds the labs, cfs, and weaver
+ * instances against their own repository and workflow. The labs and cfs
  * instances drill down to that repository's main-run history on /bench. The
  * labs instance owns the Gantt image route, whose view exposes the
  * scripts/ci-gantt.ts controls for both repositories.
@@ -37,8 +37,8 @@ import {
   DUR_MAX_AGE_HOURS,
   DUR_MIN_RUNS,
   DUR_WARN,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
   WEAVER_CI_WORKFLOW,
   WEAVER_REPO,
@@ -224,9 +224,9 @@ ${DASHBOARD_THEME_HEAD}
   <div class="controls">
     <label class="field" for="repo">repository <select id="repo"><option value="labs"${
     source.key === "labs" ? " selected" : ""
-  }>labs</option><option value="loom"${
-    source.key === "loom" ? " selected" : ""
-  }>loom</option></select></label>
+  }>labs</option><option value="cfs"${
+    source.key === "cfs" ? " selected" : ""
+  }>cfs</option></select></label>
     <label class="field" for="limit">runs to include <output id="limitv" for="limit">60</output><input type="range" id="limit" min="1" max="150" step="1" value="60"></label>
     <label class="check"><input type="checkbox" id="mainOnly" checked> main pushes only</label>
     <label class="check"><input type="checkbox" id="allConcl"> include failed/cancelled in timing</label>
@@ -830,10 +830,10 @@ export const labsCiDuration = makeCiDuration({
   link: { href: "/bench?view=ci&repo=labs", hint: "main run history ↗" },
   routes: ganttRoutes,
 });
-export const loomCiDuration = makeCiDuration({
-  label: "loom ci duration",
-  source: runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "pull requests"),
-  link: { href: "/bench?view=ci&repo=loom", hint: "main run history ↗" },
+export const cfsCiDuration = makeCiDuration({
+  label: "cfs ci duration",
+  source: runSource(CFS_REPO, CFS_CI_WORKFLOW, "pull requests"),
+  link: { href: "/bench?view=ci&repo=cfs", hint: "main run history ↗" },
 });
 export const weaverCiDuration = makeCiDuration({
   label: "weaver ci duration",

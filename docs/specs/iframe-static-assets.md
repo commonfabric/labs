@@ -16,7 +16,7 @@ supplies. Three facts constrain how a guest gets one.
 Security Policy that the embedding page sets. Labs' policy is `CSP` in
 `base/iframe-sandbox/src/csp.ts`. Loom serves the sandbox's outer frame from a
 URL of its own and gives it a stricter policy, `FRAME_CSP` in
-`src/lib/loom_pattern_pane.py` in `commonfabric/loom`. The guest inherits
+`src/lib/loom_pattern_pane.py` in `commonfabric/cfs`. The guest inherits
 whichever applies:
 
 | Resource | Labs guest | Loom guest |

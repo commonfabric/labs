@@ -12,8 +12,8 @@ import { stub } from "@std/testing/mock";
 import {
   CI_FAILURE_FRESH_HOURS,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "../config.ts";
 import { RunLists } from "../github-runs.ts";
@@ -105,9 +105,9 @@ const labsCi = (runs: RunSpec[]): WorkflowSpec => ({
   file: CI_WORKFLOW,
   runs,
 });
-const loomCi = (runs: RunSpec[]): WorkflowSpec => ({
+const cfsCi = (runs: RunSpec[]): WorkflowSpec => ({
   name: "Tests (fast)",
-  file: LOOM_CI_WORKFLOW,
+  file: CFS_CI_WORKFLOW,
   runs,
 });
 const green: RunSpec[] = [{ conclusion: "success", minutesAgo: 30 }];
@@ -377,15 +377,15 @@ const pondPages = (wire: Wire) =>
 
 const standingOrg = (
   labsRuns: RunSpec[],
-  loomRuns: RunSpec[],
+  cfsRuns: RunSpec[],
   extra: RepoSpec[] = [],
 ): RepoSpec[] => [
   { name: REPO.split("/")[1], workflows: [labsCi(labsRuns)] },
-  { name: LOOM_REPO.split("/")[1], workflows: [loomCi(loomRuns)] },
+  { name: CFS_REPO.split("/")[1], workflows: [cfsCi(cfsRuns)] },
   ...extra,
 ];
 
-Deno.test("ci: every job passing keeps labs and loom green in the body", async () => {
+Deno.test("ci: every job passing keeps labs and cfs green in the body", async () => {
   await withGitHub(standingOrg(green, green), async () => {
     const tile = createCiHealth();
     const view = await collectSwept(tile);
@@ -404,7 +404,7 @@ Deno.test("ci: every job passing keeps labs and loom green in the body", async (
     assertStringIncludes(view.extra ?? "", `<span class="dot green"></span>labs · CI`);
     assertStringIncludes(
       view.extra ?? "",
-      `<span class="dot green"></span>loom · Tests (fast)`,
+      `<span class="dot green"></span>cfs · Tests (fast)`,
     );
     assertStringIncludes(view.extra ?? "", "30m ago");
   });
@@ -417,10 +417,10 @@ Deno.test("ci: one failing job names its repository in the headline", async () =
       const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
       assertStringIncludes(
         view.extra ?? "",
-        `<span class="dot red"></span>loom · Tests (fast)`,
+        `<span class="dot red"></span>cfs · Tests (fast)`,
       );
       assertStringIncludes(view.extra ?? "", "failure · 3h ago");
       // A red tile drops every job that is passing, labs' main build included.
@@ -473,7 +473,7 @@ Deno.test("ci: several failing jobs are counted and all of them listed", async (
 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "3 failing");
-      for (const name of ["labs · CI", "loom · Tests (fast)", "bay · Audit"]) {
+      for (const name of ["labs · CI", "cfs · Tests (fast)", "bay · Audit"]) {
         assertStringIncludes(view.extra ?? "", name);
       }
     },
@@ -505,7 +505,7 @@ Deno.test("ci: a conclusion that judges nothing falls through to the run before 
         },
         { conclusion: "failure", minutesAgo: 65 },
       ],
-      value: "loom failing",
+      value: "cfs failing",
       status: "bad",
     },
     {
@@ -513,7 +513,7 @@ Deno.test("ci: a conclusion that judges nothing falls through to the run before 
         { conclusion: "skipped", minutesAgo: 5 },
         { conclusion: "failure", minutesAgo: 65 },
       ],
-      value: "loom failing",
+      value: "cfs failing",
       status: "bad",
     },
     {
@@ -521,7 +521,7 @@ Deno.test("ci: a conclusion that judges nothing falls through to the run before 
         { conclusion: "success", event: "pull_request", minutesAgo: 5 },
         { conclusion: "failure", minutesAgo: 65 },
       ],
-      value: "loom failing",
+      value: "cfs failing",
       status: "bad",
     },
   ];
@@ -552,7 +552,7 @@ Deno.test("ci: a cancelled run that stopped a job on a runner is a failure, not 
       const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
       assertStringIncludes(view.extra ?? "", "cancelled · 20m ago");
     },
   );
@@ -575,7 +575,7 @@ Deno.test("ci: a cancelled run with a job that failed on a runner is a failure",
       const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
     },
   );
 });
@@ -590,7 +590,7 @@ Deno.test("ci: a failure nobody has fixed in two days goes orange, still failing
       assertEquals(view.status, "warn");
       // It is still one of the failing jobs, and still named as one, with how
       // long ago it failed.
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
       assertStringIncludes(
         view.extra ?? "",
         `failure · ${compactSpan(stale * 60_000)} ago`,
@@ -602,7 +602,7 @@ Deno.test("ci: a failure nobody has fixed in two days goes orange, still failing
       );
       assertStringIncludes(
         view.extra ?? "",
-        `<span class="dot amber"></span>loom · Tests (fast)`,
+        `<span class="dot amber"></span>cfs · Tests (fast)`,
       );
       // The tile is not red, so the labs main build stays in the body.
       assertStringIncludes(view.extra ?? "", "labs · CI");
@@ -623,7 +623,7 @@ Deno.test("ci: one fresh failure keeps the tile red beside an older one", async 
       assertEquals(view.status, "bad");
       assertEquals(view.value, "2 failing");
       assertStringIncludes(view.extra ?? "", `<span class="dot red"></span>labs`);
-      assertStringIncludes(view.extra ?? "", `<span class="dot amber"></span>loom`);
+      assertStringIncludes(view.extra ?? "", `<span class="dot amber"></span>cfs`);
     },
   );
 });
@@ -635,7 +635,7 @@ Deno.test("ci: a failure an hour short of the threshold is still red", async () 
     async () => {
       const view = await collectSwept(createCiHealth());
       assertEquals(view.status, "bad");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
     },
   );
 });
@@ -719,8 +719,8 @@ Deno.test("ci: a job gated off after it passed stays green however many runs ski
     [
       { name: REPO.split("/")[1], workflows: [labsCi(green)] },
       {
-        name: LOOM_REPO.split("/")[1],
-        workflows: [{ ...loomCi(gated), fileChangedMinutesAgo: 30 * 24 * 60 }],
+        name: CFS_REPO.split("/")[1],
+        workflows: [{ ...cfsCi(gated), fileChangedMinutesAgo: 30 * 24 * 60 }],
       },
     ],
     async () => {
@@ -731,7 +731,7 @@ Deno.test("ci: a job gated off after it passed stays green however many runs ski
       assertStringIncludes(view.aside ?? "", "2 jobs · 2 repos");
       assertStringIncludes(
         view.extra ?? "",
-        `<span class="dot green"></span>loom · Tests (fast)`,
+        `<span class="dot green"></span>cfs · Tests (fast)`,
       );
     },
   );
@@ -749,7 +749,7 @@ Deno.test("ci: runs still going do not hide the verdict before them", async () =
     async () => {
       const view = await collectSwept(createCiHealth());
       assertEquals(view.status, "bad");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
     },
   );
 });
@@ -798,13 +798,13 @@ Deno.test("ci: a main build whose snapshot has a problem is unreadable, and the 
     const context: Ctx = {
       ...ctx(),
       runSourceProblem: (source) =>
-        source.repo === LOOM_REPO ? "GitHub 503 Service Unavailable" : undefined,
+        source.repo === CFS_REPO ? "GitHub 503 Service Unavailable" : undefined,
     };
     const tile = createCiHealth();
     const view = await collectSwept(tile, context);
     assertEquals(view.status, "warn");
     assertEquals(view.value, "1 unreadable");
-    assertStringIncludes(view.extra ?? "", "loom · Tests (fast)");
+    assertStringIncludes(view.extra ?? "", "cfs · Tests (fast)");
     assertStringIncludes(view.extra ?? "", "temporarily unavailable");
 
     // A failure elsewhere is not hidden behind it.
@@ -1054,9 +1054,9 @@ Deno.test("ci: a failure made after the workflow's last change still counts", as
     [
       { name: REPO.split("/")[1], workflows: [labsCi(green)] },
       {
-        name: LOOM_REPO.split("/")[1],
+        name: CFS_REPO.split("/")[1],
         workflows: [{
-          ...loomCi([{ conclusion: "failure", minutesAgo: 180 }]),
+          ...cfsCi([{ conclusion: "failure", minutesAgo: 180 }]),
           fileChangedMinutesAgo: 300,
         }],
       },
@@ -1064,7 +1064,7 @@ Deno.test("ci: a failure made after the workflow's last change still counts", as
     async () => {
       const view = await collectSwept(createCiHealth());
       assertEquals(view.status, "bad");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
     },
   );
 });
@@ -1074,9 +1074,9 @@ Deno.test("ci: a pinned build changed since its failure reads gray and says why"
     [
       { name: REPO.split("/")[1], workflows: [labsCi(green)] },
       {
-        name: LOOM_REPO.split("/")[1],
+        name: CFS_REPO.split("/")[1],
         workflows: [{
-          ...loomCi([{ conclusion: "failure", minutesAgo: 180 }]),
+          ...cfsCi([{ conclusion: "failure", minutesAgo: 180 }]),
           fileChangedMinutesAgo: 60,
         }],
       },
@@ -1087,7 +1087,7 @@ Deno.test("ci: a pinned build changed since its failure reads gray and says why"
       assertEquals(view.status, "good");
       assertStringIncludes(
         view.extra ?? "",
-        `<span class="dot gray"></span>loom · Tests (fast)`,
+        `<span class="dot gray"></span>cfs · Tests (fast)`,
       );
       assertStringIncludes(view.extra ?? "", "changed since it failed");
     },
@@ -1098,7 +1098,7 @@ Deno.test("ci: a failure stands when its workflow's history cannot be read", asy
   await withGitHub(
     standingOrg(green, [{ conclusion: "failure", minutesAgo: 180 }]).map(
       (repo) =>
-        repo.name === LOOM_REPO.split("/")[1]
+        repo.name === CFS_REPO.split("/")[1]
           ? { ...repo, commitsStatus: 403 }
           : repo,
     ),
@@ -1106,10 +1106,10 @@ Deno.test("ci: a failure stands when its workflow's history cannot be read", asy
       const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
       assert(
         wire.logged.some((line) =>
-          line.startsWith("ci: could not read loom · Tests (fast)'s history:")
+          line.startsWith("ci: could not read cfs · Tests (fast)'s history:")
         ),
         "the unanswered check leaves a trace",
       );
@@ -1162,7 +1162,7 @@ Deno.test("ci: a run that timed out while a newer one was going is still a failu
       const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
     },
   );
 });
@@ -1172,7 +1172,7 @@ Deno.test("ci: a rerun of an older run is judged by why its own jobs were cancel
   // concludes cancelled, and the run listing gives it the older run's
   // creation time, from before the newer run.
   const cases = [
-    { stoppedBy: TIMED_OUT, status: "bad", value: "loom failing" },
+    { stoppedBy: TIMED_OUT, status: "bad", value: "cfs failing" },
     { stoppedBy: REPLACED, status: "good", value: "passing" },
   ];
   for (const { stoppedBy, status, value } of cases) {
@@ -1210,7 +1210,7 @@ Deno.test("ci: a run still going is not a verdict", async () => {
     async () => {
       const view = await collectSwept(createCiHealth());
       // The newest completed run decides; the one still going says nothing.
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
     },
   );
 });
@@ -1233,13 +1233,13 @@ Deno.test("ci: the page links a job to its run in progress, and not to one queue
       )).text();
       // The loom workflow's runs are numbered from the oldest, so the one in
       // progress is its second.
-      const loomCiId = workflowId(LOOM_REPO, LOOM_CI_WORKFLOW) * 100 + 1;
+      const cfsCiId = workflowId(CFS_REPO, CFS_CI_WORKFLOW) * 100 + 1;
       assertStringIncludes(
         page,
-        `>Tests (fast)</a><a class="dot run" href="https://github.com/${LOOM_REPO}/actions/runs/${loomCiId}"`,
+        `>Tests (fast)</a><a class="dot run" href="https://github.com/${CFS_REPO}/actions/runs/${cfsCiId}"`,
       );
       // The queued run, its third, is linked from nowhere on the page.
-      assert(!page.includes(`/actions/runs/${loomCiId + 1}"`));
+      assert(!page.includes(`/actions/runs/${cfsCiId + 1}"`));
       // The labs job has nothing going, so only loom's carries the dot.
       assertEquals(page.match(/class="dot run"/g)?.length, 1);
     },
@@ -1339,7 +1339,7 @@ Deno.test("ci: runs a pull request review started are a pull request's too", asy
     ]),
     async () => {
       const view = await collectSwept(createCiHealth());
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
     },
   );
 });
@@ -1353,7 +1353,7 @@ Deno.test("ci: a red tile lists only its failing jobs", async () => {
       const view = await collectSwept(createCiHealth());
 
       assertEquals(view.status, "bad");
-      assertStringIncludes(view.extra ?? "", "loom · Tests (fast)");
+      assertStringIncludes(view.extra ?? "", "cfs · Tests (fast)");
       // Neither the unreadable repository nor the passing labs build.
       assert(!(view.extra ?? "").includes("pond"));
       assert(!(view.extra ?? "").includes("labs · CI"));
@@ -1387,14 +1387,14 @@ Deno.test("ci: a failure stands when its workflow's history makes no sense", asy
     await withGitHub(
       standingOrg(green, [{ conclusion: "failure", minutesAgo: 30 }]).map(
         (repo) =>
-          repo.name === LOOM_REPO.split("/")[1]
+          repo.name === CFS_REPO.split("/")[1]
             ? { ...repo, commitsBody: testCase.body }
             : repo,
       ),
       async (wire) => {
         const view = await collectSwept(createCiHealth());
 
-        assertEquals(view.value, "loom failing", JSON.stringify(testCase.body));
+        assertEquals(view.value, "cfs failing", JSON.stringify(testCase.body));
         assertEquals(
           wire.logged.some((line) =>
             line.includes("GitHub commits returned invalid data")
@@ -1418,7 +1418,7 @@ Deno.test("ci: a cancelled run whose job listing cannot be read is unreadable, n
 
       assertEquals(view.status, "warn");
       assertEquals(view.value, "1 unreadable");
-      assertStringIncludes(view.extra ?? "", "loom · Tests (fast)");
+      assertStringIncludes(view.extra ?? "", "cfs · Tests (fast)");
     },
   );
 });
@@ -1449,7 +1449,7 @@ Deno.test("ci: a repository that leaves the inventory takes its job listings wit
       Date.now = () => T0 + 2 * HOUR + 120_000;
       const view = await collectSwept(tile);
       assertEquals(counts(), 2, "its count was read again");
-      assertEquals(view.value, "loom failing");
+      assertEquals(view.value, "cfs failing");
     } finally {
       Date.now = realNow;
     }
@@ -1573,7 +1573,7 @@ Deno.test("ci: a tile with everything to list does not also carry a line saying 
   await withGitHub(
     [
       { name: REPO.split("/")[1], workflowsStatus: 403 },
-      { name: LOOM_REPO.split("/")[1], workflowsStatus: 403 },
+      { name: CFS_REPO.split("/")[1], workflowsStatus: 403 },
     ],
     async () => {
       const view = await collectSwept(createCiHealth());
@@ -1584,7 +1584,7 @@ Deno.test("ci: a tile with everything to list does not also carry a line saying 
       // one line under the headline rather than standing beneath a second.
       assertEquals(view.sub, undefined);
       assertStringIncludes(view.extra ?? "", "labs · workflows");
-      assertStringIncludes(view.extra ?? "", "loom · workflows");
+      assertStringIncludes(view.extra ?? "", "cfs · workflows");
     },
   );
 });

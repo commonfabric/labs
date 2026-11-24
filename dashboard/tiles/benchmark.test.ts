@@ -3128,16 +3128,16 @@ Deno.test("/bench: the page names the repo and workflow it read", async () => {
 });
 
 Deno.test("/bench runtime preserves the selected CI repository across its links", () => {
-  const html = benchPage("p75", "duration", 9, BASE, "loom");
+  const html = benchPage("p75", "duration", 9, BASE, "cfs");
 
-  assertStringIncludes(html, '<input type="hidden" name="repo" value="loom">');
+  assertStringIncludes(html, '<input type="hidden" name="repo" value="cfs">');
   assertStringIncludes(
     html,
-    'href="/bench?view=ci&amp;repo=loom&amp;days=9&amp;sort=duration&amp;stat=p75">CI duration history</a>',
+    'href="/bench?view=ci&amp;repo=cfs&amp;days=9&amp;sort=duration&amp;stat=p75">CI duration history</a>',
   );
   assertStringIncludes(
     html,
-    'href="/bench?view=gantt&amp;repo=loom&amp;days=9&amp;sort=duration&amp;stat=p75">CI run Gantt</a>',
+    'href="/bench?view=gantt&amp;repo=cfs&amp;days=9&amp;sort=duration&amp;stat=p75">CI run Gantt</a>',
   );
 });
 

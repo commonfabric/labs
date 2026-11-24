@@ -34,7 +34,7 @@
  * failing and still listed, but it goes orange: it is no longer the thing that
  * just broke, and the red is left for a failure somebody can still act on.
  *
- * The labs and loom main builds stay in the body while the tile is not red, so
+ * The labs and cfs main builds stay in the body while the tile is not red, so
  * the two builds the team watches are visible even when there is nothing wrong.
  * A red tile shows only what is failing. Every job the collection read, and
  * what its deciding run concluded and took, is on the page behind the tile.
@@ -60,8 +60,8 @@
 import {
   CI_FAILURE_FRESH_HOURS,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "../config.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -127,7 +127,7 @@ export const SWEEP_TTL_MS = 300_000;
 // the ci trust tiles read as well.
 const PINNED = [
   runSource(REPO, CI_WORKFLOW, "main"),
-  runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+  runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"),
 ];
 
 const FAILING_CONCLUSIONS = new Set([

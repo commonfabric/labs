@@ -13,6 +13,7 @@ import { basename, dirname, join } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { CacheFile, dashboardCacheFile } from "./history-files.ts";
+import { currentRepoName } from "./repository-names.ts";
 
 export const CI_JOB_CACHE_DAYS = 60;
 export const CI_JOB_HISTORY_SAMPLING_VERSION = 2;
@@ -256,7 +257,8 @@ const isCachedInvalidation = (
 // Every run repeats the same repository, workflow, and job names, and parsing
 // gives each occurrence its own string. Pointing them at one string per
 // distinct value costs a map over the runs and saves several megabytes across a
-// full retention window.
+// full retention window. The same pass names each run's repository by the name
+// it has now, so a run written under a name it had before is read as its own.
 function shareRepeatedStrings(runs: CachedCiRun[]): void {
   const pool = new Map<string, string>();
   const share = (value: string): string => {
@@ -266,7 +268,7 @@ function shareRepeatedStrings(runs: CachedCiRun[]): void {
     return value;
   };
   for (const run of runs) {
-    run.repo = share(run.repo);
+    run.repo = share(currentRepoName(run.repo));
     run.workflow = share(run.workflow);
     for (const job of run.jobs) job.name = share(job.name);
   }
@@ -352,7 +354,7 @@ export class CiJobHistoryStore {
           !isCachedInvalidation(entry) ||
           (entry.invalidatedAt > Date.now() &&
             !this.#futureQuarantines.has(
-              refreshKey(entry.repo, entry.workflow, entry.days),
+              refreshKey(currentRepoName(entry.repo), entry.workflow, entry.days),
             ))
         ))
     ) {
@@ -365,9 +367,13 @@ export class CiJobHistoryStore {
     const rejectedInvalidation = value.invalidations !== undefined &&
       (!Array.isArray(value.invalidations) ||
         value.invalidations.some((entry) => !isCachedInvalidation(entry)));
+    // These loops and the pass over the runs below name each repository by
+    // the name it has now, so what was written under a name it had before is
+    // read as its own.
     const futureKeys = new Set<string>();
     if (Array.isArray(value.refreshes)) {
       for (const refresh of value.refreshes.filter(isCachedRefresh)) {
+        refresh.repo = currentRepoName(refresh.repo);
         if (refresh.refreshedAt > Date.now()) {
           futureKeys.add(
             refreshKey(refresh.repo, refresh.workflow, refresh.days),
@@ -381,6 +387,7 @@ export class CiJobHistoryStore {
           isCachedInvalidation,
         )
       ) {
+        invalidation.repo = currentRepoName(invalidation.repo);
         if (invalidation.invalidatedAt > Date.now()) {
           futureKeys.add(refreshKey(
             invalidation.repo,
