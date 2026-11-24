@@ -213,8 +213,8 @@ describe("home-favorites-cfc", () => {
 
   describe("addFavorite", () => {
     it("adds a favorite after an owner-confidential favorite is removed", async () => {
-      // The removal is what once left the owner's clause on the list, and the
-      // next add read it back and was refused.
+      // A removal that leaves the owner's clause on the list puts it in every
+      // later add, which reads the whole list.
 
       const result = await startRealHome();
       const owned = await seedPiece("owned", true);
