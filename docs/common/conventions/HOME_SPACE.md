@@ -745,11 +745,14 @@ Both the home pattern and the default app pattern follow the same mechanism:
      `/api/patterns/system/default-app/default-app.tsx`
 
    A client that replicates views under server execution, as the shell does,
-   creates no root from a system source. It waits until the serving runtime
-   links one, which that runtime creates from the same source once the space
-   is active, so the browser compiles neither Home nor the default app. A
-   custom `defaultAppUrl` is a source the serving runtime does not read, so a
-   root from one is still created by the client
+   creates no root from the home or default app source. It waits until the
+   serving runtime links one, so the browser compiles neither Home nor the
+   default app. That runtime creates the root from the same source once the
+   space is active and it can resolve the space's owner. Until then it skips
+   the space, and it tries again when an access list is committed, which for
+   a new Home is the one its first session writes. A `defaultAppUrl` that
+   names any other source is one the serving runtime does not read, so a root
+   from it is still created by the client
 3. The pattern is compiled, run, linked as `spaceCell.defaultPattern`, and its
    source URL is stamped as `patternSource` for future updates
 4. `recreateDefaultPattern()` replaces a non-Home root, and refuses an identity

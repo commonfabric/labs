@@ -2818,8 +2818,9 @@ export class PiecesController<T = unknown> {
 
     // A client that replicates views runs no root, and leaves creating one to
     // the serving runtime, whose activation of the space creates it from the
-    // system source (`ensureSpaceRootPattern`). That runtime does not read a
-    // custom `defaultAppUrl`, so a root from one is still created here.
+    // system source (`ensureSpaceRootPattern`) once it can resolve the
+    // space's owner. That runtime does not read `defaultAppUrl`, so a root
+    // from one that names any other source is still created here.
     if (
       (patternConfig.source === HOME_PATTERN_SOURCE ||
         patternConfig.source === DEFAULT_APP_PATTERN_SOURCE) &&
