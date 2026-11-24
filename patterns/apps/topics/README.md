@@ -209,8 +209,9 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   `board` input, so it shows no backlinks. `scripts/topics-bind-board.ts` links
   each such topic's `board` to the board's, once the topic runs the pattern that
   declares it. The restore tooling (`scripts/topics-rehearsal-lib.ts`) relinks
-  `board` as it does `mentionable`, and retires `boardCrossrefs` and
-  `boardCrossrefIndex` on a topic that no longer declares them.
+  `board` on a topic that declares it and leaves it out on one that predates it,
+  and retires `boardCrossrefs` and `boardCrossrefIndex` on a topic that no
+  longer declares them.
 - **An existing board moves to this pattern by being recreated.** Its space is
   exported from a snapshot with `scripts/topics-export.ts`, a board is deployed
   fresh from `main.tsx`, and `scripts/topics-recreate.ts` files every exported

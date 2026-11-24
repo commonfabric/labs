@@ -316,13 +316,18 @@ export interface TopicsExport {
  * a retirable one is left out and reported, and any other is refused.
  * `buildRestoreDocument` makes each of these decisions.
  *
- * Five today: `mentionable` (the board's mention universe), `board` (its
- * collection of topics, which a topic asks for the topics that mention it),
- * `boardCrossrefs` (the reference graph a topic read its backlinks from
- * before the board held a collection), `boardCrossrefIndex` (that graph's
- * rows grouped by topic number), and `boardNames` (its names table). The
- * mention index publishes display rows with stable strings and unread member
- * references, matching the wiring the board supplies when it creates a topic.
+ * Each field and the board path it links to:
+ *
+ * - `mentionable` to `mentionable`, the board's mention universe: display
+ *   rows with stable strings and unread member references, matching the
+ *   wiring the board supplies when it creates a topic.
+ * - `board` to `board`, the board's collection of topics, which a topic asks
+ *   for the topics that mention it.
+ * - `boardCrossrefs` to `crossrefs`, the reference graph a topic read its
+ *   backlinks from before the board held a collection.
+ * - `boardCrossrefIndex` to `crossrefIndex`, that graph's rows grouped by
+ *   topic number.
+ * - `boardNames` to `namesTable`, the board's names table.
  *
  * Adding a wiring input to the topic pattern means adding it here. Leaving it
  * out is not silent: `buildRestoreDocument` throws on any link-valued field it
@@ -365,13 +370,16 @@ export const STRUCTURAL_LINK_FIELDS = Object.keys(STRUCTURAL_LINK_SOURCES);
  * topic stored its own. `boardCrossrefs` is declared by the generations that
  * read their backlinks out of the board's reference graph, and
  * `boardCrossrefIndex` by those among them that look their row up by number;
- * a topic that asks the board's collection declares neither.
+ * a topic that asks the board's collection declares neither. `board` is
+ * declared by the generations that ask the board's collection, and by none
+ * before them.
  */
 export const RETIRABLE_LINK_FIELDS = [
   "myName",
   "boardNames",
   "boardCrossrefs",
   "boardCrossrefIndex",
+  "board",
 ] as const;
 
 /**

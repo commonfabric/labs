@@ -277,10 +277,11 @@ describe("topics-rehearsal-lib", () => {
         },
         resolved,
       );
-      expect(structural).toEqual(["mentionable", "board"]);
+      expect(structural).toEqual(["mentionable"]);
       // In the raw argument's own order, which is what the walk follows. All
-      // four are retired here because this target declares none of them.
+      // five are retired here because this target declares none of them.
       expect(legacy).toEqual([
+        "board",
         "boardCrossrefs",
         "boardCrossrefIndex",
         "boardNames",
@@ -422,10 +423,45 @@ describe("topics-rehearsal-lib", () => {
         const { structural, legacy } = buildRestoreDocument(
           { ...newerExport, board: link },
           resolved,
-          { declaredLinks: [], publishedSources: [...board, "board"] },
+          { declaredLinks: ["board"], publishedSources: [...board, "board"] },
         );
         expect(structural).toEqual(["mentionable", "board"]);
         expect(legacy).toEqual(["boardCrossrefs", "boardCrossrefIndex"]);
+      });
+    });
+
+    describe("a topic's `board` link", () => {
+      // `board` is declared by the topics that ask the board's collection for
+      // their backlinks and by no topic before them, and a restore runs
+      // against targets of both. Each case here is one pairing of an export
+      // and a target.
+
+      const published = ["mentionable", "board"];
+
+      it("relinks it from an export that predates it, onto a target holding one", async () => {
+        const declaredLinks = await declaredRetirableLinks((field) =>
+          Promise.resolve(
+            field === "board" ? { id: "fid1:collection" } : undefined,
+          )
+        );
+        const { structural, legacy } = buildRestoreDocument(
+          { title: "t", mentionable: link },
+          resolved,
+          { declaredLinks, publishedSources: published },
+        );
+        expect(structural).toEqual(["mentionable", "board"]);
+        expect(legacy).toEqual([]);
+      });
+
+      it("retires it for a target that predates it, rather than relinking a path the target lacks", () => {
+        const { doc, structural, legacy } = buildRestoreDocument(
+          { title: "t", mentionable: link, board: link },
+          resolved,
+          { declaredLinks: [], publishedSources: published },
+        );
+        expect(structural).toEqual(["mentionable"]);
+        expect(legacy).toEqual(["board"]);
+        expect(doc.board).toBeUndefined();
       });
     });
 
@@ -670,6 +706,7 @@ describe("topics-rehearsal-lib", () => {
         "boardNames",
         "boardCrossrefs",
         "boardCrossrefIndex",
+        "board",
       ]);
     });
   });

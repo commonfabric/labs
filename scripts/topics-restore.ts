@@ -31,8 +31,9 @@
  *
  * Those wiring links are `STRUCTURAL_LINK_SOURCES`, which maps each one to
  * the board path it points at: `mentionable` to the board's `mentionable`
- * index, `boardCrossrefs` to its `crossrefs`, `boardCrossrefIndex` to its
- * `crossrefIndex`, and `boardNames` to its `namesTable`. A link-valued field
+ * index, `board` to its `board` collection, `boardCrossrefs` to its
+ * `crossrefs`, `boardCrossrefIndex` to its `crossrefIndex`, and `boardNames`
+ * to its `namesTable`. A link-valued field
  * absent from that map stops the restore rather than being guessed at, so a
  * wiring input added to the topic pattern announces itself here. The board is
  * asked which of those paths it publishes before anything is applied, because
