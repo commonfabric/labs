@@ -247,6 +247,7 @@ export {
 } from "./pattern-source-scheme.ts";
 export {
   currentPatternKey,
+  formerKeyIn,
   formerPatternKey,
   mainNamesPattern,
 } from "./pattern-key-moves.ts";

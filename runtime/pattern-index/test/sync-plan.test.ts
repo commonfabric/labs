@@ -35,11 +35,15 @@ export default pattern<{ value: number }>(() => ({ missing }));
   "patterns/dev/scratch.tsx": `/** Excluded. */
 export default 1;
 `,
-  // The repository's own record of moves: the counter was once the tally.
+  // The repository's record of moves where Labs keeps its own: the counter
+  // folder was once the tally folder.
   "runtime/runner/src/pattern-key-moves.ts":
-    `export const formerPatternKey = (key: string): string =>
-  key === "counter/main.tsx" ? "tally/main.tsx" : key;
-`,
+    `export const MOVED_PATTERN_KEYS = { "tally/": "counter/" };\n`,
+  // A record of moves kept as JSON elsewhere: before that, it was one file.
+  "moves.json": JSON.stringify({
+    "count.tsx": "tally/main.tsx",
+    "tally/": "counter/",
+  }),
 };
 
 /** Runs `git` in `cwd`, failing the test when it fails. */
@@ -138,6 +142,53 @@ describe("sync-plan", () => {
     expect(await Deno.readTextFile(`${repo}/summary.md`)).toContain(
       "3 entries: 1 compiled, 1 without a description, 1 failed.",
     );
+  });
+
+  it("reads the record of moves `--moves-table` names, as JSON", async () => {
+    const output = await runPlan([
+      "--repo-root",
+      repo,
+      "--program-root",
+      "patterns",
+      "--include",
+      "patterns/counter/**",
+      "--moves-table",
+      "moves.json",
+      "--out",
+      `${repo}/moved.json`,
+    ]);
+    expect(output.code).toBe(0);
+    const plan: RepoSyncPlan = JSON.parse(
+      await Deno.readTextFile(`${repo}/moved.json`),
+    );
+    const [counter] = plan.entries;
+    if (counter.status !== "compiled") throw new Error("not compiled");
+    expect(counter.formerPaths).toEqual([
+      "patterns/tally/main.tsx",
+      "patterns/count.tsx",
+    ]);
+  });
+
+  it("follows no moves when `--moves-table` names no file", async () => {
+    const output = await runPlan([
+      "--repo-root",
+      repo,
+      "--program-root",
+      "patterns",
+      "--include",
+      "patterns/counter/**",
+      "--moves-table",
+      "no-such-moves.json",
+      "--out",
+      `${repo}/unmoved.json`,
+    ]);
+    expect(output.code).toBe(0);
+    const plan: RepoSyncPlan = JSON.parse(
+      await Deno.readTextFile(`${repo}/unmoved.json`),
+    );
+    const [counter] = plan.entries;
+    if (counter.status !== "compiled") throw new Error("not compiled");
+    expect(counter.formerPaths).toBeUndefined();
   });
 
   it("writes the same source hash and pattern id for the same source on a second run", async () => {

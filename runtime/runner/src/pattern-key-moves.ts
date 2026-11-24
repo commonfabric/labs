@@ -303,10 +303,23 @@ function movedBy(
   return key;
 }
 
-/** The table's entries reversed, longest new key first. */
-const FORMER = Object.entries(MOVED_PATTERN_KEYS)
-  .map(([from, to]) => [to, from] as const)
-  .sort(([a], [b]) => b.length - a.length);
+/**
+ * The key a pattern had before its latest move in `table`, a table of moves
+ * shaped as {@link MOVED_PATTERN_KEYS} is, given the key it has now. A key
+ * that never moved comes back unchanged. A repository sync reads another
+ * repository's table this way.
+ */
+export function formerKeyIn(
+  table: Readonly<Record<string, string>>,
+): (key: string) => string {
+  // Reversed, longest new key first.
+  const former = Object.entries(table)
+    .map(([from, to]) => [to, from] as const)
+    .sort(([a], [b]) => b.length - a.length);
+  return (key) => movedBy(key, former);
+}
+
+const FORMER = formerKeyIn(MOVED_PATTERN_KEYS);
 
 /**
  * The key a pattern is served under, given a key it may have been served under
@@ -321,7 +334,7 @@ export function currentPatternKey(key: string): string {
  * served under now. A key that never moved comes back unchanged.
  */
 export function formerPatternKey(key: string): string {
-  return movedBy(key, FORMER);
+  return FORMER(key);
 }
 
 /**
