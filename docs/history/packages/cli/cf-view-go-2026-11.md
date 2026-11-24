@@ -78,9 +78,9 @@ highlight, a parse, or an edit does. For the fourth, the adjacent retained
 [comparison](cf-view-go-2026-11-preamble.ts) timed 40 alternating runs in one
 process on the probe's source, with and without that pattern, at a one-minute
 load average of 15.5. With the pattern, the complete highlight's median was
-34.18 ms of wall-clock time and 38.52 ms of processor time, against 33.93 and
-38.28 without it; the re-color's was 18.31 and 23.45 ms, against 18.67 and
-23.76. Its [results](cf-view-go-2026-11-preamble-results.json) hold every
+34.12 ms of wall-clock time and 38.50 ms of processor time, against 33.61 and
+38.28 without it; the re-color's was 18.30 and 23.25 ms, against 18.62 and
+23.74. Its [results](cf-view-go-2026-11-preamble-results.json) hold every
 sample.
 
 ## Timings

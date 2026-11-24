@@ -78,8 +78,13 @@ for (let round = 0; round < ROUNDS; round++) {
   }
 }
 
-const median = (samples: readonly number[]) =>
-  samples.toSorted((a, b) => a - b)[Math.floor(samples.length / 2)];
+function median(samples: readonly number[]): number {
+  const sorted = samples.toSorted((a, b) => a - b);
+  const middle = sorted.length / 2;
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[Math.floor(middle)];
+}
 console.log(JSON.stringify(
   Object.fromEntries(
     Object.entries(timings).map(([name, { wall, cpu }]) => [name, {
