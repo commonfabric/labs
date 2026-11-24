@@ -23,6 +23,7 @@ import {
 import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
 import { GREEN_STAR_RULES } from "./green-star.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
+import { RUNNERS_PATH } from "./runners-paths.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
 import { reconcileTiles } from "./tiles-client.ts";
@@ -250,14 +251,14 @@ ${TILE_RULES}
   .evarrow:hover{color:var(--text-subtle)}
   .note{font-size:11px;color:var(--text-faint);margin-top:14px}
   code{background:var(--surface-code);padding:1px 5px;border-radius:4px}
-  /* The way to the repository pages sits at the foot of the page, across from
-     the theme switch. */
+  /* The ways to the repository pages and the runners page sit at the foot of
+     the page, across from the theme switch. */
   .foot{display:flex;align-items:flex-end;gap:12px}
 </style></head><body>
   ${dashboardHeader(message.text, DASHBOARD_MESSAGE_MAX_LENGTH, ago)}
   <div class="grid" id="dashboard-grid">${gridHtml}</div>
   <div id="dashboard-wide">${wideHtml}</div>
-  <div class="foot"><a class="pill" href="${REPOS_PATH}">▤ Repositories</a>${dashboardThemeToggle()}</div>
+  <div class="foot"><a class="pill" href="${REPOS_PATH}">▤ Repositories</a><a class="pill" href="${RUNNERS_PATH}">● Runners</a>${dashboardThemeToggle()}</div>
 ${DASHBOARD_THEME_CLIENT}
 <script>
   const REFRESH = ${refreshMs};

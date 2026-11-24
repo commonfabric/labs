@@ -14,8 +14,10 @@ import { type GitHubCredential, staticGitHubCredential } from "./github-auth.ts"
 import {
   friendlyError,
   github,
+  GitHubAnswers,
   githubDownload,
   githubOperationsInProgress,
+  githubPage,
   GitHubStatusError,
   inParallel,
   memo,
@@ -903,6 +905,99 @@ Deno.test("github: an explicit token wins over the env; GITHUB_TOKEN backs up GH
     });
     assertEquals(calls.map(auth), ["Bearer explicit", "Bearer gh", "Bearer github"]);
   });
+});
+
+// Each conditional-request case answers its requests in turn from `replies`,
+// and reads what each request asked with `ifNoneMatch`.
+const ifNoneMatch = (call: { init: RequestInit }) => new Headers(call.init.headers).get("if-none-match");
+const replies = (...answers: Response[]) => () => answers.shift() ?? Response.json({});
+const notModified = () => new Response(null, { status: 304 });
+const tagged = (value: unknown, etag: string, link?: string) =>
+  Response.json(value, { headers: { etag, ...(link === undefined ? {} : { link }) } });
+
+Deno.test("github: a request is conditional only on an answer held for its path, and a 304 returns that answer and its next page", async () => {
+  const credential = staticGitHubCredential("t");
+  const answers = new GitHubAnswers();
+  const link = '<https://api.github.com/repos/o/r/jobs?page=2>; rel="next"';
+  await withFetch(
+    replies(tagged({ n: 1 }, '"a"', link), notModified(), tagged({ n: 2 }, '"b"'), Response.json({ n: 3 })),
+    async (calls) => {
+      const first = await githubPage("repos/o/r/jobs", credential, { answers });
+      const again = await githubPage("/repos/o/r/jobs", credential, { answers });
+      await github("repos/o/other", credential, { answers });
+      await github("repos/o/r/jobs", credential);
+
+      assertEquals(first, { value: { n: 1 }, next: "/repos/o/r/jobs?page=2" });
+      assertEquals(again, first);
+      assertEquals(calls.map(ifNoneMatch), [null, '"a"', null, null]);
+      assertEquals(answers.size, 2);
+    },
+  );
+});
+
+Deno.test("github: a 200 to a conditional request replaces the answer held", async () => {
+  const credential = staticGitHubCredential("t");
+  const answers = new GitHubAnswers();
+  await withFetch(
+    replies(tagged({ n: 1 }, '"a"'), tagged({ n: 2 }, '"b"'), notModified()),
+    async (calls) => {
+      assertEquals(await github("repos/o/r", credential, { answers }), { n: 1 });
+      assertEquals(await github("repos/o/r", credential, { answers }), { n: 2 });
+      assertEquals(await github("repos/o/r", credential, { answers }), { n: 2 });
+      assertEquals(calls.map(ifNoneMatch), [null, '"a"', '"b"']);
+    },
+  );
+});
+
+Deno.test("github: an answer without an ETag is not held", async () => {
+  const credential = staticGitHubCredential("t");
+  const answers = new GitHubAnswers();
+  await withFetch(replies(Response.json({ n: 1 }), Response.json({ n: 2 })), async (calls) => {
+    await github("repos/o/r", credential, { answers });
+    assertEquals(await github("repos/o/r", credential, { answers }), { n: 2 });
+    assertEquals(calls.map(ifNoneMatch), [null, null]);
+    assertEquals(answers.size, 0);
+  });
+});
+
+Deno.test("github: a request with a body is neither conditional nor held", async () => {
+  const credential = staticGitHubCredential("t");
+  const answers = new GitHubAnswers();
+  answers.set("graphql", '"held"', { value: { held: true }, next: undefined });
+  await withFetch(replies(tagged({ n: 1 }, '"new"')), async (calls) => {
+    assertEquals(await github("graphql", credential, { answers, body: "{}" }), { n: 1 });
+    assertEquals(calls.map(ifNoneMatch), [null]);
+    assertEquals(answers.get("graphql"), { etag: '"held"', page: { value: { held: true }, next: undefined } });
+  });
+});
+
+Deno.test("github: a 304 with no answer held fails as a 304", async () => {
+  const credential = staticGitHubCredential("t");
+  await captureConsole("error", async () => {
+    await withFetch(notModified, async () => {
+      const e = await assertRejects(() => github("repos/o/r", credential, { answers: new GitHubAnswers() }), Error);
+      assertEquals(e.message, "GitHub API repos/o/r failed: HTTP 304");
+      assert(e instanceof GitHubStatusError && e.status === 304);
+    });
+  });
+});
+
+Deno.test("GitHubAnswers: holds the most recently used, forgetting the least recently used beyond its limit", () => {
+  const answers = new GitHubAnswers(2);
+  const page = (n: number) => ({ value: n, next: undefined });
+  answers.set("a", "1", page(1));
+  answers.set("b", "2", page(2));
+  answers.set("a", "3", page(3));
+  assertEquals(answers.size, 2);
+  assertEquals(answers.get("a"), { etag: "3", page: page(3) });
+
+  answers.get("b");
+  answers.set("c", "4", page(4));
+  assertEquals(answers.size, 2);
+  assertEquals(answers.get("a"), undefined);
+  assertEquals(answers.get("b"), { etag: "2", page: page(2) });
+  assertEquals(answers.get("c"), { etag: "4", page: page(4) });
+  assertEquals(new GitHubAnswers().get("a"), undefined);
 });
 
 Deno.test("memo: a result is reused within the ttl, refetched past it", async () => {

@@ -61,6 +61,7 @@
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   type GitHubWebhooks,
   githubWebhooks,
@@ -69,8 +70,10 @@ import {
   workflowRunOf,
 } from "./github-webhooks.ts";
 import {
+  GITHUB_REQUEST_CONCURRENCY,
   type GitHubRequestOptions,
   GitHubStatusError,
+  inParallel,
   RUN_LIST_ACCESS,
 } from "./lib.ts";
 import { firstLine, RunListFile, type SavedHead } from "./run-list-file.ts";
@@ -339,17 +342,8 @@ class RunList {
 
   /** Reads the run as GitHub serves it now, or `undefined` once deleted. */
   async run(id: number): Promise<GitHubRun | undefined> {
-    const path = `repos/${this.repo}/actions/runs/${id}`;
-    try {
-      return narrow(
-        await this.request<GitHubRun>(path, { ignoreStatuses: [404] }),
-      );
-    } catch (error) {
-      if (error instanceof GitHubStatusError && error.status === 404) {
-        return undefined;
-      }
-      throw error;
-    }
+    const run = await runById<GitHubRun>(this.request, this.repo, id);
+    return run === undefined ? undefined : narrow(run);
   }
 
   /**
@@ -953,4 +947,98 @@ function narrow(run: GitHubRun): GitHubRun {
       message: firstLine(run.head_commit.message),
     },
   } satisfies Record<keyof GitHubRun, unknown>;
+}
+
+/**
+ * Reads the runs of `repo` under way, for a reader that follows the jobs
+ * under way, and returns them as GitHub describes them: those not completed
+ * among the hundred newest runs of its unfiltered list, which GitHub serves
+ * current, and, when that list goes on past them without reaching back past
+ * the oldest a run under way can be, those that the lists filtered to each
+ * status a run under way can have name further down and that are young
+ * enough, each read again by its id, since those lists can be behind. A run deleted
+ * before it is read again is left out. The filtered lists are read only when
+ * `deep`. `finished` remembers, between calls,
+ * each run read again and found completed, with when the filtered list's
+ * copy of it was last updated, so that it is not read again until that
+ * changes, as when the run is started again.
+ */
+export async function runsUnderWay(
+  request: RunRequest,
+  repo: string,
+  finished: Map<number, string> = new Map(),
+  deep = true,
+): Promise<unknown[]> {
+  const list = async (query: string) => {
+    const answer = await request<{ workflow_runs?: unknown; total_count?: unknown }>(
+      `repos/${repo}/actions/runs?${query}per_page=${PAGE}`,
+      { runListAccess: RUN_LIST_ACCESS },
+    );
+    const runs = answer.workflow_runs;
+    if (!Array.isArray(runs)) {
+      throw new Error(`GitHub's run list of ${repo} returned invalid data`);
+    }
+    const total = typeof answer.total_count === "number" ? answer.total_count : Infinity;
+    return { runs: runs.filter(isObjectNotArray), total };
+  };
+  // A run can be under way only if it was created lately enough to be
+  // started again, with a week to spare for one that waits or runs long.
+  const horizon = Date.now() - RERUN_MS - 7 * 86_400_000;
+  const created = (run: Record<string, unknown>) =>
+    typeof run.created_at === "string" ? Date.parse(run.created_at) : Infinity;
+  const { runs: top, total } = await list("");
+  // The filtered lists are needed only when the top of the list holds fewer
+  // than all the runs and does not reach back past the horizon.
+  const reaches = top.some((run) => created(run) < horizon);
+  const filtered = !deep || total <= top.length || reaches ? [] : await Promise.all(
+    ["requested", "queued", "pending", "waiting", "in_progress"].map(async (status) =>
+      (await list(`status=${status}&`)).runs
+    ),
+  );
+  const listed = new Set(top.map((run) => run.id));
+  const further = new Map<number, string>();
+  for (const runs of filtered) {
+    for (const run of runs) {
+      const updated = typeof run.updated_at === "string" ? run.updated_at : "";
+      if (
+        typeof run.id === "number" && !listed.has(run.id) && created(run) >= horizon &&
+        finished.get(run.id) !== updated
+      ) {
+        further.set(run.id, updated);
+      }
+    }
+  }
+  const reread = await inParallel(
+    GITHUB_REQUEST_CONCURRENCY / 4,
+    [...further].map(([id, updated]) => async () => {
+      const run = await runById<unknown>(request, repo, id);
+      if (isObjectNotArray(run) && run.status === "completed") {
+        finished.set(id, updated);
+        // The oldest are forgotten first, which costs only a read again.
+        for (const oldest of finished.keys()) {
+          if (finished.size <= 10_000) break;
+          finished.delete(oldest);
+        }
+      }
+      return run === undefined ? [] : [run];
+    }),
+  );
+  return [...top, ...reread.flat().filter(isObjectNotArray)].filter((run) => run.status !== "completed");
+}
+
+/**
+ * Reads run `id` of `repo` as GitHub serves it now, or returns `undefined`
+ * once it is deleted.
+ */
+export async function runById<T>(
+  request: RunRequest,
+  repo: string,
+  id: number,
+): Promise<T | undefined> {
+  try {
+    return await request<T>(`repos/${repo}/actions/runs/${id}`, { ignoreStatuses: [404] });
+  } catch (error) {
+    if (error instanceof GitHubStatusError && error.status === 404) return undefined;
+    throw error;
+  }
 }

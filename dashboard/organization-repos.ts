@@ -5,7 +5,7 @@
 
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubCredential } from "./github-auth.ts";
-import { github, GITHUB_ORGANIZATION } from "./lib.ts";
+import { github, GITHUB_ORGANIZATION, type GitHubRequestOptions } from "./lib.ts";
 
 /** A repository of the organization that is not archived. */
 export interface OrganizationRepo {
@@ -21,18 +21,20 @@ export interface OrganizationRepo {
 
 /**
  * Lists every repository in the organization the token can see, minus the
- * archived ones. A token that cannot see a private repository is not shown it
+ * archived ones, making each request with `options`. A token that cannot see a private repository is not shown it
  * here, so a caller covers what the token reaches and says nothing about the
  * rest. Throws when GitHub's answer does not have the shape of a listing.
  */
 export async function organizationRepos(
   credential: GitHubCredential,
+  options: GitHubRequestOptions = {},
 ): Promise<OrganizationRepo[]> {
   const repos: OrganizationRepo[] = [];
   for (let page = 1;; page++) {
     const batch = await github<unknown>(
       `orgs/${GITHUB_ORGANIZATION.name}/repos?per_page=100&page=${page}`,
       credential,
+      options,
     );
     if (!Array.isArray(batch)) {
       throw new Error("GitHub organization repositories returned invalid data");
