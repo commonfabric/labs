@@ -1490,11 +1490,11 @@ describe("piece pull materialization", () => {
       value: unknown,
       destination: JSONSchema = candidate,
       priorArgumentSchema: JSONSchema = prior,
-    ) => {
-      const element = runtime.getCell(
+      element = runtime.getCell(
         pieces.getSpace(),
         "pushed-element-" + crypto.randomUUID(),
-      );
+      ),
+    ) => {
       await runtime.editWithRetry((tx) => {
         element.withTx(tx).set(value as never);
       });
@@ -1550,6 +1550,28 @@ describe("piece pull materialization", () => {
     });
     expect(
       await overElement({ author: elsewhere.key("author"), body: "x" }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // Links that lead back to where they started reach no value for setup
+    // to read.
+    const looped = runtime.getCell(
+      pieces.getSpace(),
+      "looped-comment-" + crypto.randomUUID(),
+    );
+    const back = runtime.getCell(
+      pieces.getSpace(),
+      "looped-comment-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      back.withTx(tx).set({ author: looped.key("author"), body: "y" });
+    });
+    expect(
+      await overElement(
+        { author: back.key("author"), body: "x" },
+        candidate,
+        prior,
+        looped,
+      ),
     ).toThrow(/comments\.0\.author\.pictureBlob/);
 
     const heldAuthor = (author: JSONSchema): JSONSchema =>

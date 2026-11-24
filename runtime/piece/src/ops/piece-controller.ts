@@ -2544,7 +2544,9 @@ function holdsOwnPlainInput(
 ): boolean {
   const base = baseCell.getAsNormalizedFullLink();
   const tx = cellTx(linkedCell) ?? pieces.runtime.readTx();
-  const visited = new Set<string>();
+  // Values judged plain, and the values on the way to the one being judged.
+  const judged = new Set<string>();
+  const reading = new Set<string>();
   const plain = (
     cell: Cell<unknown>,
     path: readonly (string | number)[],
@@ -2552,12 +2554,14 @@ function holdsOwnPlainInput(
   ): boolean => {
     const at = cell.getAsNormalizedFullLink();
     if (!isStoredArgumentOwnData(tx, at, base)) return false;
-    // A value already being read is judged where it was first met.
     const key = JSON.stringify([at.id, at.path, path]);
-    if (visited.has(key)) return true;
-    visited.add(key);
+    // Links that lead back to a value on the way here reach no value for
+    // setup to read. One reached a second way was judged where it was met.
+    if (reading.has(key)) return false;
+    if (judged.has(key)) return true;
     const stored = cell.getRaw();
     if (stored === undefined) return false;
+    reading.add(key);
     for (const nested of suppliedLinks(stored)) {
       const nestedPath = [...path, ...nested.path];
       if (depth === MAX_OWN_INPUT_DEPTH || !readsAsValue(nestedPath)) {
@@ -2582,6 +2586,8 @@ function holdsOwnPlainInput(
         !plain(target, nestedPath, depth + 1)
       ) return false;
     }
+    reading.delete(key);
+    judged.add(key);
     return true;
   };
   return plain(linkedCell, [], 0);
