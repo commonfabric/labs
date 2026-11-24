@@ -11,15 +11,16 @@ files. Transformed TypeScript is parsed with the same parser the transformer
 uses, so blocks, closures, schemas, type positions and Common Fabric builders
 (pattern/lift/handler/…) are colored exactly as the compiler sees them.
 Markdown, JSON, JSONC, YAML, Python, Go, Swift, Kotlin, Rust, TOML, HCL,
-Starlark, Bazel rc, Lean, C, C++, CUDA, shell, makefile, Java properties, INI,
-Graphviz DOT, ProGuard, Git attributes and XML files use syntax highlighting
-selected from language metadata, as do Go's 'go.mod', 'go.work', 'go.sum' and
-'go.work.sum' files, Lean's 'lean-toolchain' files, and Git, Docker and Bazel
-ignore files. Kotlin covers Gradle's '.gradle.kts' build scripts, HCL covers
-OpenTofu and Terraform configuration, Starlark covers Bazel's BUILD, '.bzl' and
-'.bazel' files, '.bazelrc' files use the Bazel rc language, a '.h' header is
-colored with the C++ grammar unless piped with '--language c', shell covers Bash
-and POSIX shell, makefiles color their recipes as shell, INI covers Ansible
+Starlark, Bazel rc, Lean, C, C++, CUDA, shell, makefile, Dockerfile, Java
+properties, INI, Graphviz DOT, ProGuard, Git attributes and XML files use syntax
+highlighting selected from language metadata, as do Go's 'go.mod', 'go.work',
+'go.sum' and 'go.work.sum' files, Lean's 'lean-toolchain' files, and Git, Docker
+and Bazel ignore files. Kotlin covers Gradle's '.gradle.kts' build scripts, HCL
+covers OpenTofu and Terraform configuration, Starlark covers Bazel's BUILD,
+'.bzl' and '.bazel' files, '.bazelrc' files use the Bazel rc language, a '.h'
+header is colored with the C++ grammar unless piped with '--language c', shell
+covers Bash and POSIX shell, makefiles color their recipes as shell, Dockerfiles
+color the shell form of their commands as shell, INI covers Ansible
 configuration and inventories, and XML covers Android manifests and resources,
 SVG and Apple property lists. Python interpreter shebangs select Python, 'swift'
 and 'xcrun swift' shebangs select Swift, 'kotlin' shebangs select Kotlin, 'sh',

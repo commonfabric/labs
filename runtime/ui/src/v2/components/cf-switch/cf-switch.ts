@@ -4,6 +4,7 @@ import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createBooleanCellController } from "../../core/cell-controller.ts";
+import { HostActivationController } from "../../core/host-activation-controller.ts";
 
 /**
  * CFSwitch - Toggle switch component for binary on/off states
@@ -153,6 +154,13 @@ export class CFSwitch extends BaseElement {
     },
   });
 
+  #activation = new HostActivationController(this, {
+    role: "switch",
+    keys: ["Enter", " "],
+    isDisabled: () => this.disabled,
+    activate: () => this._toggle(),
+  });
+
   constructor() {
     super();
     this.checked = false;
@@ -164,9 +172,6 @@ export class CFSwitch extends BaseElement {
   }
 
   override connectedCallback() {
-    if (!this.hasAttribute("role")) {
-      this.setAttribute("role", "switch");
-    }
     if (!this.hasAttribute("exportparts")) {
       this.setAttribute("exportparts", "switch,thumb");
     }
@@ -174,15 +179,6 @@ export class CFSwitch extends BaseElement {
     this._updateAriaAttributes();
     // Bind initial checked value
     this._checkedCellController.bind(this.checked, booleanSchema);
-    // Add event listeners to the host element
-    this.addEventListener("click", this._handleClick);
-    this.addEventListener("keydown", this._handleKeydown);
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this.removeEventListener("click", this._handleClick);
-    this.removeEventListener("keydown", this._handleKeydown);
   }
 
   override willUpdate(
@@ -230,17 +226,9 @@ export class CFSwitch extends BaseElement {
   private _updateAriaAttributes() {
     const isChecked = this.getChecked();
     this.setAttribute("aria-checked", String(isChecked));
-    this.setAttribute("aria-disabled", String(this.disabled));
-    this.tabIndex = this.disabled ? -1 : 0;
   }
 
-  private _handleClick(event: Event) {
-    if (this.disabled) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-
+  private _toggle() {
     // Toggle checked state via cell controller, which computes it from what
     // the cell holds, asking the worker first where it has read nothing.
     if (this._checkedCellController.hasCell()) {
@@ -251,20 +239,5 @@ export class CFSwitch extends BaseElement {
     // For plain boolean usage (no Cell), update the property directly
     this.checked = !this.getChecked();
     this.emit("cf-change", { checked: this.checked });
-  }
-
-  private _handleKeydown(event: KeyboardEvent) {
-    if (this.disabled) {
-      return;
-    }
-
-    // Handle Space and Enter keys
-    if (
-      event.key === " " || event.key === "Spacebar" ||
-      event.key === "Enter"
-    ) {
-      event.preventDefault();
-      this._handleClick(event);
-    }
   }
 }

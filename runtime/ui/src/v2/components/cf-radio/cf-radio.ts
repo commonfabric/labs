@@ -1,5 +1,6 @@
 import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import { HostActivationController } from "../../core/host-activation-controller.ts";
 
 /**
  * CFRadio - Single selection radio button component that works with cf-radio-group
@@ -131,6 +132,15 @@ export class CFRadio extends BaseElement {
   declare disabled: boolean;
   declare value: string;
 
+  #activation = new HostActivationController(this, {
+    role: "radio",
+    keys: [" "],
+    isDisabled: () => this.disabled,
+    activate: (event) => this.#select(event),
+    // A group keeps one Tab stop among its radios.
+    ownsTabStop: () => !this.closest("cf-radio-group"),
+  });
+
   constructor() {
     super();
     this.checked = false;
@@ -139,26 +149,11 @@ export class CFRadio extends BaseElement {
   }
 
   override connectedCallback() {
-    if (!this.hasAttribute("role")) {
-      this.setAttribute("role", "radio");
-    }
     if (!this.hasAttribute("exportparts")) {
       this.setAttribute("exportparts", "radio,indicator");
     }
     super.connectedCallback();
     this.#updateAriaAttributes();
-
-    // Host owns role="radio" and focus — handle interaction here so
-    // keyboard (Space) and click both work regardless of where in the
-    // component they land.
-    this.addEventListener("click", this.#handleClick);
-    this.addEventListener("keydown", this.#handleKeydown);
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this.removeEventListener("click", this.#handleClick);
-    this.removeEventListener("keydown", this.#handleKeydown);
   }
 
   override updated(
@@ -198,20 +193,14 @@ export class CFRadio extends BaseElement {
 
   #updateAriaAttributes() {
     this.setAttribute("aria-checked", String(this.checked));
-    this.setAttribute("aria-disabled", String(this.disabled));
-    const radioGroup = this.closest("cf-radio-group");
-    if (radioGroup) {
-      // The group keeps one Tab stop among its radios.
-      radioGroup.dispatchEvent(new Event("radio-state"));
-    } else {
-      this.tabIndex = this.disabled ? -1 : 0;
-    }
+    // The group moves its Tab stop when a radio's state changes.
+    this.closest("cf-radio-group")?.dispatchEvent(new Event("radio-state"));
   }
 
-  #handleClick(event: Event) {
-    if (this.disabled || this.checked) {
+  #select(event: MouseEvent) {
+    // Like a native radio, a checked one stays checked.
+    if (this.checked) {
       event.preventDefault();
-      event.stopPropagation();
       return;
     }
 
@@ -229,18 +218,6 @@ export class CFRadio extends BaseElement {
       // Standalone radio button
       this.checked = true;
       this.emit("cf-change", { checked: this.checked, value: this.value });
-    }
-  }
-
-  #handleKeydown(event: KeyboardEvent) {
-    if (this.disabled) {
-      return;
-    }
-
-    // Handle Space key
-    if (event.key === " " || event.key === "Spacebar") {
-      event.preventDefault();
-      this.#handleClick(event);
     }
   }
 }

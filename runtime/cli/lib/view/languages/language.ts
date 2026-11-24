@@ -61,6 +61,7 @@ import { starlarkLanguage } from "./starlark/language.ts";
 import { bazelrcLanguage } from "./bazelrc/language.ts";
 import { shellLanguage } from "./shell/language.ts";
 import { makeLanguage } from "./make/language.ts";
+import { dockerfileLanguage } from "./dockerfile/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
 import { gitAttributesLanguage } from "./gitattributes/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
@@ -286,7 +287,8 @@ export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
    * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
-   * `"make"`, `"org"`, `"directive"`, `"binary"`, or `"plain-text"`.
+   * `"make"`, `"org"`, `"directive"`, `"dockerfile"`, `"binary"`, or
+   * `"plain-text"`.
    */
   readonly id: string;
 
@@ -496,7 +498,9 @@ let languages: readonly Language[] | undefined;
 
 /**
  * Every language the pager knows, most specific first, built on first use.
- * Plain text comes last and remains the fallback after metadata selection.
+ * Plain text remains the fallback after metadata selection. The Dockerfile
+ * language claims names by their prefix, so it comes after every language that
+ * claims an extension, and `Dockerfile.sh` is shell.
  *
  * The list is lazy so this module's top level never reads the concrete language
  * singletons: they and this module form an import cycle (a language's semantic
@@ -543,6 +547,7 @@ function allLanguages(): readonly Language[] {
     directiveLanguage,
     binaryLanguage,
     plainTextLanguage,
+    dockerfileLanguage,
   ];
 }
 

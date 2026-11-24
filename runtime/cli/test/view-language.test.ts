@@ -61,6 +61,7 @@ import { starlarkLanguage } from "../lib/view/languages/starlark/language.ts";
 import { bazelrcLanguage } from "../lib/view/languages/bazelrc/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
+import { dockerfileLanguage } from "../lib/view/languages/dockerfile/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
 import { directiveLanguage } from "../lib/view/languages/directive/language.ts";
@@ -208,6 +209,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("make"), makeLanguage);
   assertEquals(languageForName("makefile"), makeLanguage);
   assertEquals(languageForName("mk"), makeLanguage);
+  assertEquals(languageForName("dockerfile"), dockerfileLanguage);
+  assertEquals(languageForName("docker"), dockerfileLanguage);
+  assertEquals(languageForName("containerfile"), dockerfileLanguage);
   assertEquals(languageForName("properties"), propertiesLanguage);
   assertEquals(languageForName("java-properties"), propertiesLanguage);
   assertEquals(languageForName("proguard"), proguardLanguage);
@@ -268,6 +272,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "directive",
     "binary",
     "plain-text",
+    "dockerfile",
   ]);
   expect(languageNames()).toEqual([
     "typescript",
@@ -356,6 +361,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "plain-text",
     "text",
     "plaintext",
+    "dockerfile",
+    "docker",
+    "containerfile",
   ]);
 });
 
