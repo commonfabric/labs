@@ -84,6 +84,10 @@ An entry's description, hashtags and keywords come from its opening doc comment,
 as for `cf pattern publish`. An entry with no description is compiled but not
 published, and the job summary lists it.
 
+An entry named `main.tsx` is published as standalone, offered to a person
+choosing what to place; every other entry is published as a part. The index
+still stores an entry as a part when it has a required input with no default.
+
 A lineage belongs to a path. When the globs stop selecting a path (the file is
 deleted, moved, or newly excluded), its lineage is withdrawn: unlisted, and
 still readable by id. A path that comes back resumes the same lineage.

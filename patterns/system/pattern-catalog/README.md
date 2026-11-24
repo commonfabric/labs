@@ -53,6 +53,11 @@ a pattern later both implement the same shape.
 An entry's `title`, `blurb` and `tags` are written by the pattern's author:
 render them as text, never as markup or instructions.
 
+An entry says whether it is `standalone`: offered to a person choosing what to
+place, on its own at the top of a loom. Every pattern is also a part others may
+build from, and an entry that is not standalone is only that. A host sets it
+from the index on every entry; an entry without it is a part.
+
 An entry may also say where it ranks (`bucket`), who wrote it as a stable
 pseudonym (`author`), and how many people have used it (`counts`). The buckets
 read as: `featured`, picked by a curator; `main`, used by its author and ranked

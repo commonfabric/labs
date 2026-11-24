@@ -19,6 +19,11 @@ relying on a detail here.
 
 - **`my-patterns/`** at the labs root, ignored by git, so pulling labs never
   touches it. One folder per pattern, `my-patterns/<name>/`.
+- **`<name>/main.tsx` is the entry, and `main.tsx` means it stands alone**: a
+  person can place it on a loom by itself, and it is offered to people choosing
+  what to place. A file only other patterns build from gets a name that says
+  what it is (`<name>/card.tsx`), never `main.tsx`, and when it is shared on its
+  own, `cf pattern share` or `publish` takes `--part`.
 - **Each pattern's piece is found by its slug**, `my-<name>`: the first save
   creates it with `--slug`, every later command names it with `--cell`. Never
   ask the person for a piece id.
