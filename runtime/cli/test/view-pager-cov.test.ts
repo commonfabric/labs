@@ -18,8 +18,13 @@ import {
 } from "../lib/view/pager.ts";
 import type { BlameLine, BlameRequest } from "../lib/view/blame.ts";
 import { fileSource } from "../lib/view/editsource.ts";
+import { type FileGateway, realFileGateway } from "../lib/view/filegateway.ts";
 import { parseDiff } from "../lib/view/diff.ts";
-import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
+import {
+  buildDiffDocument,
+  type DiffWorkspace,
+  WorkspaceCache,
+} from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
 import { ViewError } from "../lib/view/errors.ts";
 import { sgr, term } from "../lib/view/ansi.ts";
@@ -28,6 +33,14 @@ import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { styleFor, ui } from "../lib/view/theme.ts";
 import { buildView } from "../lib/view/mod.ts";
 import type { GitHubApi } from "../lib/view/github.ts";
+import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
+import {
+  IN_PLACE_PARSE_BUDGET,
+  parse,
+  type ParseJob,
+  type ParseOutcome,
+  PendingParses,
+} from "../lib/view/backgroundparse.ts";
 
 /** A GitHub API that these tests never reach. */
 const noGitHub: GitHubApi = {
@@ -68,6 +81,8 @@ interface FakeOpts {
   removeSignalThrows?: boolean;
   env?: Record<string, string>;
   blame?: PagerDeps["blame"];
+  parseInBackground?: PagerDeps["parseInBackground"];
+  files?: FileGateway;
 }
 
 function makeFake(opts: FakeOpts = {}) {
@@ -189,6 +204,10 @@ function makeFake(opts: FakeOpts = {}) {
     pullRequestList: () => Promise.resolve(null),
     blame: opts.blame ??
       (() => Promise.reject(new Error("these tests blame nothing"))),
+    files: opts.files ?? realFileGateway(),
+    parseInBackground: opts.parseInBackground ?? (() => {
+      throw new Error("these tests parse nothing in the background");
+    }),
   };
   return {
     deps,
@@ -559,6 +578,377 @@ Deno.test("pager: a Swift file parsed before its parser loads is colored once it
   }
 });
 
+/** A diff of one TypeScript file in an in-memory workspace, built with both
+ * of its complete files' parses pending, and its editable source. */
+function pendingDiff() {
+  const text = "export const answer = 42; // the answer\n";
+  const diff = `diff --git a/answer.ts b/answer.ts
+--- a/answer.ts
++++ b/answer.ts
+@@ -1 +1 @@
+-export const answer = 41;
++${text}`;
+  const ws: DiffWorkspace = {
+    resolve: (path) => `/workspace/${path}`,
+    read: (path) => path === "/workspace/answer.ts" ? text : null,
+  };
+  const cache = new WorkspaceCache();
+  const pending = new PendingParses(0);
+  const { doc, edit } = buildDiffDocument(
+    diff,
+    parseDiff(diff)!,
+    ws,
+    cache,
+    "source",
+    undefined,
+    pending,
+  );
+  const source = diffSource(ws, edit, cache, undefined, pending);
+  return { doc, source, jobs: pending.take() };
+}
+
+Deno.test("pager: a diff colors the files whose parses finish in the background", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const keyword = sgr(styleFor("storageKeyword")).slice(0, -1);
+  const colored = new RegExp(`${keyword.replace("[", "\\[")}[;0-9]*mexport`);
+  const started = Promise.withResolvers<(outcomes: ParseOutcome[]) => void>();
+  const finished = Promise.withResolvers<void>();
+  let stopped = 0;
+  const given: (readonly ParseJob[])[] = [];
+  const { deps, writes } = makeFake({
+    steps: [
+      {
+        wait: started.promise.then((deliver) =>
+          deliver(jobs.map((job, index) => ({
+            kind: "parsed",
+            index,
+            result: parse(job.kind, job.language, job.text, job.fileName),
+          })))
+        ),
+      },
+      { wait: finished.promise },
+      { eof: true },
+    ],
+    parseInBackground: (parses, deliver) => {
+      given.push(parses);
+      started.resolve(deliver);
+      return () => stopped++;
+    },
+  });
+  const write = deps.write;
+  deps.write = (text) => {
+    write(text);
+    if (colored.test(text) && !text.includes("Highlighting")) {
+      finished.resolve();
+    }
+  };
+
+  await runPager(
+    doc,
+    { color: true, showLineNumbers: false, parses: jobs },
+    undefined,
+    source,
+    deps,
+  );
+
+  const frames = writes.filter((frame) => frame.includes("answer"));
+  assertEquals(given, [jobs], "the pager parsed the view's pending parses");
+  assertEquals(colored.test(frames[0]), false, "the first frame is plain");
+  assert(
+    writes.some((frame) => frame.includes("░".repeat(10))),
+    "the status bar shows the progress before any parse finishes",
+  );
+  assertEquals(stopped, 1, "the parses are stopped once, when they end");
+});
+
+Deno.test("pager: background parses rebuild the document once the parsed source doubles, and at the end", async () => {
+  // Each entry is how much source one finished parse adds, and whether the
+  // document is built again once it lands.
+  const steps: [number, boolean][] = [
+    [IN_PLACE_PARSE_BUDGET / 2, false],
+    [IN_PLACE_PARSE_BUDGET / 2, true],
+    [IN_PLACE_PARSE_BUDGET - 1, false],
+    [1, true],
+    [IN_PLACE_PARSE_BUDGET, false],
+    [IN_PLACE_PARSE_BUDGET, true],
+    [1, true],
+  ];
+  const jobs: ParseJob[] = steps.map(([size]) => ({
+    kind: "lines",
+    language: plainTextLanguage,
+    text: "x".repeat(size),
+    fileName: undefined,
+    finish: () => {},
+    fail: () => {},
+  }));
+  let builds = 0;
+  const source = {
+    label: "big.diff",
+    editable: false,
+    parse: () => {
+      builds++;
+      return DOC;
+    },
+    save: () => "Nothing to save.",
+  };
+  const rebuilt: boolean[] = [];
+  let writesBeforeTheLast = 0;
+  const delivered = Promise.withResolvers<void>();
+  const { deps, writes } = makeFake({
+    steps: [{ wait: delivered.promise }, { eof: true }],
+    parseInBackground: (_parses, deliver) => {
+      queueMicrotask(() => {
+        for (const index of jobs.keys()) {
+          const before = builds;
+          writesBeforeTheLast = writes.length;
+          deliver([{
+            kind: "parsed",
+            index,
+            result: { kind: "lines", lines: [] },
+          }]);
+          rebuilt.push(builds > before);
+        }
+        delivered.resolve();
+      });
+      return () => {};
+    },
+  });
+
+  await runPager(DOC, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assertEquals(rebuilt, steps.map(([, expected]) => expected));
+  assert(
+    writes.slice(0, writesBeforeTheLast).some((frame) =>
+      frame.includes("█") && frame.includes("░")
+    ),
+    "the progress shows part of the source parsed while parses are unfinished",
+  );
+  assertEquals(
+    writes.slice(writesBeforeTheLast).some((frame) => frame.includes("░")),
+    false,
+    "the progress is gone once every parse has ended",
+  );
+});
+
+Deno.test("pager: background parse outcomes that arrive after the viewer closes change nothing", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  let deliver: ((outcomes: ParseOutcome[]) => void) | undefined;
+  let finished = 0;
+  const watched = jobs.map((job) => ({
+    ...job,
+    finish: () => finished++,
+    fail: () => finished++,
+  }));
+  const { deps, writes } = makeFake({
+    steps: [{ eof: true }],
+    parseInBackground: (_parses, given) => {
+      deliver = given;
+      return () => {};
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: watched }, undefined, source, deps);
+  const written = writes.length;
+  deliver?.([{
+    kind: "parsed",
+    index: 0,
+    result: parse(jobs[0].kind, jobs[0].language, jobs[0].text, undefined),
+  }]);
+
+  assertEquals(finished, 0, "no outcome was kept");
+  assertEquals(writes.length, written, "nothing was drawn");
+});
+
+Deno.test("pager: the semantics prewarm once the first frame is drawn, not before", async () => {
+  let prewarmed = 0;
+  let writesWhenPrewarmed = 0;
+  const semantics = {
+    typeAt: () => null,
+    definitionOf: () => [],
+    fileLines: () => null,
+    prewarm: () => {
+      prewarmed++;
+      writesWhenPrewarmed = writes.length;
+    },
+  };
+  const { deps, writes } = makeFake({
+    steps: [{ fireTimers: true }, { eof: true }],
+  });
+
+  await runPager(DOC, OPTS, semantics, undefined, deps);
+
+  assertEquals(prewarmed, 1);
+  assert(writesWhenPrewarmed > 0, "the first frame was drawn first");
+});
+
+Deno.test("pager: background parses that fail say so and leave their files plain", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const { deps, writes } = makeFake({
+    steps: [{ eof: true }],
+    consoleSize: { columns: 200, rows: 24 },
+    parseInBackground: (_parses, deliver) => {
+      deliver(jobs.map((_job, index) => ({
+        kind: "failed",
+        index,
+        failure: "The grammar is broken.",
+      })));
+      return () => {};
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assert(
+    writes.join("").includes(
+      "Some files could not be highlighted, and are shown as plain text: " +
+        "The grammar is broken.",
+    ),
+    "the status line says why",
+  );
+});
+
+Deno.test("pager: background parses stop when the viewer quits", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  let stopped = 0;
+  const { deps } = makeFake({
+    steps: [{ eof: true }],
+    parseInBackground: () => () => stopped++,
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assertEquals(stopped, 1);
+});
+
+Deno.test("pager: a background outcome that cannot be applied says why", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const delivered = Promise.withResolvers<void>();
+  let stopped = 0;
+  const { deps, writes } = makeFake({
+    steps: [{ wait: delivered.promise }, { eof: true }],
+    consoleSize: { columns: 200, rows: 24 },
+    parseInBackground: (_parses, deliver) => {
+      queueMicrotask(() => {
+        deliver([{
+          kind: "parsed",
+          index: 0,
+          result: parse("lines", jobs[0].language, jobs[0].text, undefined),
+        }]);
+        delivered.resolve();
+      });
+      return () => stopped++;
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assert(
+    writes.join("").includes(
+      "Highlighting failed: A document parse cannot finish with lines.",
+    ),
+    "the status line says why",
+  );
+  assertEquals(stopped, 1, "the parses stopped");
+});
+
+Deno.test("pager: background parses that cannot start say why", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const { deps, writes } = makeFake({
+    steps: [{ eof: true }],
+    consoleSize: { columns: 200, rows: 24 },
+    parseInBackground: () => {
+      throw new Error("No worker can start.");
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assert(
+    writes.join("").includes("Highlighting failed: No worker can start."),
+    "the status line says why",
+  );
+  assertEquals(
+    writes.at(-2)?.includes("░"),
+    false,
+    "the progress is gone",
+  );
+});
+
+Deno.test("pager: background parses stop once the viewer opens another file", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const opened = parseDocument("export const other = 1;\n");
+  let deliver: ((outcomes: ParseOutcome[]) => void) | undefined;
+  let stopped = 0;
+  let stoppedBeforeTheBatch = 0;
+  const fileOpened = Promise.withResolvers<void>();
+  const { deps, writes } = makeFake({
+    steps: [
+      { bytes: enc("\x18\x06") },
+      { bytes: enc("other") },
+      { bytes: enc("\r") },
+      {
+        wait: fileOpened.promise.then(() => {
+          stoppedBeforeTheBatch = stopped;
+          deliver?.([{
+            kind: "parsed",
+            index: 0,
+            result: parse(
+              jobs[0].kind,
+              jobs[0].language,
+              jobs[0].text,
+              jobs[0].fileName,
+            ),
+          }]);
+        }),
+      },
+      { eof: true },
+    ],
+    files: {
+      cwd: () => "/work",
+      list: () => [{ name: "other.ts", isDir: false }],
+      open: () => {
+        fileOpened.resolve();
+        return {
+          source: {
+            label: "other.ts",
+            editable: false,
+            parse: () => opened,
+            save: () => "Nothing to save.",
+          },
+          text: opened.text,
+        };
+      },
+      join: (dir, name) => `${dir}/${name}`,
+      parent: () => "/work",
+      base: (path) => path.split("/").at(-1)!,
+    },
+    parseInBackground: (_parses, given) => {
+      deliver = given;
+      return () => stopped++;
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assert(
+    writes.some((frame) => frame.includes("other = 1")),
+    "the viewer shows the opened file",
+  );
+  assertEquals(
+    stoppedBeforeTheBatch,
+    1,
+    "opening the file stopped the parses before the next batch arrived",
+  );
+  assertEquals(stopped, 1, "nothing stopped them again");
+  assertEquals(
+    writes.filter((frame) => frame.includes("other")).some((frame) =>
+      frame.includes("░")
+    ),
+    false,
+    "the opened file shows no progress",
+  );
+});
+
 Deno.test("pager: a parser that cannot load says why and leaves the document as it was", async () => {
   const { doc, source, dir, parses } = editableDoc();
   try {
@@ -649,6 +1039,9 @@ Deno.test("realPagerDeps: the wrappers reach the real primitives", () => {
   assert(d.git(["--version"])?.startsWith("git version "));
   assertEquals(d.git(["--version"]), d.git(["--version"]));
   assertEquals(d.relay(""), undefined);
+  // No jobs start no worker, and the file system is the real one.
+  d.parseInBackground([], () => {})();
+  assert(d.files.cwd().length > 0);
   // Opening the controlling terminal either succeeds (close it) or throws when
   // the test has none; both reach the wrapper.
   try {

@@ -379,11 +379,15 @@ export type ServingLoopStats = {
      * found: `no-record`, `marked`, `other-epoch` (the root's piece), and
      * `unvouched-instance`, `absent-owned`,
      * `owner-not-clean` (a demanded instance of the piece or of one beneath
-     * it). */
+     * it). A `skip` loop adds `stale-upstream`: the roots a judgment found
+     * stale only through what is upstream of them, which it loads as it
+     * loads a refused root and a `start-upstream` loop would have held. No
+     * other mode counts under that reason. */
     refused: Record<string, number>;
 
-    /** Roots left unloaded and unstarted on that judgment, which only the
-     * `skip` mode does, counted once each time a root is first left. */
+    /** Roots left unloaded and unstarted on that judgment, which the `skip`
+     * and `start-upstream` modes do, counted once each time a root is first
+     * left. */
     servedFromStore: number;
 
     /** Roots a judgment had left unloaded that were then loaded: an input
@@ -403,9 +407,10 @@ export type ServingLoopStats = {
      * commit reports. */
     expiryWakes: number;
 
-    /** Pieces the index held clean that wrote an instance they vouched for
-     * again, to a value other than the one it held, with no input of theirs
-     * changed. Each one is a judgment that would have served a stale
+    /** Pieces the index held clean that wrote an instance they answered
+     * for again, one a slice vouches for at its own key or decides at
+     * another, to a value other than the one it held, with no input of
+     * theirs changed. Each one is a judgment that would have served a stale
      * value. */
     falseClean: number;
 
@@ -418,17 +423,19 @@ export type ServingLoopStats = {
     /** Rows of carried demand the space they were sent to refused. */
     carriedRefused: number;
 
-    /** Roots a `skip` loop left unloaded because what the store held of
-     * them was stale only through what is upstream: starting their own
-     * piece would not have made them current, so the loop started the
-     * pieces upstream instead (serving-loop.md §1). */
+    /** Roots a `start-upstream` loop left unloaded because what the store
+     * held of them was stale only through what is upstream: starting their
+     * own piece would not have made them current, so the loop started the
+     * pieces upstream instead (serving-loop.md §1). Zero under `skip` and
+     * under `record`. */
     heldUpstream: number;
 
     /** Pieces, each one whose slices hold a root or one that runs, that
      * the loop gave up waiting on what is upstream of: no piece named for
      * one could be started, or each ran and was recorded and it was stale
      * still. A root is loaded as a refused one is once every piece that
-     * holds it was given up on. */
+     * holds it was given up on. Zero under `skip`, which waits on nothing
+     * upstream. */
     upstreamAbandoned: number;
   };
 
@@ -875,6 +882,70 @@ export type ServingLoopStats = {
     heapLimited: number;
     heapStopped: number;
   };
+
+  /**
+   * The actions that have cost the serving runtimes the most wall time, most
+   * expensive first, as `action-costs.ts` keeps them. A listed action's time
+   * is counted from the run that gave it a row. A row is unlisted because the
+   * list is bounded or because a host stopped tracking it. An action whose
+   * run is still going has no row yet.
+   */
+  actions: {
+    /** The listed actions, most total wall time first. */
+    entries: ServingActionCost[];
+
+    /**
+     * How many action rows are not listed: rows a host gave up for a costlier
+     * action, and rows past the list's bound.
+     */
+    dropped: number;
+
+    /** The wall time of the unlisted actions and of runs no row took. */
+    droppedMs: number;
+  };
+};
+
+/**
+ * What one action has cost the serving runtimes of one space. The times are
+ * wall times in milliseconds, from the start of a run to the end of its
+ * last await.
+ */
+export type ServingActionCost = {
+  /** The space whose serving runtime ran the action. */
+  space: string;
+
+  /** The scheduler's id for the action. */
+  action: string;
+
+  /** The result cell of the piece the action belongs to. */
+  piece?: string;
+
+  /** The name of the pattern the action belongs to. */
+  pattern?: string;
+
+  /** The name of the module the action runs. */
+  module?: string;
+
+  /** Where the action is authored, as `cf:module/<identity>/<path>:<l>:<c>`. */
+  src?: string;
+
+  /** How many of the action's runs have ended. */
+  runs: number;
+
+  /**
+   * How many of those runs a change to the action's inputs caused, a retry of
+   * such a run included.
+   */
+  inputRuns: number;
+
+  /** The wall time of all those runs together. */
+  totalMs: number;
+
+  /** The wall time of the longest of those runs. */
+  longestMs: number;
+
+  /** The wall time of the latest of those runs. */
+  lastMs: number;
 };
 
 /** How many rows each of the bounded settle series keeps. */
@@ -1022,6 +1093,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     heapLimited: 0,
     heapStopped: 0,
   },
+  actions: { entries: [], dropped: 0, droppedMs: 0 },
 });
 
 type ActiveDeliveryCheckpointStat = {
@@ -1100,12 +1172,13 @@ export const bumpDerivedCommits = (
 };
 
 /** The counters without the settle blocks, whose series cost about as much
- * to post as a wave commit. A serving worker posts these ahead of each wave
+ * to post as a wave commit, and without the action costs, which are ranked
+ * when they are read. A serving worker posts these ahead of each wave
  * commit, so a client that has seen the commit reads counts that include
  * what the wave counted before its commit. */
 export type ServingLoopCounters = Omit<
   ServingLoopStats,
-  "settle" | "settleAdvances"
+  "settle" | "settleAdvances" | "actions"
 >;
 
 // One provider per process (the ExecutorHost registers itself); the

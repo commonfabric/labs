@@ -134,9 +134,7 @@ import {
 } from "@commonfabric/runner/cfc/custody-seal";
 import {
   blobSuffix,
-  encodedBlobRecordBytes,
-  isBlobFileName,
-  MAX_BLOB_RECORD_BYTES,
+  storeBlob,
   storedBlobPath,
 } from "@commonfabric/runner/blob-record";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
@@ -4431,18 +4429,12 @@ export class RuntimeProcessor {
   }
 
   /**
-   * Stores the request's blob in the request's space, and returns its id and
-   * the URL that space's host serves it at. The blob's record is staged as
-   * the document `cid:<id>` in a transaction committed on this runtime's
-   * session there, so the memory server admits it only for a principal
-   * holding `WRITE` on the space, and the upload settles once the commit
-   * does. While the session's connection is down, it waits for the
-   * connection, and the commit is sent once it is back.
+   * Stores the request's blob in the request's space with `storeBlob()`, on
+   * this runtime's session there, and returns its id and the URL that space's
+   * host serves it at.
    *
-   * @throws Error when the request is malformed, when its record would take
-   *   more than {@link MAX_BLOB_RECORD_BYTES} encoded, or when the commit is
-   *   refused, which it is, unsent, when it is past what the space's
-   *   connection takes in one request.
+   * @throws Error when the request is malformed, or when `storeBlob()` refuses
+   *   or fails to store its record.
    */
   async handleUploadBlob(
     request: UploadBlobRequest,
@@ -4464,11 +4456,6 @@ export class RuntimeProcessor {
     if (!(bytes instanceof FabricBytes)) {
       throw new Error("uploadBlob requires bytes as its body");
     }
-    if (request.name !== undefined && !isBlobFileName(request.name)) {
-      throw new Error(
-        "uploadBlob requires any name it is given to be one a blob may hold",
-      );
-    }
     // A blob with no name has no `name` key at all, since its id is the hash
     // of exactly the record stored.
     const record = {
@@ -4477,22 +4464,7 @@ export class RuntimeProcessor {
       ...(request.name === undefined ? {} : { name: request.name }),
     };
     const space = request.space;
-    const size = encodedBlobRecordBytes(record);
-    if (size > MAX_BLOB_RECORD_BYTES) {
-      throw new Error(
-        `Blob upload failed: a blob takes at most ${MAX_BLOB_RECORD_BYTES} ` +
-          `bytes encoded, and this one takes ${size}`,
-      );
-    }
-
-    const tx = this.#runtime.edit();
-    const id = tx.stageContentAddressedDocument(space, record)
-      .slice("cid:".length);
-    this.#runtime.prepareTxForCommit(tx);
-    const result = await tx.commit().settled;
-    if (result.error) {
-      throw new Error(`Blob upload failed: ${result.error.message}`);
-    }
+    const id = await storeBlob(this.#runtime, space, record);
 
     // A requested suffix is the extension of a name made of it alone, and
     // without one the extension comes from the blob's own name.

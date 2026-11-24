@@ -76,7 +76,8 @@ describe("piece-currency", () => {
    * document that the runtime registered the piece under, `space` unless
    * given. Each of `unattributed` is a
    * computation that names no piece, clean and live unless it says
-   * otherwise, with the document it writes and what it read.
+   * otherwise, with the document it writes and what it read. With
+   * `live: false` the piece's computation is registered and not live.
    */
   const snapshotOf = (options: {
     declared?: CellScope;
@@ -87,6 +88,7 @@ describe("piece-currency", () => {
     changed?: { at: ScopeKey; by: ScopeKey };
     root?: ScopeKey;
     status?: NodeStatus;
+    live?: boolean;
     reads?: Read[];
     clocks?: Record<string, { intervalMs: number; tick?: number }>;
     sourceSeqs?: Record<string, number>;
@@ -105,7 +107,7 @@ describe("piece-currency", () => {
     };
     const node = nodes.register(action, "computation");
     nodes.setStatus(action, options.status ?? "clean");
-    node.liveRefs = 1;
+    node.liveRefs = options.live === false ? 0 : 1;
     const logOf = (reads: Read[] = []): ReactivityLog => ({
       reads: reads.map((read) => ({
         space: SPACE,
@@ -285,7 +287,6 @@ describe("piece-currency", () => {
         expect(sliceOf(taken, bobUser)?.reads).toEqual([
           { space: SPACE, id: "of:prefs", scopeKey: bobUser, derived: false },
         ]);
-        expect(sliceOf(taken, "space")?.reads).toEqual([]);
       });
 
       it("names the instance a read carries over the one its scope resolves to", () => {
@@ -615,6 +616,29 @@ describe("piece-currency", () => {
 
         expect(taken.unvouched).toEqual([]);
         expect(sliceOf(taken, session)?.unvouched).toEqual([]);
+      });
+    });
+
+    describe("the slices it names", () => {
+      it("are none for a piece whose one computation is registered and not live", () => {
+        const taken = snapshotOf({ live: false, reads: [{ id: "of:input" }] });
+
+        expect(taken.slices).toEqual([]);
+        expect(taken.writes).toEqual(["computed:out"]);
+      });
+
+      it("are the `space` slice alone for a live computation with no fan-out state", () => {
+        const taken = snapshotOf({ reads: [{ id: "of:input" }] });
+
+        expect(taken.slices.map(({ key }) => key)).toEqual(["space"]);
+      });
+
+      it("are the viewers' slices, and no `space` slice, for a live computation that ran at viewers' instances alone", () => {
+        const taken = snapshotOf({
+          instances: [{ key: user }, { key: bobUser, identity: BOB }],
+        });
+
+        expect(taken.slices.map(({ key }) => key)).toEqual([user, bobUser]);
       });
     });
 

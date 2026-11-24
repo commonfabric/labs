@@ -9,7 +9,8 @@
  * longer admits the person, is refused.
  *
  * Every scenario here lists the same person's rooms, which the file's setup
- * makes once. `fabrichat-room-list-fixture.ts` holds the server and clients
+ * makes once, and each scenario's own setup runs when the first of its tests
+ * reads it. `fabrichat-room-list-fixture.ts` holds the server and clients
  * the `fabrichat-room-list-*` files share.
  */
 
@@ -26,16 +27,15 @@ import {
 } from "./fabrichat-room-fixture.ts";
 import {
   arrivedIn,
-  type Client,
   HANDLE,
   heldIn,
   memberOf,
   openedOf,
   RoomListServer,
   ROOMS,
-  type Row,
   SENT,
 } from "./fabrichat-room-list-fixture.ts";
+import { once } from "./multi-runtime-harness.ts";
 
 describe("fabrichat-room-list-kept-rooms", () => {
   let fabric: RoomListServer;
@@ -64,20 +64,18 @@ describe("fabrichat-room-list-kept-rooms", () => {
   // Listing the rooms
   //
 
+  /** A fresh client of the person's Home, once it has listed their rooms. */
+  const listing = once(async () => {
+    const client = await fabric.bootClient({ person: owner });
+    const rows = await fabric.listRooms(client, ROOMS + 2);
+    return { client, rows };
+  });
+
   describe("a fresh client listing the rooms", () => {
-    let client: Client;
-    let rows: Row[];
+    afterAll(() => fabric.disposeClients());
 
-    beforeAll(async () => {
-      client = await fabric.bootClient({ person: owner });
-      rows = await fabric.listRooms(client, ROOMS + 2);
-    });
-
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
-
-    it("lists every room with the kind and title its manager recorded", () => {
+    it("lists every room with the kind and title its manager recorded", async () => {
+      const { rows } = await listing();
       const titles = rows.map((row) => row.title)
         .filter((title) => title !== "Later room").sort();
       expect(titles).toEqual([
@@ -92,7 +90,8 @@ describe("fabrichat-room-list-kept-rooms", () => {
       ).toEqual([...kept, deleted, revoked].sort());
     });
 
-    it("lists each room with the message count its manager last heard", () => {
+    it("lists each room with the message count its manager last heard", async () => {
+      const { rows } = await listing();
       const counts = kept.map((space) =>
         rows.find((row) => row.room.space === space)?.activity?.count
       );
@@ -103,21 +102,25 @@ describe("fabrichat-room-list-kept-rooms", () => {
       ).toBe(true);
     });
 
-    it("receives no document from any room's space, from bring-up on", () => {
+    it("receives no document from any room's space, from bring-up on", async () => {
+      const { client } = await listing();
       const spaces = [...kept, deleted, revoked];
       expect(arrivedIn(client, spaces)).toEqual(spaces.map(() => 0));
       expect(heldIn(client, spaces)).toEqual(spaces.map(() => 0));
     });
 
-    it("is refused no room's space while it lists them", () => {
+    it("is refused no room's space while it lists them", async () => {
+      const { client } = await listing();
       expect([...client.refused.keys()]).toEqual([]);
     });
 
-    it("opens no session to any room's space, from bring-up on", () => {
+    it("opens no session to any room's space, from bring-up on", async () => {
+      const { client } = await listing();
       expect(openedOf(client, [...kept, deleted, revoked])).toEqual([]);
     });
 
     it("receives no document from another room's space when it creates a group", async () => {
+      const { client } = await listing();
       const created = await fabric.createGroup(
         memberOf(client, owner),
         "later",
@@ -129,6 +132,7 @@ describe("fabrichat-room-list-kept-rooms", () => {
     });
 
     it("receives no document from another room's space when it opens a direct room", async () => {
+      const { client } = await listing();
       const manager = client.home.key("chatManager");
       await sendTrusted(client.controller, manager.key("openDirect"), {
         requestId: "direct",
@@ -153,18 +157,17 @@ describe("fabrichat-room-list-kept-rooms", () => {
   //
 
   describe("a second fresh client of the same Home", () => {
-    let client: Client;
-
-    beforeAll(async () => {
-      client = await fabric.bootClient({ person: owner });
+    const replacing = once(async () => {
+      await fabric.dispose((await listing()).client.controller);
+      const client = await fabric.bootClient({ person: owner });
       await fabric.listRooms(client, ROOMS + 2);
+      return client;
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("receives no document from any room's space either", () => {
+    it("receives no document from any room's space either", async () => {
+      const client = await replacing();
       const spaces = [...kept, deleted, revoked];
       expect(arrivedIn(client, spaces)).toEqual(spaces.map(() => 0));
       expect(openedOf(client, spaces)).toEqual([]);
@@ -176,18 +179,16 @@ describe("fabrichat-room-list-kept-rooms", () => {
   //
 
   describe("a fresh client subscribing to the list before Home is brought up", () => {
-    let client: Client;
-
-    beforeAll(async () => {
-      client = await fabric.bootClient({ early: true, person: owner });
+    const subscribing = once(async () => {
+      const client = await fabric.bootClient({ early: true, person: owner });
       await fabric.listRooms(client, ROOMS + 2);
+      return client;
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("receives no document from any room's space, from bring-up on", () => {
+    it("receives no document from any room's space, from bring-up on", async () => {
+      const client = await subscribing();
       const spaces = [...kept, deleted, revoked];
       expect(arrivedIn(client, spaces)).toEqual(spaces.map(() => 0));
       expect(heldIn(client, spaces)).toEqual(spaces.map(() => 0));
@@ -200,14 +201,10 @@ describe("fabrichat-room-list-kept-rooms", () => {
   //
 
   describe("a room the catalog lists with no membership", () => {
-    let legacy: DID;
-    let client: Client;
-    let before: Row[];
-    let after: Row[];
-
-    beforeAll(async () => {
+    const adopting = once(async () => {
       // A room listed before the manager recorded memberships: its catalog
       // entry is there, and its membership is not.
+      let legacy: DID;
       const ada = await openMember(fabric.url, owner, 0);
       try {
         legacy = await fabric.createGroup(ada, "legacy", "Legacy room");
@@ -230,24 +227,25 @@ describe("fabrichat-room-list-kept-rooms", () => {
       } finally {
         await closeMember(ada);
       }
-      client = await fabric.bootClient({ adopt: false, person: owner });
-      before = await fabric.listRooms(client, ROOMS + 2);
+      const client = await fabric.bootClient({ adopt: false, person: owner });
+      const before = await fabric.listRooms(client, ROOMS + 2);
       await client.controller.adoptCatalogRooms();
-      after = await fabric.listRooms(client, before.length + 1);
+      const after = await fabric.listRooms(client, before.length + 1);
+      return { legacy, client, before, after };
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("lists the room once the host adopts it, and not before", () => {
+    it("lists the room once the host adopts it, and not before", async () => {
+      const { legacy, before, after } = await adopting();
       expect(before.map((row) => row.room.space)).not.toContain(legacy);
       expect(after.find((row) => row.room.space === legacy)?.title).toBe(
         "Legacy room",
       );
     });
 
-    it("reads the adopted room's space, and no other room's", () => {
+    it("reads the adopted room's space, and no other room's", async () => {
+      const { legacy, client } = await adopting();
       expect(client.arrived.get(legacy)?.size ?? 0).toBeGreaterThan(0);
       expect(arrivedIn(client, kept)).toEqual(kept.map(() => 0));
     });
@@ -258,10 +256,8 @@ describe("fabrichat-room-list-kept-rooms", () => {
   //
 
   describe("opening a room that is gone", () => {
-    let client: Client;
-
-    beforeAll(async () => {
-      client = await fabric.bootClient({ person: owner });
+    const opening = once(async () => {
+      const client = await fabric.bootClient({ person: owner });
       const rows = await fabric.listRooms(client, ROOMS + 2);
       const storage = client.controller.runtime.storageManager;
       for (const space of [deleted, revoked]) {
@@ -269,29 +265,32 @@ describe("fabrichat-room-list-kept-rooms", () => {
         await row.room.sync();
         await storage.awaitSpaceAnswer?.(space as MemorySpace);
       }
+      return client;
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("is refused a deleted room's space as deleted", () => {
+    it("is refused a deleted room's space as deleted", async () => {
+      const client = await opening();
       const error = client.refused.get(deleted);
       expect(error?.name).toBe("AuthorizationError");
       expect(isDeletedSpaceError(error)).toBe(true);
     });
 
-    it("is refused a revoked room's space, not as deleted", () => {
+    it("is refused a revoked room's space, not as deleted", async () => {
+      const client = await opening();
       const error = client.refused.get(revoked);
       expect(error?.name).toBe("AuthorizationError");
       expect(isDeletedSpaceError(error)).toBe(false);
     });
 
-    it("receives no document from the rooms it didn't open", () => {
+    it("receives no document from the rooms it didn't open", async () => {
+      const client = await opening();
       expect(arrivedIn(client, kept)).toEqual(kept.map(() => 0));
     });
 
-    it("has opened a session to the rooms it opened, and to no other room", () => {
+    it("has opened a session to the rooms it opened, and to no other room", async () => {
+      const client = await opening();
       expect(openedOf(client, [...kept, deleted, revoked]).sort()).toEqual(
         [deleted, revoked].sort(),
       );

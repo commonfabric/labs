@@ -168,7 +168,7 @@ step("profile", async (server, timed) => {
       await server.settle(client.controller);
     });
   } finally {
-    await client.controller.dispose();
+    await server.dispose(client.controller);
   }
 });
 
@@ -198,6 +198,6 @@ step("reopen", async (server, timed) => {
       client = await server.bootClient({ person });
     });
   } finally {
-    await client?.controller.dispose();
+    if (client !== undefined) await server.dispose(client.controller);
   }
 });

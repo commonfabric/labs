@@ -275,7 +275,11 @@ const FACE_FIELD_TARGETS: ReadonlySet<string> = new Set([
   "#profilePicture",
   "#profileAvatar",
 ]);
-const FACE_FIELDS: ReadonlySet<string> = new Set(["picture", "avatar"]);
+const FACE_FIELDS: ReadonlySet<string> = new Set([
+  "pictureBlob",
+  "picture",
+  "avatar",
+]);
 
 /**
  * Parses the wish target `target`, with `extraPath` (a wish's `path`)

@@ -1,16 +1,20 @@
 /**
- * The record a space's blob store keeps for each blob, and the rules that
- * decide what one may hold. A record is the document `cid:<id>` of the blob's
- * space, where `<id>`, the blob's id, is the hash of the whole record, so a
- * record never changes: the same bytes under another name are another blob.
- * The runtime client's upload, the blob store's upload route and `nameBlob()`
- * all write records, and all hold them to these rules.
+ * The record a space's blob store keeps for each blob, the rules that decide
+ * what one may hold, and how a blob is named. A record is the document
+ * `cid:<id>` of the blob's space, where `<id>`, the blob's id, is the hash of
+ * the whole record, so a record never changes: the same bytes under another
+ * name are another blob. `storeBlob()`, the blob store's upload route and
+ * `nameBlob()` all write records, and all hold them to these rules.
  */
 
 import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import type { DID } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import type { URI } from "@commonfabric/memory/interface";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+
+import type { Runtime } from "./runtime.ts";
 
 /** The most bytes a blob's file name may take as UTF-8. */
 export const MAX_BLOB_FILE_NAME_BYTES = 1024;
@@ -81,6 +85,21 @@ export function isBlobFileName(name: unknown): name is string {
     new TextEncoder().encode(name).byteLength <= MAX_BLOB_FILE_NAME_BYTES;
 }
 
+/** A blob, by the DID of the space whose blob store holds it and its id there. */
+export type BlobReference = { space: DID; id: string };
+
+/**
+ * Returns `value` as a reference to a blob when it names one, by a space's DID
+ * and a non-empty id, or `undefined` when it names none.
+ */
+export function blobReferenceOf(value: unknown): BlobReference | undefined {
+  if (!isObjectNotArray(value)) return undefined;
+  const { space, id } = value;
+  return isDID(space) && typeof id === "string" && id !== ""
+    ? { space, id }
+    : undefined;
+}
+
 /** Returns the id of the document holding the record of the blob `blobId`. */
 export function blobDocumentId(blobId: string): URI {
   return `cid:${blobId}`;
@@ -93,6 +112,46 @@ export function blobDocumentId(blobId: string): URI {
  */
 export function encodedBlobRecordBytes(record: BlobRecord): number {
   return new TextEncoder().encode(blobRecordCodec.encode(record)).byteLength;
+}
+
+/**
+ * Stores `record` in the blob store of `space`, and returns the blob's id. The
+ * record is staged as the document `cid:<id>` in a transaction committed on
+ * `runtime`'s session there, so the memory server admits it only for a
+ * principal holding `WRITE` on the space, and the call settles once the commit
+ * does. While the session's connection is down, it waits for the connection,
+ * and the commit is sent once it is back.
+ *
+ * @throws Error when `record` has a name that is not a file name a blob may
+ *   hold (see {@link isBlobFileName}), when it would take more than
+ *   {@link MAX_BLOB_RECORD_BYTES} encoded, or when the commit is refused. A
+ *   commit larger than the space's connection takes in one request is refused
+ *   without being sent.
+ */
+export async function storeBlob(
+  runtime: Runtime,
+  space: DID,
+  record: BlobRecord,
+): Promise<string> {
+  if (record.name !== undefined && !isBlobFileName(record.name)) {
+    throw new Error("The name given is not one a blob may hold");
+  }
+  const size = encodedBlobRecordBytes(record);
+  if (size > MAX_BLOB_RECORD_BYTES) {
+    throw new Error(
+      `Blob upload failed: a blob takes at most ${MAX_BLOB_RECORD_BYTES} ` +
+        `bytes encoded, and this one takes ${size}`,
+    );
+  }
+  const tx = runtime.edit();
+  const id = tx.stageContentAddressedDocument(space, record)
+    .slice("cid:".length);
+  runtime.prepareTxForCommit(tx);
+  const result = await tx.commit().settled;
+  if (result.error) {
+    throw new Error(`Blob upload failed: ${result.error.message}`);
+  }
+  return id;
 }
 
 /**

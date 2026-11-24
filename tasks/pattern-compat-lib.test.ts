@@ -50,6 +50,31 @@ const RESULT_WITHOUT_TITLE: JSONSchema = {
   properties: {},
 };
 
+/**
+ * A result whose `title` only the handler at `path` may write, in the module
+ * whose content hash is `moduleIdentity`.
+ */
+const writerGuardedResult = (
+  moduleIdentity: string,
+  path = "setTitle",
+): JSONSchema => ({
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: {
+            file: "/patterns/demo/main.tsx",
+            path: [path],
+            moduleIdentity,
+          },
+        },
+      },
+    },
+  },
+});
+
 describe("checkPattern", () => {
   it("rejects a result schema that drops a previously promised field", () => {
     const current = contract(EMPTY_ARGUMENT, RESULT_WITHOUT_TITLE);
@@ -117,6 +142,25 @@ describe("checkPattern", () => {
       path: "result.foo: bar",
       detail: "result.foo: bar: existing result field was removed",
     }]);
+  });
+
+  it("reports nothing for a contract recorded apart from its writer's module hash", () => {
+    // An edit to the module that authorizes a write, a comment included,
+    // changes the module's content hash and so every contract that names the
+    // module as a writer. The proof gives such a contract the same verdict as
+    // the one recorded, so it needs no baseline of its own.
+
+    const current = contract(EMPTY_ARGUMENT, writerGuardedResult("after"));
+    expect(
+      checkPattern("system/home/home.tsx", current, [
+        baseline("v1", EMPTY_ARGUMENT, writerGuardedResult("before")),
+      ]),
+    ).toEqual([]);
+    expect(
+      checkPattern("system/home/home.tsx", current, [
+        baseline("v1", EMPTY_ARGUMENT, writerGuardedResult("before", "other")),
+      ]).map((finding) => finding.kind),
+    ).toEqual(["missing-baseline", "incompatible"]);
   });
 
   it("reports a missing baseline for a contract no file records", () => {
@@ -198,6 +242,18 @@ describe("contractHash", () => {
     });
 
     expect(contractHash(a)).toBe(contractHash(b));
+  });
+
+  it("is the same for contracts that differ only in a writer's volatile identity", () => {
+    const a = contract(EMPTY_ARGUMENT, writerGuardedResult("before"));
+    const b = contract(EMPTY_ARGUMENT, writerGuardedResult("after"));
+
+    expect(contractHash(a)).toBe(contractHash(b));
+    expect(contractHash(a)).not.toBe(
+      contractHash(
+        contract(EMPTY_ARGUMENT, writerGuardedResult("before", "other")),
+      ),
+    );
   });
 
   it("separates contracts that differ only in the argument schema", () => {

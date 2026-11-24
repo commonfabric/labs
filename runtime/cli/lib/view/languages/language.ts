@@ -49,6 +49,12 @@ import { propertiesLanguage } from "./properties/language.ts";
 import { iniLanguage } from "./ini/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
 import { hclLanguage } from "./hcl/language.ts";
+import {
+  cFamilyHeaderLanguage,
+  cLanguage,
+  cppLanguage,
+  cudaLanguage,
+} from "./c-family/language.ts";
 import { shellLanguage } from "./shell/language.ts";
 import { makeLanguage } from "./make/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
@@ -507,6 +513,10 @@ function allLanguages(): readonly Language[] {
     hclLanguage,
     leanLanguage,
     leanToolchainLanguage,
+    cLanguage,
+    cppLanguage,
+    cudaLanguage,
+    cFamilyHeaderLanguage,
     shellLanguage,
     makeLanguage,
     propertiesLanguage,

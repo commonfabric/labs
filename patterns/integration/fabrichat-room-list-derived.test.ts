@@ -8,7 +8,8 @@
  * archived a container whose chat the person joined, a fresh client leaves
  * the chat out, and still loads nothing in the container's space.
  *
- * Each scenario has a fresh person keep rooms of their own.
+ * Each scenario has a fresh person keep rooms of their own, and is set up when
+ * the first of its tests reads it.
  * `fabrichat-room-list-fixture.ts` holds the server and clients the
  * `fabrichat-room-list-*` files share.
  */
@@ -28,7 +29,6 @@ import {
 } from "./fabrichat-room-fixture.ts";
 import {
   arrivedIn,
-  type Client,
   crossSpaceReads,
   HANDLE,
   heldIn,
@@ -38,6 +38,7 @@ import {
   type Row,
   serving,
 } from "./fabrichat-room-list-fixture.ts";
+import { once } from "./multi-runtime-harness.ts";
 
 describe("fabrichat-room-list-derived", () => {
   let fabric: RoomListServer;
@@ -51,58 +52,47 @@ describe("fabrichat-room-list-derived", () => {
   });
 
   describe("a fresh client once another has rendered the manager's view", () => {
-    let rooms: DID[];
-    let linked: Set<string>;
-    let client: Client;
-
-    beforeAll(async () => {
-      const made = await fabric.personWithRooms("dana", 2);
-      rooms = made.rooms;
-      const renderer = await fabric.bootClient({ person: made.person });
+    const rendered = once(async () => {
+      const { person, rooms } = await fabric.personWithRooms("dana", 2);
+      let linked: Set<string>;
+      const renderer = await fabric.bootClient({ person });
       try {
         ({ linked } = await fabric.renderManagerView(renderer));
       } finally {
-        await renderer.controller.dispose();
+        await fabric.dispose(renderer.controller);
       }
-      client = await fabric.bootClient({ person: made.person });
+      const client = await fabric.bootClient({ person });
       await fabric.listRooms(client, rooms.length);
+      return { rooms, linked, client };
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("finds the rendered view linking each room", () => {
+    it("finds the rendered view linking each room", async () => {
+      const { rooms, linked } = await rendered();
       expect(rooms.filter((space) => linked.has(space))).toEqual(rooms);
     });
 
-    it("receives no document from any room's space, from bring-up on", () => {
+    it("receives no document from any room's space, from bring-up on", async () => {
+      const { rooms, client } = await rendered();
       expect(arrivedIn(client, rooms)).toEqual(rooms.map(() => 0));
       expect(heldIn(client, rooms)).toEqual(rooms.map(() => 0));
     });
 
-    it("opens no session to any room's space, from bring-up on", () => {
+    it("opens no session to any room's space, from bring-up on", async () => {
+      const { rooms, client } = await rendered();
       expect(openedOf(client, rooms)).toEqual([]);
     });
   });
 
   describe("a direct room with a counterpart whose profile is named", () => {
-    let counterpart: Identity;
-    let room: DID;
-    let profileSpace: DID;
-    let rosterNamesThem: boolean;
-    let labels: string[];
-    let renderedOpened: DID[];
-    let renderedArrived: number[];
-    let client: Client;
-
-    beforeAll(async () => {
+    const labeled = once(async () => {
       // The counterpart has a Home and a named profile, and the person starts
       // the room naming that profile, which puts it on the room's roster: a
       // label read from the roster, or from the profile, would find their
       // name there, by reading the room's space and the profile's.
       const made = await fabric.personWithRooms("erin", 0);
-      counterpart = await Identity.fromPassphrase(
+      const counterpart = await Identity.fromPassphrase(
         `fabrichat-room-list fay ${crypto.randomUUID()}`,
         { implementation: "noble" },
       );
@@ -114,7 +104,9 @@ describe("fabrichat-room-list-derived", () => {
       } finally {
         await closeMember(theirs);
       }
-      profileSpace = profile.space as DID;
+      const profileSpace = profile.space as DID;
+      let room: DID;
+      let rosterNamesThem: boolean;
       const member = await openMember(fabric.url, made.person, 0);
       try {
         const manager = member.home.key("chatManager");
@@ -152,6 +144,9 @@ describe("fabrichat-room-list-derived", () => {
       } finally {
         await closeMember(member);
       }
+      let labels: string[];
+      let renderedOpened: DID[];
+      let renderedArrived: number[];
       const renderer = await fabric.bootClient({ person: made.person });
       try {
         await fabric.listRooms(renderer, 1);
@@ -159,53 +154,59 @@ describe("fabrichat-room-list-derived", () => {
         renderedOpened = openedOf(renderer, [profileSpace]);
         renderedArrived = arrivedIn(renderer, [profileSpace]);
       } finally {
-        await renderer.controller.dispose();
+        await fabric.dispose(renderer.controller);
       }
-      client = await fabric.bootClient({ person: made.person });
+      const client = await fabric.bootClient({ person: made.person });
       await fabric.listRooms(client, 1);
+      return {
+        counterpart,
+        room,
+        profileSpace,
+        rosterNamesThem,
+        labels,
+        renderedOpened,
+        renderedArrived,
+        client,
+      };
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("finds the room's roster listing the counterpart's profile", () => {
+    it("finds the room's roster listing the counterpart's profile", async () => {
+      const { rosterNamesThem } = await labeled();
       expect(rosterNamesThem).toBe(true);
     });
 
-    it("labels the room with the counterpart's principal, shortened", () => {
+    it("labels the room with the counterpart's principal, shortened", async () => {
+      const { counterpart, labels } = await labeled();
       expect(labels).toEqual([directRoomLabel(counterpart.did())]);
     });
 
-    it("receives no document from the counterpart's profile space while it renders the list", () => {
+    it("receives no document from the counterpart's profile space while it renders the list", async () => {
+      const { renderedArrived } = await labeled();
       expect(renderedArrived).toEqual([0]);
     });
 
-    it("opens no session to the counterpart's profile space while it renders the list", () => {
+    it("opens no session to the counterpart's profile space while it renders the list", async () => {
+      const { renderedOpened } = await labeled();
       expect(renderedOpened).toEqual([]);
     });
 
-    it("lists the room in a fresh client without receiving a document from either space", () => {
+    it("lists the room in a fresh client without receiving a document from either space", async () => {
+      const { room, profileSpace, client } = await labeled();
       expect(arrivedIn(client, [room, profileSpace])).toEqual([0, 0]);
     });
 
-    it("lists the room in a fresh client without opening a session to either space", () => {
+    it("lists the room in a fresh client without opening a session to either space", async () => {
+      const { room, profileSpace, client } = await labeled();
       expect(openedOf(client, [room, profileSpace])).toEqual([]);
     });
   });
 
   describe("a fresh client once another has read the people list", () => {
-    let rooms: DID[];
-    let reader: Client;
-    let client: Client;
-
-    /** The plan reads the resume pre-sync's cross-space pass made. */
-    let crossSpaceReadsAtBringUp: number;
-
-    beforeAll(async () => {
-      const made = await fabric.personWithRooms("carol", 2);
-      rooms = made.rooms;
-      reader = await fabric.bootClient({ person: made.person });
+    const read = once(async () => {
+      const { person, rooms } = await fabric.personWithRooms("carol", 2);
+      const reader = await fabric.bootClient({ person });
       try {
         // The people list names no one, and reads no roster, until the
         // session asks for it.
@@ -221,41 +222,45 @@ describe("fabrichat-room-list-derived", () => {
         await people.pull();
         await fabric.settle(reader.controller);
       } finally {
-        await reader.controller.dispose();
+        await fabric.dispose(reader.controller);
       }
       const before = crossSpaceReads();
-      client = await fabric.bootClient({ person: made.person });
+      const client = await fabric.bootClient({ person });
       await fabric.listRooms(client, rooms.length);
-      crossSpaceReadsAtBringUp = crossSpaceReads() - before;
+      // The plan reads the resume pre-sync's cross-space pass made.
+      const crossSpaceReadsAtBringUp = crossSpaceReads() - before;
+      return { rooms, reader, client, crossSpaceReadsAtBringUp };
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("finds the people list reading each room's roster", () => {
+    it("finds the people list reading each room's roster", async () => {
       // Under server execution the serving loop reads the rosters, and the
       // reader holds what it derived from them.
       if (serving) return;
+      const { rooms, reader } = await read();
       expect(
         rooms.filter((space) => (reader.arrived.get(space)?.size ?? 0) > 0),
       )
         .toEqual(rooms);
     });
 
-    it("receives no document from any room's space, from bring-up on", () => {
+    it("receives no document from any room's space, from bring-up on", async () => {
+      const { rooms, client } = await read();
       expect(arrivedIn(client, rooms)).toEqual(rooms.map(() => 0));
       expect(heldIn(client, rooms)).toEqual(rooms.map(() => 0));
     });
 
-    it("opens no session to any room's space, from bring-up on", () => {
+    it("opens no session to any room's space, from bring-up on", async () => {
+      const { rooms, client } = await read();
       expect(openedOf(client, rooms)).toEqual([]);
     });
 
-    it("runs no cross-space pass while it brings Home up", () => {
+    it("runs no cross-space pass while it brings Home up", async () => {
       // The serving loop runs in this process under server execution, and
       // its pass is counted with the clients'.
       if (serving) return;
+      const { crossSpaceReadsAtBringUp } = await read();
       expect(crossSpaceReadsAtBringUp).toBe(0);
     });
   });
@@ -265,18 +270,12 @@ describe("fabrichat-room-list-derived", () => {
     // its own space, as a loom's chat is, which her catalog lists under the
     // `loom` kind. She then archives the container in her catalog.
 
-    let ownRoom: DID;
-    let containerSpace: DID;
-
-    /** The spaces of the rooms her manager listed before the archive. */
-    let listedBefore: DID[];
-
-    let client: Client;
-    let rows: Row[];
-
-    beforeAll(async () => {
+    const archiving = once(async () => {
       const made = await fabric.personWithRooms("nia", 1);
-      ownRoom = made.rooms[0];
+      const ownRoom = made.rooms[0];
+      let containerSpace: DID;
+      // The spaces of the rooms her manager listed before the archive.
+      let listedBefore: DID[];
       const member = await openMember(fabric.url, made.person, 0);
       try {
         const runtime = member.controller.runtime;
@@ -358,23 +357,25 @@ describe("fabrichat-room-list-derived", () => {
       } finally {
         await closeMember(member);
       }
-      client = await fabric.bootClient({ person: made.person });
-      rows = await fabric.listRooms(client, 1);
+      const client = await fabric.bootClient({ person: made.person });
+      const rows = await fabric.listRooms(client, 1);
+      return { ownRoom, containerSpace, listedBefore, client, rows };
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("lists the container's chat before the container is archived", () => {
+    it("lists the container's chat before the container is archived", async () => {
+      const { ownRoom, containerSpace, listedBefore } = await archiving();
       expect(listedBefore.sort()).toEqual([ownRoom, containerSpace].sort());
     });
 
-    it("lists only the person's own room once the container is archived", () => {
+    it("lists only the person's own room once the container is archived", async () => {
+      const { ownRoom, rows } = await archiving();
       expect(rows.map((row) => row.room.space)).toEqual([ownRoom]);
     });
 
-    it("opens no session to the container's space, and receives no document from it", () => {
+    it("opens no session to the container's space, and receives no document from it", async () => {
+      const { containerSpace, client } = await archiving();
       expect(openedOf(client, [containerSpace])).toEqual([]);
       expect(arrivedIn(client, [containerSpace])).toEqual([0]);
     });

@@ -497,6 +497,18 @@ pager never uses; its dependencies are the two `tree-sitter-python` already
 brings. Roll it with the runtime, then run the `cf view` Rust tests and
 `cf view` against a `.rs` file.
 
+C, C++, CUDA, and C-family headers reach their grammars through
+`runtime/cli/lib/view/languages/c-family/c-family.ts`, and the CLI pins
+`tree-sitter-c` and `tree-sitter-cpp` exactly. Both packages are the official
+grammars and ship their WebAssembly builds; the pager loads the C grammar for C
+and the C++ grammar for the rest. `tree-sitter-cpp` depends on `tree-sitter-c`
+through a version range, and the C pin is chosen inside that range so that the
+lockfile holds one copy of it. Like `tree-sitter-python`, both packages also
+ship generated C source, native bindings, and an install script, which the
+pager never uses. Roll them together and with the runtime, keeping the C pin
+inside the range the C++ package names, then run the `cf view` C-family tests
+and `cf view` against a `.c` and a `.cc` file.
+
 Shell reaches its grammar through `runtime/cli/lib/view/languages/shell/shell.ts`,
 and the CLI pins `tree-sitter-bash` exactly. That package is the official Bash
 grammar and ships its WebAssembly build, which the pager loads for Bash and

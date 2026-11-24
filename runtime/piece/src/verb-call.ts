@@ -387,7 +387,7 @@ async function prepareDispatch(
         `the event for "${verb}" was refused before it was sent: ${judged.refusal}`,
     };
   }
-  if (!await startWithInputSources(runtime, cell, () => runtime.start(cell))) {
+  if (!await startWithInputSources(runtime, cell)) {
     return {
       status: "refused",
       message:

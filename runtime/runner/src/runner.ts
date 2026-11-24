@@ -655,6 +655,9 @@ type StartAttempt = {
   // (`RunnerStartOptions.forEvent`). A caller that joins the attempt for any
   // other reason clears it.
   forEventOnly?: boolean;
+  // The work the attempt's instantiation waits for and has not yet waited for
+  // (`RunnerStartOptions.instantiateAfter`), its callers' and its joiners'.
+  readonly instantiateAfter: Promise<unknown>[];
 };
 
 /** Options of `Runner.start()` and `Runner.startWithCommit()`. */
@@ -666,6 +669,18 @@ export type RunnerStartOptions = {
    * may stop.
    */
   forEvent?: boolean;
+
+  /**
+   * Work the start waits for before it instantiates the piece's graph. The
+   * start's own loads, of the piece's root, its pattern, and the documents
+   * the pattern reads, run while this is under way. A piece that is running
+   * once this settles, such as a child that a graph this work started set
+   * up, is not instantiated again. A start that waits for it fails with its
+   * rejection, installing nothing. A call that joins a start in flight for
+   * the same document adds this to what that start waits for, unless it has
+   * instantiated the piece already.
+   */
+  instantiateAfter?: Promise<unknown>;
 };
 
 /** A piece an event's delivery started, and that no other start has asked for. */
@@ -5802,7 +5817,10 @@ export class Runner {
    * of a start, and concurrent callers — several views asking for the same
    * space root during one page load, say — would otherwise each run it in
    * full. Joining shares the outcome, rejection included, and runs under the
-   * first caller's options. A call made after a stop never
+   * first caller's options, except that the joiner's
+   * `RunnerStartOptions.instantiateAfter` is added to what the attempt waits
+   * for, and a joiner waits for the work the attempt waits for. A call made
+   * after a stop never
    * joins — the stop moved the doc's start generation, so the held attempt is
    * no longer current and a fresh attempt runs. Calls entering through
    * different docs whose links resolve to the same piece do not join either;
@@ -5877,10 +5895,18 @@ export class Runner {
     // before it has resolved the piece the document leads to.
     if (!forEvent) this.#eventStarts.delete(startKey);
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
+    const instantiateAfter = options?.instantiateAfter;
+    // The work is awaited only once the start's loads are done, or never, for
+    // a joiner's work added after the attempt instantiated the piece, so a
+    // rejection is handled here rather than reported as unhandled.
+    instantiateAfter?.catch(() => {});
     if (
       inFlight?.settled !== undefined && this.#isStartAttemptCurrent(inFlight)
     ) {
       if (!forEvent) inFlight.forEventOnly = false;
+      if (instantiateAfter !== undefined) {
+        inFlight.instantiateAfter.push(instantiateAfter);
+      }
       return { attempt: inFlight, settled: inFlight.settled };
     }
     const attempt: StartAttempt = {
@@ -5888,6 +5914,9 @@ export class Runner {
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
       forEventOnly: forEvent,
+      instantiateAfter: instantiateAfter === undefined
+        ? []
+        : [instantiateAfter],
     };
     this.#activeStartAttempts.add(attempt);
     this.#trackStartAttempt(attempt, startKey);
@@ -8483,8 +8512,9 @@ export class Runner {
 
     // Fast path for pieces prepared in the current runtime via setup()/run() or
     // explicitly restarted after stop(). Those writes are already present
-    // locally, so we should preserve the historical synchronous start()
-    // behavior. The dependency sync + snapshot resume below is specifically for
+    // locally, so start() instantiates the piece synchronously, unless it has
+    // work to wait for first (`RunnerStartOptions.instantiateAfter`). The
+    // dependency sync + snapshot resume below is specifically for
     // pieces resumed from storage in a fresh runtime.
     //
     // We gate on the locally-assembled signals (`wasPreparedLocally` /
@@ -8496,6 +8526,13 @@ export class Runner {
     // diagnostics).
     void wasSyncedAtEntry;
     if (wasPreparedLocally || wasStoppedLocally) {
+      const work = attempt.instantiateAfter.shift();
+      if (work !== undefined) {
+        // The piece may have started, its pointer may have moved, or a joining
+        // start may have added work, during the wait, so the walk runs again
+        // from the top.
+        return work.then(() => this.#doStart(rootCell, seenDocs, attempt));
+      }
       try {
         attempt.installedRegistration = this.#startCore(rootCell, {
           ...attempt.options,
@@ -8534,19 +8571,26 @@ export class Runner {
           allowReadOnly: true,
         },
       );
+      // Nothing awaits between the last check of the list and the
+      // instantiation, so work a joining start adds is never left out.
+      while (attempt.instantiateAfter.length > 0) {
+        await attempt.instantiateAfter.shift();
+      }
       if (!this.#isStartAttemptCurrent(attempt)) return false;
-      // The result doc can hot-swap while the dependency pre-sync is awaiting
-      // I/O. Never carry the old resolved Pattern into the new identity; restart
-      // the resolution cascade against the current metadata instead.
+      // The result doc can hot-swap while the dependency pre-sync, or the wait
+      // after it, is awaiting I/O. Never carry the old resolved Pattern into
+      // the new identity; restart the resolution cascade against the current
+      // metadata instead.
       if (!patternIdentityStillCurrent()) {
         return await this.#doStart(rootCell, seenDocs, attempt);
       }
 
       // Another path may have installed this piece's registration while the
-      // pre-sync was awaiting I/O. start() joins same-doc calls before they
-      // get here, so the remaining writers of this race are an identity-change
-      // restart within this same attempt and an attempt that entered through a
-      // different doc whose links resolve to this piece.
+      // pre-sync or the wait was awaiting I/O. start() joins same-doc calls
+      // before they get here, so the remaining writers of this race are an
+      // identity-change restart within this same attempt, an attempt that
+      // entered through a different doc whose links resolve to this piece, and
+      // a graph the awaited work started that sets this piece up as its child.
       if (this.#cancels.has(this.#getDocKey(rootCell))) {
         return true;
       }
@@ -10108,6 +10152,7 @@ export class Runner {
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
+      instantiateAfter: [],
     };
     this.#activeStartAttempts.add(attempt);
     this.#trackStartAttempt(attempt, this.#getDocKey(resultCell));

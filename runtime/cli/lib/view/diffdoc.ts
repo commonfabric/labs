@@ -9,7 +9,8 @@
  * whose content matches the workspace file reuse that complete file. Removed
  * lines use the complete old file, loaded from Git or reconstructed from the
  * complete new file. Lines without either complete file use a per-hunk
- * fragment.
+ * fragment. Complete files are parsed only for the file sections a build
+ * cannot reuse from an earlier build.
  *
  * The structure tree is: file (a `section` node) → hunk → the workspace file's
  * own structure nodes, clamped and remapped into diff coordinates. So WASD and
@@ -24,6 +25,7 @@ import { spawnSync } from "@node/child_process";
 import { spliceAll } from "@commonfabric/collections/splice";
 
 import { cpLen } from "./ansi.ts";
+import type { PendingParses } from "./backgroundparse.ts";
 import type { DiffFile, DiffHunk, DiffModel } from "./diff.ts";
 import type { DeclaredTests } from "./fold.ts";
 import type { Language } from "./languages/language.ts";
@@ -450,9 +452,10 @@ export interface DiffEdit {
    * lines back in on save. */
   readonly fileText: ReadonlyMap<string, string>;
 
-  /** Complete highlighted old files, aligned with the parsed diff's files.
-   * The live highlighter uses these spans when an edit creates a removed line. */
-  readonly oldFileLines: readonly (readonly Line[] | null)[];
+  /** Highlights the complete old file of the parsed diff's file at
+   * `fileIndex`. The live highlighter uses these spans when an edit creates a
+   * removed line. */
+  readonly oldFileLines: (fileIndex: number) => readonly Line[] | null;
 
   /**
    * The languages of each file's two sides, aligned with the parsed diff's
@@ -516,21 +519,266 @@ interface FileMapping {
 }
 
 /**
- * Per-session cache of complete new and old files. New files use their absolute
- * paths as keys. Old Git files use their path and object name. Reconstructed
- * old files use their stable file-section position and paths. File headers are
- * not editable, so repeated versions remain distinct while a deferred re-parse
- * can reuse both highlighted files.
+ * What the builds of one session's diff keep between them: the workspace files
+ * they read, the file sections the latest build in each view mode used, and
+ * the complete-file parses of the section built last. A build reuses a section
+ * whose text and languages are unchanged, wherever in the diff it now sits, and
+ * reads no workspace file that an earlier build read. Every other complete-file
+ * parse lives only as long as the build that made it.
  */
-export type WorkspaceCache = Map<string, LoadedFile>;
+export class WorkspaceCache {
+  #files = new Map<string, WorkspaceFile>();
+  #sections = new Map<ViewMode, ReadonlyMap<string, BuiltSection>>();
+  #recentParses: ReadonlyMap<string, LoadedFile> = new Map();
 
+  /** The workspace copy of `absPath` that a build read, if one did. */
+  file(absPath: string): WorkspaceFile | undefined {
+    return this.#files.get(absPath);
+  }
+
+  /** Records `file` as the workspace copy of `absPath`, and returns it. */
+  rememberFile(absPath: string, file: WorkspaceFile): WorkspaceFile {
+    this.#files.set(absPath, file);
+    return file;
+  }
+
+  /** The sections the latest build in `viewMode` used, by key. */
+  sections(viewMode: ViewMode): ReadonlyMap<string, BuiltSection> {
+    return this.#sections.get(viewMode) ?? new Map();
+  }
+
+  /** The section the latest build in either view mode used for `key`. */
+  section(key: string): BuiltSection | undefined {
+    for (const sections of this.#sections.values()) {
+      const section = sections.get(key);
+      if (section) return section;
+    }
+    return undefined;
+  }
+
+  /** The complete-file parses of the section built last, by key. */
+  get recentParses(): ReadonlyMap<string, LoadedFile> {
+    return this.#recentParses;
+  }
+
+  /**
+   * Records what a build in `viewMode` used: its `sections`, and the
+   * `recentParses` of the section it built last, when it built one.
+   */
+  rememberBuild(
+    viewMode: ViewMode,
+    sections: ReadonlyMap<string, BuiltSection>,
+    recentParses: ReadonlyMap<string, LoadedFile> | undefined,
+  ): void {
+    this.#sections.set(viewMode, sections);
+    if (recentParses) this.#recentParses = recentParses;
+  }
+
+  /** Forgets the workspace copy of `absPath` and everything built from it,
+   * so that the next build reads the file again. */
+  forget(absPath: string): void {
+    this.#files.delete(absPath);
+    for (const [viewMode, sections] of this.#sections) {
+      this.#sections.set(
+        viewMode,
+        new Map(
+          Array.from(sections).filter(([, section]) =>
+            section.absPath !== absPath
+          ),
+        ),
+      );
+    }
+    this.#recentParses = new Map(
+      Array.from(this.#recentParses).filter(([key]) =>
+        !key.startsWith(newFileKey(absPath, ""))
+      ),
+    );
+  }
+
+  /** Returns a new cache holding what this one does, except `absPaths`. */
+  without(absPaths: Iterable<string>): WorkspaceCache {
+    const copy = new WorkspaceCache();
+    copy.#files = new Map(this.#files);
+    copy.#sections = new Map(this.#sections);
+    copy.#recentParses = this.#recentParses;
+    for (const absPath of absPaths) copy.forget(absPath);
+    return copy;
+  }
+}
+
+/** A workspace file as one read found it. */
+interface WorkspaceFile {
+  readonly fileText: string | null;
+
+  /** The encoding state kept outside the BOM-stripped text. */
+  readonly hasUtf8Bom?: boolean;
+}
+
+/**
+ * Everything a build produced for one file section of a diff, which a later
+ * build of a diff with the same section reuses. Positions are those of the
+ * section starting at diff line `line` and diff offset `offset`.
+ */
+interface BuiltSection {
+  readonly line: number;
+  readonly offset: number;
+
+  /** The workspace file the section's new side resolved to, or null. */
+  readonly absPath: string | null;
+
+  /** The section's lines, from its header to its last line, which no build
+   * changes once the section is built. */
+  readonly lines: readonly MutableLine[];
+
+  /** The section's `section` structure node. */
+  readonly node: StructureNode;
+
+  /** The names the section's structure declares, each in document order. */
+  readonly definitions: ReadonlyMap<string, readonly Definition[]>;
+
+  /** The section's hunks, in document order. */
+  readonly hunks: readonly DiffHunkInfo[];
+
+  /** The workspace file's verified lines in this section, when it has some. */
+  readonly mapping: FileMapping | undefined;
+
+  /** Highlights the complete old file the section's removed lines came from,
+   * returning null while its parse is pending. */
+  readonly oldFileLines: () => readonly Line[] | null;
+
+  /** Whether a complete file the section read was still being parsed, so that
+   * its lines show that file as plain text. */
+  readonly pending: boolean;
+}
+
+/**
+ * Moves `section` to start at diff line `line` and diff offset `offset`,
+ * returning it unchanged when it already starts there.
+ */
+function placedSection(
+  section: BuiltSection,
+  line: number,
+  offset: number,
+): BuiltSection {
+  const lines = line - section.line;
+  const offsets = offset - section.offset;
+  if (lines === 0 && offsets === 0) return section;
+  const top: StructureNode[] = [];
+  const pending: [StructureNode, StructureNode[]][] = [[section.node, top]];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [node, into] = next;
+    const children: StructureNode[] = [];
+    into.push({
+      ...node,
+      ...(node.nameOffset === undefined
+        ? {}
+        : { nameOffset: node.nameOffset + offsets }),
+      startLine: node.startLine + lines,
+      endLine: node.endLine + lines,
+      startOffset: node.startOffset + offsets,
+      endOffset: node.endOffset + offsets,
+      children,
+    });
+    for (let at = node.children.length - 1; at >= 0; at--) {
+      pending.push([node.children[at], children]);
+    }
+  }
+  return {
+    ...section,
+    line,
+    offset,
+    node: top[0],
+    definitions: new Map(
+      Array.from(section.definitions, ([name, list]) => [
+        name,
+        list.map((definition) => ({
+          ...definition,
+          startLine: definition.startLine + lines,
+          endLine: definition.endLine + lines,
+          startOffset: definition.startOffset + offsets,
+          endOffset: definition.endOffset + offsets,
+        })),
+      ]),
+    ),
+    mapping: section.mapping && {
+      ...section.mapping,
+      newToDiff: new Map(
+        Array.from(
+          section.mapping.newToDiff,
+          ([fileLine, diffLine]) => [fileLine, diffLine + lines],
+        ),
+      ),
+    },
+  };
+}
+
+/**
+ * Parses the complete file `key` names with `parse`, or returns a parse that
+ * a section built earlier made of it.
+ */
+type SharedParse = (key: string, parse: () => LoadedFile) => LoadedFile;
+
+/**
+ * Shares complete-file parses between the sections of one build, starting
+ * from `recent`. A parse is kept only until the last of the uses `keys`
+ * counts, so a build holds the parses that later sections still need and no
+ * others.
+ *
+ * @throws {Error} When asked for a key `keys` does not count.
+ */
+function sharedParse(
+  keys: readonly string[],
+  recent: ReadonlyMap<string, LoadedFile>,
+): SharedParse {
+  const remaining = new Map<string, number>();
+  for (const key of keys) remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  const parsed = new Map<string, LoadedFile>();
+  return (key, parse) => {
+    const left = remaining.get(key);
+    if (left === undefined) {
+      throw new Error(`A diff build parsed ${key}, which it did not count.`);
+    }
+    const file = parsed.get(key) ?? recent.get(key) ?? parse();
+    remaining.set(key, left - 1);
+    if (left > 1) {
+      parsed.set(key, file);
+    } else {
+      parsed.delete(key);
+    }
+    return file;
+  };
+}
+
+/** The complete files that building one file section parses. */
+interface SectionParses {
+  /** The section's new side, read from its workspace file. */
+  readonly newFile?: { readonly key: string; readonly absPath: string };
+
+  /** The section's old side, read from its Git blob. */
+  readonly oldBlob?: { readonly key: string; readonly object: string };
+}
+
+/** The key of the parse of workspace file `absPath` in the language whose
+ * identifier is `languageId`. */
+function newFileKey(absPath: string, languageId: string): string {
+  return `${absPath}\0${languageId}`;
+}
+
+/** The key of the parse of Git blob `object`, named `fileName`, in
+ * `language`. */
+function oldBlobKey(
+  fileName: string | undefined,
+  object: string,
+  language: Language,
+): string {
+  return `\0diff-old-blob:${JSON.stringify([fileName, object, language.id])}`;
+}
+
+/** A complete file a build parsed, which lives only as long as that build. */
 interface LoadedFile {
   fileText: string | null;
   fileDoc: Document | null;
   fileLineStarts: number[];
-
-  /** The language `fileDoc` was parsed in. */
-  language?: Language;
 
   /** The encoding state kept outside the BOM-stripped parser text. */
   hasUtf8Bom?: boolean;
@@ -540,33 +788,53 @@ interface LoadedFile {
 
   /** Alternate rendered lines, computed once when that view is opened. */
   renderedLines?: readonly Line[] | null;
+
+  /** Set when the file's parse is still pending, so that its lines are
+   * plain text. */
+  pending?: true;
+
+  /** The key the parse of a complete old file is named by. */
+  key?: string;
 }
 
+/**
+ * Parses workspace file `absPath` in `language` under `key`, as plain text
+ * while the parse `build.pending` names `key` is pending. Two sections of
+ * `git log -p` output can read one workspace file in two languages when each
+ * shows a different first line, so a parse serves only the language it was
+ * made in.
+ */
 function loadFile(
-  absPath: string,
+  { key, absPath }: NonNullable<SectionParses["newFile"]>,
   language: Language,
-  ws: DiffWorkspace,
-  cache?: WorkspaceCache,
+  build: SectionBuild,
 ): LoadedFile {
-  // Two sections of `git log -p` output can read one workspace file in two
-  // languages when each shows a different first line, so a cached parse
-  // serves only the language it was parsed in.
-  const hit = cache?.get(absPath);
-  if (hit?.language === language) return hit;
+  return build.parse(key, () => {
+    const { fileText, hasUtf8Bom } = build.cache.file(absPath) ??
+      build.cache.rememberFile(absPath, readWorkspaceFile(build.ws, absPath));
+    if (fileText === null) {
+      return { fileText, fileDoc: null, fileLineStarts: [], hasUtf8Bom };
+    }
+    const fileDoc = build.pending
+      ? build.pending.document(key, language, fileText, absPath)
+      : language.parseDocument(fileText, absPath);
+    return {
+      fileText,
+      fileDoc: fileDoc ?? plainTextLanguage.parseDocument(fileText, absPath),
+      fileLineStarts: computeLineStarts(fileText),
+      hasUtf8Bom,
+      ...(fileDoc === null ? { pending: true } : {}),
+    };
+  });
+}
+
+/** Reads workspace file `absPath` with its encoding state. */
+function readWorkspaceFile(ws: DiffWorkspace, absPath: string): WorkspaceFile {
   const fileText = ws.read(absPath);
-  const fileDoc = fileText !== null
-    ? language.parseDocument(fileText, absPath)
-    : null;
-  const fileLineStarts = fileText !== null ? computeLineStarts(fileText) : [];
-  const entry: LoadedFile = {
+  return {
     fileText,
-    fileDoc,
-    fileLineStarts,
-    language,
     hasUtf8Bom: fileText === null ? undefined : ws.hasUtf8Bom?.(absPath),
   };
-  cache?.set(absPath, entry);
-  return entry;
 }
 
 function isNoNewlineMarker(line: string | undefined): boolean {
@@ -835,35 +1103,60 @@ function reconstructOldFile(
     : null;
 }
 
-function reconstructedOldFileCacheKey(
-  file: DiffFile,
-  fileIndex: number,
-): string {
-  return `\0diff-old:${
-    JSON.stringify([
-      fileIndex,
-      file.oldPath,
-      file.newPath,
-      file.oldObject,
-    ])
-  }`;
-}
-
+/**
+ * Highlights the complete old file `fileText`, as plain text while the parse
+ * `pending` names `key` is pending.
+ */
 function highlightedFile(
+  key: string,
   fileText: string | null,
   fileName: string | undefined,
   language: Language,
-  hasUtf8Bom?: boolean,
+  hasUtf8Bom: boolean | undefined,
+  pending: PendingParses | undefined,
 ): LoadedFile {
+  const lines = fileText === null
+    ? null
+    : oldFileHighlight(key, fileText, fileName, language, pending);
   return {
     fileText,
     fileDoc: null,
     fileLineStarts: [],
     hasUtf8Bom,
-    highlightedLines: fileText === null
-      ? null
-      : language.highlightLines(fileText, fileName),
+    key,
+    highlightedLines: fileText !== null && lines === null
+      ? plainTextLanguage.highlightLines(fileText, fileName)
+      : lines,
+    ...(fileText !== null && lines === null ? { pending: true } : {}),
   };
+}
+
+/**
+ * Highlights the complete old file `text` as `language` reads it, or returns
+ * null while the parse `pending` names `key` is pending.
+ */
+function oldFileHighlight(
+  key: string,
+  text: string,
+  fileName: string | undefined,
+  language: Language,
+  pending: PendingParses | undefined,
+): readonly Line[] | null {
+  return pending
+    ? pending.lines(key, language, text, fileName)
+    : language.highlightLines(text, fileName);
+}
+
+/** The key of the parse of the old side of the diff's file at `fileIndex`,
+ * reconstructed from its new side, in `language`. */
+function reconstructedOldKey(
+  file: DiffFile,
+  fileIndex: number,
+  language: Language,
+): string {
+  return `\0diff-old:${
+    JSON.stringify([fileIndex, file.oldPath, file.newPath, language.id])
+  }`;
 }
 
 /** The complete file lines to show for one view mode. */
@@ -888,18 +1181,20 @@ function displayedFileLines(
   return file.renderedLines ?? source;
 }
 
-/** Load and highlight the complete old side represented by one diff file. */
+/**
+ * Load and highlight the complete old side represented by one diff file, from
+ * `oldBlob` when that matches the diff and otherwise by reversing the diff
+ * against `newFile`.
+ */
 function loadOldFile(
   file: DiffFile,
-  fileIndex: number,
   language: Language,
   newFile: LoadedFile | null,
-  oldBlobs: ReadonlyMap<string, string> | undefined,
-  ws: DiffWorkspace,
-  rawLines: string[],
-  modelLines: DiffModel["lines"],
-  cache?: WorkspaceCache,
+  oldBlob: SectionParses["oldBlob"],
+  reconstructedKey: string,
+  build: SectionBuild,
 ): LoadedFile {
+  const { rawLines, modelLines, ws } = build;
   if (file.hunks.length === 0 || readOnlyReasonFor(language) !== undefined) {
     return {
       fileText: null,
@@ -915,24 +1210,21 @@ function loadOldFile(
     rawLines,
     modelLines,
   ) ?? newFile?.hasUtf8Bom;
-  const object = file.oldObject;
-  if (object !== undefined) {
-    const blobKey = `\0diff-old-blob:${
-      JSON.stringify([fileName, object, language.id])
-    }`;
-    let blob = cache?.get(blobKey);
-    if (!blob) {
-      const blobText = oldBlobText(object, oldBlobs, ws);
-      blob = highlightedFile(
+  if (oldBlob !== undefined) {
+    const { key, object } = oldBlob;
+    const blob = build.parse(key, () => {
+      const blobText = oldBlobText(object, build.oldBlobs, ws);
+      return highlightedFile(
+        key,
         blobText,
         fileName,
         language,
         blobText === null
           ? undefined
           : ws.blobHasUtf8Bom?.(object) ?? inferredOldHasUtf8Bom,
+        build.pending,
       );
-      cache?.set(blobKey, blob);
-    }
+    });
     if (
       blob.fileText !== null &&
       fileMatchesSide(
@@ -948,9 +1240,6 @@ function loadOldFile(
     }
   }
 
-  const key = reconstructedOldFileCacheKey(file, fileIndex);
-  const hit = cache?.get(key);
-  if (hit) return hit;
   const newText = newFile?.fileText ?? null;
   const fileText = newText === null ? null : reconstructOldFile(
     file,
@@ -959,14 +1248,14 @@ function loadOldFile(
     modelLines,
     newFile?.hasUtf8Bom,
   );
-  const entry = highlightedFile(
+  return highlightedFile(
+    reconstructedKey,
     fileText,
     fileName,
     language,
     inferredOldHasUtf8Bom,
+    build.pending,
   );
-  cache?.set(key, entry);
-  return entry;
 }
 
 /**
@@ -1061,17 +1350,26 @@ function oldObjects(
   model: DiffModel,
   wanted: (file: DiffFile, fileIndex: number) => boolean,
 ): string[] {
-  return model.files.flatMap((file, fileIndex) =>
-    file.hunks.length > 0 && file.oldObject &&
-      validGitObject(file.oldObject) && wanted(file, fileIndex)
-      ? [file.oldObject]
-      : []
-  );
+  return model.files.flatMap((file, fileIndex) => {
+    const object = shownOldObject(file);
+    return object !== undefined && wanted(file, fileIndex) ? [object] : [];
+  });
+}
+
+/** The old Git object of `file`, when it names one and a hunk shows it. */
+function shownOldObject(file: DiffFile): string | undefined {
+  return file.hunks.length > 0 && file.oldObject !== undefined &&
+      validGitObject(file.oldObject)
+    ? file.oldObject
+    : undefined;
 }
 
 /**
  * Builds the document, semantic maps, and edit targets for a diff, reading
- * each file side in the language `languages` gives it.
+ * each file side in the language `languages` gives it. A file section that
+ * `cache` holds from an earlier build is reused rather than built again. A
+ * complete file whose parse `pending` leaves pending is shown as plain text,
+ * and the sections that read it are built again by later builds.
  *
  * @throws {Error} When `languages` does not hold one entry for each of the
  * diff's files.
@@ -1080,9 +1378,10 @@ export function buildDiffDocument(
   text: string,
   model: DiffModel,
   ws: DiffWorkspace,
-  cache?: WorkspaceCache,
+  cache: WorkspaceCache = new WorkspaceCache(),
   viewMode: ViewMode = "source",
   languages: readonly DiffFileLanguages[] = diffLanguages(text, model, ws),
+  pending?: PendingParses,
 ): { doc: Document; maps: DiffMaps; edit: DiffEdit } {
   if (languages.length !== model.files.length) {
     throw new Error(
@@ -1091,151 +1390,115 @@ export function buildDiffDocument(
   }
   const rawLines = text.split("\n");
   const diffLineStarts = computeLineStarts(text);
-  const diffColumnOf = codePointColumns(text, diffLineStarts);
-  const lines: MutableLine[] = rawLines.map((t) => ({ text: t, spans: [] }));
+  // Lines not claimed by any file section below are plain text.
+  const lines = rawLines.map((t, i) => plainLine(t, model.lines[i]?.kind));
+  const sections = model.files.map((file, fileIndex) => {
+    const { oldLanguage, newLanguage } = languages[fileIndex];
+    const sectionText = text.slice(
+      diffLineStarts[file.headerLine],
+      lineEndOffset(diffLineStarts, text, file.endLine),
+    );
+    // A section that neither side renders builds alike in both view modes.
+    const mode =
+      canRenderDiffLines(oldLanguage) || canRenderDiffLines(newLanguage)
+        ? viewMode
+        : "";
+    const key = `${oldLanguage.id}\0${newLanguage.id}\0${mode}\0${sectionText}`;
+    const reused = cache.section(key);
+    return reused
+      ? { key, reused }
+      : { key, reused, parses: sectionParses(file, languages[fileIndex], ws) };
+  });
+  const build: SectionBuild = {
+    text,
+    rawLines,
+    modelLines: model.lines,
+    lines,
+    diffLineStarts,
+    diffColumnOf: codePointColumns(text, diffLineStarts),
+    ws,
+    cache,
+    viewMode,
+    pending,
+    oldBlobs: ws.readBlobs?.(
+      sections.flatMap((section) =>
+        section.reused === undefined && section.parses.oldBlob
+          ? [section.parses.oldBlob.object]
+          : []
+      ),
+    ),
+    parse: sharedParse(
+      sections.flatMap((section) =>
+        section.reused === undefined
+          ? [section.parses.newFile?.key, section.parses.oldBlob?.key].filter(
+            (key) => key !== undefined,
+          )
+          : []
+      ),
+      cache.recentParses,
+    ),
+  };
+
+  const used = new Map<string, BuiltSection>();
+  let recentParses: Map<string, LoadedFile> | undefined;
   const structure: StructureNode[] = [];
   const definitions = new Map<string, Definition[]>();
   const mappings = new Map<string, FileMapping>(); // by abs path
   const hunks: DiffHunkInfo[] = [];
-  const oldFileLines: (readonly Line[] | null)[] = [];
-  const oldBlobs = ws.readBlobs?.(
-    oldObjects(
-      model,
-      (_file, fileIndex) =>
-        readOnlyReasonFor(languages[fileIndex].oldLanguage) === undefined,
-    ),
-  );
-
-  // Lines not claimed by any file/hunk below default to plain text.
-  for (let i = 0; i < rawLines.length; i++) {
-    const kind = model.lines[i]?.kind ?? "other";
-    if (kind === "other" && rawLines[i].length > 0) {
-      lines[i].spans = [{ col: 0, text: rawLines[i], cls: "plain" }];
-    }
-  }
-
+  const oldFileLines: (() => readonly Line[] | null)[] = [];
   for (const [fileIndex, file] of model.files.entries()) {
-    // Every operation on a file side — parsing the workspace copy, coloring
-    // fragments, projecting structure — dispatches through its language.
-    const { oldLanguage, newLanguage } = languages[fileIndex];
-    const absPath = file.newPath ? ws.resolve(file.newPath) : null;
-    // A file's content serves only its hunks, so a section without hunks (a
-    // pure rename, say) reads nothing.
-    const loaded = absPath && file.hunks.length > 0 &&
-        readOnlyReasonFor(newLanguage) === undefined
-      ? loadFile(absPath, newLanguage, ws, cache)
-      : null;
-    const fileText = loaded?.fileText ?? null;
-    const fileDoc = loaded?.fileDoc ?? null;
-    const fileLineStarts = loaded?.fileLineStarts ?? [];
-    const oldFile = loadOldFile(
-      file,
-      fileIndex,
-      oldLanguage,
-      loaded,
-      oldBlobs,
-      ws,
-      rawLines,
-      model.lines,
-      cache,
-    );
-    oldFileLines.push(oldFile.highlightedLines ?? null);
-    const newFileLines = displayedFileLines(
-      loaded,
-      newLanguage,
-      file.newPath ?? file.oldPath,
-      viewMode,
-    );
-    const oldDisplayedLines = displayedFileLines(
-      oldFile,
-      oldLanguage,
-      file.oldPath ?? file.newPath,
-      viewMode,
-    );
-    const newSourceLines = loaded?.fileDoc?.lines ??
-      loaded?.highlightedLines ??
-      null;
-    const oldSourceLines = oldFile.highlightedLines ??
-      oldFile.fileDoc?.lines ??
-      null;
-
-    let mapping: FileMapping | undefined;
-    if (absPath && fileText !== null) {
-      mapping = mappings.get(absPath) ?? {
-        absPath,
-        language: newLanguage,
-        fileText,
-        fileLineStarts,
-        newToDiff: new Map(),
-      };
+    const source = sections[fileIndex];
+    let section: BuiltSection;
+    if (source.reused === undefined) {
+      const recorded = new Map<string, LoadedFile>();
+      section = buildSection(
+        file,
+        fileIndex,
+        languages[fileIndex],
+        source.parses,
+        { ...build, parse: recordedParse(build.parse, recorded) },
+      );
+      if (!section.pending) recentParses = recorded;
+    } else {
+      section = placedSection(
+        source.reused,
+        file.headerLine,
+        diffLineStarts[file.headerLine],
+      );
+      for (const [i, line] of section.lines.entries()) {
+        lines[file.headerLine + i] = line;
+      }
+    }
+    if (!section.pending) used.set(source.key, section);
+    structure.push(section.node);
+    for (const [name, list] of section.definitions) {
+      const all = definitions.get(name) ?? [];
+      for (const definition of list) all.push(definition);
+      definitions.set(name, all);
+    }
+    for (const hunk of section.hunks) hunks.push(hunk);
+    if (section.mapping) {
+      // A file that several sections show keeps its first verified
+      // occurrence of each line, as each section does within itself.
+      const { absPath, newToDiff } = section.mapping;
+      const mapping = mappings.get(absPath) ??
+        { ...section.mapping, newToDiff: new Map() };
+      for (const [fileLine, diffLine] of newToDiff) {
+        if (!mapping.newToDiff.has(fileLine)) {
+          mapping.newToDiff.set(fileLine, diffLine);
+        }
+      }
       mappings.set(absPath, mapping);
     }
-
-    // file header lines
-    for (let i = file.headerLine; i <= file.endLine; i++) {
-      const kind = model.lines[i]?.kind;
-      if (kind !== "meta") continue;
-      const t = rawLines[i];
-      if (t.length === 0) continue;
-      lines[i].spans = [{
-        col: 0,
-        text: t,
-        cls: t.startsWith("diff --git ") ? "sectionHeader" : "diffMeta",
-      }];
-    }
-
-    const hunkNodes: StructureNode[] = [];
-    for (const hunk of file.hunks) {
-      hunkNodes.push(buildHunk(hunk, {
-        rawLines,
-        modelLines: model.lines,
-        lines,
-        diffLineStarts,
-        diffColumnOf,
-        fileDoc,
-        fileText,
-        fileLineStarts,
-        oldFileHasUtf8Bom: oldFile.hasUtf8Bom,
-        newFileHasUtf8Bom: loaded?.hasUtf8Bom,
-        newFileLines,
-        oldFileLines: oldDisplayedLines,
-        newSourceLines,
-        oldSourceLines,
-        mapping,
-        definitions,
-        hunks,
-        newLanguage,
-        oldLanguage,
-        newFileName: file.newPath ?? file.oldPath,
-        oldFileName: file.oldPath ?? file.newPath,
-        viewMode,
-      }));
-    }
-
-    // the file's section node
-    const label = file.newPath ?? file.oldPath ?? "(unknown file)";
-    const start = diffLineStarts[file.headerLine];
-    const end = lineEndOffset(diffLineStarts, text, file.endLine);
-    structure.push({
-      kind: "section",
-      label: `▸ ${label}`,
-      name: file.newPath,
-      startLine: file.headerLine,
-      endLine: file.endLine,
-      startCol: 0,
-      endCol: cpLen(rawLines[file.endLine] ?? ""),
-      startOffset: start,
-      endOffset: end,
-      depth: 0,
-      children: hunkNodes,
-    });
+    oldFileLines.push(section.oldFileLines);
   }
+  cache.rememberBuild(viewMode, used, recentParses);
 
   const flatStructure = flattenStructure(structure);
 
   const doc: Document = {
     text,
-    lines: lines as Line[],
+    lines,
     structure,
     flatStructure,
     definitions,
@@ -1248,9 +1511,252 @@ export function buildDiffDocument(
       rawLines,
       mappings,
       hunks,
-      oldFileLines,
+      latestOldFileLines(oldFileLines),
       languages,
     ),
+  };
+}
+
+/** What every file section of one build reads. */
+interface SectionBuild {
+  readonly text: string;
+  readonly rawLines: string[];
+  readonly modelLines: DiffModel["lines"];
+
+  /** The build's lines, indexed by diff line, which a section colors. */
+  readonly lines: MutableLine[];
+
+  readonly diffLineStarts: number[];
+  readonly diffColumnOf: ColumnOf;
+  readonly ws: DiffWorkspace;
+  readonly cache: WorkspaceCache;
+  readonly viewMode: ViewMode;
+
+  /** The parses left to finish in the background, which show as plain text
+   * until they do. */
+  readonly pending: PendingParses | undefined;
+
+  readonly oldBlobs: ReadonlyMap<string, string> | undefined;
+  readonly parse: SharedParse;
+}
+
+/** A diff line with no color beyond the plain text of an unclaimed line. */
+function plainLine(
+  text: string,
+  kind: DiffModel["lines"][number]["kind"] | undefined,
+): MutableLine {
+  return {
+    text,
+    spans: (kind ?? "other") === "other" && text.length > 0
+      ? [{ col: 0, text, cls: "plain" }]
+      : [],
+  };
+}
+
+/** Like `parse`, except that it also records each parse it returns. */
+function recordedParse(
+  parse: SharedParse,
+  record: Map<string, LoadedFile>,
+): SharedParse {
+  return (key, parseFile) => {
+    const file = parse(key, parseFile);
+    record.set(key, file);
+    return file;
+  };
+}
+
+/**
+ * The complete files that building `file` parses: its workspace file, where
+ * `ws` resolves one, and its old Git blob, in the languages `languages` gives.
+ * A read-only language and a section without hunks parse nothing.
+ */
+function sectionParses(
+  file: DiffFile,
+  { oldLanguage, newLanguage }: DiffFileLanguages,
+  ws: DiffWorkspace,
+): SectionParses {
+  if (file.hunks.length === 0) return {};
+  const absPath = file.newPath && readOnlyReasonFor(newLanguage) === undefined
+    ? ws.resolve(file.newPath)
+    : null;
+  const object = shownOldObject(file);
+  return {
+    ...(absPath
+      ? { newFile: { key: newFileKey(absPath, newLanguage.id), absPath } }
+      : {}),
+    ...(object !== undefined && readOnlyReasonFor(oldLanguage) === undefined
+      ? {
+        oldBlob: {
+          key: oldBlobKey(file.oldPath ?? file.newPath, object, oldLanguage),
+          object,
+        },
+      }
+      : {}),
+  };
+}
+
+/**
+ * Builds one file section of a diff, the diff's file at `fileIndex`, reading
+ * its two sides in `languages` and parsing the complete files `parses` names.
+ */
+function buildSection(
+  file: DiffFile,
+  fileIndex: number,
+  { oldLanguage, newLanguage }: DiffFileLanguages,
+  parses: SectionParses,
+  build: SectionBuild,
+): BuiltSection {
+  const { rawLines, modelLines, lines, diffLineStarts, viewMode } = build;
+  // Every operation on a file side — parsing the workspace copy, coloring
+  // fragments, projecting structure — dispatches through its language.
+  const loaded = parses.newFile
+    ? loadFile(parses.newFile, newLanguage, build)
+    : null;
+  const absPath = parses.newFile?.absPath ?? null;
+  const fileText = loaded?.fileText ?? null;
+  const fileDoc = loaded?.fileDoc ?? null;
+  const fileLineStarts = loaded?.fileLineStarts ?? [];
+  const oldFile = loadOldFile(
+    file,
+    oldLanguage,
+    loaded,
+    parses.oldBlob,
+    reconstructedOldKey(file, fileIndex, oldLanguage),
+    build,
+  );
+  const newFileLines = displayedFileLines(
+    loaded,
+    newLanguage,
+    file.newPath ?? file.oldPath,
+    viewMode,
+  );
+  const oldDisplayedLines = displayedFileLines(
+    oldFile,
+    oldLanguage,
+    file.oldPath ?? file.newPath,
+    viewMode,
+  );
+  const newSourceLines = loaded?.fileDoc?.lines ??
+    loaded?.highlightedLines ??
+    null;
+  const oldSourceLines = oldFile.highlightedLines ??
+    oldFile.fileDoc?.lines ??
+    null;
+  const mapping = absPath && fileText !== null
+    ? {
+      absPath,
+      language: newLanguage,
+      fileText,
+      fileLineStarts,
+      newToDiff: new Map<number, number>(),
+    }
+    : undefined;
+
+  // file header lines
+  for (let i = file.headerLine; i <= file.endLine; i++) {
+    const kind = modelLines[i]?.kind;
+    if (kind !== "meta") continue;
+    const t = rawLines[i];
+    if (t.length === 0) continue;
+    lines[i].spans = [{
+      col: 0,
+      text: t,
+      cls: t.startsWith("diff --git ") ? "sectionHeader" : "diffMeta",
+    }];
+  }
+
+  const definitions = new Map<string, Definition[]>();
+  const hunks: DiffHunkInfo[] = [];
+  const hunkNodes: StructureNode[] = [];
+  for (const hunk of file.hunks) {
+    hunkNodes.push(buildHunk(hunk, {
+      rawLines,
+      modelLines,
+      lines,
+      diffLineStarts,
+      diffColumnOf: build.diffColumnOf,
+      fileDoc,
+      fileText,
+      fileLineStarts,
+      oldFileHasUtf8Bom: oldFile.hasUtf8Bom,
+      newFileHasUtf8Bom: loaded?.hasUtf8Bom,
+      newFileLines,
+      oldFileLines: oldDisplayedLines,
+      newSourceLines,
+      oldSourceLines,
+      mapping,
+      definitions,
+      hunks,
+      newLanguage,
+      oldLanguage,
+      newFileName: file.newPath ?? file.oldPath,
+      oldFileName: file.oldPath ?? file.newPath,
+      viewMode,
+    }));
+  }
+
+  const label = file.newPath ?? file.oldPath ?? "(unknown file)";
+  return {
+    line: file.headerLine,
+    offset: diffLineStarts[file.headerLine],
+    absPath,
+    lines: lines.slice(file.headerLine, file.endLine + 1),
+    node: {
+      kind: "section",
+      label: `▸ ${label}`,
+      name: file.newPath,
+      startLine: file.headerLine,
+      endLine: file.endLine,
+      startCol: 0,
+      endCol: cpLen(rawLines[file.endLine] ?? ""),
+      startOffset: diffLineStarts[file.headerLine],
+      endOffset: lineEndOffset(diffLineStarts, build.text, file.endLine),
+      depth: 0,
+      children: hunkNodes,
+    },
+    definitions,
+    hunks,
+    mapping,
+    oldFileLines: oldFileLinesOf(
+      oldFile,
+      file.oldPath ?? file.newPath,
+      oldLanguage,
+      build.pending,
+    ),
+    pending: loaded?.pending === true || oldFile.pending === true,
+  };
+}
+
+/**
+ * Returns a function that highlights the complete old file `oldFile` again
+ * each time it is called, so that a section keeps only the old file's text and
+ * not a highlighting of every old line. The function keeps nothing else alive.
+ */
+function oldFileLinesOf(
+  oldFile: LoadedFile,
+  fileName: string | undefined,
+  language: Language,
+  pending: PendingParses | undefined,
+): () => readonly Line[] | null {
+  const { key, fileText } = oldFile;
+  if (key === undefined || fileText === null) return () => null;
+  return () => oldFileHighlight(key, fileText, fileName, language, pending);
+}
+
+/**
+ * Highlights the complete old file of the file at an index with
+ * `oldFileLines`, keeping only the latest highlighting, so that one whose
+ * parse is pending is asked for again. An edit works in one file at a time.
+ */
+function latestOldFileLines(
+  oldFileLines: readonly (() => readonly Line[] | null)[],
+): (fileIndex: number) => readonly Line[] | null {
+  let latest: { fileIndex: number; lines: readonly Line[] } | undefined;
+  return (fileIndex) => {
+    if (latest?.fileIndex === fileIndex) return latest.lines;
+    const lines = oldFileLines[fileIndex]?.() ?? null;
+    if (lines !== null) latest = { fileIndex, lines };
+    return lines;
   };
 }
 
@@ -1262,7 +1768,7 @@ function buildEdit(
   rawLines: string[],
   mappings: Map<string, FileMapping>,
   hunks: DiffHunkInfo[],
-  oldFileLines: readonly (readonly Line[] | null)[],
+  oldFileLines: (fileIndex: number) => readonly Line[] | null,
   languages: readonly DiffFileLanguages[],
 ): DiffEdit {
   const lines = new Map<
@@ -1895,5 +2401,6 @@ export const _internal = {
   readGitBlobs,
   reconstructOldFile,
   restoreLossyChangeGroup,
+  sharedParse,
   shiftCompleteLineSpans,
 };

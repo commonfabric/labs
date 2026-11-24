@@ -630,6 +630,37 @@ Deno.test("fold: C toggles files that change only comments", () => {
   assertEquals(s.displayDoc().lines.length, full, "c hides no files");
 });
 
+Deno.test("fold: C judges the diff as edited since it was last pressed", () => {
+  const notes = "// new explanation\n// and more\nkeep(); // unchanged\n";
+  const diff = COMMENT_ONLY_FILES.slice(
+    COMMENT_ONLY_FILES.indexOf("diff --git a/src/notes.ts"),
+    COMMENT_ONLY_FILES.indexOf("diff --git a/src/tail.ts"),
+  );
+  const ws: DiffWorkspace = {
+    resolve: (path) => path === "src/notes.ts" ? "/w/src/notes.ts" : null,
+    read: (path) => path === "/w/src/notes.ts" ? notes : null,
+    readBlob: (object) => COMMENT_ONLY_OBJECTS.get(object) ?? null,
+  };
+  const { doc, edit } = buildDiffDocument(diff, parseDiff(diff)!, ws);
+  const s = new Session(
+    doc,
+    { color: false, showLineNumbers: false },
+    { width: 80, height: 30 },
+    undefined,
+    diffSource(ws, edit),
+  );
+  press(s, "C");
+  assertEquals(s.view().message, "Hid 1 comment-only file.");
+  press(s, "C");
+  assertEquals(s.view().message, "Showing 1 comment-only file.");
+
+  s.top = 6;
+  press(s, "e", ..."run(); ", "escape");
+  assertEquals(s.doc.lines[6].text, "+run(); // new explanation");
+  press(s, "C");
+  assertEquals(s.view().message, "No comment-only files.");
+});
+
 Deno.test("fold: C selects no file whose old Git object is unknown", () => {
   const s = foldSession(COMMENT_ONLY_FILES);
   const full = s.displayDoc().lines.length;

@@ -17,6 +17,12 @@ import {
 } from "@commonfabric/github-webhooks/relay";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { CSI, term } from "./ansi.ts";
+import {
+  IN_PLACE_PARSE_BUDGET,
+  type ParseJob,
+  type ParseOutcome,
+  workerParser,
+} from "./backgroundparse.ts";
 import { type BlameRunner, blameRunner } from "./blame.ts";
 import type { Document } from "./model.ts";
 import { decodeKeys } from "./keys.ts";
@@ -25,7 +31,7 @@ import { type PushedFrame, Session, type SessionOptions } from "./session.ts";
 import { ui } from "./theme.ts";
 import { onGrammarLoad, type Semantics } from "./languages/language.ts";
 import type { EditableSource } from "./editsource.ts";
-import { realFileGateway } from "./filegateway.ts";
+import { type FileGateway, realFileGateway } from "./filegateway.ts";
 import { ViewError } from "./errors.ts";
 import { join } from "@std/path";
 import {
@@ -100,7 +106,11 @@ const SPINNER_FRAME_MS = 150;
  * the viewer, saying it is quitting, before the viewer closes. */
 const PULL_REQUEST_QUIT_MS = 2000;
 
-export type PagerOptions = SessionOptions;
+export type PagerOptions = SessionOptions & {
+  /** Whole-file parses the view left for the pager to finish while it takes
+   * keys, whose file sides it shows as plain text until then. */
+  readonly parses?: readonly ParseJob[];
+};
 
 /** Why `error` happened, to follow a colon in the task dialog, with the
  * reason GitHub gave quoted when GitHub refused a request. */
@@ -185,6 +195,17 @@ export interface PagerDeps {
   /** Attribute each line of a file with `git blame`, rejecting with git's
    * message when it cannot, and stopping git when `signal` aborts. */
   blame: BlameRunner;
+
+  /** The files the viewer can open from its file picker. */
+  files: FileGateway;
+
+  /** Starts running `jobs` away from the thread that takes keys, giving each
+   * batch of outcomes to `deliver` as it arrives; returns a function that
+   * stops the jobs still running. */
+  parseInBackground(
+    jobs: readonly ParseJob[],
+    deliver: (outcomes: readonly ParseOutcome[]) => void,
+  ): () => void;
 }
 
 /** The real terminal and process operations, which find the user's files
@@ -229,6 +250,8 @@ export function realPagerDeps(
       readPullRequestList(join(home, ".cache", "github-prs.tsv")),
     relay: relayAddress,
     blame: blameRunner(),
+    files: realFileGateway(),
+    parseInBackground: (jobs, deliver) => workerParser(jobs, deliver),
   };
 }
 
@@ -262,7 +285,7 @@ export async function runPager(
     consoleSize(deps),
     semantics,
     editSource,
-    realFileGateway(),
+    deps.files,
   );
 
   // While a dialog is up, the terminal reports every key in full, so that
@@ -317,7 +340,7 @@ export async function runPager(
     // gone, and has nothing left to draw on.
     if (cleanedUp) return;
     paint(session.displayDoc(), session.view(), changedOnly);
-    if (session.taskSpinning) {
+    if (session.taskSpinning || session.highlighting) {
       cancelSpin ??= deps.setSpinnerTimer(spin);
     }
     for (const load of session.takeBlameLoads()) {
@@ -334,13 +357,14 @@ export async function runPager(
     }
   };
 
-  // While the task dialog shows a running step, its spinner turns a frame at
-  // a time, writing only the rows it changes, except while a pressed button
-  // is drawn, whose own draw starts its timer again.
+  // While the task dialog shows a running step, or the status bar shows
+  // highlighting progress, its spinner turns a frame at a time, writing only
+  // the rows it changes, except while a pressed button is drawn, whose own
+  // draw starts its timer again.
   let cancelSpin: (() => void) | undefined;
   const spin = () => {
     cancelSpin = undefined;
-    if (!session.taskSpinning || cancelPush) return;
+    if (!(session.taskSpinning || session.highlighting) || cancelPush) return;
     session.advanceSpinner();
     draw(true);
   };
@@ -452,10 +476,80 @@ export async function runPager(
   // the viewer while it waits for a key.
   const quitting = Promise.withResolvers<null>();
 
+  // The complete files whose parses the view left are shown as plain text,
+  // and parse in the background while keys keep arriving, while the status
+  // bar shows how much of their source has been parsed. The document is
+  // parsed again and drawn each time the source parsed in the background has
+  // at least doubled, and grown by at least the in-place budget, since the
+  // document was last parsed again, and once more when every parse has ended. The parses stop when the
+  // viewer closes, or when opening another file ends the progress.
+  const parses = options.parses ?? [];
+  let stopParses: (() => void) | undefined;
+  const endParses = (message?: string) => {
+    stopParses?.();
+    stopParses = undefined;
+    session.showHighlightProgress(null);
+    if (message !== undefined) session.showMessage(message);
+  };
+  const startParses = () => {
+    const total = parses.reduce((sum, job) => sum + job.text.length, 0);
+    let parsed = 0;
+    let shown = 0;
+    let unfinished = parses.length;
+    const failures: string[] = [];
+    const deliver = (outcomes: readonly ParseOutcome[]) => {
+      if (cleanedUp) return;
+      if (!session.highlighting) {
+        endParses();
+        return;
+      }
+      try {
+        for (const outcome of outcomes) {
+          const job = parses[outcome.index];
+          parsed += job.text.length;
+          unfinished--;
+          if (outcome.kind === "parsed") {
+            job.finish(outcome.result);
+          } else {
+            job.fail();
+            failures.push(outcome.failure);
+          }
+        }
+        if (unfinished > 0) {
+          session.showHighlightProgress(parsed / Math.max(1, total));
+          // The spinner's next frame draws the gauge.
+          if (parsed - shown < Math.max(IN_PLACE_PARSE_BUDGET, shown)) return;
+          shown = parsed;
+          session.reparse({ force: true });
+        } else {
+          session.reparse({ force: true });
+          endParses(
+            failures.length === 0 ? undefined : "Some files could not be " +
+              `highlighted, and are shown as plain text: ${failures[0]}`,
+          );
+        }
+      } catch (error) {
+        endParses(`Highlighting failed: ${describeFailure(error)}`);
+      }
+      draw();
+    };
+    session.showHighlightProgress(0);
+    try {
+      const stop = deps.parseInBackground(parses, deliver);
+      // Outcomes delivered before it returned may have ended the parses.
+      if (session.highlighting) stopParses = stop;
+      else stop();
+    } catch (error) {
+      endParses(`Highlighting failed: ${describeFailure(error)}`);
+    }
+    draw(true);
+  };
+
   let cleanedUp = false;
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
+    stopParses?.();
     taskController?.abort();
     stopWatching();
     cancelQuit?.();
@@ -1041,6 +1135,7 @@ export async function runPager(
         (padBg ? term.setDefaultBg(padBg) : ""),
     );
     draw();
+    if (parses.length > 0) startParses();
     // Warm the TypeScript program after the first frame is on screen, while the
     // user is reading it and before any keypress arrives, so the first info card
     // does not pay the one-time build cost on the interactive path.
@@ -1092,6 +1187,7 @@ export async function runPager(
         break;
       }
       if (!session.taskDialogUp) stopWatching();
+      if (stopParses && !session.highlighting) endParses();
       if (!session.pullRequestQuitPending) {
         cancelQuit?.();
         cancelQuit = undefined;

@@ -655,6 +655,30 @@ let unwrapTransaction: (
 ) => IExtendedStorageTransaction | undefined;
 let assignBeforeAbort: (tx: object, callback: () => void) => boolean;
 let isExtendedStorageTransaction: (value: object) => boolean;
+let restoreAmbientReadMeta: (
+  tx: ExtendedStorageTransaction,
+  previous: Metadata | undefined,
+) => void;
+
+/**
+ * What `enterAmbientReadMeta()` returns: disposing it puts back the ambient
+ * read metadata that entering it replaced. Traversals enter one per element
+ * they read as a reference, so it is a class instance rather than an object
+ * literal with a closure, which V8 creates many times more slowly.
+ */
+class AmbientReadMetaScope implements Disposable {
+  readonly #tx: ExtendedStorageTransaction;
+  readonly #previous: Metadata | undefined;
+
+  constructor(tx: ExtendedStorageTransaction, previous: Metadata | undefined) {
+    this.#tx = tx;
+    this.#previous = previous;
+  }
+
+  [Symbol.dispose](): void {
+    restoreAmbientReadMeta(this.#tx, this.#previous);
+  }
+}
 
 export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #commitCallbacks = new Set<
@@ -2096,27 +2120,35 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /**
    * Ambient metadata merged into every read issued inside a
-   * `runWithAmbientReadMeta()` scope. Used by scheduler dependency seeding to
-   * tag its materialization reads without threading meta through every
-   * cell/traverse API in between.
+   * `runWithAmbientReadMeta()` or `enterAmbientReadMeta()` scope, which tags
+   * those reads without threading meta through every cell/traverse API in
+   * between.
    */
   #ambientReadMeta?: Metadata;
 
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T {
-    using _scope = this.enterAmbientReadMeta(meta);
-    return fn();
+    // Read paths call this once per element, and V8 runs a function that
+    // declares `using` many times slower than one with a `try` block
+    // (`docs/development/DEVELOPMENT.md`, "`using` on a path that runs often").
+    const previous = this.#mergeAmbientReadMeta(meta);
+    try {
+      return fn();
+    } finally {
+      this.#ambientReadMeta = previous;
+    }
   }
 
   enterAmbientReadMeta(meta: Metadata): Disposable {
+    return new AmbientReadMetaScope(this, this.#mergeAmbientReadMeta(meta));
+  }
+
+  /** Merges `meta` into the ambient metadata, and returns what it replaced. */
+  #mergeAmbientReadMeta(meta: Metadata): Metadata | undefined {
     const previous = this.#ambientReadMeta;
     this.#ambientReadMeta = previous === undefined
       ? meta
       : { ...previous, ...meta };
-    return {
-      [Symbol.dispose]: () => {
-        this.#ambientReadMeta = previous;
-      },
-    };
+    return previous;
   }
 
   #withAmbientReadMeta(options?: IReadOptions): IReadOptions | undefined {
@@ -2505,6 +2537,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   static {
+    restoreAmbientReadMeta = (tx, previous) => {
+      tx.#ambientReadMeta = previous;
+    };
     isExtendedStorageTransaction = (value) => #cfcState in value;
     assignBeforeAbort = (tx, callback) => {
       if (!(#cfcState in tx)) return false;

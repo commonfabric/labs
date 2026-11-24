@@ -570,8 +570,14 @@ export class Session {
    * for the pull request to open or merge and quitting once it has. */
   #watchLog = new TaskLog();
 
-  /** How far the spinners of the task dialog's running steps have turned. */
+  /** How far the spinners of the task dialog's running steps, and of the
+   * status bar's highlighting progress, have turned. */
   #spinnerFrame = 0;
+
+  /** How much of the source left to color in the background has been
+   * parsed, from 0 to 1, or null when nothing is left, which opening another
+   * file makes so. */
+  #highlightProgress: number | null = null;
 
   /** The settings dialog's controls, while it is up. */
   #settingsDraft: SettingsDraft | null = null;
@@ -667,6 +673,10 @@ export class Session {
     readonly doc: Document;
     readonly mode: DiffCountMode;
     readonly counts: DiffCounts;
+  };
+  #commentOnlyCache?: {
+    readonly doc: Document;
+    readonly files: readonly boolean[];
   };
 
   constructor(
@@ -1358,6 +1368,10 @@ export class Session {
       hasNonPrintables: this.#hasNonPrintables(),
       notice: null,
       currentFile: this.#currentFile(),
+      highlighting: this.#highlightProgress === null ? null : {
+        fraction: this.#highlightProgress,
+        frame: this.#spinnerFrame,
+      },
     };
   }
 
@@ -2905,15 +2919,24 @@ export class Session {
 
   /** Toggle the files whose changes touch only comments. */
   #toggleCommentOnlyFiles(): void {
-    let commentOnly: readonly boolean[] | undefined;
     this.#toggleFileCategory(
-      (file) =>
-        (commentOnly ??= commentOnlyFiles(
-          this.#sourceDoc.text,
-          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
-        ))[file.index],
+      (file) => this.#commentOnlyFiles()[file.index],
       "comment-only",
     );
+  }
+
+  /** Which files of the current source document change only comments. */
+  #commentOnlyFiles(): readonly boolean[] {
+    if (this.#commentOnlyCache?.doc !== this.#sourceDoc) {
+      this.#commentOnlyCache = {
+        doc: this.#sourceDoc,
+        files: commentOnlyFiles(
+          this.#sourceDoc.text,
+          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
+        ),
+      };
+    }
+    return this.#commentOnlyCache.files;
   }
 
   //
@@ -3895,9 +3918,22 @@ export class Session {
       TaskLog.spinning([this.#taskLog, this.#watchLog]);
   }
 
-  /** Turn the spinners of the task dialog's running steps a frame. */
+  /** Whether the status bar shows highlighting progress, whose spinner
+   * {@link advanceSpinner} turns. Opening another file ends it. */
+  get highlighting(): boolean {
+    return this.#highlightProgress !== null;
+  }
+
+  /** Turn the spinners of the task dialog's running steps, and of the
+   * highlighting progress, a frame. */
   advanceSpinner(): void {
     this.#spinnerFrame++;
+  }
+
+  /** Show on the status bar that `fraction` of the source left to color in
+   * the background has been parsed, or, given null, that nothing is left. */
+  showHighlightProgress(fraction: number | null): void {
+    this.#highlightProgress = fraction;
   }
 
   /**
@@ -4057,19 +4093,23 @@ export class Session {
    * when no edit asked for it, as when a language's parser has just loaded. */
   reparse({ force = false }: { force?: boolean } = {}): void {
     if (!this.#source || !this.#buffer || !(this.needsReparse || force)) return;
+    // The text is unchanged, so the selected node keeps its lines, while the
+    // new structure tree can number it differently.
+    const selected = this.#selectedNode();
     this.#setSourceDocument(
       this.#source.parse(
         this.#buffer.text(),
         this.#buffer.lineEndingProvenance(),
       ),
     );
+    this.#reselect(selected, (line) => line);
     this.needsReparse = false;
     // Re-baseline the live highlighter from this authoritative parse while still
     // editing; drop it when leaving edit mode.
     if (this.#cursorOn) this.#seedHighlighter();
     else this.#highlighter = undefined;
     this.#clampScroll();
-    this.#ensureCursorVisible();
+    if (this.#cursorOn) this.#ensureCursorVisible();
   }
 
   #cursorPage(dir: number): void {
@@ -5132,7 +5172,7 @@ export class Session {
     }
     // Pager mode: re-point the selection at the same node (its line moved), and
     // put the pinned line back on the row it was on.
-    this.#reselectAfterExpand(selected, moved);
+    this.#reselect(selected, moved);
     const movedPin = moved(pinDoc);
     if (this.#wrapLines) {
       const basePlan = this.#baseWrapPlan();
@@ -5213,14 +5253,14 @@ export class Session {
     this.transientMessage = true;
   }
 
-  /** After a pager-mode expand rebuilds the structure tree, point the selection
-   * back at the same node, at wherever `moved` puts its line. Cleared when the
-   * node can no longer be found — a join takes one of the two hunks away, and
-   * there is nothing to point at. A hunk is matched on its line alone: only one
+  /** After a re-parse or a pager-mode expand rebuilds the structure tree, point
+   * the selection back at the same node, at wherever `moved` puts its line.
+   * Cleared when the node can no longer be found — a join takes one of the two
+   * hunks away, and there is nothing to point at. A hunk is matched on its line alone: only one
    * hunk starts at a given header line, and its label (the `@@` counts) changes
    * as the hunk grows; other kinds keep the label, which is stable and tells
    * apart nodes sharing a start line. */
-  #reselectAfterExpand(
+  #reselect(
     node: StructureNode | null,
     moved: (line: number) => number,
   ): void {
@@ -5745,6 +5785,8 @@ export class Session {
       return;
     }
     this.#source = opened.source;
+    // What was left to color belongs to the source shown until now.
+    this.#highlightProgress = null;
     if (opened.source.defaultViewMode === "rendered") {
       this.#viewMode = "rendered";
     }

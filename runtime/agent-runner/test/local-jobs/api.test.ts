@@ -40,9 +40,10 @@ const apiWith = (
     fabricLane?: () => boolean;
     heartbeatMs?: number;
     browserHost?: (id: string) => LocalJobBrowserHost | undefined;
+    store?: LocalJobStore;
   } = {},
 ) => {
-  const store = LocalJobStore.open(":memory:");
+  const store = options.store ?? LocalJobStore.open(":memory:");
   const kicked: string[] = [];
   const cancelled: string[] = [];
   const stopping = new AbortController();
@@ -451,6 +452,72 @@ describe("local-jobs/api", () => {
       expect((await response.json()).job.request).toEqual({
         task: "t",
         resultSchema: true,
+      });
+    });
+
+    describe("after the host's profiles change", () => {
+      // A job was accepted under a Codex pin, with a bound only a Codex
+      // run can hold; the host then pins the profile to the gateway, or
+      // drops it.
+
+      const CODEX: LocalJobProfile = { ...ASK, modelProvider: "openai-codex" };
+      const GATEWAY: LocalJobProfile = {
+        ...ASK,
+        modelProvider: "openai-compatible-gateway",
+      };
+      const BOUNDED = { ...BODY, maxOutputTokens: 64 };
+
+      const acceptedThenRepinned = async (
+        now: Map<string, LocalJobProfile>,
+      ) => {
+        const before = apiWith({ profiles: new Map([["ask", CODEX]]) });
+        const accepted = await before.post("/jobs", BOUNDED);
+        expect(accepted.status).toBe(201);
+        const { job } = await accepted.json();
+        return { job, after: apiWith({ profiles: now, store: before.store }) };
+      };
+
+      it("answers the identical request with the job it accepted", async () => {
+        const { job, after } = await acceptedThenRepinned(
+          new Map([["ask", GATEWAY]]),
+        );
+        const again = await after.post("/jobs", BOUNDED);
+
+        expect(again.status).toBe(200);
+        expect((await again.json()).job.id).toBe(job.id);
+        expect(after.kicked).toEqual([]);
+      });
+
+      it("answers the identical request with its job when the host names its profile no more", async () => {
+        const { job, after } = await acceptedThenRepinned(new Map());
+        const again = await after.post("/jobs", BOUNDED);
+
+        expect(again.status).toBe(200);
+        expect((await again.json()).job.id).toBe(job.id);
+      });
+
+      it("returns 409 for another request under the accepted key", async () => {
+        const { after } = await acceptedThenRepinned(
+          new Map([["ask", GATEWAY]]),
+        );
+        const other = await after.post("/jobs", { ...BOUNDED, task: "Other" });
+
+        expect(other.status).toBe(409);
+        expect((await other.json()).code).toBe("idempotency_conflict");
+      });
+
+      it("returns 400 beyond_profile for the bounded request under a new key", async () => {
+        const { after } = await acceptedThenRepinned(
+          new Map([["ask", GATEWAY]]),
+        );
+        const fresh = await after.post("/jobs", {
+          ...BOUNDED,
+          idempotencyKey: "weaver-ask:2",
+        });
+
+        expect(fresh.status).toBe(400);
+        expect((await fresh.json()).code).toBe("beyond_profile");
+        expect(after.store.list(10)).toHaveLength(1);
       });
     });
   });

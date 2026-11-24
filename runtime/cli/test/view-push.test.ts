@@ -22,6 +22,7 @@ import {
   realPushIo,
   relayText,
 } from "../lib/view/push.ts";
+import { realFileGateway } from "../lib/view/filegateway.ts";
 import { dialogBox } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
 import { ui } from "../lib/view/theme.ts";
@@ -448,6 +449,10 @@ function pagerHarness(
       touchGate,
       pullRequestList,
       blame: () => Promise.reject(new Error("these tests blame nothing")),
+      files: realFileGateway(),
+      parseInBackground: () => {
+        throw new Error("these tests parse nothing in the background");
+      },
     };
     await runPager(
       parseDocument("const a = 1;\n"),

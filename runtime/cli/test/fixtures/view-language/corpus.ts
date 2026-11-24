@@ -46,6 +46,19 @@ export interface ViewLanguageFixture {
   readonly incompleteEvidence: HighlightEvidence;
 }
 
+/**
+ * The C-family languages. They read a name followed by a parenthesized list as
+ * a function being declared, and a name that follows another name as a value
+ * being declared. So they color the names that other languages' definitions
+ * and declarations declare, such as a Python `def` name or a Kotlin `val` name,
+ * in the same classes those languages do. C also reads a word followed by `:`
+ * as a label, as YAML colors its keys.
+ */
+const C_FAMILY = ["c", "cpp", "cuda", "c-family-header"];
+
+/** The C-family languages that use the C++ grammar. */
+const CPP_GRAMMAR = ["cpp", "cuda", "c-family-header"];
+
 /** Text-language fixtures covered by the shared language contract. */
 export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
@@ -169,8 +182,8 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "yaml",
     // Java properties and INI lines color the key before a `:` as a property
-    // name, as YAML colors its keys.
-    highlightingPeers: ["properties", "ini"],
+    // name, as YAML colors its keys, and C colors it as a label.
+    highlightingPeers: ["properties", "ini", "c"],
     surveyRepository: "common-cluster",
     surveyCommit: "50c7f1bb0b83dad6057b3bde73ce599f86624084",
     surveyPath: ".github/workflows/ci.yml",
@@ -260,7 +273,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean"],
+    highlightingPeers: ["lean", ...C_FAMILY],
     surveyRepository: "loom",
     surveyCommit: "43a4afe18fbfc37ab8a11da8fe5011f0be81f6e7",
     surveyPath: "src/bin/loom-size-report.py",
@@ -293,7 +306,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean"],
+    highlightingPeers: ["lean", ...C_FAMILY],
     surveyRepository: "specs",
     surveyCommit: "34fb8680caa9f68005a438854fa5dc2ef15ff953",
     surveyPath: "cfc/formal/scripts/check-architecture.py",
@@ -308,7 +321,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean"],
+    highlightingPeers: ["lean", ...CPP_GRAMMAR],
     surveyRepository: "legibility",
     surveyCommit: "ff46a8e811e0f75246b2fe1cafa8e18954dede3f",
     surveyPath: "src/probe/artifact_refs.py",
@@ -338,7 +351,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean"],
+    highlightingPeers: ["lean", "c"],
     surveyRepository: "gvisor",
     surveyCommit: "0da391ef9ab8d513fba6412f4b14680917a00556",
     surveyPath: "vdso/check_vdso.py",
@@ -386,7 +399,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "swift",
     // A Swift `let` declaration of one name is also a Rust one, and Rust
     // colors the name it binds as Swift does.
-    highlightingPeers: ["rust"],
+    highlightingPeers: ["rust", "c"],
     surveyRepository: "gvisor",
     surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
     surveyPath: "tools/cfc-sandbox/Package.swift",
@@ -411,6 +424,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "swift",
+    highlightingPeers: ["c"],
     surveyRepository: "loom-scripts",
     surveyCommit: "fb0f2eb1031c548992b4e76bd79f79c30b7c548e",
     surveyPath: "icontact/extract-contacts.swift",
@@ -428,7 +442,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "kotlin",
     // Directive configuration colors the word that opens a statement as a
     // keyword, as Kotlin colors the `suspend` modifier that opens a line.
-    highlightingPeers: ["directive"],
+    highlightingPeers: ["directive", ...CPP_GRAMMAR],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "776e81bca0cbee698d99808973212273b62af8d0",
     surveyPath:
@@ -452,6 +466,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "kotlin",
+    highlightingPeers: C_FAMILY,
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "e88977de1086357c148795a3d8560ff164ba2278",
     surveyPath: "android/app/build.gradle.kts",
@@ -495,6 +510,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "rust",
+    highlightingPeers: C_FAMILY,
     surveyRepository: "danfuzz-land",
     surveyCommit: "1b1dd23ebf2e774ed52dd95cb317c5cc7f4f124f",
     surveyPath:
@@ -511,6 +527,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "rust",
+    highlightingPeers: C_FAMILY,
     surveyRepository: "gvisor",
     surveyCommit: "a5f0778c3895302c448f4db3b977aeae2b4dfc59",
     surveyPath: "images/basic/rust/helloworld.rs",
@@ -613,6 +630,115 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "leanprover/lean4", className: "typeName" },
   },
   {
+    languageId: "c",
+    // The C++ grammar, which C++, CUDA, and headers use, reads these C
+    // declarations as the C grammar does.
+    highlightingPeers: CPP_GRAMMAR,
+    surveyRepository: "gvisor",
+    surveyCommit: "53489c2820a58bc82aa788447660474d493489d0",
+    surveyPath: "pkg/sentry/platform/systrap/sysmsg/sighandler_amd64.c",
+    before: new URL("./c-gvisor/before.c", import.meta.url),
+    after: new URL("./c-gvisor/after.c", import.meta.url),
+    incomplete: new URL("./c-gvisor/incomplete.c", import.meta.url),
+    selection: {
+      filenames: [
+        "pkg/sentry/platform/systrap/sysmsg/sighandler_amd64.c",
+        "runtime/fuse/verify-structs.c",
+      ],
+      aliases: ["c"],
+    },
+    beforeEvidence: { text: "__export_start", className: "functionName" },
+    afterEvidence: { text: "__export_sighandler", className: "functionName" },
+    incompleteEvidence: {
+      text: "__export_sighandler",
+      className: "functionName",
+    },
+  },
+  {
+    languageId: "c",
+    highlightingPeers: CPP_GRAMMAR,
+    surveyRepository: "labs",
+    surveyCommit: "74705eea154f43c67bb9942e65a59954b726ed1e",
+    surveyPath: "packages/fuse/verify-structs.c",
+    before: new URL("./c-labs/before.c", import.meta.url),
+    after: new URL("./c-labs/after.c", import.meta.url),
+    incomplete: new URL("./c-labs/incomplete.c", import.meta.url),
+    beforeEvidence: { text: "main", className: "functionName" },
+    afterEvidence: { text: "main", className: "functionName" },
+    incompleteEvidence: { text: "main", className: "functionName" },
+  },
+  {
+    languageId: "cpp",
+    // CUDA and headers use the C++ language's grammar, and Lean colors the
+    // name a `class` or `namespace` declares as C++ does.
+    highlightingPeers: ["cuda", "c-family-header", "lean"],
+    surveyRepository: "gvisor",
+    surveyCommit: "cebe1c52b7203cb4de7ab9a61f5cd63805ed3448",
+    surveyPath: "test/syscalls/linux/cfc_test.cc",
+    before: new URL("./cpp-gvisor/before.cc", import.meta.url),
+    after: new URL("./cpp-gvisor/after.cc", import.meta.url),
+    incomplete: new URL("./cpp-gvisor/incomplete.cc", import.meta.url),
+    selection: {
+      filenames: [
+        "test/syscalls/linux/cfc_test.cc",
+        "src/main.cpp",
+        "src/main.cxx",
+        "src/main.c++",
+        "include/util.hh",
+        "include/util.hpp",
+        "include/util.hxx",
+        "include/util.h++",
+        "include/util.tcc",
+      ],
+      aliases: ["cpp", "c++", "cxx"],
+    },
+    beforeEvidence: { text: "CFCTest", className: "interfaceName" },
+    afterEvidence: { text: "CFCTest", className: "interfaceName" },
+    incompleteEvidence: { text: "CFCTest", className: "interfaceName" },
+  },
+  {
+    languageId: "cuda",
+    // Directive configuration colors the word that opens a line as a keyword,
+    // as CUDA colors its qualifiers.
+    highlightingPeers: ["cpp", "c-family-header", "directive"],
+    surveyRepository: "gvisor",
+    surveyCommit: "7c2bcddc13c1729e345cfd9a75b910822e4ddcd1",
+    surveyPath: "images/gpu/cuda-tests/cuda_malloc.cu",
+    before: new URL("./cuda-gvisor/before.cu", import.meta.url),
+    after: new URL("./cuda-gvisor/after.cu", import.meta.url),
+    incomplete: new URL("./cuda-gvisor/incomplete.cu", import.meta.url),
+    selection: {
+      filenames: [
+        "images/gpu/cuda-tests/cuda_malloc.cu",
+        "images/gpu/cuda-tests/cuda_test_util.cuh",
+      ],
+      aliases: ["cuda"],
+    },
+    beforeEvidence: { text: "__global__", className: "keyword" },
+    afterEvidence: { text: "__global__", className: "keyword" },
+    incompleteEvidence: { text: "__global__", className: "keyword" },
+  },
+  {
+    languageId: "c-family-header",
+    highlightingPeers: ["c", "cpp", "cuda", "lean"],
+    surveyRepository: "gvisor",
+    surveyCommit: "2c1c4a5516248ba575cc17a4fbe569e540469160",
+    surveyPath: "test/util/fs_util.h",
+    before: new URL("./c-family-header-gvisor/before.h", import.meta.url),
+    after: new URL("./c-family-header-gvisor/after.h", import.meta.url),
+    incomplete: new URL(
+      "./c-family-header-gvisor/incomplete.h",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: ["test/util/fs_util.h"],
+      aliases: ["c-family-header", "h"],
+    },
+    beforeEvidence: { text: "gvisor", className: "interfaceName" },
+    afterEvidence: { text: "RENAME_EXCHANGE", className: "binding" },
+    incompleteEvidence: { text: "gvisor", className: "interfaceName" },
+  },
+  {
     languageId: "shell",
     // `local` is also a Lean declaration modifier, which Lean colors as shell
     // colors the declaration.
@@ -652,6 +778,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "shell",
+    highlightingPeers: C_FAMILY,
     surveyRepository: "loom",
     surveyCommit: "12d633c0e865491b4d006c883f4201eab1edcaec",
     surveyPath: "src/bin/check-deno-setup-gate.sh",

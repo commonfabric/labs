@@ -4,25 +4,25 @@
  * each stopped once the room is joined, unless the client opened the room
  * itself. Such a catalog is one kept before the manager recorded memberships.
  *
- * Each scenario has a fresh person keep rooms of their own.
+ * Each scenario has a fresh person keep rooms of their own, and is set up when
+ * the first of its tests reads it.
  * `fabrichat-room-list-fixture.ts` holds the server and clients the
  * `fabrichat-room-list-*` files share.
  */
 
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import type { DID, Identity } from "@commonfabric/identity";
 import type { Cell } from "@commonfabric/runner";
 import {
   adoptedRooms,
   arrivedIn,
-  type Client,
   HANDLE,
   RoomListServer,
   roomNodesOn,
   runningOn,
   serving,
 } from "./fabrichat-room-list-fixture.ts";
+import { once } from "./multi-runtime-harness.ts";
 
 describe("fabrichat-room-list-adoption", () => {
   let fabric: RoomListServer;
@@ -36,42 +36,40 @@ describe("fabrichat-room-list-adoption", () => {
   });
 
   describe("adopting rooms the catalog lists with no membership", () => {
-    let person: Identity;
-    let rooms: DID[];
-    let noRoom: DID;
-    let client: Client;
-    let runningBefore: string[];
-    let roomNodesBefore: number;
-    let stopped: number;
-    let outcomes: { status?: string; room?: Cell<unknown> }[];
-
-    beforeAll(async () => {
-      const made = await fabric.personWithRooms("erin", 3);
-      person = made.person;
-      rooms = made.rooms;
-      noRoom = await fabric.orphanRooms(person, rooms);
-      client = await fabric.bootClient({ adopt: false, person });
-      runningBefore = runningOn(client);
-      roomNodesBefore = roomNodesOn(client);
-      stopped = await client.controller.adoptCatalogRooms();
+    const adopting = once(async () => {
+      const { person, rooms } = await fabric.personWithRooms("erin", 3);
+      const noRoom = await fabric.orphanRooms(person, rooms);
+      const client = await fabric.bootClient({ adopt: false, person });
+      const runningBefore = runningOn(client);
+      const roomNodesBefore = roomNodesOn(client);
+      const stopped = await client.controller.adoptCatalogRooms();
       await fabric.settle(client.controller);
-      outcomes = await adoptedRooms(client, [...rooms, noRoom]);
+      const outcomes = await adoptedRooms(client, [...rooms, noRoom]);
+      return {
+        person,
+        rooms,
+        client,
+        runningBefore,
+        roomNodesBefore,
+        stopped,
+        outcomes,
+      };
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("stops the piece of each room it joins", () => {
+    it("stops the piece of each room it joins", async () => {
       // Under server execution a client starts a room's piece only where its
       // own echo of the join reaches the room, which it does for some of the
       // rooms and not others from run to run; each piece it does start is
       // stopped, and none is left running, as the next case says.
       if (serving) return;
+      const { rooms, stopped } = await adopting();
       expect(stopped).toBe(rooms.length);
     });
 
-    it("leaves no room's piece running, and no node of the room pattern", () => {
+    it("leaves no room's piece running, and no node of the room pattern", async () => {
+      const { rooms, client, roomNodesBefore, outcomes } = await adopting();
       expect(
         outcomes.slice(0, rooms.length).map(({ room }) =>
           room !== undefined &&
@@ -85,6 +83,7 @@ describe("fabrichat-room-list-adoption", () => {
     it("leaves no intent outstanding and no speculative entry in a room's space", async () => {
       // Only a client under server execution echoes the joins.
       if (!serving) return;
+      const { rooms, client } = await adopting();
       const overlay = client.controller.runtime.speculationOverlay;
       expect(overlay).toBeDefined();
       await overlay!.waitForIntentQuiescence();
@@ -94,11 +93,13 @@ describe("fabrichat-room-list-adoption", () => {
       );
     });
 
-    it("leaves the pieces that ran before it running, and no other", () => {
+    it("leaves the pieces that ran before it running, and no other", async () => {
+      const { client, runningBefore } = await adopting();
       expect(runningOn(client)).toEqual(runningBefore);
     });
 
-    it("records each room's adoption, and refuses the space with no room", () => {
+    it("records each room's adoption, and refuses the space with no room", async () => {
+      const { rooms, outcomes } = await adopting();
       expect(outcomes.map(({ status }) => status)).toEqual([
         ...rooms.map(() => "done"),
         "refused",
@@ -106,24 +107,18 @@ describe("fabrichat-room-list-adoption", () => {
     });
 
     describe("a client booting after the adoption", () => {
-      let second: Client;
-      let secondStopped: number;
-
-      /** The documents each room's space delivered to it while it adopted. */
-      let arrivedWhileAdopting: number[];
-
-      beforeAll(async () => {
-        second = await fabric.bootClient({ adopt: false, person });
-        secondStopped = await second.controller.adoptCatalogRooms();
+      const booting = once(async () => {
+        const { person, rooms } = await adopting();
+        const second = await fabric.bootClient({ adopt: false, person });
+        const secondStopped = await second.controller.adoptCatalogRooms();
         await fabric.settle(second.controller);
-        arrivedWhileAdopting = arrivedIn(second, rooms);
+        // The documents each room's space delivered to it while it adopted.
+        const arrivedWhileAdopting = arrivedIn(second, rooms);
+        return { rooms, secondStopped, arrivedWhileAdopting };
       });
 
-      afterAll(async () => {
-        await second?.controller.dispose();
-      });
-
-      it("adopts nothing, and receives no document from any room's space", () => {
+      it("adopts nothing, and receives no document from any room's space", async () => {
+        const { rooms, secondStopped, arrivedWhileAdopting } = await booting();
         expect(secondStopped).toBe(0);
         expect(arrivedWhileAdopting).toEqual(rooms.map(() => 0));
       });
@@ -131,16 +126,10 @@ describe("fabrichat-room-list-adoption", () => {
   });
 
   describe("adopting a room that a client opens while it adopts", () => {
-    let rooms: DID[];
-    let client: Client;
-    let stopped: number;
-    let outcomes: { status?: string; room?: Cell<unknown> }[];
-
-    beforeAll(async () => {
-      const made = await fabric.personWithRooms("frank", 2);
-      rooms = made.rooms;
-      await fabric.orphanRooms(made.person, rooms);
-      client = await fabric.bootClient({ adopt: false, person: made.person });
+    const adopting = once(async () => {
+      const { person, rooms } = await fabric.personWithRooms("frank", 2);
+      await fabric.orphanRooms(person, rooms);
+      const client = await fabric.bootClient({ adopt: false, person });
       // The client opens the first room as a page does, as soon as the
       // adoption has recorded its membership.
       const opened = Promise.withResolvers<void>();
@@ -156,6 +145,7 @@ describe("fabrichat-room-list-adoption", () => {
         if (room === undefined || opening !== undefined) return;
         opening = client.controller.startPiece(room).then(opened.resolve);
       });
+      let stopped: number;
       try {
         stopped = await client.controller.adoptCatalogRooms();
         await opened.promise;
@@ -163,14 +153,14 @@ describe("fabrichat-room-list-adoption", () => {
         cancel();
       }
       await fabric.settle(client.controller);
-      outcomes = await adoptedRooms(client, rooms);
+      const outcomes = await adoptedRooms(client, rooms);
+      return { client, stopped, outcomes };
     });
 
-    afterAll(async () => {
-      await client?.controller.dispose();
-    });
+    afterAll(() => fabric.disposeClients());
 
-    it("leaves the opened room's piece running, and stops the other's", () => {
+    it("leaves the opened room's piece running, and stops the other's", async () => {
+      const { client, stopped, outcomes } = await adopting();
       expect(
         outcomes.map(({ room }) =>
           room !== undefined &&

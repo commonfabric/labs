@@ -1121,19 +1121,19 @@ function finalizeSchedulerAction(
     args.actionEndTime,
     args.reads,
   );
+  const annotated = args.action as Partial<TelemetryAnnotations>;
+  const src = getAuthoredDebugSource(annotated.module?.implementation)?.src;
+  const piece = annotated.schedulerObservationIdentity?.pieceRootId;
   state.runtime.telemetry.submit({
     type: "scheduler.run.complete",
     actionId: args.actionId,
     actionInfo: state.getActionTelemetryInfo(args.action),
     durationMs: elapsed,
-    ...(args.reads
-      ? {
-        reads: args.reads,
-        src: getAuthoredDebugSource(
-          (args.action as Partial<TelemetryAnnotations>).module?.implementation,
-        )?.src,
-      }
-      : {}),
+    inputDriven: args.invalidCauses !== undefined &&
+      args.invalidCauses.length > 0,
+    ...(piece === undefined ? {} : { piece }),
+    ...(src === undefined ? {} : { src }),
+    ...(args.reads ? { reads: args.reads } : {}),
     ...(args.error !== undefined
       ? { error: args.error instanceof Error ? args.error.message : "error" }
       : {}),
