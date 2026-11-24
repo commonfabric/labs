@@ -269,9 +269,9 @@ export class CFChip extends BaseElement {
       }
 
       /*
-       * The slot lays out no box of its own, so an empty one leaves no gap
-       * before the label, and a slotted icon is a flex item of the row.
-       */
+      * The slot lays out no box of its own, so an empty one leaves no gap
+      * before the label, and a slotted icon is a flex item of the row.
+      */
       .chip-icon {
         display: contents;
         font-size: var(--cf-font-body-compact-size, 0.8125rem);
