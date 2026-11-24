@@ -1448,8 +1448,8 @@ describe("piece pull materialization", () => {
   });
 
   it("holds a retained link to another piece's result to the full producer proof", async () => {
-    // The board's shape: its `topics` list links to Topics, each a piece with
-    // a contract of its own. That contract is a producer's, which the update
+    // A reader whose list links to other pieces' results, each with a
+    // contract of its own. That contract is a producer's, which the update
     // does not replace, so everything it admits must still be accepted: an
     // open object there admits any value under a name it does not declare.
     const authorWith = (extra: Record<string, JSONSchema>): JSONSchema => ({
