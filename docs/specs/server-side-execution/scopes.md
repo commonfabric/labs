@@ -347,7 +347,7 @@ coexist on one root, the run set is exactly the identity-bearing
 demand entries: the space demand rides those runs (the space
 consumer reads the run's value) and mints no separate userless run,
 so the root's derived writes carry the scoped demander's acting
-annotation — recorded, not read (protocol.md §1; its "a space-scope
+annotation — recorded, and deciding nothing (protocol.md §1; its "a space-scope
 derivation carries none" is the NO-identity-bearing-demand case).
 Before any narrowing, a node runs at SPACE
 scope and needs no principal at all. Handlers are the other case and

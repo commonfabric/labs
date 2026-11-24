@@ -233,6 +233,7 @@ type ProfileDefaultPattern = {
   [UI]: VNode;
   name: string;
   avatar: string;
+  pictureBlob?: { space?: string; id?: string };
   picture?: FabricBytes;
   bio: string;
   externalLinks: ExternalProfileLink[];
@@ -268,24 +269,44 @@ type SetProfileInboxEvent = {
 };
 ```
 
-`picture` is the profile picture: the bytes of a raster image, in any format
-an HTML `<img>` decodes. No media type is stored with it, because the browser
-determines the format of a raster image from its bytes. A profile with no
-picture holds empty bytes, and a stored profile from before the field had that
-default may hold no `picture` property. Only the owner sets it, through
-`setPicture`, which refuses every other writer. The profile's edit form drives
-`setPicture` from an image picked with
-`<cf-avatar-input>`; that component crops the image to its centered square and
-scales it to 128 pixels on each side, so the bytes stay small enough to store
-inline and to copy into snapshots.
+`pictureBlob` is the profile picture as a blob: a raster image, in any format
+an HTML `<img>` decodes, named by the DID of the space whose blob store holds
+it and the blob's id there. Its bytes stay out of the profile, so they are
+carried by no list, feed or snapshot that carries the profile, and a reader
+fetches them from that blob store, `GET /<space>/blobs/<hash>`, which needs no
+credential ([files](../common/capabilities/files.md)). A blob's id is the hash
+of its media type and bytes, and the memory server stores a blob's record only
+under that hash, so a reference names fixed bytes. Nothing deletes a blob, so
+a picture the owner replaces or clears stays fetchable by anyone who holds its
+reference. A profile that holds no picture as a blob holds `{}`, and a stored
+profile from before the field may hold no `pictureBlob` property.
+
+`picture` is the profile picture as bytes held inline, the format being read
+from the bytes: a host that holds only bytes, such as a host's profile
+suggestion, sets it so. A profile that holds no picture as bytes holds empty
+bytes, and a stored profile from before the field had that default may hold
+no `picture` property.
+
+Only the owner sets either, through `setPicture`, which refuses every other
+writer. A picture sent as a blob a host stored it in (`pictureBlob`, or
+`<cf-avatar-input>`'s `detail.blob`) is stored in `pictureBlob`, and one sent
+as bytes (`picture`, or `detail.bytes`) in `picture`; an event carrying both
+is taken as the blob, and each empties the other field. The bytes reach the
+blob store the way a file's do: the host code that holds them uploads them,
+and no pattern does. The profile's edit form drives `setPicture` from
+`<cf-avatar-input>`, which crops the picked image to its centered square,
+scales it to 128 pixels on each side, and stores it as a blob in the space it
+is shown in; `cf profile set-picture` stores the picture as a blob in the
+profile's own space.
 
 `avatar` is free text: a URL, a `data:` URL, or a glyph. Its writer
 `setAvatar` remains, but no form or pattern in this repository sends to it, and
 new profiles hold `""`. It stays in the contract because stored profiles and
 deployed readers hold and read it as a string. Every reader draws a profile's
-picture, or else its avatar text, or else initials: `<cf-profile-badge>` does
-so from the live profile, and a pattern that snapshots a profile's appearance
-copies the picture when there is one and the avatar text when there is not.
+picture, from `pictureBlob` or else from `picture`, or else its avatar text, or
+else initials: `<cf-profile-badge>` does so from the live profile, and a
+pattern that snapshots a profile's appearance copies the picture's reference or
+bytes when there is a picture and the avatar text when there is not.
 
 `bio` (CT-1648) is a short, owner-authored free-text description, the canonical
 shared-profile bio — distinct from Home's legacy `learned.summary`. Like `name`
@@ -443,7 +464,7 @@ If `profile` is missing:
 If `profile` is present:
 
 - render the profile default pattern or a compact summary based on
-  `profile.name` and `profile.picture`
+  `profile.name` and the profile's face (`profileFace()`)
 
 This write targets the home default pattern because that is the current durable
 home-field convention used by favorites. If custom home pattern replacement
@@ -477,6 +498,7 @@ and element mutations:
 
 - `profileDefault.name`
 - `profileDefault.avatar`
+- `profileDefault.pictureBlob`
 - `profileDefault.picture`
 - `profileDefault.elements`
 - `profileDefault.addElement` / `profileDefault.removeElement` writes that

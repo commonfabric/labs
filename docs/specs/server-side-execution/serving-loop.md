@@ -2963,9 +2963,13 @@ mode;
 unloaded on it, once each time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
 instance it does not vouch for; `falseClean` the pieces the index held
-clean that wrote an instance they vouched for again, to a value other than
+clean that wrote an instance they answered for again, to a value other than
 the one it held, with no input of theirs changed, each one a judgment that
-would have served a stale value; `indexWakes` and `expiryWakes` the times
+would have served a stale value. An instance a slice vouches for at its own
+key counts whichever derivation wrote it, and a slot it decides at another
+key counts where each revision of the slot since is attributed
+(protocol.md §1) to a run at the slice's key and the record being stored
+names the slot as one the slice decides; `indexWakes` and `expiryWakes` the times
 the loop was woken to judge a root it had left unloaded, or a piece that
 runs and is stale upstream, because the index changed from outside the loop
 or a slice's record expired; `carried` the

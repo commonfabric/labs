@@ -407,9 +407,10 @@ export type ServingLoopStats = {
      * commit reports. */
     expiryWakes: number;
 
-    /** Pieces the index held clean that wrote an instance they vouched for
-     * again, to a value other than the one it held, with no input of theirs
-     * changed. Each one is a judgment that would have served a stale
+    /** Pieces the index held clean that wrote an instance they answered
+     * for again, one a slice vouches for at its own key or decides at
+     * another, to a value other than the one it held, with no input of
+     * theirs changed. Each one is a judgment that would have served a stale
      * value. */
     falseClean: number;
 

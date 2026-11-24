@@ -8,6 +8,10 @@ const profileDisplayListSchema = {
     type: "object",
     properties: {
       name: { type: "string" },
+      pictureBlob: {
+        type: "object",
+        properties: { space: { type: "string" }, id: { type: "string" } },
+      },
       picture: { type: "FabricBytes" },
       avatar: { type: "string" },
       initialNameApplied: { type: "string" },

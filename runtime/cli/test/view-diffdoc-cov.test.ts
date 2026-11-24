@@ -9,7 +9,7 @@ import {
   buildDiffDocument,
   type DiffWorkspace,
   realWorkspace,
-  type WorkspaceCache,
+  WorkspaceCache,
 } from "../lib/view/diffdoc.ts";
 
 /** A workspace stub over a prepared root directory. */
@@ -240,13 +240,17 @@ Deno.test("buildDiffDocument: a shared cache is reused across builds (cache hit)
 +export const b = a;
 `;
     const model = parseDiff(diff)!;
-    const cache: WorkspaceCache = new Map();
+    const cache = new WorkspaceCache();
     const ws = stubWs(root);
     // First build populates the cache for the resolved abs path.
     const first = buildDiffDocument(diff, model, ws, cache);
     assert(first.maps.rootFiles.size === 1, "first build resolved the file");
     const [absPath] = first.maps.rootFiles.keys();
-    assert(cache.has(absPath), "cache populated after the first build");
+    assertEquals(
+      cache.file(absPath)?.fileText,
+      "export const a = 1;\nexport const b = a;\n",
+      "cache holds the file the first build read",
+    );
     // Make read() throw if called again; the cache hit must avoid re-reading.
     const throwingWs: DiffWorkspace = {
       resolve: (p) => join(root, p),

@@ -593,8 +593,8 @@ export class StoreCurrency {
         if (stored.falseClean.length > 0) {
           logger.warn("currency-false-clean", () => [
             `space ${this.#space}: ${stored.falseClean.length} piece(s) the ` +
-            "currency index held clean wrote a different value to a " +
-            "vouched output with no input changed: " +
+            "currency index held clean wrote a different value to an " +
+            "output it answered for with no input changed: " +
             stored.falseClean.join(", "),
           ]);
         }
