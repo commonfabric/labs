@@ -699,8 +699,8 @@ of the rest as plain text. It parses them in the background while it takes keys,
 and colors the files that have finished each time source as long as a sixteenth
 of the diff, and at least 131,072 characters, has finished parsing since it last
 colored them, and again once every parse has ended. A file stays plain until
-both of its sides have finished parsing. Meanwhile, the status bar shows
-a spinner and a gauge of how much of their source has been parsed, before the
+both of its sides have finished parsing. Meanwhile, the status bar shows a
+spinner and a gauge of how much of their source has been parsed, before the
 current file's name, with the word "Highlighting" when there is room. Key hints
 make way for the gauge, except the first two, Help and Quit. When files cannot
 be parsed, the status line says so, with the reason the first one failed, and
