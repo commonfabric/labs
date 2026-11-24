@@ -14,7 +14,7 @@ import { dockerfileDocument, dockerfileLines } from "./dockerfile.ts";
  * semantic layer.
  *
  * `Dockerfile.x86_64` and other names that add a dot and a suffix to
- * `Dockerfile` or `Containerfile` select it, apart from the ignore files that
+ * `Dockerfile` or `Containerfile`, in any case, select it, apart from the ignore files that
  * BuildKit pairs with such names, such as `Dockerfile.build.dockerignore`, and
  * names whose last suffix is an extension that another language claims.
  */
@@ -27,7 +27,7 @@ export const dockerfileLanguage: Language = {
     extensions: [".dockerfile", ".containerfile"],
     filenames: ["Dockerfile", "dockerfile", "Containerfile", "containerfile"],
     filenamePatterns: [
-      /^(?:Dockerfile|Containerfile)(?!.*\.(?:docker|container)ignore$)\../,
+      /^(?:Dockerfile|Containerfile)(?!.*\.(?:docker|container)ignore$)\../i,
     ],
     aliases: ["docker", "containerfile"],
     interpreters: [],

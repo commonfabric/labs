@@ -1198,7 +1198,7 @@ They are not Dockerfiles, and they belong with the Docker ignore files.
 
 `Dockerfile` and `Containerfile`, their lowercase spellings, and the
 `.dockerfile` and `.containerfile` extensions select the language. So does a
-name that adds a dot and a suffix to either capitalized name, unless it is such
+name that adds a dot and a suffix to either name, in any case, unless it is such
 an ignore file or its last suffix is an extension another language claims
 whatever the source holds, as shell claims `Dockerfile.sh`. It uses a focused
 scanner rather than Tree-sitter. No npm package carries a WebAssembly build of a

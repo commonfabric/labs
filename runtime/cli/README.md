@@ -599,21 +599,22 @@ structure tree lists sections with the keys and hosts in each.
 
 The Dockerfile language reads the syntax of BuildKit's Dockerfile frontend in
 files named `Dockerfile`, `dockerfile`, `Containerfile`, or `containerfile`, in
-names that add a dot and a suffix to `Dockerfile` or `Containerfile`, such as
-`Dockerfile.x86_64`, and in `.dockerfile` and `.containerfile` files. A suffix
-that is an extension another language claims whatever the source holds, as shell
-claims `.sh`, selects that language. The ignore file BuildKit pairs with a
-Dockerfile, such as `Dockerfile.build.dockerignore`, is not a Dockerfile. The
-shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a health check's command is
-colored as shell, unless a `SHELL` instruction earlier in the build stage, or in
-the stage it is built from, names a shell other than `sh`, `bash`, `dash`, or
-`ash`. The exec form is colored as a JSON array of strings. The body of a `RUN`
-whose command is a single heredoc is a script, colored as shell when its shebang
-names one of those shells or, without a shebang, when the shell form is. The
-bodies of `COPY` and `ADD` heredocs are colored as strings. A continuation line
-skips blank lines and comments, as BuildKit does, and an `escape` parser
-directive can make the backtick the escape character. The structure tree lists
-build stages and the variables that `ARG` and `ENV` set in each.
+names that add a dot and a suffix to `Dockerfile` or `Containerfile`, in any
+case, such as `Dockerfile.x86_64`, and in `.dockerfile` and `.containerfile`
+files. A suffix that is an extension another language claims whatever the source
+holds, as shell claims `.sh`, selects that language. The ignore file BuildKit
+pairs with a Dockerfile, such as `Dockerfile.build.dockerignore`, is not a
+Dockerfile. The shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a health check's
+command is colored as shell, unless a `SHELL` instruction earlier in the build
+stage, or in the stage it is built from, names a shell other than `sh`, `bash`,
+`dash`, or `ash`. The exec form is colored as a JSON array of strings. The body
+of a `RUN` whose command is a single heredoc is a script, colored as shell when
+its shebang names one of those shells or, without a shebang, when the shell form
+is. The bodies of `COPY` and `ADD` heredocs are colored as strings. A
+continuation line skips blank lines and comments, as BuildKit does, and an
+`escape` parser directive can make the backtick the escape character. The
+structure tree lists build stages and the variables that `ARG` and `ENV` set in
+each.
 
 Org mode covers `.org` files. Headlines, keywords, blocks, comments, drawers,
 tables, lists, links, code, and timestamps are colored, and the structure tree

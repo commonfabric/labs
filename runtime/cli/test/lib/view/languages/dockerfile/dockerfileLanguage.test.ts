@@ -60,11 +60,18 @@ describe("dockerfileLanguage", () => {
       }
     });
 
+    it("selects a name that adds a suffix to `Dockerfile` or `Containerfile` in any case", () => {
+      for (const path of ["dockerfile.dev", "CONTAINERFILE.prod"]) {
+        expect(languageForFile(path).id).toBe("dockerfile");
+      }
+    });
+
     it("leaves the ignore files paired with a Dockerfile, and similar names, to other languages", () => {
       for (
         const path of [
           "memory-router/Dockerfile.build.dockerignore",
           "Containerfile.containerignore",
+          "Dockerfile.BUILD.DOCKERIGNORE",
           ".dockerignore",
           "lib/dockerfile.ts",
           "DOCKERFILE",
