@@ -6662,12 +6662,13 @@ is relitigated.
   clauses read, which puts the limit near 150 such items by arithmetic and
   not by a run. The boundary of the ruling: the path writes version-2
   envelopes, which a runtime from before version 2 refuses with
-  `UnknownCfcMetadataVersionError`. A compiled piece therefore uses it only
-  in a space whose every reader understands version-2 envelopes, and the
-  round that builds it shows that for each reader of a runtime with
-  `compiledPatterns` on; a space still read by an older runtime keeps the
-  option off until those readers are updated. Being built on the branch
-  `merge-attempt/serving-m6`.
+  `UnknownCfcMetadataVersionError`. The owner ruled the same day that this
+  is accepted: "don't worry about backwards compatibility". A runtime with
+  `compiledPatterns` on writes what a compiled piece commits through the
+  path, with no gate per space; an older runtime cannot read those
+  documents. The build spends no work on compatibility with older runtimes
+  or with data that earlier builds of the compiled path stored. Being built
+  on the branch `merge-attempt/serving-m6`.
 
 ## Provisional decisions awaiting the owner's ratification
 

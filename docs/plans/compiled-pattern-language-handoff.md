@@ -88,8 +88,8 @@ one case of `test/compiled/`, the first item below.
   both paths; the option waits on every deployed reader understanding
   version-2 envelopes. The owner ruled on 2026-11-24 (Z95) that a
   compiled piece commits through that path, with today's path left at its
-  default and only in a space whose every reader understands version-2
-  envelopes; that is being built on this branch. Separately, a start
+  default, and that compatibility with runtimes from before version-2
+  envelopes is not a concern; that is being built on this branch. Separately, a start
   writes one label entry per written path of its lists of readers (884 at
   200 items), so its size follows rows times clauses read; what label such
   a document owes is deferred question 1 of round thirteen.
@@ -506,6 +506,8 @@ these rules:
   sought helps every pattern (Z91).
 - No method that regular JavaScript arrays lack is added to the language;
   the crate recognizes the JavaScript form (Z92).
+- No work goes into compatibility with older runtimes or with data that
+  earlier builds of the compiled path stored (the owner, with Z95).
 - When writing about `map`, `filter` or another per-element construct, name
   the case: an array of references, an array of plain values in place, or
   the result of another per-element construct.
