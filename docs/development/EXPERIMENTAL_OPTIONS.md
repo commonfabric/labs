@@ -68,7 +68,7 @@ was last checked against the code.
 | [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
 | [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | on in toolshed | Bernhard Seefeld (serve each space from the process that owns it) | delete the knob and the in-process crossings once every process keeps the lease in memory | implemented for every crossing, on by default in toolshed |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
-| [`SERVER_EXECUTION_CURRENCY_INDEX`](#server_execution_currency_index) | `SERVER_EXECUTION_CURRENCY_INDEX` env on toolshed (`skip`, `record`, `off`), or `SpaceServerPolicy.currencyIndex` | `skip` on toolshed; none for a policy that sets no mode | Bernhard Seefeld (the currency index of a space's store) | make `skip` the only behavior once deployed spaces have run it with `currency.falseClean` at zero | implemented, on by default on toolshed |
+| [`SERVER_EXECUTION_CURRENCY_INDEX`](#server_execution_currency_index) | `SERVER_EXECUTION_CURRENCY_INDEX` env on toolshed (`skip`, `start-upstream`, `record`, `off`), or `SpaceServerPolicy.currencyIndex` | `skip` on toolshed; none for a policy that sets no mode | Bernhard Seefeld (the currency index of a space's store) | make `start-upstream` the only behavior once deployed spaces have run under it with `currency.falseClean` at zero | implemented, `skip` by default on toolshed |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
 
@@ -2481,18 +2481,30 @@ the per-epic implementation notes).
   `ExecutorHost` sets the policy field directly, and a test's serving memory
   server (`runtime/runner/src/executor/serving-memory-server.deno.ts`) reads
   the same variable for a policy that leaves the field unset. On toolshed
-  the mode is `skip` unless the variable says otherwise: `record` and `skip`
-  select a mode, `off` keeps no index, and anything else warns and leaves
-  `skip`. A policy that sets no mode keeps no index, and the test server
-  keeps one only for the literal `record` or `skip`.
-  `SERVER_EXECUTION_CURRENCY_EPOCH` names the build whose records are
-  trusted (`SpaceServerPolicy.currencyEpoch`). Unset on toolshed, the epoch
-  is the commit baked into a compiled binary, so a deployment trusts the
-  records of its own build across restarts, and one made up per process for
-  a source run, whose checkout can change under the commit it names. A
-  serving loop asked to `skip` with no epoch named runs as `record`, with a
-  warning. Meaningful only with the serving loop running
-  ([`serverExecution`](#serverexecution) on).
+  the mode is `skip` unless the variable says otherwise
+  (`DEFAULT_CURRENCY_INDEX` in `server-execution.ts`): `record`, `skip` and
+  `start-upstream` select a mode, `off` keeps no index, and anything else
+  warns and leaves `skip`. The names are matched exactly, from one list
+  (`CURRENCY_INDEX_MODES` in
+  [`runtime/runner/src/executor/store-currency.ts`](../../runtime/runner/src/executor/store-currency.ts)).
+  A starting toolshed logs the mode in force. A policy that sets no mode
+  keeps no index, and the test server keeps one only for the literal name of
+  a mode.
+  `SERVER_EXECUTION_CURRENCY_EPOCH` names the epoch records are stored
+  under and trusted by (`SpaceServerPolicy.currencyEpoch`): a piece recorded
+  under another epoch is started. Unset, the epoch is
+  `DEFAULT_CURRENCY_EPOCH`
+  ([`runtime/runner/src/executor/space-server.ts`](../../runtime/runner/src/executor/space-server.ts)),
+  one fixed value for every build and every process, so a deployment trusts
+  the records of its earlier builds, and a source run those of its earlier
+  runs. A build that changes what an unchanged pattern computes from
+  unchanged inputs, as a fix to the runtime or to a builtin does, therefore
+  leaves the stored outputs judged current until an input of the piece
+  changes. Setting the variable to a value no record carries stops trusting
+  every record stored so far, and each piece starts on its next demand;
+  [the plan](../plans/stored-output-currency.md) lists what else a record
+  carries across builds, under "Known limits". Meaningful only with the
+  serving loop running ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that adds the currency index
   of a space's store.
 - **Purpose.** A serving loop starts a piece whenever a session's demand
@@ -2520,37 +2532,56 @@ the per-epic implementation notes).
   that space's index does not prove the instance current: `currency.carried`
   counts the rows offered now, and `currency.carriedRefused` the rows a
   space refused, as it does an actor's own instance where the actor may not
-  read the space. A root that is stale only through what is upstream of it,
-  in its own space, is not made current by starting its piece: the loop
-  demands the instances that keep it stale, which starts the pieces that
-  write them, and holds the watermark until the root is judged again.
-  `currency.heldUpstream` counts the roots `skip` left unloaded for that,
-  and `currency.upstreamAbandoned` the pieces the loop gave up waiting on
-  what is upstream of, which loads a root that was held for them.
-  `skip` acts on the judgment: a root
+  read the space.
+  `skip` acts on the judgment of what is current: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a
-  demanded instance is resolved under, the record of such a slice expires
+  demanded instance is resolved under, by a commit in the space or by a
+  change another space reports (`currency.indexWakes`), the record of such a slice expires
   because it read the interval clock of a wish, which the loop sets a timer
   for (`currency.expiryWakes`), or a session's demand reaches an instance
   the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
+  That is all `skip` does. A root that is stale only through what is
+  upstream of it, in its own space, is not made current by starting its
+  piece, and `skip` starts its piece all the same, as it starts any root the
+  judgment refuses: the piece derives from what the store holds of the
+  pieces upstream, which is what a loop with no index derives, and it stays
+  marked. `currency.refused` counts such a root under `stale-upstream`,
+  which no other mode counts under, so the count says how many roots
+  `start-upstream` would have held.
+  `start-upstream` leaves a current root unstarted as `skip` does, and treats
+  that case otherwise: the loop
+  leaves the root unloaded, demands the instances that keep it stale, which
+  starts the pieces that write them, and holds the watermark until the root
+  is judged again. A piece that runs and is stale the same way has the
+  pieces upstream of it started too, which `record` does as well.
+  `currency.heldUpstream` counts the roots `start-upstream` left unloaded
+  for that, and `currency.upstreamAbandoned` the pieces the loop gave up
+  waiting on what is upstream of, which loads a root that was held for
+  them; both stay zero under `skip`.
   [The plan](../plans/stored-output-currency.md) carries the design, its
   limits and the stages after this one.
 - **Current default and planned end state.** `skip` on toolshed, and no index
-  for a serving host whose policy sets no mode. The end state is `skip` as
-  the only behavior, once deployed spaces have run it with
-  `currency.falseClean` at zero. `SERVER_EXECUTION_CURRENCY_INDEX=off`
+  for a serving host whose policy sets no mode. The end state is
+  `start-upstream` as the only behavior, once deployed spaces have run under
+  it with `currency.falseClean` at zero;
+  [the plan](../plans/stored-output-currency.md) lists, under "Known
+  limits", what `skip` leaves stale and what is open in the upstream starts.
+  `SERVER_EXECUTION_CURRENCY_INDEX=off`
   restores a start for every demanded piece, and `record` keeps the index
   and starts every piece.
-- **Status on 2026-11-20.** Implemented, and `skip` by default on toolshed.
+- **Status on 2026-11-23.** Implemented, and `skip` by default on toolshed,
+  under an epoch every build shares. `start-upstream` is opt-in.
   The index and its marks are covered in
   `runtime/memory/test/v2-currency-index.test.ts`, what passes between two
   spaces' indexes in
   `runtime/memory/test/v2-server-currency-across-spaces.test.ts`, and
   recording, the judgment, and a skipped root's re-arm in
   `runtime/runner/test/executor/space-server-currency.test.ts` and
-  `space-server-currency-wish.test.ts` beside it. Measured on a
+  `space-server-currency-wish.test.ts` beside it, and what each of `skip`
+  and `start-upstream` does with a root stale only upstream in
+  `space-server-currency-upstream.test.ts`. Measured on a
   synthetic Topics board under a serving worker and on a counter in the
   browser
   ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md)).

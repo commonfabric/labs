@@ -379,11 +379,15 @@ export type ServingLoopStats = {
      * found: `no-record`, `marked`, `other-epoch` (the root's piece), and
      * `unvouched-instance`, `absent-owned`,
      * `owner-not-clean` (a demanded instance of the piece or of one beneath
-     * it). */
+     * it). A `skip` loop adds `stale-upstream`: the roots a judgment found
+     * stale only through what is upstream of them, which it loads as it
+     * loads a refused root and a `start-upstream` loop would have held. No
+     * other mode counts under that reason. */
     refused: Record<string, number>;
 
-    /** Roots left unloaded and unstarted on that judgment, which only the
-     * `skip` mode does, counted once each time a root is first left. */
+    /** Roots left unloaded and unstarted on that judgment, which the `skip`
+     * and `start-upstream` modes do, counted once each time a root is first
+     * left. */
     servedFromStore: number;
 
     /** Roots a judgment had left unloaded that were then loaded: an input
@@ -419,17 +423,19 @@ export type ServingLoopStats = {
     /** Rows of carried demand the space they were sent to refused. */
     carriedRefused: number;
 
-    /** Roots a `skip` loop left unloaded because what the store held of
-     * them was stale only through what is upstream: starting their own
-     * piece would not have made them current, so the loop started the
-     * pieces upstream instead (serving-loop.md §1). */
+    /** Roots a `start-upstream` loop left unloaded because what the store
+     * held of them was stale only through what is upstream: starting their
+     * own piece would not have made them current, so the loop started the
+     * pieces upstream instead (serving-loop.md §1). Zero under `skip` and
+     * under `record`. */
     heldUpstream: number;
 
     /** Pieces, each one whose slices hold a root or one that runs, that
      * the loop gave up waiting on what is upstream of: no piece named for
      * one could be started, or each ran and was recorded and it was stale
      * still. A root is loaded as a refused one is once every piece that
-     * holds it was given up on. */
+     * holds it was given up on. Zero under `skip`, which waits on nothing
+     * upstream. */
     upstreamAbandoned: number;
   };
 

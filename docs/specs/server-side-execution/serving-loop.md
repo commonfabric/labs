@@ -376,9 +376,11 @@ the ruled flows subscribes to setup docs before activation.
 
 **A root the store can serve.** *(AMENDED 2026-11-19; behind
 `SpaceServerPolicy.currencyIndex`, which a toolshed sets to `skip` unless
-SERVER_EXECUTION_CURRENCY_INDEX says otherwise.)* Where the policy keeps
-the currency index (§3b) in its `skip` mode, the demand pass asks the memory
-server, for each root awaiting its first structure load whose piece is not
+SERVER_EXECUTION_CURRENCY_INDEX says otherwise.)* The policy keeps the
+currency index (§3b) in one of three modes: `record`, `skip`, and
+`start-upstream`, which does what `skip` does and what "A root stale
+upstream" below adds. Where the mode is `skip` or `start-upstream`, the
+demand pass asks the memory server, for each root awaiting its first structure load whose piece is not
 running, whether the store can serve it as it stands. A root that is no
 result document is judged as the piece its `result` back-links lead to,
 which is the piece a load of it would start, and a `computed:` root that
@@ -416,8 +418,12 @@ are loaded as before. A `computed:` root narrower than the space is judged
 as a space-scoped one is: its instance is one of the demand rows the piece
 that writes it has to vouch for. In the
 `record` mode the same judgment is made and counted, and every root is
-loaded; a loop whose policy names `skip` and no epoch
-(`SpaceServerPolicy.currencyEpoch`) runs in it. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
+loaded. A root the judgment does not pass is loaded in every mode but one
+case: `start-upstream` holds a root that is stale only upstream, as the
+next paragraphs say. The epoch is the one the loop's policy names
+(`SpaceServerPolicy.currencyEpoch`), and one fixed value shared by every
+build where it names none, so a record is trusted by a later build until an
+input marks it or the policy names another epoch. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
 `judgeCurrencyRoots()` in `runtime/memory/v2/currency-index.ts`; pinned in
 `runtime/runner/test/executor/space-server-currency.test.ts`.
 
@@ -438,7 +444,8 @@ pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
 asks for (`docs/features/document-release.md`).
 
-**A root stale upstream.** *(Behind `SpaceServerPolicy.currencyIndex`.)* A
+**A root stale upstream.** *(Behind `SpaceServerPolicy.currencyIndex`, and
+acted on in its `start-upstream` and `record` modes.)* A
 root whose piece is stale only through what is upstream of it is not made
 current by starting that piece: the piece would derive from what the store
 holds. The judgment tells such a root apart. A slice marked `1` is stale only
@@ -452,7 +459,16 @@ slice that read its output is stale for a reason no start clears
 (`currency_slice.unvouched`). A root that passes but for such slices is held,
 whether they are slices of its own piece or of a piece beneath it that a
 demanded instance is resolved under, and the judgment names the pieces whose
-slices hold it. Under `skip` it is neither loaded nor started, and stays
+slices hold it. That judgment is the same in every mode. Under `skip` the
+loop acts on none of it: the root is loaded and its piece started, as a root
+the judgment refuses is, so the piece derives from what the store holds of
+the pieces upstream, as it does where no index is kept. The loop counts the
+root under the reason `stale-upstream` (§7), demands no instance for it,
+holds W for nothing, and leaves a piece that runs and is stale upstream as it
+is; the record of the started piece is stored marked, so the store serves no
+root that rests on it. The rest of this paragraph is what a `start-upstream`
+loop does, and a `record` loop for a piece that runs. Under `start-upstream`
+the root is neither loaded nor started, and stays
 among the roots awaiting a first load; under `record` it is loaded, and each
 of those pieces is then one that runs and is stale upstream. The loop demands the instances those reads
 name, in its own space, for the pairs the reads were made for, as demand it
@@ -1393,7 +1409,8 @@ executing:
   reached it with no pair is carried on with its origin for the reads made
   in the `space` slice, and the memory
   server drops every row of an origin session when that session ends. A
-  space's own loop offers rows the same way for what keeps one of its roots
+  space's own loop offers rows the same way, in every mode but `skip`, for
+  what keeps one of its roots
   or running pieces stale upstream (§1, "A root stale upstream"): each of
   those rows stands, since its own index named the instance, and a session
   of the space is carried as a pair without the access list being asked. A
@@ -2959,8 +2976,12 @@ store; `unvouched` how many of those were of a piece the loop could not
 vouch for, by reason (§3b); `judged` the roots put to a judgment; `servable`
 the roots a judgment found the store could serve (§1), and `refused` the
 ones it could not, by the first reason found;
-`servedFromStore` the roots the `skip` mode left unloaded on it, once each
-time a root is first left; `rearmed` the roots so left that were then
+`refused` holds one reason the judgment does not return, `stale-upstream`:
+the roots a `skip` loop loaded that a judgment found stale only upstream,
+which a `start-upstream` loop would have held (§1), counted under no other
+mode;
+`servedFromStore` the roots the `skip` and `start-upstream` modes left
+unloaded on it, once each time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
 instance it does not vouch for; `falseClean` the pieces the index held
 clean that wrote an instance they answered for again, to a value other than
@@ -2975,10 +2996,11 @@ runs and is stale upstream, because the index changed from outside the loop
 or a slice's record expired; `carried` the
 rows of demand the loops offer to carry into other spaces now, and
 `carriedRefused` the rows a space they were sent to refused (§3b);
-`heldUpstream` the roots a `skip` loop left unloaded because what the store
-held of them was stale only upstream, once each time a root is first held,
-and `upstreamAbandoned` the pieces, each one whose slices hold a root or
-one that runs, that the loop gave up waiting on what is upstream of (§1).
+`heldUpstream` the roots a `start-upstream` loop left unloaded because what
+the store held of them was stale only upstream, once each time a root is
+first held, and `upstreamAbandoned` the pieces, each one whose slices hold a
+root or one that runs, that the loop gave up waiting on what is upstream of
+(§1); both stay zero under `skip`.
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned

@@ -14,8 +14,14 @@ import {
   open,
 } from "@commonfabric/memory/v2/engine";
 import type { HostMemoryServer } from "../../src/executor/host-memory-server.ts";
-import { emptyServingLoopStats } from "../../src/executor/stats.ts";
-import { StoreCurrency } from "../../src/executor/store-currency.ts";
+import {
+  emptyServingLoopStats,
+  type ServingLoopStats,
+} from "../../src/executor/stats.ts";
+import {
+  type CurrencyIndexMode,
+  StoreCurrency,
+} from "../../src/executor/store-currency.ts";
 import type { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 
@@ -551,8 +557,11 @@ describe("StoreCurrency", () => {
       /** The reads the memory server returns as upstream of a held root. */
       let reads: Array<typeof UPSTREAM>;
 
+      /** What the loops of a case counted. */
+      let stats: ServingLoopStats;
+
       /** A loop that keeps the index as `mode` says. */
-      const loop = (mode: "skip" | "record") =>
+      const loop = (mode: CurrencyIndexMode) =>
         new StoreCurrency({
           space: SPACE,
           server: {
@@ -576,7 +585,7 @@ describe("StoreCurrency", () => {
           mode,
           epoch: "epoch-one",
           serviceIdentity: "did:key:service",
-          stats: emptyServingLoopStats(),
+          stats,
           onOwed: () => {},
           onMarked: () => {},
           runs: (piece) => running.has(piece),
@@ -602,10 +611,63 @@ describe("StoreCurrency", () => {
         running = new Set();
         stale = true;
         reads = [UPSTREAM];
+        stats = emptyServingLoopStats();
       });
 
-      it("holds the root under `skip`, and returns the instance that keeps it stale as one to demand", async () => {
+      it("holds no root under `skip`, counts the root as refused for `stale-upstream`, and names nothing to demand", async () => {
         const currency = loop("skip");
+
+        expect(await judge(currency)).toEqual({
+          servable: [],
+          origins: new Map(),
+          held: [],
+          rearm: [],
+        });
+        expect(currency.staleUpstream).toBe(false);
+        expect(currency.servesFromStore).toBe(false);
+        expect(currency.upstreamReads).toEqual([]);
+        expect([...currency.upstreamProducers]).toEqual([]);
+        expect(currency.takeUpstreamChanged()).toBe(false);
+        expect(stats.currency.refused).toEqual({ "stale-upstream": 1 });
+        expect(stats.currency.heldUpstream).toBe(0);
+      });
+
+      it("counts no root as refused for `stale-upstream` under `start-upstream` or `record`", async () => {
+        await judge(loop("start-upstream"));
+        await judge(loop("record"));
+
+        expect(stats.currency.refused).toEqual({});
+        expect(stats.currency.heldUpstream).toBe(1);
+      });
+
+      it("keeps no running piece as one that is stale upstream under `skip`", async () => {
+        const currency = loop("skip");
+        running.add("of:reader");
+
+        expect((await judge(currency)).held).toEqual([]);
+        expect(currency.staleUpstream).toBe(false);
+        expect(currency.upstreamReads).toEqual([]);
+      });
+
+      it("takes a root it had left unloaded under `skip` out of those once the memory server returns it as stale only upstream", async () => {
+        const currency = loop("skip");
+        stale = false;
+        expect((await judge(currency)).servable).toEqual(["key"]);
+        stale = true;
+
+        expect(await judge(currency)).toEqual({
+          servable: [],
+          origins: new Map(),
+          held: [],
+          rearm: [],
+        });
+        expect(currency.servesFromStore).toBe(false);
+        expect(currency.staleUpstream).toBe(false);
+        expect(stats.currency.rearmed).toBe(1);
+      });
+
+      it("holds the root under `start-upstream`, and returns the instance that keeps it stale as one to demand", async () => {
+        const currency = loop("start-upstream");
 
         expect(await judge(currency)).toEqual({
           servable: [],
@@ -635,7 +697,7 @@ describe("StoreCurrency", () => {
       });
 
       it("serves the root, and demands nothing, once the memory server returns it as servable", async () => {
-        const currency = loop("skip");
+        const currency = loop("start-upstream");
         await judge(currency);
         expect(currency.takeUpstreamChanged()).toBe(true);
         stale = false;
@@ -652,7 +714,7 @@ describe("StoreCurrency", () => {
       });
 
       it("reports a piece upstream as just named at the first judgment that names it, and not at the next", async () => {
-        const currency = loop("skip");
+        const currency = loop("start-upstream");
 
         await judge(currency);
         expect(currency.producerProgress("of:producer").named).toBe(true);
@@ -665,7 +727,7 @@ describe("StoreCurrency", () => {
       });
 
       it("holds the root no longer once what is upstream of it was given up on, while the same piece is named for it", async () => {
-        const currency = loop("skip");
+        const currency = loop("start-upstream");
         await judge(currency);
 
         expect(currency.abandonUpstream("of:reader")).toEqual(["key"]);
@@ -676,8 +738,8 @@ describe("StoreCurrency", () => {
         expect(currency.staleUpstream).toBe(false);
       });
 
-      it("holds the root under `skip` for a read of a piece beneath its own", async () => {
-        const currency = loop("skip");
+      it("holds the root under `start-upstream` for a read of a piece beneath its own", async () => {
+        const currency = loop("start-upstream");
         reads = [NESTED];
 
         expect(await judge(currency)).toEqual({
@@ -705,7 +767,7 @@ describe("StoreCurrency", () => {
       });
 
       it("holds nothing once everything upstream was given up on, and holds the root no more while the same piece is named", async () => {
-        const currency = loop("skip");
+        const currency = loop("start-upstream");
         reads = [UPSTREAM, NESTED];
         await judge(currency);
 
@@ -718,7 +780,7 @@ describe("StoreCurrency", () => {
       });
 
       it("asks the memory server again at the next judgment once one is owed", async () => {
-        const currency = loop("skip");
+        const currency = loop("start-upstream");
         const settled = () =>
           currency.judge(
             runtime,
@@ -797,8 +859,71 @@ describe("StoreCurrency", () => {
         expect(currency.staleUpstream).toBe(false);
       });
 
+      it("asks the memory server nothing about a running piece that a stored record leaves stale, under `skip`", async () => {
+        const asked: string[][] = [];
+        const currency = new StoreCurrency({
+          space: SPACE,
+          server: {
+            judgeCurrencyRoots: (_space, _roots, options) => {
+              asked.push([...(options.running ?? [])]);
+              return Promise.resolve({
+                servable: [],
+                held: [],
+                upstream: [],
+                refused: {},
+                marked: [],
+              });
+            },
+            storeCurrencyRecords: () =>
+              Promise.resolve({
+                marked: [{
+                  piece: "of:reader",
+                  slice: "space",
+                  under: [],
+                  seq: 1,
+                  upstream: true as const,
+                }],
+                falseClean: [],
+                blocked: ["of:reader"],
+                blockedBy: [],
+                behind: [],
+                unread: [],
+              }),
+          } as Pick<
+            HostMemoryServer,
+            "judgeCurrencyRoots" | "storeCurrencyRecords"
+          > as HostMemoryServer,
+          mode: "skip",
+          epoch: "epoch-one",
+          serviceIdentity: "did:key:service",
+          stats,
+          onOwed: () => {},
+          onMarked: () => {},
+          runs: () => true,
+        });
+
+        currency.store({
+          asOf: 1,
+          seen: [],
+          records: [{
+            piece: "of:reader",
+            under: [],
+            vouched: true,
+            writes: [],
+            owned: [],
+            slices: [{ key: "space", vouched: true, reads: [], vouches: [] }],
+          }],
+        });
+        await currency.stored;
+        await currency.judge(runtime, new Map(), () => true, false);
+
+        expect(asked).toEqual([]);
+        expect(currency.staleUpstream).toBe(false);
+        expect(currency.nextExpiry).toBeUndefined();
+      });
+
       it("holds the root until what is upstream of each piece whose read holds it was given up on", async () => {
-        const currency = loop("skip");
+        const currency = loop("start-upstream");
         reads = [UPSTREAM, NESTED];
         await judge(currency);
 

@@ -260,7 +260,7 @@ export type CurrencyBatch = {
    */
   seen: readonly number[];
 
-  /** The epoch of the recording build. */
+  /** The epoch the recording loop records under. */
   epoch: string;
 
   /** The records, one per piece. */

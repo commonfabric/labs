@@ -321,8 +321,10 @@ describe("SpaceServer", () => {
 
   describe("instance members", () => {
     describe("serving the last of three pieces in one space, each reading the one before, with none running", () => {
-      it("starts the two pieces before it when an input of the first changed, and brings the viewer the value derived from it, under `skip`", async () => {
-        const { roots, input, resultSchema } = await standUpAndPark("skip");
+      it("starts the two pieces before it when an input of the first changed, and brings the viewer the value derived from it, under `start-upstream`", async () => {
+        const { roots, input, resultSchema } = await standUpAndPark(
+          "start-upstream",
+        );
         await changeInput(input, 20);
         expect([serves(roots.first), serves(roots.middle), serves(roots.last)])
           .toEqual([false, false, false]);
@@ -337,8 +339,10 @@ describe("SpaceServer", () => {
         expect(host!.stats().currency.upstreamAbandoned).toBe(0);
       });
 
-      it("starts the first piece alone, and leaves the last unstarted, when the first derives the value it held, under `skip`", async () => {
-        const { roots, input, resultSchema } = await standUpAndPark("skip");
+      it("starts the first piece alone, and leaves the last unstarted, when the first derives the value it held, under `start-upstream`", async () => {
+        const { roots, input, resultSchema } = await standUpAndPark(
+          "start-upstream",
+        );
         await changeInput(input, 15);
 
         const { result } = await watchLast(resultSchema);
@@ -363,9 +367,9 @@ describe("SpaceServer", () => {
         expect(host!.stats().currency.upstreamAbandoned).toBe(0);
       });
 
-      it("keeps the watermark below a change to the first piece's input until the viewer's piece is current, under `skip`", async () => {
+      it("keeps the watermark below a change to the first piece's input until the viewer's piece is current, under `start-upstream`", async () => {
         const { roots, input, output, resultSchema } = await standUpAndPark(
-          "skip",
+          "start-upstream",
         );
         const { alice, result } = await watchLast(resultSchema);
         await reads(alice, result, "c:b:1");
@@ -393,9 +397,9 @@ describe("SpaceServer", () => {
         await reads(alice, result, "c:b:2");
       });
 
-      it("starts the piece between for a returning viewer, whose own instance of its output the last piece reads, under `skip`", async () => {
+      it("starts the piece between for a returning viewer, whose own instance of its output the last piece reads, under `start-upstream`", async () => {
         const { input, resultSchema } = await standUpAndPark(
-          "skip",
+          "start-upstream",
           MIDDLE_PER_USER_PROGRAM,
           aliceSigner,
         );
@@ -406,15 +410,62 @@ describe("SpaceServer", () => {
         await reads(alice, result, "c:b:2");
       });
 
-      it("starts the piece between for a viewer it never ran for, whose own instance of its output the last piece reads, under `skip`", async () => {
+      it("starts the piece between for a viewer it never ran for, whose own instance of its output the last piece reads, under `start-upstream`", async () => {
         const { resultSchema } = await standUpAndPark(
-          "skip",
+          "start-upstream",
           MIDDLE_PER_USER_PROGRAM,
         );
 
         const { alice, result } = await watchLast(resultSchema);
 
         await reads(alice, result, "c:b:1");
+      });
+
+      it("starts the last piece alone, on what the store holds of the piece before it, when an input of the first changed, under `skip`", async () => {
+        const { roots, input, resultSchema } = await standUpAndPark("skip");
+        await changeInput(input, 20);
+        const engine = await server.engineForSpace(space);
+        const changedAt = Engine.serverSeq(engine);
+
+        const { alice, result } = await watchLast(resultSchema);
+        await awaitEach(cycles, () => serves(roots.last));
+        await waitForSettledThroughHead(alice, space, changedAt);
+        await host!.whenQuiescent();
+
+        expect([serves(roots.first), serves(roots.middle), serves(roots.last)])
+          .toEqual([false, false, true]);
+        expect(result.key("c").get()).toBe("c:b:1");
+        const { currency } = host!.stats();
+        expect(currency.refused["stale-upstream"]).toBe(1);
+        expect([
+          currency.heldUpstream,
+          currency.upstreamAbandoned,
+          currency.servedFromStore,
+          currency.carried,
+        ]).toEqual([0, 0, 0, 0]);
+        expect(await markOf(roots.last)).toBe(1);
+      });
+
+      it("leaves the two pieces before it unstarted for a last piece that runs already, under `skip`", async () => {
+        const { roots, input, resultSchema } = await standUpAndPark("skip");
+        await changeInput(input, 15);
+        const { alice, result } = await watchLast(resultSchema);
+        await awaitEach(cycles, () => serves(roots.last));
+        await host!.whenQuiescent();
+
+        await changeInput(input, 20);
+        const engine = await server.engineForSpace(space);
+        await waitForSettledThroughHead(alice, space, Engine.serverSeq(engine));
+        await host!.whenQuiescent();
+
+        expect([serves(roots.first), serves(roots.middle), serves(roots.last)])
+          .toEqual([false, false, true]);
+        expect(result.key("c").get()).toBe("c:b:1");
+        const { currency } = host!.stats();
+        expect([currency.heldUpstream, currency.upstreamAbandoned]).toEqual([
+          0,
+          0,
+        ]);
       });
 
       it("starts the two pieces before it for a last piece that runs already, under `record`", async () => {

@@ -12,6 +12,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { stub } from "@std/testing/mock";
 import { ExecutorHost } from "../../src/executor/host.ts";
+import { DEFAULT_CURRENCY_EPOCH } from "../../src/executor/space-server.ts";
 import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
 import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
@@ -631,17 +632,43 @@ describe("SpaceServer", () => {
         expect(host.stats().currency.falseClean).toBe(0);
       });
 
-      it("starts a piece the store could serve, and counts it, under `skip` with no epoch named", async () => {
+      it("records under the default epoch, and leaves unstarted a piece recorded under it, under `skip` with no epoch named", async () => {
         host = newHost("skip", null);
         const piece = await setUpTripler();
         await serveAndPark(piece);
+        expect(await recordOf(piece.root)).toEqual({
+          mark: 0,
+          epoch: DEFAULT_CURRENCY_EPOCH,
+        });
 
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore === 1,
+        );
+        await settled();
+
+        expect(serves(piece.root)).toBe(false);
+        await outIs(6);
+      });
+
+      it("starts a piece recorded under another epoch, under `skip` with no epoch named", async () => {
+        host = newHost("skip", "earlier-epoch");
+        const piece = await setUpTripler();
+        await serveAndPark(piece);
+        expect(await recordOf(piece.root)).toEqual({
+          mark: 0,
+          epoch: "earlier-epoch",
+        });
+        await host.close();
+
+        host = newHost("skip", null);
         await touchSpace();
         await awaitEach(cycles, () => serves(piece.root));
         await settled();
 
-        expect(host.stats().currency.servable).toBe(1);
         expect(host.stats().currency.servedFromStore).toBe(0);
+        expect(host.stats().currency.refused).toEqual({ "other-epoch": 1 });
       });
 
       it("leaves unstarted a piece whose record is clean and vouches for what is demanded, under `skip`", async () => {
