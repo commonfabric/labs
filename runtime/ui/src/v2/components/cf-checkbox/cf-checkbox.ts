@@ -191,7 +191,7 @@ export class CFCheckbox extends BaseElement {
 
     #activation = new HostActivationController(this, {
       role: "checkbox",
-      keys: [" ", "Spacebar"],
+      keys: [" "],
       isDisabled: () => this.disabled,
       activate: () => this._toggle(),
     });

@@ -134,7 +134,7 @@ export class CFRadio extends BaseElement {
 
   #activation = new HostActivationController(this, {
     role: "radio",
-    keys: [" ", "Spacebar"],
+    keys: [" "],
     isDisabled: () => this.disabled,
     activate: (event) => this.#select(event),
     // A group keeps one Tab stop among its radios.

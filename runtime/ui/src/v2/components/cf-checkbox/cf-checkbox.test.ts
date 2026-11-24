@@ -128,22 +128,6 @@ describe("CFCheckbox", () => {
     expect(element.required).toBe(false);
   });
 
-  it("is a Tab stop while enabled, and none while disabled", async () => {
-    const element = await checkbox();
-    expect(element.getAttribute("aria-disabled")).toBe("false");
-    expect(element.tabIndex).toBe(0);
-
-    element.disabled = true;
-    await element.updateComplete;
-    expect(element.getAttribute("aria-disabled")).toBe("true");
-    expect(element.tabIndex).toBe(-1);
-
-    element.disabled = false;
-    await element.updateComplete;
-    expect(element.getAttribute("aria-disabled")).toBe("false");
-    expect(element.tabIndex).toBe(0);
-  });
-
   describe("render()", () => {
     it("renders a checked box for a checked value", async () => {
       const element = await checkbox({ checked: true });

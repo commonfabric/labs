@@ -156,7 +156,7 @@ export class CFSwitch extends BaseElement {
 
   #activation = new HostActivationController(this, {
     role: "switch",
-    keys: ["Enter", " ", "Spacebar"],
+    keys: ["Enter", " "],
     isDisabled: () => this.disabled,
     activate: () => this._toggle(),
   });

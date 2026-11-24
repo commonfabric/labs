@@ -10,7 +10,7 @@ export interface HostActivationOptions {
   /**
    * The keys that activate the control, as `KeyboardEvent.key` values:
    * Enter and Space for a button or switch, Space alone for a checkbox or
-   * radio. Old browsers report Space as "Spacebar".
+   * radio. Space is " "; the "Spacebar" old browsers report counts as it.
    */
   keys: readonly string[];
   /** Whether the control is disabled. */
@@ -23,8 +23,8 @@ export interface HostActivationOptions {
   activate(event: MouseEvent): void;
   /**
    * Whether the host is its own Tab stop. A control in a composite widget
-   * (a radio in a radio group) leaves its `tabIndex` to the composite.
-   * Defaults to always.
+   * (a radio in a radio group) leaves its `tabIndex` to the composite,
+   * which must set it. Defaults to always.
    */
   ownsTabStop?(): boolean;
 }
@@ -48,6 +48,8 @@ export interface HostActivationOptions {
 export class HostActivationController implements ReactiveController {
   readonly #host: ReactiveControllerHost & HTMLElement;
   readonly #options: HostActivationOptions;
+  // Made up front, so a page can turn it on before the first drop.
+  readonly #logger;
 
   constructor(
     host: ReactiveControllerHost & HTMLElement,
@@ -55,25 +57,23 @@ export class HostActivationController implements ReactiveController {
   ) {
     this.#host = host;
     this.#options = options;
+    this.#logger = getLogger(host.localName, {
+      enabled: false,
+      level: "debug",
+    });
     host.addController(this);
-    // Dropping a disabled click is right whether or not the host is in the
-    // document, so it listens for the host's whole life, from before any
-    // listener a page adds.
+    // Listeners on the host itself live as long as it does, and added here
+    // they run before any listener a page adds.
     host.addEventListener("click", this.#dropWhileDisabled, { capture: true });
+    host.addEventListener("click", this.#onClick);
+    host.addEventListener("keydown", this.#onKeydown);
   }
 
   hostConnected(): void {
     if (!this.#host.hasAttribute("role")) {
       this.#host.setAttribute("role", this.#options.role);
     }
-    this.#host.addEventListener("click", this.#onClick);
-    this.#host.addEventListener("keydown", this.#onKeydown);
     this.#sync();
-  }
-
-  hostDisconnected(): void {
-    this.#host.removeEventListener("click", this.#onClick);
-    this.#host.removeEventListener("keydown", this.#onKeydown);
   }
 
   hostUpdated(): void {
@@ -90,25 +90,23 @@ export class HostActivationController implements ReactiveController {
 
   #dropWhileDisabled = (event: MouseEvent): void => {
     if (!this.#options.isDisabled()) return;
-    getLogger(this.#host.localName, { enabled: false, level: "debug" }).debug(
-      "dropped",
-      () => [
-        `${this.#host.localName} dropped a click while disabled (${
-          JSON.stringify(this.#host.textContent?.trim() ?? "")
-        })`,
-      ],
-    );
+    this.#logger.debug("dropped", () => [
+      `${this.#host.localName} dropped a click while disabled (${
+        JSON.stringify(this.#host.textContent?.trim() ?? "")
+      })`,
+    ]);
     event.preventDefault();
     event.stopImmediatePropagation();
   };
 
   #onClick = (event: MouseEvent): void => {
-    this.#options.activate(event);
+    if (this.#host.isConnected) this.#options.activate(event);
   };
 
   #onKeydown = (event: KeyboardEvent): void => {
-    if (this.#options.isDisabled()) return;
-    if (!this.#options.keys.includes(event.key)) return;
+    if (!this.#host.isConnected || this.#options.isDisabled()) return;
+    const key = event.key === "Spacebar" ? " " : event.key;
+    if (!this.#options.keys.includes(key)) return;
     event.preventDefault();
     this.#host.click();
   };
