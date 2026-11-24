@@ -697,17 +697,12 @@ export class GraphQueryWalk {
         address: { ...document.address, space: this.#space, path: ["value"] },
         value,
       };
-      // The path is resolved through the links along it, and through a
-      // write redirect at its end. An ordinary link at its end is left to
-      // the traversal, whose schema decides whether to follow it: one that
-      // holds the link as an opaque cell reads nothing through it.
       const [nextDoc, nextSelector] = getAtPath(
         tx,
         root,
         effectiveSelector.path.slice(1),
         this.#context,
         effectiveSelector,
-        "writeRedirect",
       );
       if (
         nextDoc.value !== undefined &&

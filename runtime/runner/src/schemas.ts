@@ -36,9 +36,10 @@ export const rendererVDOMSchema = internSchema(
             type: "object",
             properties: {
               style: { anyOf: [{ type: "object" }, { type: "string" }] },
-              // A binding holds its cell and reads nothing through it.
               $value: { asCell: ["cell"], type: "unknown" },
-              $cell: { asCell: ["cell"], type: "unknown" },
+              // A bound cell is handed on as its link, and nothing is read
+              // through it: a renderer reads the cell under its own schema.
+              $cell: { asCell: ["opaque"], type: "unknown" },
               assets: {
                 type: "object",
                 additionalProperties: { type: "string" },
@@ -201,8 +202,9 @@ export const vnodeSchema = internSchema(
         type: "object",
         properties: {
           style: { anyOf: [{ type: "object" }, { type: "string" }] },
-          // A binding holds its cell and reads nothing through it.
-          $cell: { asCell: ["cell"], type: "unknown" },
+          // A bound cell is handed on as its link, and nothing is read
+          // through it: a renderer reads the cell under its own schema.
+          $cell: { asCell: ["opaque"], type: "unknown" },
         },
         additionalProperties: {
           anyOf: [

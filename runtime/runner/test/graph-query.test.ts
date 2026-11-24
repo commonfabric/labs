@@ -1670,151 +1670,118 @@ describe("graph-query", () => {
         });
       });
 
-      describe("over a link held as an opaque cell", () => {
-        // A reader that holds a link as a cell of unknown type holds the
-        // handle and reads nothing through it, so the walk loads no target
-        // for it and reports no link into another space for it.
+      describe("over a view's bound cell", () => {
+        // A view's `$cell` prop binds a cell. A renderer is handed the link
+        // and reads the cell under a schema of its own, so a walk of the
+        // view reads nothing through the prop, where it reads an ordinary
+        // prop's link for the value a renderer shows.
 
         const OTHER = "did:key:graph-query-other" as MemorySpace;
-        const opaque: JSONSchema = { asCell: ["cell"], type: "unknown" };
-        const reading: JSONSchema = {
-          type: "object",
-          properties: { name: { type: "string" } },
-        };
+
+        /** A link to `id` in `OTHER`. */
+        const linkAway = (id: string) => ({
+          "/": { [LINK_V1_TAG]: { id, path: [], space: OTHER } },
+        });
 
         /**
-         * Walks `of:root` under `selector`, and returns the ids of the
-         * other documents the walk asked for, sorted.
+         * Walks `of:root`, a view node binding `room` and labeled by `label`,
+         * under `schema`, and returns the ids of the other documents the walk
+         * asked for, the ids its tracker holds, and the ids of the documents
+         * in `OTHER` it reported a link into, each sorted.
          */
-        const reachedFrom = (
-          documents: Map<string, FabricValue>,
-          selector: SchemaPathSelector,
-        ): string[] => {
-          const { manager, walk } = walkOver(documents);
-          const root = documentFor(manager, "of:root");
-          walk.visit(root, selector);
-          return [...new Set(manager.requested)]
-            .filter((key) => key !== keyFor("of:root"))
-            .map((key) => key.slice(key.lastIndexOf("/") + 1))
-            .toSorted();
-        };
-
-        const roomBehindLink = () =>
-          new Map<string, FabricValue>([
-            [keyFor("of:root"), { room: linkTo("of:room") }],
-            [keyFor("of:room"), { name: "one" }],
-          ]);
-
-        it("loads the target of the link its selector's path ends at, under a schema that reads it", () => {
-          expect(
-            reachedFrom(roomBehindLink(), {
-              path: ["value", "room"],
-              schema: reading,
-            }),
-          ).toEqual(["of:room"]);
-        });
-
-        it("loads no target of the link its selector's path ends at, under an opaque cell schema", () => {
-          expect(
-            reachedFrom(roomBehindLink(), {
-              path: ["value", "room"],
-              schema: opaque,
-            }),
-          ).toEqual([]);
-        });
-
-        it("follows a link partway along its selector's path, and loads no target of the link the path ends at", () => {
-          const documents = new Map<string, FabricValue>([
-            [keyFor("of:root"), { entry: linkTo("of:entry") }],
-            [keyFor("of:entry"), { room: linkTo("of:room") }],
-            [keyFor("of:room"), { name: "one" }],
-          ]);
-
-          expect(
-            reachedFrom(documents, {
-              path: ["value", "entry", "room"],
-              schema: opaque,
-            }),
-          ).toEqual(["of:entry"]);
-        });
-
-        it("follows a write redirect its selector's path ends at, and loads no target of the link behind it", () => {
-          const documents = new Map<string, FabricValue>([
-            [keyFor("of:root"), {
-              room: {
-                "/": {
-                  [LINK_V1_TAG]: {
-                    id: "of:slot",
-                    path: [],
-                    overwrite: "redirect",
-                  },
-                },
-              },
-            }],
-            [keyFor("of:slot"), linkTo("of:room")],
-            [keyFor("of:room"), { name: "one" }],
-          ]);
-
-          expect(
-            reachedFrom(documents, {
-              path: ["value", "room"],
-              schema: opaque,
-            }),
-          ).toEqual(["of:slot"]);
-        });
-
-        it("reports a link into another space under a schema that reads it, and none under an opaque cell schema", () => {
-          const crossingsUnder = (schema: JSONSchema): string[] => {
-            const manager = new StubObjectManager(
-              new Map<string, FabricValue>([[keyFor("of:root"), {
-                room: {
-                  "/": {
-                    [LINK_V1_TAG]: { id: "of:room", path: [], space: OTHER },
-                  },
-                },
-              }]]),
-            );
-            const crossings: string[] = [];
-            const walk = new GraphQueryWalk({
-              manager,
-              space: SPACE,
-              schemaTracker: new MapSetStringToPathSelectors(true),
-              identity: TEST_SCOPE_IDENTITY,
-              onCrossing: (key) => crossings.push(key),
-            });
-            walk.visit(documentFor(manager, "of:root"), {
-              path: ["value", "room"],
-              schema,
-            });
-            return crossings;
-          };
-
-          expect(crossingsUnder(reading).length).toBe(1);
-          expect(crossingsUnder(opaque)).toEqual([]);
-        });
-
-        for (
-          const [name, schema, type] of [
-            ["rendered view", rendererVDOMSchema, "vnode"],
-            ["view node", vnodeSchema, "vnode"],
-          ] as const
-        ) {
-          it(`loads the target of an ordinary prop's link and none of \`$cell\`'s, under the ${name} schema`, () => {
-            const documents = new Map<string, FabricValue>([
+        const walkView = (
+          schema: JSONSchema,
+          room: FabricValue,
+          label: FabricValue,
+        ): { reached: string[]; tracked: string[]; crossed: string[] } => {
+          const manager = new StubObjectManager(
+            new Map<string, FabricValue>([
               [keyFor("of:root"), {
-                type,
+                type: "vnode",
                 name: "cf-cell-link",
-                props: {
-                  $cell: linkTo("of:room"),
-                  label: linkTo("of:label"),
-                },
+                props: { $cell: room, label },
               }],
               [keyFor("of:label"), "Room one"],
               [keyFor("of:room"), { name: "one" }],
-            ]);
+              // An entry whose fields are links into `OTHER`, as a list of
+              // rooms holds each room. The manager serves one space, so a
+              // document of `OTHER` is one it does not hold.
+              [keyFor("of:entry"), {
+                room: linkAway("of:far-room"),
+                label: linkAway("of:far-label"),
+              }],
+            ]),
+          );
+          const schemaTracker = new MapSetStringToPathSelectors(true);
+          const crossed = new Set<string>();
+          const idOf = (key: string) => key.slice(key.lastIndexOf("/") + 1);
+          const walk = new GraphQueryWalk({
+            manager,
+            space: SPACE,
+            schemaTracker,
+            identity: TEST_SCOPE_IDENTITY,
+            // A crossing's key is its target's space, scope and id as JSON.
+            onCrossing: (key) => crossed.add(JSON.parse(key)[2]),
+            // The memory server's walks attribute by record, which is what
+            // has a link found below the root reported.
+            onTrackedDoc: () => {},
+          });
+          walk.visit(
+            documentFor(manager, "of:root"),
+            { path: ["value"], schema },
+            undefined,
+            "root",
+          );
+          return {
+            reached: [...new Set(manager.requested)]
+              .filter((key) => key !== keyFor("of:root"))
+              .map(idOf)
+              .toSorted(),
+            tracked: trackedKeys(schemaTracker).map(idOf),
+            crossed: [...crossed].toSorted(),
+          };
+        };
 
-            expect(reachedFrom(documents, { path: ["value"], schema }))
-              .toEqual(["of:label"]);
+        for (
+          const [name, schema] of [
+            ["rendered view", rendererVDOMSchema],
+            ["view node", vnodeSchema],
+          ] as const
+        ) {
+          it(`loads the target of an ordinary prop's link and none of \`$cell\`'s, under the ${name} schema`, () => {
+            const { reached } = walkView(
+              schema,
+              linkTo("of:room"),
+              linkTo("of:label"),
+            );
+
+            expect(reached).toEqual(["of:label"]);
+          });
+
+          it(`tracks the target of an ordinary prop's link and none of \`$cell\`'s, under the ${name} schema`, () => {
+            // A tracked target is walked again when its document changes, so
+            // one tracked for `$cell` would be read then.
+
+            const { tracked } = walkView(
+              schema,
+              linkTo("of:room"),
+              linkTo("of:label"),
+            );
+
+            expect(tracked).toEqual(["of:label", "of:root"]);
+          });
+
+          it(`reports an ordinary prop's link into another space and none of \`$cell\`'s, under the ${name} schema`, () => {
+            // Each prop links to a field of `of:entry`, which links on into
+            // `OTHER`.
+
+            const { crossed } = walkView(
+              schema,
+              linkTo("of:entry", ["room"]),
+              linkTo("of:entry", ["label"]),
+            );
+
+            expect(crossed).toEqual(["of:far-label"]);
           });
         }
       });

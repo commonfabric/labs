@@ -47,11 +47,8 @@ caller keeps them, walks them under a schema, and records what it reached.
   from the acting identity. A link the walk follows resolves under the acting
   identity, and a walk acting as a principal with no session follows no
   session-scoped link; "One graph per acting identity" below says which
-  identity `memory` walks a root under. `visit` resolves the selector's path
-  through the links along it and through a write redirect at its end, and
-  leaves an ordinary link at its end to the schema: one that holds the link
-  as a cell of unknown type loads nothing through it, and reports no link
-  into another space for it. The walk builds the read-only transaction the
+  identity `memory` walks a root under. The walk builds the read-only
+  transaction the
   traverser reads through, carries the pointer-cycle tracker that stops a
   link loop, and loads, for every document it delivers, the schema document
   its `cfc` labels are stated against, which a reader needs in order to

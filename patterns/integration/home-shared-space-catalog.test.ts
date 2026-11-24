@@ -2737,19 +2737,12 @@ describe("Home chat manager's people", () => {
   // Each case compiles Home, and only the first compile in a process is slow.
   beforeAll(compileHomeOnce);
 
-  it.ignore("runs no reader of a room's roster, and holds none of its documents, in Home's serving runtime while no session has asked for the people", async () => {
+  it("runs no reader of a room's roster, and holds none of its documents, in Home's serving runtime while no session has asked for the people", async () => {
     // A client demands every derivation its runtime builds, so a reader of
     // each listed room's roster that ran without being asked for would hold
     // every room's documents in Home's serving runtime. The rooms are created
     // by a session that runs its own events, so that Home's serving runtime
     // holds only what its derivations read.
-    //
-    // Ignored because the document count does not hold. The memory server
-    // walks the owner's instances under the owner's identity, so its walk
-    // reaches each listed room's entry and reports the entry's link into the
-    // room's space, and Home's serving runtime loads every link so reported.
-    // TODO(ubik2): Run this again once a serving runtime loads nothing
-    // through a room's entry that no run reads through.
 
     const serving = new Map<string, Runtime>();
     await withHome(
