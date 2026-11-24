@@ -123,6 +123,7 @@ const boardConfig: PieceConfig = { ...spaceConfig, piece: board };
 const session = newSessionId();
 
 let made = 0;
+let wrote = 0;
 const counts = await recreateTopics(
   topics,
   await readProgress(progressPath),
@@ -134,7 +135,11 @@ const counts = await recreateTopics(
       Deno.writeTextFile(progressPath, JSON.stringify(line) + "\n", {
         append: true,
       }),
-    write: writeFields,
+    write: async (id, fields) => {
+      await writeFields(id, fields);
+      wrote++;
+      if (wrote % 100 === 0) console.error(`wrote ${wrote}`);
+    },
   },
 );
 if (counts.reconciled > 0) {
