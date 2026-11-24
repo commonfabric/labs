@@ -57,6 +57,7 @@ import {
   watchForPullRequest,
 } from "./pullrequest.ts";
 import {
+  defaultBranch,
   describePush,
   type GitQuery,
   openPage,
@@ -855,8 +856,17 @@ export async function runPager(
           pullRequest(open.number, open.url)
         } is open: ${link(open.url)}`;
       }
-      const { title, body } = pullRequestText(deps.git, target);
-      const { repository, head, base } = target;
+      const { repository, head, remote } = target;
+      const asking = step(say`Asking ${remote} which branch is its default`);
+      const base = await defaultBranch(
+        deps.pushIo(taskOutput, signal).queryAsync,
+        remote,
+      );
+      if (base === null) {
+        throw new Error(`${remote}'s default branch is unknown`);
+      }
+      asking();
+      const { title, body } = pullRequestText(deps.git, target, base);
       const creating = step(
         say`Creating a pull request in ${repository} from ${head} into ${base}`,
       );
@@ -927,13 +937,20 @@ export async function runPager(
   };
 
   // A push that fails, unless the server refused it, can be tried again, as
-  // when the network failed it. The push dialog's output goes on from how
-  // the failed push ended.
-  const pushFailed = (output: string) => {
+  // when the network failed it, asking first as the failed push would have.
+  // The push dialog's output goes on from how the failed push ended.
+  const pushFailed = (output: string, confirmed: boolean) => {
     if (!pushRefused(output)) {
-      retry = { label: RETRY_PUSH, run: () => startBranchPush(true) };
+      retry = {
+        label: RETRY_PUSH,
+        run: () => startBranchPush(true, confirmed),
+      };
     }
   };
+
+  // The default branch origin named before the push dialog asked whether to
+  // push, which the push the dialog confirms keeps to.
+  let confirmedMain: string | undefined;
 
   // Pushing a branch that origin already has asks first, saying what the
   // push would do, and which pull request is open from the branch, if one
@@ -942,8 +959,10 @@ export async function runPager(
   const askToPush = async (
     branch: string,
     remote: PushedBranch,
+    main: string,
     signal: AbortSignal,
   ): Promise<null> => {
+    confirmedMain = main;
     let open: TaskText;
     try {
       const { found } = await lookForPullRequest(branch, signal);
@@ -962,8 +981,13 @@ export async function runPager(
   };
 
   // Once the push dialog has asked, or a push has failed, pushing again
-  // continues the dialog, and asks nothing.
-  const startBranchPush = async (again = false) => {
+  // continues the dialog. A push the user has confirmed asks nothing, and
+  // keeps to `main` as origin's default branch when given one.
+  const startBranchPush = async (
+    again = false,
+    confirmed = again,
+    main?: string,
+  ) => {
     session.branchPushRequested = false;
     session.pushConfirmed = false;
     // A watch is for the push whose dialog it outlived.
@@ -980,10 +1004,12 @@ export async function runPager(
         io,
         controller.signal,
         (branch, url) => pushed(io, branch, url, controller.signal),
-        pushFailed,
-        again
+        (output) => pushFailed(output, confirmed),
+        confirmed
           ? undefined
-          : (branch, remote) => askToPush(branch, remote, controller.signal),
+          : (branch, remote, main) =>
+            askToPush(branch, remote, main, controller.signal),
+        main,
       );
     } catch (error) {
       summary = say`Push failed: ${failure(error)}`;
@@ -1119,7 +1145,7 @@ export async function runPager(
 
   const startRequested = () => {
     if (session.branchPushRequested) startBranchPush();
-    if (session.pushConfirmed) startBranchPush(true);
+    if (session.pushConfirmed) startBranchPush(true, true, confirmedMain);
     if (session.retryRequested) {
       session.retryRequested = false;
       retry?.run();
