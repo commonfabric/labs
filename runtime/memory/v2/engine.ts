@@ -943,6 +943,20 @@ ORDER BY seq DESC, op_index DESC
 LIMIT 1
 `;
 
+// The seq of the newest revision of an instance below a seq, on the branch's
+// own rows. It selects no revision data, so a `set` row costs no more than a
+// `patch` row.
+const SELECT_PRECEDING_REVISION_SEQ = `
+SELECT seq
+FROM revision
+WHERE branch = :branch
+  AND id = :id
+  AND scope_key = :scope_key
+  AND seq < :seq
+ORDER BY seq DESC
+LIMIT 1
+`;
+
 // The newest `set` or `delete` at or before a revision, searched no further
 // back than `:floor`, which is the newest snapshot's seq (see
 // {@link latestBaseAndSnapshot}). The index this walks does not cover `op`, so
@@ -2108,6 +2122,7 @@ const STATEMENTS = {
   insertSnapshot: INSERT_SNAPSHOT,
   selectActiveOperationFields: SELECT_ACTIVE_OPERATION_FIELDS,
   selectAtSeqLocal: SELECT_AT_SEQ_LOCAL,
+  selectPrecedingRevisionSeq: SELECT_PRECEDING_REVISION_SEQ,
   selectAuthoredSeqThrough: SELECT_AUTHORED_SEQ_THROUGH,
   selectBlob: SELECT_BLOB,
   selectBranch: SELECT_BRANCH,
@@ -3464,6 +3479,29 @@ export const headSeq = (
   engine: Engine,
   branch: BranchName = DEFAULT_BRANCH,
 ): number => getBranch(engine, branch)?.headSeq ?? 0;
+
+/**
+ * Returns the seq of the newest revision of the instance `scopeKey` of
+ * document `id` that `branch` itself holds below `seq`, or `undefined` when
+ * it holds none there. A revision the branch reads through its parent is not
+ * one it holds, and neither is one that compaction removed, so `undefined`
+ * does not say the instance had no earlier state.
+ */
+export const precedingRevisionSeq = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+  },
+): number | undefined =>
+  (engine.statement("selectPrecedingRevisionSeq").get({
+    branch: revision.branch,
+    id: revision.id,
+    scope_key: revision.scopeKey,
+    seq: revision.seq,
+  }) as { seq: number } | undefined)?.seq;
 
 export const serverSeq = (engine: Engine): number => {
   return (engine.statement("selectServerSeq").get() as { seq: number }).seq;
