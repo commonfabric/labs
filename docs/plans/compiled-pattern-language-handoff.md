@@ -132,8 +132,10 @@ one case of `test/compiled/`, the first item below.
   evaluations at 100, 1,000 and 2,000 topics, 2.6 to 6.3 ms in the piece,
   which is what the serving branch alone gives; the scope instances are
   448 bytes at every size; a FabriChat send at 100 messages gives 148
-  records (188 before). Not applied: inside an element body, to a bare
-  `{name}`, and inside an authored `computed` or `lift` body. Open:
+  records (188 before). Not yet applied, and ruled by the owner to be
+  covered as well (Z94): inside an element body, to a bare `{name}`, and
+  inside an authored `computed` or `lift` body; a continuation of round
+  nineteen is building them. Open:
   - `system/profile-embed` now fails 4 of 5 events in every run, with four
     writer-fit refusals on its draft documents (before, 1 run of 3 did).
     Its handler copies the profile's user-scoped name and bio into drafts

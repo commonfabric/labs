@@ -6640,8 +6640,13 @@ is relitigated.
   the owner's words on it: "fwiw, i agree with this approach". Today's
   runtime does the same with a node of its own for such an expression.
   Built on the branch `merge-attempt/serving-m6` for an operator expression
-  written as a JSX child or attribute value outside every element body;
-  the handoff document says what it does not cover and what it left open.
+  written as a JSX child or attribute value outside every element body.
+  The owner ruled the same day that the cases it left out are covered too
+  ("we should cover that as well"): a bare `{name}`, the read inside the
+  body of a per-element construct, where the row stays a row of the space
+  and only the expression that reads the scoped value is of the scope, and
+  the read inside an authored `computed` or `lift` body. Those three are
+  being built.
 
 - The labels of what a compiled piece commits are content-addressed
   (2026-11-24, Z95). Asked whether to turn the experimental option
