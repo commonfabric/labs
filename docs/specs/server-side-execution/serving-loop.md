@@ -385,6 +385,15 @@ running, whether the store can serve it as it stands. A root that is no
 result document is judged as the piece its `result` back-links lead to,
 which is the piece a load of it would start, and a `computed:` root that
 one recorded piece writes is judged as that piece with no back-link read.
+A root whose stored document carries neither a back-link nor a pattern
+pointer starts no piece when loaded: one that one recorded piece writes is
+judged as that piece, with the root's own instance among the instances it
+is to vouch for, and one nothing derives (no record names it as written,
+no recorded slice read it as derived, and no `derived` commit wrote its
+shared instance) is **underived**. Under `skip` and `start-upstream` an
+underived root is parked as its load would park it, terminal and watching
+the document (a commit to it re-arms it, §3), without the load, unless
+a commit to the document was admitted while the judgment ran.
 The store can serve a root
 when the piece's `space` slice is clean and of the current epoch, and every
 demand row of every session whose id the piece writes or owns, or a recorded
@@ -2780,7 +2789,7 @@ demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
 {recordsStored, unvouched, judged, servable, refused, servedFromStore,
-rearmed, indexWakes, expiryWakes, falseClean, carried, carriedRefused,
+underived, rearmed, indexWakes, expiryWakes, falseClean, carried, carriedRefused,
 heldUpstream, upstreamAbandoned},
 settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
@@ -2982,7 +2991,9 @@ the roots a `skip` loop loaded that a judgment found stale only upstream,
 which a `start-upstream` loop would have held (§1), counted under no other
 mode;
 `servedFromStore` the roots the `skip` and `start-upstream` modes left
-unloaded on it, once each time a root is first left; `rearmed` the roots so left that were then
+unloaded on it, once each time a root is first left; `underived` the roots
+a judgment found nothing derives (§1), which the `skip` and
+`start-upstream` modes park without a load; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
 instance it does not vouch for; `falseClean` the pieces the index held
 clean that wrote an instance they answered for again, to a value other than

@@ -592,6 +592,7 @@ describe("SpaceServer", () => {
           servable: 0,
           refused: {},
           servedFromStore: 0,
+          underived: 0,
           rearmed: 0,
           indexWakes: 0,
           expiryWakes: 0,
@@ -952,13 +953,13 @@ describe("SpaceServer", () => {
           await demand({ link: data, root: true });
           await awaitEach(
             cycles,
-            () => host!.stats().currency.servedFromStore === 1,
+            () => host!.stats().currency.underived === 1,
           );
           await settled();
 
           const stats = host.stats();
           expect(stats.structureLoadTerminal).toBe(0);
-          expect(stats.currency.servable).toBe(1);
+          expect(stats.currency.servedFromStore).toBe(0);
           expect(stats.currency.refused).toEqual({});
         });
 
@@ -969,7 +970,7 @@ describe("SpaceServer", () => {
           await demand({ link: data, root: true });
           await awaitEach(
             cycles,
-            () => host!.stats().currency.servedFromStore === 1,
+            () => host!.stats().currency.underived === 1,
           );
           expect(serves(piece.root)).toBe(false);
 
@@ -1002,9 +1003,7 @@ describe("SpaceServer", () => {
             () => host!.stats().structureLoadTerminal === 1,
           );
 
-          const stats = host.stats();
-          expect(stats.currency.servable).toBe(1);
-          expect(stats.currency.servedFromStore).toBe(0);
+          expect(host.stats().currency.underived).toBe(1);
         });
       });
 

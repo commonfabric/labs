@@ -2550,6 +2550,10 @@ the per-epic implementation notes).
   for (`currency.expiryWakes`), or a session's demand reaches an instance
   the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
+  A root whose stored document carries no back-link and no pattern pointer,
+  which a load starts no piece from, is judged as the one piece recorded as
+  writing it, and one that nothing derives is parked as that load would
+  park it, until a commit to it (`currency.underived`).
   That is all `skip` does. A root that is stale only through what is
   upstream of it, in its own space, is not made current by starting its
   piece, and `skip` starts its piece all the same, as it starts any root the

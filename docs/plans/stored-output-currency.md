@@ -311,7 +311,25 @@ The judgment follows the same links to the piece, and reads a computed
 document as the one piece the index records as writing it where there is
 one. A computed document is judged at any scope, so a viewer's own instance
 of one can pass, and a root that passes is left unstarted under `skip` and
-`start-upstream` as below. The store can serve a root when:
+`start-upstream` as below.
+
+A space-scoped document that carries neither a back-link nor a pattern
+pointer, as the elements and views a list renders do, is one a load starts
+no piece from. The judgment reads it as the one piece the index records as
+writing it, with the root's own instance among the instances that piece is
+to vouch for, so an overwrite of it, which marks the writer's slice, and a
+record that no longer vouches for it both refuse the root. Where nothing
+derives such a document, the judgment returns it as **underived**: no
+record names it as written, no recorded slice read it as a document a
+computation writes, and no serving loop's derivation wrote its shared
+instance. The store holds what clients wrote to it, and a load would find
+no piece to start, so under `skip` and `start-upstream` the loop parks it
+as that load would: terminal, watching the document, so that a commit to
+it, one that gives it a back-link, a pattern pointer or a derived value
+among them, brings the load. A commit admitted while the judgment ran
+leaves it to be loaded at once. `currency.underived` counts such roots.
+
+The store can serve a root when:
 
 - the piece's `space` slice is clean and was recorded under the current
   epoch;
@@ -682,13 +700,25 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
 - **A piece whose result document each viewer holds an instance of, one of
   which records a source origin, always starts.** An origin is followed
   through one result document.
+- **A document a load starts no piece from is brought up to date only by
+  a start of a piece that encloses its writer.** A root judged as its
+  writer is loaded when the judgment refuses it, and when a mark of the
+  writer re-arms it, and the load starts nothing. Where the writer is
+  beneath a demanded root, as each row of a board is beneath the board,
+  that root is refused for the same mark and its start runs the writer.
+  Where no demanded root encloses the writer, nothing starts it, with the
+  index or without it.
 - **A piece with no computation of its own has no record.** A pattern that
   only instantiates others registers no computation under its own result
   document, so no snapshot is taken of it, and a root that leads to it is
   loaded.
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
-  computes.
+  computes. The documents a lift writes through `Writable.for(...).set()`,
+  one for each element of the list it returns, are written that way: a
+  root that names one is refused as `no-record` and loaded each tenure.
+  The run's own writes cannot supply the rows, since a run that computes
+  what a document already holds writes nothing to it.
   [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
   under "Computations that run without demand", is the plan for it and for
   a materializer's envelope.
@@ -864,6 +894,14 @@ of which exist:
 28. A piece that an enclosing piece's start instantiates for a viewer who
     demands nothing of it keeps its record, and the store can still serve
     its root to the viewer it was recorded for.
+29. A root that carries neither a back-link nor a pattern pointer is judged
+    as the one piece recorded as writing it, and refused where two pieces
+    are recorded as writing it, where that piece is marked, where it does
+    not vouch for the root's instance, and where a client overwrote it. One
+    nothing derives is returned as underived, and one a serving loop's
+    derivation wrote is not (`runtime/memory/test/v2-server-currency.test.ts`).
+    Under `skip` the loop parks an underived root unloaded, and loads it
+    once a client commits to it (`space-server-currency.test.ts`).
 
 ## Related
 

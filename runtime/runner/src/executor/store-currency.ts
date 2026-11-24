@@ -813,8 +813,7 @@ export class StoreCurrency {
         this.#served.delete(key);
         this.#held.delete(key);
         underived.push(key);
-        this.#stats.currency.servable += 1;
-        if (this.skips) this.#stats.currency.servedFromStore += 1;
+        this.#stats.currency.underived += 1;
         continue;
       }
       const piece = pieces.get(root);

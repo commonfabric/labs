@@ -509,7 +509,7 @@ describe("StoreCurrency", () => {
             true,
           );
 
-        it("returns its key apart from the servable ones, counts it as left unloaded, and leaves it to the caller under `skip`", async () => {
+        it("returns its key apart from the servable ones, and counts it as underived and not as left unloaded, under `skip`", async () => {
           const stats = emptyServingLoopStats();
           const currency = underivedIn("skip", stats);
 
@@ -517,18 +517,19 @@ describe("StoreCurrency", () => {
 
           expect(judged.underived).toEqual(["data"]);
           expect(judged.servable).toEqual(["result"]);
-          expect(stats.currency.servable).toBe(2);
-          expect(stats.currency.servedFromStore).toBe(2);
+          expect(stats.currency.underived).toBe(1);
+          expect(stats.currency.servable).toBe(1);
+          expect(stats.currency.servedFromStore).toBe(1);
         });
 
-        it("returns its key and counts it as servable and not as left unloaded, under `record`", async () => {
+        it("returns its key and counts it as underived, under `record`", async () => {
           const stats = emptyServingLoopStats();
           const currency = underivedIn("record", stats);
 
           const judged = await judgeBoth(currency);
 
           expect(judged.underived).toEqual(["data"]);
-          expect(stats.currency.servable).toBe(2);
+          expect(stats.currency.underived).toBe(1);
           expect(stats.currency.servedFromStore).toBe(0);
         });
       });
