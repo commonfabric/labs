@@ -171,7 +171,7 @@ describe("home-favorites-cfc", () => {
     const tx = runtime.edit();
     try {
       // Resolves the label documents a content-addressed envelope refers to.
-      const metadata = readStoredCfcMetadata(tx, { ...link, path: [] });
+      const metadata = readStoredCfcMetadata(tx, link);
       return (metadata?.labelMap.entries ?? [])
         .filter((entry) => entry.path[0] !== "cfc")
         .flatMap((entry) => entry.label.confidentiality ?? []);
