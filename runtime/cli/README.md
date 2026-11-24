@@ -517,40 +517,40 @@ uses this fixture mechanism at both postures.
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, shell,
 makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT, ProGuard, XML,
-Org mode, CSV, and TSV files use their own highlighting. A lowercase `.c`
-selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`, `.tcc`,
-and an uppercase `.C` select C++; and `.cu` and `.cuh` select CUDA. C++ and CUDA
-share one grammar, which colors CUDA's qualifiers, such as `__global__`, as
-keywords. C and C++ both write `.h` headers, so a `.h` file is colored in a mode
-that claims neither dialect, using the C++ grammar, which reads the declarations
-C headers usually make; a C header that uses one of C++'s keywords, such as
-`new`, as a name is colored as C when piped with `--language
-c`. HCL covers
-OpenTofu and Terraform configuration named `.tf` or `.tofu`, variable
-definitions files named `.tfvars`, backend configuration files named
-`.tfbackend`, and other `.hcl` files, such as dependency lock files. A string's
-interpolations and template directives are colored as code inside the string.
-Starlark covers Bazel's build files, named `BUILD`, `BUILD.bazel`, or with a
-`.BUILD` suffix, its module, repository, and workspace files, `.bzl` extension
-files, and other `.star` files. Its structure tree lists functions, each name
-that a statement outside functions assigns a value to on its own, and the target
-that each rule call outside functions declares when its `name` argument is a
-string literal. The Bazel rc language covers `.bazelrc` and other files named
-with that suffix, and lists the files an rc file imports and the configurations
-it defines, such as `race` in `build:race`. `.bazelversion` is plain text. Shell
-covers Bash and POSIX shell scripts named `.sh`, `.bash`, or `.command`, and
-Bash's startup files, such as `.bashrc` and `.profile`. A heredoc's body is
-colored as a string, with the expansions its delimiter allows. The makefile
-language reads GNU make's syntax in files named `Makefile`, `makefile`,
-`GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so they are
-colored as shell. The same is true of the command in a `!=` assignment and the
-argument of the `shell` function. Make's own variable references and function
-calls are colored inside that shell text. A Swift package manifest is Swift
-source under its `.swift` extension, and a module's `.swiftinterface` is Swift
-as well. Gradle build and settings scripts are Kotlin scripts under the `.kts`
-extension. Gradle version catalogs and Cargo manifests are TOML, as are Cargo
-lock files. The ProGuard language covers the keep rules that ProGuard and R8
-read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
+Org mode, CSV, TSV, and assembly files use their own highlighting. A lowercase
+`.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`,
+`.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select CUDA. C++
+and CUDA share one grammar, which colors CUDA's qualifiers, such as
+`__global__`, as keywords. C and C++ both write `.h` headers, so a `.h` file is
+colored in a mode that claims neither dialect, using the C++ grammar, which
+reads the declarations C headers usually make; a C header that uses one of C++'s
+keywords, such as `new`, as a name is colored as C when piped with
+`--language
+c`. HCL covers OpenTofu and Terraform configuration named `.tf` or
+`.tofu`, variable definitions files named `.tfvars`, backend configuration files
+named `.tfbackend`, and other `.hcl` files, such as dependency lock files. A
+string's interpolations and template directives are colored as code inside the
+string. Starlark covers Bazel's build files, named `BUILD`, `BUILD.bazel`, or
+with a `.BUILD` suffix, its module, repository, and workspace files, `.bzl`
+extension files, and other `.star` files. Its structure tree lists functions,
+each name that a statement outside functions assigns a value to on its own, and
+the target that each rule call outside functions declares when its `name`
+argument is a string literal. The Bazel rc language covers `.bazelrc` and other
+files named with that suffix, and lists the files an rc file imports and the
+configurations it defines, such as `race` in `build:race`. `.bazelversion` is
+plain text. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
+`.command`, and Bash's startup files, such as `.bashrc` and `.profile`. A
+heredoc's body is colored as a string, with the expansions its delimiter allows.
+The makefile language reads GNU make's syntax in files named `Makefile`,
+`makefile`, `GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so
+they are colored as shell. The same is true of the command in a `!=` assignment
+and the argument of the `shell` function. Make's own variable references and
+function calls are colored inside that shell text. A Swift package manifest is
+Swift source under its `.swift` extension, and a module's `.swiftinterface` is
+Swift as well. Gradle build and settings scripts are Kotlin scripts under the
+`.kts` extension. Gradle version catalogs and Cargo manifests are TOML, as are
+Cargo lock files. The ProGuard language covers the keep rules that ProGuard and
+R8 read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
 another `.pro` file uses it when one of its lines starts with one of ProGuard's
 option names, because Qt project files and Prolog use that suffix as well. XML
 covers Android manifests, resources, and layouts, SVG images, and Apple property
@@ -587,6 +587,10 @@ keywords, and attributes. The structure tree lists namespaces, sections, and
 and inductive types inside them. A project's `lean-toolchain` file, which names
 the Lean release the project builds with, colors the repository that publishes
 the release and the release's name.
+
+Assembly covers `.s` and `.S` files in the Go assembler's dialect and in the GNU
+assembler's, including GNU assembler source that the C preprocessor reads first.
+Linker scripts named `.lds.S` are not assembly.
 
 INI covers `.ini` files, which include Ansible inventories with that suffix,
 Ansible's `ansible.cfg` and `.ansible.cfg`, and the configuration files of

@@ -79,6 +79,7 @@ import { leanLanguage } from "../lib/view/languages/lean/language.ts";
 import { leanToolchainLanguage } from "../lib/view/languages/lean-toolchain/language.ts";
 import { dotLanguage } from "../lib/view/languages/dot/language.ts";
 import { dotenvLanguage } from "../lib/view/languages/dotenv/language.ts";
+import { assemblyLanguage } from "../lib/view/languages/assembly/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -255,6 +256,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   expect(languageForName("csv")).toBe(csvLanguage);
   expect(languageForName("tsv")).toBe(tsvLanguage);
   expect(languageForName("dat")).toBe(datLanguage);
+  expect(languageForName("assembly")).toBe(assemblyLanguage);
+  expect(languageForName("asm")).toBe(assemblyLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -303,6 +306,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "csv",
     "tsv",
     "dat",
+    "assembly",
     "binary",
     "plain-text",
   ]);
@@ -398,6 +402,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "csv",
     "tsv",
     "dat",
+    "assembly",
+    "asm",
     "binary",
     "bytes",
     "plain-text",

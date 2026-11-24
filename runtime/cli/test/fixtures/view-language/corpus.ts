@@ -546,9 +546,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "kotlin",
-    // Directive configuration colors the word that opens a statement as a
-    // keyword, as Kotlin colors the `suspend` modifier that opens a line.
-    highlightingPeers: ["directive", ...CPP_GRAMMAR],
+    // Directive configuration and assembly color the word that opens a
+    // statement as a keyword, as Kotlin colors the `suspend` modifier that
+    // opens a line.
+    highlightingPeers: ["directive", ...CPP_GRAMMAR, "assembly"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "776e81bca0cbee698d99808973212273b62af8d0",
     surveyPath:
@@ -804,9 +805,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "cuda",
-    // Directive configuration colors the word that opens a line as a keyword,
-    // as CUDA colors its qualifiers.
-    highlightingPeers: ["cpp", "c-family-header", "directive"],
+    // Directive configuration and assembly color the word that opens a line as
+    // a keyword, as CUDA colors its qualifiers.
+    highlightingPeers: ["cpp", "c-family-header", "directive", "assembly"],
     surveyRepository: "gvisor",
     surveyCommit: "7c2bcddc13c1729e345cfd9a75b910822e4ddcd1",
     surveyPath: "images/gpu/cuda-tests/cuda_malloc.cu",
@@ -826,7 +827,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "c-family-header",
-    highlightingPeers: ["c", "cpp", "cuda", "lean"],
+    // Assembly reads `#define` lines as the C preprocessor does, and colors a
+    // macro's name as headers do.
+    highlightingPeers: ["c", "cpp", "cuda", "lean", "assembly"],
     surveyRepository: "gvisor",
     surveyCommit: "2c1c4a5516248ba575cc17a4fbe569e540469160",
     surveyPath: "test/util/fs_util.h",
@@ -950,6 +953,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "make",
+    // A rule's `target:` is valid assembly label syntax, and assembly colors a
+    // label as make colors a target.
+    highlightingPeers: ["assembly"],
     surveyRepository: "infra",
     surveyCommit: "574f4a94cebb04cd12134146a25f0d7ba804da67",
     surveyPath: "tofu/postmark/Makefile",
@@ -1003,9 +1009,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "dockerfile",
     // An instruction line is a directive statement, a word and its arguments,
-    // and the directive configuration language colors its first word as a
-    // keyword, as this fixture's evidence is.
-    highlightingPeers: ["directive"],
+    // and the directive configuration and assembly languages color its first
+    // word as a keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive", "assembly"],
     surveyRepository: "infra",
     surveyCommit: "5b65688a0431cda75329734aa7784ba6fb3f76bb",
     surveyPath: "fly/pds/Dockerfile",
@@ -1019,9 +1025,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "dockerfile",
     // An instruction line is a directive statement, a word and its arguments,
-    // and the directive configuration language colors its first word as a
-    // keyword, as this fixture's evidence is.
-    highlightingPeers: ["directive"],
+    // and the directive configuration and assembly languages color its first
+    // word as a keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive", "assembly"],
     surveyRepository: "gvisor",
     surveyCommit: "90dc8548a354d618d05c968111931ba2c4764dd6",
     surveyPath: "images/default/Dockerfile",
@@ -1385,6 +1391,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "directive",
+    // Assembly colors the word that opens a statement as a mnemonic, a
+    // keyword, as directive configuration colors its directives.
+    highlightingPeers: ["assembly"],
     surveyRepository: "gvisor",
     surveyCommit: "82e8d12aed0ff0b736b1c937799b910beec68eb9",
     surveyPath: "images/benchmarks/nginx/nginx.conf",
@@ -1484,6 +1493,26 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "breadth_sd", className: "string" },
     afterEvidence: { text: "breadth_sd", className: "string" },
     incompleteEvidence: { text: "breadth_sd", className: "string" },
+  },
+  {
+    languageId: "assembly",
+    surveyRepository: "gvisor",
+    surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
+    surveyPath: "pkg/sentry/time/muldiv_amd64.s",
+    before: new URL("./assembly-gvisor/before.s", import.meta.url),
+    after: new URL("./assembly-gvisor/after.s", import.meta.url),
+    incomplete: new URL("./assembly-gvisor/incomplete.s", import.meta.url),
+    selection: {
+      filenames: [
+        "pkg/sentry/time/muldiv_amd64.s",
+        "pkg/goid/goid_arm64.tmpl.s",
+        "test/syscalls/linux/rseq/critical_amd64.S",
+      ],
+      aliases: ["assembly", "asm"],
+    },
+    beforeEvidence: { text: "·muldiv64", className: "functionName" },
+    afterEvidence: { text: "·muldiv64", className: "functionName" },
+    incompleteEvidence: { text: "·muldiv64", className: "functionName" },
   },
   {
     languageId: "plain-text",
