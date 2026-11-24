@@ -37,7 +37,7 @@ async function completeTierTree(): Promise<string> {
   for (const [file, tier] of Object.entries(TIER_FILES)) {
     await write(file, `${TIER_MARKERS[tier]}\ncode;\n`);
   }
-  await write("examples/counter/counter.tsx", "code;\n");
+  await write("examples/counter/main.tsx", "code;\n");
   return dir;
 }
 
@@ -57,7 +57,7 @@ describe("tierOf", () => {
   });
 
   it("leaves the copyable tiers unmarked", () => {
-    expect(tierOf("examples/counter/counter.tsx")).toBe(undefined);
+    expect(tierOf("examples/counter/main.tsx")).toBe(undefined);
     expect(tierOf("system/home/home.tsx")).toBe(undefined);
     expect(tierOf("system/notes/note.tsx")).toBe(undefined);
   });
@@ -209,14 +209,14 @@ describe("staleTableEntries", () => {
 
   it("reports a directory entry that matches no pattern source", () => {
     // What catches a tiered directory renamed out from under the tables.
-    const stale = staleTableEntries(["examples/counter/counter.tsx"]);
+    const stale = staleTableEntries(["examples/counter/main.tsx"]);
     expect(stale.some((entry) => entry.includes("dev/gideon-tests/"))).toBe(
       true,
     );
   });
 
   it("reports a file entry that is no longer a pattern source", () => {
-    const stale = staleTableEntries(["examples/counter/counter.tsx"]);
+    const stale = staleTableEntries(["examples/counter/main.tsx"]);
     expect(
       stale.some((entry) => entry.includes("dev/factory-outputs/vehicles.ts")),
     ).toBe(true);
@@ -305,7 +305,7 @@ describe("runTierCheck", () => {
     const dir = await completeTierTree();
     try {
       await Deno.writeTextFile(
-        `${dir}/examples/counter/counter.tsx`,
+        `${dir}/examples/counter/main.tsx`,
         `${FIXTURE}\ncode;\n`,
       );
       const report = await runTierCheck(dir, false);

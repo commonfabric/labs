@@ -125,7 +125,7 @@ describe("?identity parity with a worker HTTP compile", () => {
     // The worker attaches each file a `dataFile()` call names and folds it into
     // the entry's hash, so the endpoint has to find the same files.
 
-    const file = "examples/phonetic-speller/phonetic-speller.tsx";
+    const file = "examples/phonetic-speller/main.tsx";
     expect(await Deno.readTextFile(new URL(file, patternsRoot))).toContain(
       "dataFile(",
     );

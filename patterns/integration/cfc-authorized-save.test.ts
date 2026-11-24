@@ -46,7 +46,7 @@ describe("cfc authorized save integration test", () => {
       "..",
       "examples",
       "cfc-authorized-save",
-      "main.tsx",
+      "cfc-authorized-save.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

@@ -23,11 +23,11 @@ const CLICK_STREAMS = [
     stream: "sendMessage",
   },
   {
-    path: "patterns/examples/scoped-group-chat/main-plain-inputs.tsx",
+    path: "patterns/examples/scoped-group-chat/plain-inputs/main.tsx",
     stream: "sendMessage",
   },
   {
-    path: "patterns/examples/scoped-group-chat/main-with-writable-inputs.tsx",
+    path: "patterns/examples/scoped-group-chat/writable-inputs/main.tsx",
     stream: "sendMessage",
   },
 ];

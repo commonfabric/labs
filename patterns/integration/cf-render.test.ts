@@ -90,7 +90,7 @@ describe("cf-render integration test", () => {
           "..",
           "examples",
           "cf-render",
-          "cf-render.tsx",
+          "main.tsx",
         ),
       ),
       // We operate on the piece in this thread

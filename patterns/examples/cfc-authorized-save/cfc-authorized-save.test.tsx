@@ -15,7 +15,7 @@ import {
   SAVE_TITLE_ACTION,
   TRUSTED_SAVE_SURFACE,
 } from "../../system/cfc/trusted-surfaces/mod.ts";
-import AuthorizedSave from "./main.tsx";
+import AuthorizedSave from "./cfc-authorized-save.tsx";
 
 const setDraftTitle = handler<
   void,

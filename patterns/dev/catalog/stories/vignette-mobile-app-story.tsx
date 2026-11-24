@@ -1,5 +1,5 @@
 import { NAME, pattern, UI, type VNode } from "commonfabric";
-import MobileAppDemo from "../../../examples/mobile-app-demo/mobile-app-demo.tsx";
+import MobileAppDemo from "../../../examples/mobile-app-demo/main.tsx";
 
 // deno-lint-ignore no-empty-interface
 interface VignetteMobileAppInput {}

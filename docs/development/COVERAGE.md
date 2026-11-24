@@ -191,7 +191,7 @@ drives has a body that runs in neither path, so it sits at zero on every run
 rather than moving between them. That is permanent debt rather than flap, and it
 costs one more action apiece to clear.
 
-`patterns/examples/cfc-spec-gallery/main.test.tsx` is the worked example. It
+`patterns/examples/cfc-spec-gallery/cfc-spec-gallery.test.tsx` is the worked example. It
 reads its view, states its name and the four inputs it reports back out, and
 drives every stream the gallery exposes, which takes the file from 385 of its
 522 measured lines to all of them. Before that the integration path was the only

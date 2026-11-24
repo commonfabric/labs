@@ -9,7 +9,7 @@ import {
   isButton,
   sendMessage,
 } from "../../tools/test-support/vnode-helpers.ts";
-import EditableList from "./array-in-cell-with-remove-editable.tsx";
+import EditableList from "./main.tsx";
 
 /** The texts of `items`, in order, comma-separated. The pattern declares no
  * output type and its inferred one is `any`, so this parameter is what gives

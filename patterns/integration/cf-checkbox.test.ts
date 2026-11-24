@@ -18,7 +18,7 @@ const { API_URL, FRONTEND_URL } = env;
 const testComponents = [
   {
     name: "cf-checkbox-cell",
-    file: "examples/cf-checkbox-cell/cf-checkbox-cell.tsx",
+    file: "examples/cf-checkbox-cell/main.tsx",
   },
 ];
 

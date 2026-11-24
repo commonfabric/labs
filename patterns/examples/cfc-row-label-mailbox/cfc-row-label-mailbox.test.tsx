@@ -5,7 +5,7 @@
  * and the compose form's write gate admits a draft whose sender holds an
  * address and refuses one whose sender holds none.
  *
- * Run: deno task cf test patterns/examples/cfc-row-label-mailbox/main.test.tsx
+ * Run: deno task cf test patterns/examples/cfc-row-label-mailbox/cfc-row-label-mailbox.test.tsx
  */
 import {
   action,
@@ -23,7 +23,7 @@ import {
   hasText,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Mailbox from "./main.tsx";
+import Mailbox from "./cfc-row-label-mailbox.tsx";
 
 const inboxCount = (view: unknown): number =>
   countElements(findNodeById(view, "inbox-list"), "cf-card");

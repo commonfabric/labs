@@ -45,7 +45,7 @@ describe("cfc authorship chat integration test", () => {
       "..",
       "examples",
       "cfc-authorship-chat",
-      "main.tsx",
+      "cfc-authorship-chat.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

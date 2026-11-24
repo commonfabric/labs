@@ -604,7 +604,7 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
   assertEquals([...outside].sort(), []);
   assert(
     roots.includes(
-      join(config.patternPaths()[0], "examples", "counter", "counter.tsx"),
+      join(config.patternPaths()[0], "examples", "counter", "main.tsx"),
     ),
   );
 });

@@ -49,7 +49,7 @@ describe("cfc render policy demo integration test", () => {
       "..",
       "examples",
       "cfc-render-policy-demo",
-      "main.tsx",
+      "cfc-render-policy-demo.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

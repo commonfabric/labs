@@ -539,7 +539,7 @@ root, so adding roots does not repeatedly parse the combined file set.
 Three implementation facts make the light identity equal what the worker stores
 as `patternIdentity`, verified by a parity test against the real
 `default-app.tsx`, `home.tsx`, and
-`examples/phonetic-speller/phonetic-speller.tsx`:
+`examples/phonetic-speller/main.tsx`:
 
 - **Hash pristine, not injected.** The engine restores each module's original
   pre-injection bytes (`pristineModuleSources`) before hashing, so the light

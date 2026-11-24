@@ -11,7 +11,7 @@ import {
   findNodeById,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Gallery from "./main.tsx";
+import Gallery from "./cfc-spec-gallery.tsx";
 
 const FORWARD_RECIPIENT = "night-audit@hotel.example";
 const RESEARCH_COMMAND =

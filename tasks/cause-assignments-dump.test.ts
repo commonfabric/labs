@@ -230,14 +230,14 @@ describe("cause-assignments-dump", () => {
         ROOT,
         "--out",
         out,
-        "patterns/examples/clock/clock.tsx",
+        "patterns/examples/clock/main.tsx",
         "patterns/system/social-space/short-did.ts",
         "patterns/examples/no-such-pattern.tsx",
       ]);
 
       const dumped: DumpOutput = JSON.parse(await Deno.readTextFile(out));
       expect(dumped.assignments.map(({ pattern }) => pattern)).toEqual([
-        "examples/clock/clock.tsx",
+        "examples/clock/main.tsx",
       ]);
       expect(dumped.assignments[0].levels.length).toBeGreaterThan(0);
       expect(dumped.unassigned).toEqual([{
@@ -255,7 +255,7 @@ describe("cause-assignments-dump", () => {
         runDump([
           "--out",
           join(scratch, "dump.json"),
-          "patterns/examples/clock/clock.tsx",
+          "patterns/examples/clock/main.tsx",
         ]),
       ).rejects.toThrow("usage: cause-assignments-dump.ts --root <dir>");
       expect([...Deno.readDirSync(scratch)]).toEqual([]);

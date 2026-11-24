@@ -71,7 +71,12 @@ describe("cold start of a piece with trusted sub-pieces", () => {
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
       {
-        main: join(patternsRoot, "examples", "cfc-staged-publish", "main.tsx"),
+        main: join(
+          patternsRoot,
+          "examples",
+          "cfc-staged-publish",
+          "cfc-staged-publish.tsx",
+        ),
         root: patternsRoot,
       },
     );

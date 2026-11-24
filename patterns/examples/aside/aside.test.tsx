@@ -6,7 +6,7 @@ import {
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Aside from "./aside.tsx";
+import Aside from "./main.tsx";
 
 export default pattern(() => {
   const instance = Aside({});

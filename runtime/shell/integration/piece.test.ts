@@ -219,7 +219,7 @@ describe("shell piece tests", () => {
         "patterns",
         "examples",
         "counter",
-        "counter.tsx",
+        "main.tsx",
       );
       const slug = `compile-cache-${crypto.randomUUID()}`;
       const pieceId = await runCfPieceNewWithSlug({

@@ -5,7 +5,7 @@ import {
   fireEvent,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import CheckboxDemo from "./cf-checkbox-cell.tsx";
+import CheckboxDemo from "./main.tsx";
 
 // What the tracked checkbox reports when it is toggled.
 const toggleTracked = (root: unknown, checked: boolean): void =>
