@@ -192,9 +192,12 @@ its revision is above the vouch row, so it marks the slice that vouches for
 the instance, and a later record does not take that back, as for any other
 output ("How a slice becomes marked"). A write the serving loop makes for a
 handler or another computation is an ordinary change: it marks the slices
-that read the document, and the minting piece keeps its vouch. The lift sets
-the document to what it computes the next time it runs for its own reasons,
-and a reader reads the other writer's value until then ("Known limits").
+that read the document, and the minting piece keeps its vouch. The advance
+that finds the write above the vouch row marks the minting slice, as for any
+output; a later record of that slice moves the row up to the write, since
+the loop made the commit. From then the document is served as the other
+writer left it until the lift runs again for its own reasons ("Known
+limits").
 
 ### When a record is taken
 
@@ -787,10 +790,11 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
 - **A minted document another writer changed is read as that writer left
   it.** A served handler or another computation that writes a minted
   document through a link is not told apart from the minting lift: the
-  minting piece keeps its vouch, and the document holds the other writer's
-  value until the lift next runs because one of its own inputs changed. A
-  root that names the document is served that value meanwhile. This is
-  accepted in place of starting the minting piece to catch such writes.
+  minting piece keeps its vouch. Once a record of the minting slice is taken
+  after such a write, the document holds the other writer's value until the
+  lift next runs because one of its own inputs changed, and a root that names
+  it is served that value meanwhile. This is accepted in place of starting
+  the minting piece to catch such writes.
 - **A view plan names no producers for a piece that is not started**
   (`viewExecutionNodes`). A browser client renders such a piece from the
   store, checked on a counter in the shell; a pattern whose view depends on

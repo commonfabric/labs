@@ -1457,9 +1457,11 @@ executing:
   or not the set changed them: the run reports each one where it sets it,
   which a run that writes the value a document already holds does too. A
   write the loop makes to such a document for another computation or a
-  handler marks the slices that read it and leaves the vouch in place, so the
-  document is served as that writer left it until the minting computation
-  next runs for its own inputs; this staleness is accepted. It
+  handler marks the slices that read it and leaves the vouch in place: a
+  later record of the minting slice moves the vouch row up to it, since the
+  loop made the commit, and the document is then served as that writer left
+  it until the minting computation next runs for its own inputs. This
+  staleness is accepted. It
   vouches as well for
   the instances its runs wrote: for a run at a fan-out instance, the
   narrower of that instance and the write's declared scope as the run's
