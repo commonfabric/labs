@@ -147,6 +147,21 @@ export function addressesToPathByEntity(
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(address.path);
   }
+  // Implicit scopes and explicit keys can name the same instance. Keep
+  // distinct parent and child paths for shallow readers of that instance.
+  for (const [key, paths] of map) {
+    if (paths.length < 2) continue;
+    const seen = new Set<string>();
+    map.set(
+      key,
+      paths.filter((path) => {
+        const key = JSON.stringify(path);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+    );
+  }
   groupingsByAddressList.set(addresses, {
     identity: { principal: identity.principal, sessionId: identity.sessionId },
     length: addresses.length,

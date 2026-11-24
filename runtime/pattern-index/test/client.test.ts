@@ -660,6 +660,30 @@ describe("PatternIndexClient", () => {
     expect(body.remixedFrom).toBe("pat-other");
   });
 
+  it("sends `standalone` as stated, and omits it when unstated", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patternId: "pat-6", created: true }),
+      jsonResponse({ patternId: "pat-7", created: true }),
+      jsonResponse({ patternId: "pat-8", created: true }),
+    ]);
+    const request = {
+      patternId: "pat-6",
+      description: "Doubles a number",
+      hashtags: [],
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: "export default 2;" }],
+      },
+    };
+    await client.publishPattern({ ...request, standalone: false });
+    await client.publishPattern({ ...request, standalone: true });
+    await client.publishPattern(request);
+    const bodies = requests.map((sent) => JSON.parse(sent.body));
+    expect(bodies[0].standalone).toBe(false);
+    expect(bodies[1].standalone).toBe(true);
+    expect(Object.hasOwn(bodies[2], "standalone")).toBe(false);
+  });
+
   it("sends a version's lineage, slot, origin and privacy, and omits each when unset", async () => {
     const { client, requests } = createClient([
       jsonResponse({

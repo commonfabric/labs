@@ -80,6 +80,14 @@ export interface PublishOptions {
   remixedFrom?: string;
 
   /**
+   * Whether it is offered to a person choosing what to place (`true`) or
+   * only as a part (`false`). Absent leaves the index to decide: the version
+   * it follows keeps its answer, and a first version stands alone when its
+   * entry file is `main.tsx`.
+   */
+  standalone?: boolean;
+
+  /**
    * The lineage slot the entry's private versions are kept under
    * (`entrySlot`). With it, what is shared becomes a version of that
    * lineage, and a rewrite may go over files git cannot take back: the
@@ -223,6 +231,25 @@ export type PublishReport =
 
     priorPatternId?: string;
     remixedFrom?: string;
+
+    /**
+     * Whether the index stored it as standalone; absent from an index that
+     * does not say.
+     */
+    standalone?: boolean;
+
+    /**
+     * The required input with no default that keeps it from standing alone,
+     * when the index says that is why it is a part.
+     */
+    standaloneFloor?: string;
+
+    /**
+     * Set when `--standalone` or `--part` was given and the index recorded
+     * no answer: it predates the field.
+     */
+    standaloneNotRecorded?: true;
+
     localCheck: LocalCheckReport;
     listing: ListingReport;
 
@@ -342,6 +369,9 @@ export async function publishPatternFromDisk(
   let published = original;
   let publishedMeta = meta;
   const slot = options.slot;
+  const standalone = options.standalone === undefined
+    ? {}
+    : { standalone: options.standalone };
   const lineage = slot === undefined ? {} : { slot, origin: "self" as const };
   // The index takes a remix credit beside a slot only on the version that
   // starts the slot's lineage, so it is owed until one is sent.
@@ -370,6 +400,7 @@ export async function publishPatternFromDisk(
             ? { resultSchema: original.resultSchema }
             : {}),
           ...(credit === undefined ? {} : { remixedFrom: credit }),
+          ...standalone,
         }),
         ...lineage,
       });
@@ -426,6 +457,7 @@ export async function publishPatternFromDisk(
         : {}),
       ...(priorPatternId !== undefined ? { priorPatternId } : {}),
       ...(remixedFrom !== undefined ? { remixedFrom } : {}),
+      ...standalone,
     }),
     ...(slot === undefined ? {} : { slot, origin: "self" as const }),
   });
@@ -478,6 +510,18 @@ export async function publishPatternFromDisk(
     ...(priorPatternId !== undefined ? { priorPatternId } : {}),
     ...((remixedFrom ?? creditSent) !== undefined
       ? { remixedFrom: remixedFrom ?? creditSent }
+      : {}),
+    ...(response.standalone !== undefined
+      ? { standalone: response.standalone }
+      : {}),
+    ...(response.standalone === false &&
+        response.standaloneFloor !== undefined
+      ? { standaloneFloor: response.standaloneFloor }
+      : {}),
+    ...(options.standalone !== undefined &&
+        (response.standalone === undefined ||
+          response.ignored?.includes("standalone") === true)
+      ? { standaloneNotRecorded: true }
       : {}),
     localCheck,
     listing,
@@ -832,6 +876,16 @@ export const publishReportLines = (report: PublishReport): string[] => {
       report.remixedFrom !== undefined ? `, built on ${report.remixedFrom}` : ""
     }.`,
   );
+  if (report.standaloneFloor !== undefined) {
+    lines.push(
+      `Offered only as a part, not on its own: its input ${report.standaloneFloor} is required and has no default. Give it a default to offer the pattern on its own.`,
+    );
+  }
+  if (report.standaloneNotRecorded === true) {
+    lines.push(
+      "The index did not record whether it stands alone: it predates --standalone and --part.",
+    );
+  }
   const listing = report.listing;
   switch (listing.status) {
     case "requested":

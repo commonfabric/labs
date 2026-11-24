@@ -94,6 +94,8 @@ interface PublishCLIOptions extends PieceCLIOptions {
   allowDirty?: boolean;
   skipLocalCheck?: boolean;
   remixedFrom?: string;
+  standalone?: boolean;
+  part?: boolean;
   patternIndexUrl?: string;
   json?: boolean;
 }
@@ -277,6 +279,11 @@ async function shareOn(
         ...(options.remixedFrom === undefined
           ? {}
           : { remixedFrom: options.remixedFrom }),
+        ...(options.standalone
+          ? { standalone: true }
+          : options.part
+          ? { standalone: false }
+          : {}),
       },
       {
         compileEntry: (main, program) =>
@@ -728,6 +735,20 @@ const shareOptions = (cmd: Command<any>) =>
     .option(
       "--remixed-from <patternId:string>",
       "The published pattern this one was built from, when cf has no record of it.",
+    )
+    .option(
+      "--standalone",
+      "Offer it to people choosing what to place, on its own at the top of a " +
+        "loom. Without --standalone or --part, a new version keeps its " +
+        "predecessor's answer, a remix its source's, and any other first " +
+        "version stands alone when its entry file is main.tsx. A pattern " +
+        "that needs an input with no default is a part either way.",
+      { conflicts: ["part"] },
+    )
+    .option(
+      "--part",
+      "Offer it only as a part other patterns build from, not on its own.",
+      { conflicts: ["standalone"] },
     )
     .env(
       "CF_PATTERN_INDEX_URL=<url:string>",
