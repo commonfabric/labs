@@ -1494,11 +1494,11 @@ the per-epic implementation notes).
   tree interprets version 2: the runner's metadata reader, the memory
   engine's commit and anchor readers, cf-harness's space-label reader, and
   `cf inspect`. A reader built before 2026-09-15 fails closed on a version-2
-  envelope through `UnknownCfcMetadataVersionError` and has no setting that
-  changes that, so while one shares a space with a newer build, the newer
-  build's writers are what must write version 1. No preset or serving
-  factory takes the dial: a first-party deployment does that by building
-  with `RUNTIME_CFC_DIAL_DEFAULTS.cfcContentAddressedLabels` set back to
+  envelope and has no setting that changes that, so while one shares a
+  space with a newer build, the newer build's writers are what must write
+  version 1. No preset or serving factory takes the dial: a first-party
+  deployment does that by building with
+  `RUNTIME_CFC_DIAL_DEFAULTS.cfcContentAddressedLabels` set back to
   `false`, and a host that constructs its own `Runtime` passes
   `cfcContentAddressedLabels: false`.
 - **Path to removal.** Once the default has soaked, the dial retires and
