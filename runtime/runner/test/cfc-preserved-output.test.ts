@@ -36,6 +36,10 @@ describe("protected runtime output preservation", () => {
       }),
     });
     const setup = runtime.edit();
+    // The output is stored in version 1, as a store written before
+    // content-addressed labels holds it; the version test below relies on
+    // that, and a preserved output leaves the envelope as it is.
+    setup.setCfcContentAddressedLabels(false);
     const backing = runtime.getCell(owner.did(), "backing", {
       ...schema,
       default: "saved name",

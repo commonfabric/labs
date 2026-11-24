@@ -12,6 +12,7 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const owner = await Identity.fromPassphrase("old-symbolic-owner");
 const visitor = await Identity.fromPassphrase("old-symbolic-visitor");
@@ -103,6 +104,29 @@ const setup = async (legacy: "both" | "schema" | "label") => {
         tx.abort();
       }
     },
+    /**
+     * The label entries stored for `target`, each label read out of its
+     * label document where the envelope holds it by reference.
+     */
+    readLabelEntriesOf(target: NormalizedFullLink) {
+      const tx = runtime.edit();
+      try {
+        return storedLabelEntries(
+          (tx.readOrThrow(target, { meta: internalVerifierRead }) as {
+            cfc?: unknown;
+          }).cfc,
+          (id) =>
+            tx.readOrThrow({
+              space: target.space,
+              scope: "space",
+              id: id as NormalizedFullLink["id"],
+              path: [],
+            }, { meta: internalVerifierRead }),
+        );
+      } finally {
+        tx.abort();
+      }
+    },
     async dispose() {
       await storage.synced();
       await runtime.dispose();
@@ -148,8 +172,7 @@ describe("cfc-current-principal-legacy", () => {
       copy.set({ books: fixture.source.asSchema(fixture.schema) });
       expect((await tx.commit().settled).error).toBeUndefined();
       const copyLink = copy.getAsNormalizedFullLink();
-      const slot = fixture.readEnvelopeOf(copyLink).cfc?.labelMap.entries ??
-        [];
+      const slot = fixture.readLabelEntriesOf(copyLink);
       expect(slot).toEqual([{
         path: ["books"],
         origin: "link",

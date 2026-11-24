@@ -46,6 +46,9 @@ const makeRuntime = (
     // The stored-form assertions below read the decomposed spelling: the
     // root and its `$defs` member as separate content-addressed documents.
     cfcDecomposedEnvelopes: true,
+    // Labels stay inline in a version-1 envelope, so the envelope version
+    // these assertions read is the decomposition's alone.
+    cfcContentAddressedLabels: false,
   });
 
 /**
@@ -215,6 +218,7 @@ describe("CFC decomposed envelopes", () => {
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,
+      cfcContentAddressedLabels: false,
     });
     try {
       const tx = runtime.edit();
