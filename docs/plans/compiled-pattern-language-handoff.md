@@ -126,7 +126,11 @@ one case of `test/compiled/`, the first item below.
   3.39 MB at 2,000), and `#putScoped` compares it member by member. The
   counts of an edit are constant (8 evaluations, 4 records, 3
   derivations); the piece's own time is 29 to 32, 237 to 260 and 437 to
-  495 ms at those sizes, and the second client reads the edit after 0.3,
+  495 ms at those sizes (one run each at the commit `364a53722e`, load
+  average 11 to 21; an earlier run of the same commit at a load average of
+  6 to 15 gave 120 to 134 ms at 1,000 topics and 239 to 285 ms at 2,000
+  with the same counts, so the two sets differ by the machine's load and
+  not by the code), and the second client reads the edit after 0.3,
   2.2 and 4 to 5.6 s, most of it the label sync and the client's handling
   of the scope instance. Today's runtime makes a node of its own for the
   expression that reads the scoped value, and the result of the `map`
