@@ -48,8 +48,8 @@ The work after it is on two branches:
    with a `wish` has scoped state, so under the serving loop with resume 71
    corpus pieces are found current where the trunk finds 80.
 2. `claude/compiled-pattern-serving-m6` is the one branch not merged. The
-   attempt is the branch `merge-attempt/serving-m6` (head `223bd9d007`, notes
-   982 to 995), cut from the merged branch. One test of the serving branch fails
+   attempt is the branch `merge-attempt/serving-m6` (head `00d56b203e`, notes
+   982 to 1002), cut from the merged branch. One test of the serving branch fails
    there, for a defect of the trunk that the merge exposed and did not
    create (below).
 
@@ -67,8 +67,8 @@ at a wake and a restore that dropped another principal's memo entry; a wake
 by units that left no row of a list stored in documents), so a merge is not
 finished when the conflicts are gone.
 
-**What blocks the last merge, and what it showed** (notes 982 to 995 on
-`merge-attempt/serving-m6`, head `223bd9d007`). The gates pass there except
+**What blocks the last merge, and what it showed** (notes 982 to 1002 on
+`merge-attempt/serving-m6`, head `00d56b203e`). The gates pass there except
 one case of `test/compiled/`, the first item below.
 
 - *A commit whose label table would expand past 16 MB is sent with its
@@ -113,34 +113,38 @@ one case of `test/compiled/`, the first item below.
   on the serving branch). Open: a scoped output still holds all rows in one
   document (about 175 KB more per send at 100 messages); the plan to store
   it per row, as today's runtime does, is note 985.
-- *A view that reads one value of a scope is stored whole, once per scope
-  key, and compared whole at every change of a row* (notes 990 to 995; not
-  fixed). This is why an edit of a Topics title follows the board on every
-  tree that holds the scopes round (`75ad91d5f9`..`f315960774`); the
-  resume by units, write integrity and the list documents have no part in
-  it. The board's view reads `hasProfile`, which reads the `#profile` wish
-  of the scope `user`, so the whole `[UI]` entry is of that scope:
-  `Instance.scopedOutput` and `#scopedPlace` store the tree, with the cards
-  of the `map` over the array of topic references settled into it, in each
-  principal's scope instance (171 KB at 100 topics, 1.69 MB at 1,000,
-  3.39 MB at 2,000), and `#putScoped` compares it member by member. The
-  counts of an edit are constant (8 evaluations, 4 records, 3
-  derivations); the piece's own time is 29 to 32, 237 to 260 and 437 to
-  495 ms at those sizes (one run each at the commit `364a53722e`, load
-  average 11 to 21; an earlier run of the same commit at a load average of
-  6 to 15 gave 120 to 134 ms at 1,000 topics and 239 to 285 ms at 2,000
-  with the same counts, so the two sets differ by the machine's load and
-  not by the code), and the second client reads the edit after 0.3,
-  2.2 and 4 to 5.6 s, most of it the label sync and the client's handling
-  of the scope instance. Today's runtime makes a node of its own for the
-  expression that reads the scoped value, and the result of the `map`
-  stays a cell of the space. The plan (note 993, A): the crate plans an
-  expression of a view that reads an output or slot of a scope as a value
-  of its own, and `Host.output` hands any cone a reference to the scoped
-  place, so the view's cone stays of the space. The space positions then
-  no longer join the label of the scoped value, which is a deferred CFC
-  question. A reproduction for the first test is under
-  `work/r19-topics-edit/outside/`.
+- *Fixed (P451, which the owner agreed with on 2026-11-24, Z94; notes 990
+  to 1002): a view that read one value of a scope was stored whole, once
+  per scope key.* The board's view reads `hasProfile`, which reads the
+  `#profile` wish of the scope `user`, so the whole `[UI]` entry was of
+  that scope, with the cards of the `map` over the array of topic
+  references settled into each principal's scope instance (3.39 MB at
+  2,000 topics) and compared member by member at every edit. The scopes
+  round (`75ad91d5f9`..`f315960774`) caused it on its own. Now an operator
+  expression written as a JSX child or attribute value, outside every
+  element body, that reads a name whose place is of a scope gets a cone of
+  its own (`Emitter::eval_placed`, `hoisted_scope` and `place_scope` in
+  `src/plan.rs`), and the cone around it holds a reference to the scoped
+  place (`Host.output`, `Instance.scopedValue`), as today's runtime does
+  with a node of its own. An edit of a Topics title is 1 derivation and 5
+  evaluations at 100, 1,000 and 2,000 topics, 2.6 to 6.3 ms in the piece,
+  which is what the serving branch alone gives; the scope instances are
+  448 bytes at every size; a FabriChat send at 100 messages gives 148
+  records (188 before). Not applied: inside an element body, to a bare
+  `{name}`, and inside an authored `computed` or `lift` body. Open:
+  - `system/profile-embed` now fails 4 of 5 events in every run, with four
+    writer-fit refusals on its draft documents (before, 1 run of 3 did).
+    Its handler copies the profile's user-scoped name and bio into drafts
+    of the space, and its state now holds references to scoped places. Not
+    decided: whether the refusal is the label the copy owes, so that the
+    earlier outcome was an under-label, or whether the scoped place stores
+    a larger label than the value had (CFC question 5 of round nineteen).
+  - No test checks the stored labels of the positions around a scoped
+    value under clauses that differ between principals.
+  - Note 892's rule stands: a piece with scoped documents resumes whole.
+    The rows of the space are now units of the result whose bodies read
+    nothing scoped, so what a wake by units still needs is a basis per
+    scope key.
 - *Fixed for one case (P450): the runs of one pass for several sessions
   read the result of an instance a handler made before its first
   derivation committed,* which refused a Topics create one to three times
@@ -149,10 +153,19 @@ one case of `test/compiled/`, the first item below.
   deriving until the transaction of the run that made the first derivation
   ends. Today's runtime has no counterpart of this mechanism; it is a
   consequence of deriving once per session (note 892's open item), and one
-  refusal per create remains. Test `made-session.test.ts`.
-- *Not built:* a session no client holds any more is still derived at
-  every change; the serving runtime's own identity keeps a copy of the
-  scoped view that nothing reads.
+  refusal per create remains: each session's run derives the part of the
+  space too, so two runs write the created topic's documents. Which
+  document is refused, and whether the refusals follow the number of
+  sessions, is not measured. Test `made-session.test.ts`.
+- *Not built: a session no client holds any more is still derived at
+  every change.* The piece derives for every scope key it has seen. On
+  today's path a document of a session is derived because a client's
+  subscription demands it, and a client that left demands nothing. The fix
+  is that rule: a scope instance is derived only while something watches
+  its documents, which also bounds the memory that follows the principals
+  ever seen. It reaches the demand registry of today's runtime and is a
+  round of its own. The serving runtime's own identity also keeps a copy of
+  each scoped value that nothing reads.
 - *Not diagnosed:* a create at 100 topics threw `TypeMismatchError` in
   `RuntimeTransactions.change` from `#storeResult` once and did not
   reproduce; 3 of about 24 serving runs went idle before the load (note

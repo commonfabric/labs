@@ -6634,6 +6634,15 @@ is relitigated.
   stay: the owner's words, "keep main's methods". The move of `sortBy` is
   not built.
 
+- An expression that reads a value of a scope is a value of its own in that
+  scope, and the view around it stays of the space and holds a reference to
+  it (2026-11-24, Z94). It was the coordinator's provisional decision P451;
+  the owner's words on it: "fwiw, i agree with this approach". Today's
+  runtime does the same with a node of its own for such an expression.
+  Built on the branch `merge-attempt/serving-m6` for an operator expression
+  written as a JSX child or attribute value outside every element body;
+  the handoff document says what it does not cover and what it left open.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
