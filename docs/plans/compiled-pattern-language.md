@@ -6643,6 +6643,15 @@ is relitigated.
   written as a JSX child or attribute value outside every element body;
   the handoff document says what it does not cover and what it left open.
 
+- The labels of what a compiled piece commits are content-addressed
+  (2026-11-24, Z95). Asked whether to turn the experimental option
+  `cfcContentAddressedLabels` on for compiled pieces, the owner answered
+  "Yes, for compiled"; today's path keeps its default. The reason is a
+  defect of today's runtime that a compiled piece reaches first: a commit
+  whose label table would expand past 16 MB is sent with its labels inline
+  and refused, which stops a piece over about 150 distinctly labeled items
+  from starting. Being built on the branch `merge-attempt/serving-m6`.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on

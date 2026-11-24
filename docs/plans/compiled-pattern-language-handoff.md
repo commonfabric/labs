@@ -86,7 +86,9 @@ one case of `test/compiled/`, the first item below.
   repository, `work/r17-merge/today-wide-join.test.ts`). With the
   experimental option `cfcContentAddressedLabels` on, every case passes on
   both paths; the option waits on every deployed reader understanding
-  version-2 envelopes, which is the owner's decision. Separately, a start
+  version-2 envelopes. The owner ruled on 2026-11-24 (Z95) that the labels
+  of what a compiled piece commits are content-addressed, with today's
+  path left at its default; that is being built on this branch. Separately, a start
   writes one label entry per written path of its lists of readers (884 at
   200 items), so its size follows rows times clauses read; what label such
   a document owes is deferred question 1 of round thirteen.
