@@ -236,6 +236,27 @@ describe("repo-sync", () => {
       expect(entry.request.keywords).toEqual(["double"]);
     });
 
+    it("returns a `main.tsx` entry as standalone and any other entry as a part", async () => {
+      const plan = await planRepo(
+        OPTIONS,
+        planDeps({
+          "patterns/a/main.tsx": DESCRIBED,
+          "patterns/a/card.tsx": DESCRIBED,
+          "patterns/b.tsx": DESCRIBED,
+        }),
+      );
+      expect(
+        plan.entries.map((entry) => [
+          entry.path,
+          entry.status === "compiled" ? entry.request.standalone : undefined,
+        ]),
+      ).toEqual([
+        ["patterns/a/card.tsx", false],
+        ["patterns/a/main.tsx", true],
+        ["patterns/b.tsx", false],
+      ]);
+    });
+
     it("returns an entry with no description as undescribed", async () => {
       const plan = await planRepo(
         OPTIONS,

@@ -174,6 +174,12 @@ export interface PatternIndexSearchResult {
   /** Whether the published argument schema classifies this as a part or app. */
   kind: PatternIndexPatternKind;
 
+  /**
+   * Whether its author offers it to a person choosing what to place, rather
+   * than only as a part. Absent from deployments that predate the field.
+   */
+  standalone?: boolean;
+
   /** Evidence tier computed by the index from recorded run outcomes. */
   quality: PatternIndexQuality;
 
@@ -950,6 +956,17 @@ export interface PatternIndexPublishRequest {
   lineageId?: string;
 
   /**
+   * Whether this pattern is offered to a person choosing what to place, on
+   * its own at the top of a loom, rather than only as a part other patterns
+   * build from. Sent only when the publisher knows: absent, the index takes
+   * it from the version this one follows (`priorPatternId`, else
+   * `remixedFrom`), and for a first version, from the entry file being
+   * named `main.tsx`. A pattern with a required input and no default is
+   * stored as a part whatever this says.
+   */
+  standalone?: boolean;
+
+  /**
    * A key the caller chooses for the lineage, unique per owner, such as an
    * entry file's path; finds the lineage when no id or predecessor does.
    */
@@ -1069,6 +1086,13 @@ export interface PatternIndexPublishResponse {
 
   /** Request fields this deployment no longer stores and dropped. */
   ignored?: readonly string[];
+
+  /**
+   * Whether the index stored the version as standalone, which may differ
+   * from what was asked: a required input with no default makes it a part.
+   * Absent from deployments that predate the field.
+   */
+  standalone?: boolean;
 
   /**
    * The version recorded, or the head that already had this source. Absent
@@ -1657,6 +1681,9 @@ export class PatternIndexClient {
         ? { lineageId: request.lineageId }
         : {}),
       ...(request.slot !== undefined ? { slot: request.slot } : {}),
+      ...(request.standalone !== undefined
+        ? { standalone: request.standalone }
+        : {}),
       ...(request.origin !== undefined ? { origin: request.origin } : {}),
       ...(request.keepPrivate === true ? { keepPrivate: true } : {}),
       ...(request.deployedTo !== undefined

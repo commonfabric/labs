@@ -93,6 +93,14 @@ export interface CatalogEntry {
   title: string;
   /** What the pattern does: the index's description. */
   blurb?: string;
+  /**
+   * Whether its author offers it to a person choosing what to place, on its
+   * own at the top of a loom. Every pattern is also a part other patterns
+   * may build from; one that is not standalone is only that. A host sets it
+   * on every entry; an entry without it, stored before the field existed,
+   * is a part.
+   */
+  standalone?: boolean;
   tags?: string[];
   quality?: CatalogQuality;
   /** When the version was published (ISO 8601). */
