@@ -790,6 +790,21 @@ command line, with its prefix characters, its program, and the environment
 variable expansions systemd performs marked. The structure tree lists sections
 with the keys in each.
 
+OpenSSH authorized keys files, named `authorized_keys` or `authorized_keys2` or
+with a name ending in either after `_`, `-`, or `.`, and `.pub` public key files
+use their own syntax highlighting, which colors each key's options, type, data,
+and comment. The structure tree lists the keys by their comments.
+
+A Jinja template, named with a `.j2`, `.jinja`, or `.jinja2` suffix, is colored
+as the file it produces, whose language the rest of the name selects, with
+Jinja's expressions, tags, and comments colored inside it. `deploy.sh.j2` is
+shell. When the rest of the name selects no language, a shebang can select one,
+and otherwise, as for `nginx-logrotate.j2`, the file is plain text. The
+structure tree is that of the file the template produces. With `--language`,
+`jinja` selects Jinja over plain text, and `jinja-` followed by another text
+language's identifier or alias, as in `jinja-shell`, selects Jinja over that
+language.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each

@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+# Allow deploy user to execute any command without a password
+{% if deploy_users is defined %}
+{% for user in deploy_users | sort %}
+{{ user }} ALL=(ALL) NOPASSWD: ALL
+{% endfor %}
+{% else %}
+deploy ALL=(ALL) NOPASSWD: ALL
+{% endif %}

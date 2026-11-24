@@ -1,0 +1,3 @@
+# Read-only access for the Weaver publisher
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOBQEYE5U9wooasEc65wjRyBmOMI2ikTlmu0kOtGDpsI infra-read@example
+restrict,from="10.0.0.0/8",command="git-upload-pack 'infra.git'" ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBCAOJ0uOLeDeWNNmAUJpjShcGXehg1VWdkRFxo73Ax3B5Qn6CWzHvsr02tKFYUAYv+zhoIPukWUkNQSk5rNXjZA= deploy@example

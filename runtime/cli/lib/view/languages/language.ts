@@ -75,6 +75,13 @@ import { directiveLanguage } from "./directive/language.ts";
 import { csvLanguage, datLanguage, tsvLanguage } from "./table/language.ts";
 import { assemblyLanguage } from "./assembly/language.ts";
 import { sqlLanguage } from "./sql/language.ts";
+import { authorizedKeysLanguage } from "./authorized-keys/language.ts";
+import { jinjaSyntax } from "./jinja/jinja.ts";
+import {
+  templateHostName,
+  templateLanguage,
+  type TemplateSyntax,
+} from "./template.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -340,6 +347,13 @@ export interface Language {
    * attributes that macros and documentation tests read. */
   readonly docCommentsAreCode?: boolean;
 
+  /**
+   * Whether every value is a literal, such as a number or a quoted string, so
+   * that a bare word cannot stand where a value does, as in TOML and JSON. A
+   * template over such a language hides each expression from it as a number.
+   */
+  readonly literalValues?: true;
+
   /** Color `text` into rendered lines only — the per-keystroke-safe subset of
    * {@link parseDocument}, with no structure tree or definitions. Used by the
    * non-interactive fast path and the diff fragment renderer. `fileName` is
@@ -570,10 +584,22 @@ function allLanguages(): readonly Language[] {
     datLanguage,
     assemblyLanguage,
     sqlLanguage,
+    authorizedKeysLanguage,
+    ...TEMPLATE_SYNTAXES.map((syntax) =>
+      templateLanguage(syntax, plainTextLanguage)
+    ),
     binaryLanguage,
     plainTextLanguage,
   ];
 }
+
+/**
+ * Template syntaxes, which layer over the language that the rest of a
+ * template's filename selects, as `deploy.sh.j2` is Jinja over shell. Each is
+ * registered over plain text, and selection builds the others as names call
+ * for them.
+ */
+const TEMPLATE_SYNTAXES: readonly TemplateSyntax[] = [jinjaSyntax];
 
 /** Incrementally select any byte language from streamed content. */
 export function createByteLanguageDetector(): {
@@ -676,7 +702,7 @@ export function decodeLanguageInput(
   }
   return decodeTextInput(
     fileName,
-    byFilename,
+    byFilename?.input.decoder,
     bytes,
     allLanguages().find((language) => language.input.kind === "bytes"),
   );
@@ -684,13 +710,13 @@ export function decodeLanguageInput(
 
 function decodeTextInput(
   fileName: string | undefined,
-  selectedLanguage: Language | undefined,
+  decoder: LanguageDecoder | undefined,
   bytes: Uint8Array,
   byteFallback: Language | undefined,
 ): { language: Language; source: DecodedLanguageSource } {
   let source: DecodedLanguageSource;
   try {
-    source = (selectedLanguage?.input.decoder ?? utf8Decoder).decode(bytes);
+    source = (decoder ?? utf8Decoder).decode(bytes);
   } catch {
     if (byteFallback === undefined) {
       throw new TypeError("No byte language available.");
@@ -701,8 +727,7 @@ function decodeTextInput(
     };
   }
   return {
-    language: selectedLanguage ??
-      languageMatchingSource(fileName, source.text) ??
+    language: languageMatchingSources(fileName, [source.text]) ??
       plainTextLanguage,
     source,
   };
@@ -710,19 +735,44 @@ function decodeTextInput(
 
 /**
  * The language filename metadata selects, or undefined when none claims it. A
- * filename pattern claims a name only when no language claims it by extension
- * or exact name, so a pattern such as dotenv's `.env.*` leaves `.env.json` to
- * JSON.
+ * template suffix selects its template syntax over whatever the rest of the
+ * name selects, whatever other language a pattern would claim the whole name
+ * for. Otherwise a filename pattern claims a name only when no language claims
+ * it by extension or exact name, so a pattern such as dotenv's `.env.*` leaves
+ * `.env.json` to JSON.
  */
 export function languageMatchingFilename(
   fileName: string | undefined,
 ): Language | undefined {
-  return allLanguages().find((language) =>
-    metadataNamesFilename(language.metadata, fileName)
-  ) ??
+  if (fileName === undefined) return undefined;
+  return languageUnderTemplate(fileName, languageMatchingFilename) ??
+    allLanguages().find((language) =>
+      metadataNamesFilename(language.metadata, fileName)
+    ) ??
     allLanguages().find((language) =>
       metadataPatternMatchesFilename(language.metadata, fileName)
     );
+}
+
+/**
+ * The template syntax that `fileName`'s suffix names, over the host that
+ * `hostFor` selects for the rest of the name, or plain text when it selects
+ * none or a byte language. Undefined when no template suffix ends the name.
+ */
+function languageUnderTemplate(
+  fileName: string,
+  hostFor: (hostName: string) => Language | undefined,
+): Language | undefined {
+  for (const syntax of TEMPLATE_SYNTAXES) {
+    const hostName = templateHostName(syntax, fileName);
+    if (hostName === undefined) continue;
+    const host = hostFor(hostName);
+    return templateLanguage(
+      syntax,
+      host?.input.kind === "text" ? host : plainTextLanguage,
+    );
+  }
+  return undefined;
 }
 
 /** The language a shared extension, a shebang, or a signature selects from
@@ -758,12 +808,19 @@ export function languageForSource(
  * one of `sources` selects through a shared extension, a shebang, or a
  * signature, or undefined when nothing selects one. Each source is a file's complete text or
  * a prefix of it. Sources are read in order and only until one selects a
- * language, so an expensive source can be produced on demand.
+ * language, so an expensive source can be produced on demand. A template's
+ * host is selected the same way from the rest of its name, so the shebang of
+ * `deploy.j2` can make it a template of a shell script.
  */
 export function languageMatchingSources(
   fileName: string | undefined,
   sources: Iterable<string>,
 ): Language | undefined {
+  const template = fileName === undefined ? undefined : languageUnderTemplate(
+    fileName,
+    (hostName) => languageMatchingSources(hostName, sources),
+  );
+  if (template !== undefined) return template;
   const byFilename = languageMatchingFilename(fileName);
   if (byFilename !== undefined) return byFilename;
   for (const source of sources) {
@@ -800,15 +857,30 @@ export function indexLanguagesByName(
   return named;
 }
 
-/** Look up a language by its stable identifier or alias. */
+/**
+ * Look up a language by its stable identifier or alias, or a template syntax
+ * over another language by the two names joined with `-`, as `jinja-shell`.
+ */
 export function languageForName(name: string): Language | undefined {
-  return namedLanguages().get(name);
+  const named = namedLanguages().get(name);
+  if (named !== undefined) return named;
+  for (const syntax of TEMPLATE_SYNTAXES) {
+    if (!name.startsWith(`${syntax.id}-`)) continue;
+    const host = languageForName(name.slice(syntax.id.length + 1));
+    if (host?.input.kind === "text") return templateLanguage(syntax, host);
+  }
+  return undefined;
 }
 
 /** Stable identifiers accepted by an explicit language override. */
 export function languageIds(): string[] {
   return allLanguages().map((language) => language.id);
 }
+
+/** How {@link languageForName} names a template syntax over another
+ * language, for a list of the names it accepts. */
+export const TEMPLATE_LANGUAGE_NAMES =
+  'A template syntax over another language joins their names with "-", as in jinja-shell.';
 
 /** Stable identifiers and aliases accepted by an explicit language override. */
 export function languageNames(): string[] {

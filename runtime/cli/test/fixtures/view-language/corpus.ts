@@ -1701,7 +1701,84 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "foo", className: "interfaceName" },
   },
   {
+    languageId: "authorized-keys",
+    surveyRepository: "infra",
+    surveyCommit: "0aeb73971e5dad5ee7b7d14a7ae67a5c2f66fd74",
+    surveyPath: "tofu/weaver-dev-builds/infra-read-key.pub",
+    before: new URL("./authorized-keys-infra/before.pub", import.meta.url),
+    after: new URL("./authorized-keys-infra/after.pub", import.meta.url),
+    incomplete: new URL(
+      "./authorized-keys-infra/incomplete.pub",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "tofu/weaver-dev-builds/infra-read-key.pub",
+        ".ssh/authorized_keys",
+        ".ssh/authorized_keys2",
+        "files/deploy_authorized_keys",
+      ],
+      aliases: ["authorized-keys", "ssh-authorized-keys", "ssh-public-key"],
+    },
+    beforeEvidence: { text: "ssh-ed25519", className: "typeName" },
+    afterEvidence: { text: "restrict", className: "propertyName" },
+    incompleteEvidence: { text: "ssh-ed25519", className: "typeName" },
+  },
+  {
+    languageId: "jinja",
+    surveyRepository: "infra",
+    surveyCommit: "0aeb73971e5dad5ee7b7d14a7ae67a5c2f66fd74",
+    surveyPath: "ansible/roles/toolshed-binary/templates/deploy-sudoers.j2",
+    before: new URL("./jinja-infra/before.j2", import.meta.url),
+    after: new URL("./jinja-infra/after.j2", import.meta.url),
+    incomplete: new URL("./jinja-infra/incomplete.j2", import.meta.url),
+    selection: {
+      filenames: [
+        "ansible/roles/toolshed-binary/templates/deploy-sudoers.j2",
+        "ansible/roles/nginx/templates/nginx-logrotate.j2",
+        "templates/message.jinja2",
+        "templates/MESSAGE.JINJA",
+      ],
+      aliases: ["jinja", "jinja2", "j2"],
+    },
+    beforeEvidence: { text: "{{", className: "template" },
+    afterEvidence: { text: "endif", className: "controlKeyword" },
+    incompleteEvidence: { text: "{%-", className: "template" },
+  },
+  {
+    languageId: "jinja-shell",
+    // Jinja over plain text colors the same Jinja tags, and shell the same
+    // commands.
+    highlightingPeers: ["jinja", "shell"],
+    surveyRepository: "infra",
+    surveyCommit: "0aeb73971e5dad5ee7b7d14a7ae67a5c2f66fd74",
+    surveyPath:
+      "ansible/roles/toolshed-binary/templates/validate_binary.sh.j2",
+    before: new URL("./jinja-shell-infra/before.sh.j2", import.meta.url),
+    after: new URL("./jinja-shell-infra/after.sh.j2", import.meta.url),
+    incomplete: new URL(
+      "./jinja-shell-infra/incomplete.sh.j2",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "ansible/roles/toolshed-binary/templates/validate_binary.sh.j2",
+        "ansible/roles/deploy/templates/deploy.sh.j2",
+        "ansible/roles/tailscale/templates/tailscale-healthcheck.sh.j2",
+        "templates/profile.bash.jinja2",
+        "templates/open.command.jinja",
+      ],
+      aliases: ["jinja-shell", "jinja-sh", "jinja-bash"],
+      unclaimedFilenames: ["ansible/roles/deploy/templates/validate.j2"],
+    },
+    beforeEvidence: { text: "{{", className: "template" },
+    afterEvidence: { text: "openssl", className: "callName" },
+    incompleteEvidence: { text: "openssl", className: "callName" },
+  },
+  {
     languageId: "plain-text",
+    // Jinja over plain text colors the text outside its tags as plain text.
+    highlightingPeers: ["jinja"],
     surveyRepository: "raia",
     surveyCommit: "6b9cc95befe5f7cf0929eb569d9a1157e62d2374",
     surveyPath: "LICENSE",
