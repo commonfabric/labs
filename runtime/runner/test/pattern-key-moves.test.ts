@@ -6,8 +6,10 @@ import { fromFileUrl, relative } from "@std/path";
 import {
   currentPatternKey,
   formerPatternKey,
+  formerPatternKeys,
   mainNamesPattern,
   MOVED_PATTERN_KEYS,
+  patternKeyMovesIn,
 } from "../src/pattern-key-moves.ts";
 import {
   normalizePatternSource,
@@ -28,7 +30,54 @@ const DELETED_TARGETS = new Set([
   "system/profile-look/profile-look.ts",
 ]);
 
+// A pattern that moved twice, once as a file and once with its directory,
+// beside one that moved once.
+const CHAINED = patternKeyMovesIn({
+  "a.tsx": "apps/a/a.tsx",
+  "apps/a/a.tsx": "apps/a/main.tsx",
+  "b/": "apps/b/",
+  "apps/b/b.tsx": "apps/b/main.tsx",
+  "c.tsx": "apps/c/c.tsx",
+});
+
 describe("pattern-key-moves", () => {
+  describe("patternKeyMovesIn()", () => {
+    it("returns the newest key of a pattern that moved more than once", () => {
+      expect(CHAINED.current("a.tsx")).toBe("apps/a/main.tsx");
+      expect(CHAINED.current("apps/a/a.tsx")).toBe("apps/a/main.tsx");
+      expect(CHAINED.current("b/b.tsx")).toBe("apps/b/main.tsx");
+      expect(CHAINED.current("b/helper.ts")).toBe("apps/b/helper.ts");
+      expect(CHAINED.current("c.tsx")).toBe("apps/c/c.tsx");
+      expect(CHAINED.current("apps/a/main.tsx")).toBe("apps/a/main.tsx");
+    });
+
+    it("returns the key before the latest move from `former()`", () => {
+      expect(CHAINED.former("apps/a/main.tsx")).toBe("apps/a/a.tsx");
+      expect(CHAINED.former("apps/a/a.tsx")).toBe("a.tsx");
+      expect(CHAINED.former("a.tsx")).toBe("a.tsx");
+    });
+
+    it("returns every former key, the latest first, from `formers()`", () => {
+      expect(CHAINED.formers("apps/a/main.tsx")).toEqual([
+        "apps/a/a.tsx",
+        "a.tsx",
+      ]);
+      expect(CHAINED.formers("apps/b/main.tsx")).toEqual([
+        "apps/b/b.tsx",
+        "b/b.tsx",
+      ]);
+      expect(CHAINED.formers("apps/c/c.tsx")).toEqual(["c.tsx"]);
+      expect(CHAINED.formers("apps/never-moved.tsx")).toEqual([]);
+    });
+
+    it("returns from a table holding a cycle instead of hanging", () => {
+      const cyclic = patternKeyMovesIn({ "a.tsx": "b.tsx", "b.tsx": "a.tsx" });
+
+      expect(cyclic.current("a.tsx")).toBe("b.tsx");
+      expect(cyclic.formers("a.tsx")).toEqual(["b.tsx"]);
+    });
+  });
+
   describe("currentPatternKey()", () => {
     it("returns the new key of a file the table names", () => {
       expect(currentPatternKey("system/home.tsx")).toBe(
@@ -173,14 +222,28 @@ describe("pattern-key-moves", () => {
   });
   describe("the table", () => {
     it("names no key the patterns tree holds, and only targets it holds or that were deleted", () => {
-      for (const [from, to] of MOVES) {
+      // A target that moved on is an old key itself, so it is judged where
+      // its pattern's moves end.
+      for (const [from] of MOVES) {
+        const to = currentPatternKey(from);
         expect({ from, exists: existsSync(`${patterns}/${from}`) })
           .toEqual({ from, exists: false });
         expect({ to, exists: existsSync(`${patterns}/${to}`) })
           .toEqual({ to, exists: !DELETED_TARGETS.has(to) });
       }
       for (const to of DELETED_TARGETS) {
-        expect(MOVES.some(([, target]) => target === to)).toBe(true);
+        expect(MOVES.some(([from]) => currentPatternKey(from) === to))
+          .toBe(true);
+      }
+    });
+
+    it("holds no cycle: every key's moves end at a key the table leaves", () => {
+      for (const [from] of MOVES) {
+        const to = currentPatternKey(from);
+        expect({ from, to, again: currentPatternKey(to) })
+          .toEqual({ from, to, again: to });
+        expect({ from, returns: formerPatternKeys(to).includes(to) })
+          .toEqual({ from, returns: false });
       }
     });
 
@@ -213,9 +276,11 @@ describe("pattern-key-moves", () => {
         ].some((prefix) => from.p.startsWith(prefix))
       );
       expect(lines.length).toBeGreaterThan(0);
+      // A line records one move, so a key that moved on since ends where
+      // its target ends.
       for (const { from, to } of lines) {
         expect({ from: from.p, to: currentPatternKey(from.p) })
-          .toEqual({ from: from.p, to: to.p });
+          .toEqual({ from: from.p, to: currentPatternKey(to.p) });
       }
     });
 
