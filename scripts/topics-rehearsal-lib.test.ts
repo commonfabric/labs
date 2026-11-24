@@ -10,6 +10,7 @@ import {
   deepEqual,
   findLink,
   isAbsentPathError,
+  isStoredLink,
   normalizeFid,
   publishedBoardSources,
   retiredKeys,
@@ -158,6 +159,36 @@ describe("topics-rehearsal-lib", () => {
       ).toBe(false);
       expect(isAbsentPathError(new Error("did not return JSON"))).toBe(false);
       expect(isAbsentPathError("not an error")).toBe(false);
+    });
+  });
+
+  describe("isStoredLink", () => {
+    // What tells a bound structural field from an absent one, which a read
+    // of the field and a `<field>@` selection cannot.
+
+    it("returns true for a link as a whole-document read prints it", () => {
+      expect(isStoredLink({
+        "/": {
+          "link@1": {
+            id: "of:fid1:board",
+            path: ["board"],
+            space: "did:key:z6Mkspace",
+            scope: "space",
+          },
+        },
+      })).toBe(true);
+    });
+
+    it("returns false for an address a selection answers with", () => {
+      expect(isStoredLink({ $link: "/of:fid1:topic-argument/board" })).toBe(
+        false,
+      );
+    });
+
+    it("returns false for a value and for nothing", () => {
+      expect(isStoredLink({ "/": "not a link" })).toBe(false);
+      expect(isStoredLink([])).toBe(false);
+      expect(isStoredLink(undefined)).toBe(false);
     });
   });
 

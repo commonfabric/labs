@@ -29,6 +29,7 @@ import {
   cf,
   cfJson,
   isAbsentPathError,
+  linkedInputFields,
   normalizeFid,
   STRUCTURAL_LINK_SOURCES,
 } from "./topics-rehearsal-lib.ts";
@@ -98,26 +99,15 @@ try {
 
 /** Whether the topic's input holds a link at `FIELD`. */
 async function bound(topic: string): Promise<boolean> {
-  try {
-    const live = await cfJson<unknown>([
-      "cell",
-      "get",
-      "-q",
-      "--piece",
-      topic,
-      "--space",
-      space!,
-      "--api-url",
-      apiUrl!,
-      "--input",
-      "--select",
-      `${FIELD}@`,
-    ]);
-    return live !== undefined && live !== null;
-  } catch (error) {
-    if (isAbsentPathError(error)) return false;
-    throw error;
-  }
+  const linked = await linkedInputFields([
+    "--piece",
+    topic,
+    "--space",
+    space!,
+    "--api-url",
+    apiUrl!,
+  ]);
+  return linked.has(FIELD);
 }
 
 let linked = 0;
@@ -136,9 +126,13 @@ for (const piece of pieces) {
       console.log(`${topic}: would link ${FIELD}`);
       continue;
     }
+    // A topic filed before `board` existed stores nothing there, and the CLI
+    // refuses to link to a path the stored input lacks unless told to. The
+    // topic's schema declares the field, and still governs the link.
     await cf([
       "piece",
       "link",
+      "--allow-non-existing",
       "--space",
       space,
       "--api-url",

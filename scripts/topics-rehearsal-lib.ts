@@ -110,6 +110,40 @@ export function isAbsentPathError(error: unknown): boolean {
     );
 }
 
+/** Whether `value` is a stored link, as a whole-document read prints one. */
+export function isStoredLink(value: unknown): boolean {
+  return isObjectNotArray(value) && isObjectNotArray(value["/"]) &&
+    Object.keys(value["/"]).some((key) => key.startsWith("link@"));
+}
+
+/**
+ * The top-level fields of a piece's input document that hold a link, read
+ * with `cf cell get --input` and the address arguments `addr`
+ * (`--piece`, `--space`, `--api-url`).
+ *
+ * The document is read whole because that is the read that shows a link as
+ * stored. A read of the field itself follows the link, and `--select
+ * <field>@` answers with the field's own address whether it holds a link or
+ * nothing at all, so neither can tell a bound field from an absent one.
+ */
+export async function linkedInputFields(
+  addr: readonly string[],
+): Promise<Set<string>> {
+  const doc = await cfJson<unknown>([
+    "cell",
+    "get",
+    "-q",
+    ...addr,
+    "--input",
+  ]);
+  const linked = new Set<string>();
+  if (!isObjectNotArray(doc)) return linked;
+  for (const [field, value] of Object.entries(doc)) {
+    if (isStoredLink(value)) linked.add(field);
+  }
+  return linked;
+}
+
 /**
  * The path {@link retiredKeys} reports when the live read does not surface the
  * compared value AT ALL, rather than a key inside it — the root node, spelled
