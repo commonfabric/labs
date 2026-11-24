@@ -45,26 +45,34 @@ export class BallRenderer {
       preserveDrawingBuffer: true,
     });
     if (gl === null) return;
-    if (!gl.isContextLost()) {
-      try {
-        this.#prepare(gl);
-      } catch (error) {
-        // WebGL that cannot draw, as when a driver refuses the shaders, gives
-        // way to the 2D context, on a canvas of its own, since a canvas
-        // keeps the context it first gave.
-        console.error("runners page: drawing with WebGL failed:", error);
-        const fresh = document.createElement("canvas");
-        for (const { name, value } of canvas.attributes) fresh.setAttribute(name, value);
-        canvas.replaceWith(fresh);
-        this.#canvas = fresh;
-        return;
-      }
-    }
+    if (!gl.isContextLost() && !this.#tryPreparing(gl)) return;
     this.#gl = gl;
     // A context the browser takes away, as after the GPU resets, is asked
     // back, and set up again once it is restored.
     canvas.addEventListener("webglcontextlost", (event) => event.preventDefault());
-    canvas.addEventListener("webglcontextrestored", () => this.#prepare(gl));
+    canvas.addEventListener("webglcontextrestored", () => this.#tryPreparing(gl));
+  }
+
+  /**
+   * Helper for the constructor, which sets up `gl`, and returns whether it
+   * could. WebGL that cannot draw, as when a driver refuses the shaders,
+   * gives way to the 2D context, on a canvas of its own, since a canvas keeps
+   * the context it first gave.
+   */
+  #tryPreparing(gl: WebGL2RenderingContext): boolean {
+    try {
+      this.#prepare(gl);
+      return true;
+    } catch (error) {
+      console.error("runners page: drawing with WebGL failed:", error);
+      const canvas = this.#canvas;
+      const fresh = document.createElement("canvas");
+      for (const { name, value } of canvas.attributes) fresh.setAttribute(name, value);
+      canvas.replaceWith(fresh);
+      this.#canvas = fresh;
+      this.#gl = null;
+      return false;
+    }
   }
 
   /** Whether it draws with WebGL. */

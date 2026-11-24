@@ -533,9 +533,10 @@ export class HeapWorld {
           let ny = y[j] - y[i];
           let distance2 = nx * nx + ny * ny;
           // A sleeping ball that an awake one under it has moved away from,
-          // leaving a gap of more than a fiftieth of a ball, wakes, so that
-          // it falls rather than hang in the air.
-          if (awake[i] !== awake[j] && distance2 > d * d * 1.0404 && distance2 < d * d * 1.1) {
+          // leaving a gap of more than a fiftieth of a ball and less than a
+          // whole one, which no step moves a ball past, wakes, so that it
+          // falls rather than hang in the air.
+          if (awake[i] !== awake[j] && distance2 > d * d * 1.0404 && distance2 < d * d * 4) {
             const lower = y[i] > y[j] ? i : j;
             const upper = lower === i ? j : i;
             if (awake[lower] && !awake[upper]) {

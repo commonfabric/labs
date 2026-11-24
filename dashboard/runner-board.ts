@@ -298,7 +298,7 @@ export function buildBoard(
   // runs, as its labels do.
   const isHosted = (job: ActiveJob) =>
     job.runnerGroup === HOSTED_GROUP ||
-    (job.runner?.startsWith(`${HOSTED_GROUP} `) ?? false) ||
+    ((job.runner?.startsWith(`${HOSTED_GROUP} `) ?? false) && !selfHosted(job.labels)) ||
     (job.runnerGroup === null && job.runner === null && !selfHosted(job.labels));
   const token = (job: ActiveJob): Token => ({
     id: job.id,
@@ -487,7 +487,11 @@ export function buildBoard(
   }
   // The box of GitHub's runners with a job's labels, made if there is none.
   const hostedBox = (job: ActiveJob): string => {
-    const title = job.labels.length ? job.labels.join(", ") : "any runner";
+    // The same labels asked for in any order and case are one box.
+    const seen = new Set<string>();
+    const labels = job.labels.filter((label) => !seen.has(lower(label)) && seen.add(lower(label)))
+      .sort((a, b) => compareTuples([lower(a)], [lower(b)]));
+    const title = labels.length ? labels.join(", ") : "any runner";
     if (!pools.has(HOSTED)) {
       pools.set(HOSTED, {
         id: HOSTED,

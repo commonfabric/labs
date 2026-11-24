@@ -154,7 +154,8 @@ ${LIVE_PAGE_STYLES}
   .legend{flex:1 1 260px;min-width:240px;max-height:600px;overflow:auto;font-size:12px;padding:10px 12px;box-sizing:border-box;background:var(--surface);border:1px solid var(--border);border-radius:12px}
   .legend .run{display:flex;gap:7px;align-items:center;padding:2px 0}
   .legend .swatch{width:10px;height:10px;border-radius:50%;flex:none}
-  .legend .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .legend .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit;text-decoration:none}
+  .legend a.title:hover,.legend a.title:focus-visible{text-decoration:underline}
   .legend .jobs{color:var(--text-muted);font-variant-numeric:tabular-nums;flex:none}
   .tooltip{position:absolute;z-index:3;pointer-events:none;white-space:pre;font-size:10px;line-height:1.35;padding:4px 6px;border-radius:5px;background:var(--surface-deep);color:var(--text);border:1px solid var(--border-strong);box-shadow:0 2px 6px rgba(0,0,0,.2)}
 </style></head><body>

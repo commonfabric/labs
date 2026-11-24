@@ -743,16 +743,17 @@ neither line, because its own figure is the age badge in the header.
 
 The **Runners** button at the bottom of the dashboard opens `/runners`, which
 shows what every runner of the organization is doing, and what is waiting for
-one. Each job queued or running on any branch is a ball, colored by its run, so
-that the jobs of one workflow for two pull requests have two colors. Runs on the
-board at the same time have colors of their own while there are enough to go
-round: twelve strong ones, then a paler shade of each. A run keeps its color
-while it has jobs on the board. The legend beside the board lists each run in
-its color, alphabetically, with how many of its jobs show. The board is laid out
-780 pixels wide, and shown at that size beside the legend; on a window with no
-room for both, the legend goes under the board, and the board is scaled, with
-everything on it, to fill the window's width without growing taller than the
-window.
+one. Each job queued or running on any branch that the server has read from
+GitHub or been told of by the relay is a ball, colored by its run, so that the
+jobs of one workflow for two pull requests have two colors. Runs on the board at
+the same time have colors of their own while there are enough to go round:
+twelve strong ones, then a paler shade of each. A run keeps its color while it
+has jobs on the board. The legend beside the board lists each run in its color,
+alphabetically, with how many of its jobs show, each line a link to the run on
+GitHub. The board is laid out 780 pixels wide, and shown at that size beside the
+legend; on a window with no room for both, the legend goes under the board, and
+the board is scaled, with everything on it, to fill the window's width without
+growing taller than the window.
 
 The board is split into pools, each a set of runners that the same jobs can run
 on, as a band across the board. A pool's heading names it, says what its runners
@@ -768,7 +769,9 @@ its queue is on the left and its runners are on the right, in boxes:
   pooled by their labels. A job that asks for a runner group rather than labels,
   as `runs-on: group: labs` does, is pooled by that group, queued or running.
 - Each larger runner, such as `ubuntu-24.04-32-core`, is a pool of its own, with
-  a place for each job it can run at once, up to 64.
+  a place for each job it can run at once when that is 64 or fewer; one that can
+  run more has places as many as it has needed, as a box of autoscaled runners
+  does.
 - GitHub's own runners are one pool, with a box for each set of labels jobs ask
   for, such as `ubuntu-latest`.
 
@@ -830,31 +833,35 @@ of the jobs held. For each, it reads, through `github-runs.ts`, the runs not
 completed among the newest hundred of its unfiltered list. On the first read
 under a relay connection, when that list goes on past them without reaching back
 past the oldest a run under way can be, it also reads the lists filtered to each
-status a run under way can have, and reads again by its id each run young enough
-that they name further down, since those lists can be behind, remembering those
-found completed; later reads under the connection need not, since every run
-started since the first was delivered. A run held that no list names is read
-again by its id. Then it reads the jobs of each run under way, starts afresh
-from what it read, takes in again what the relay delivered during the read, and
-sends every page a new snapshot. A held run found completed ends its jobs as it
-ended. A repository GitHub answers is missing or forbidden has no runs; the jobs
-of one that could not be read for any other reason, or of a run whose jobs could
-not be read, are kept as they were, and a read that cannot list the repositories
-changes nothing; either way the read does not count as current. While no page is
-open, the server holds no jobs and takes in no deliveries, and the next page to
-open has them read afresh. A page tells the server whether a reader can see it,
-and the server reads GitHub, jobs and runners alike, only while one can: a page
-left open behind other tabs is still sent every delivery, which costs nothing,
-and what is not current is read when a reader looks at one again. When the relay
-falls silent for two minutes, or is heard again, open pages are told, and while
-it is silent the board says that jobs may have started or ended unseen. The
-organization's self-hosted and larger runners are read when a page opens, at
-most twice a minute, and on the server's tick every five minutes while a page is
-open, since no delivery says when a runner comes, goes, or loses its connection.
-A list that cannot be read is kept as it was, and named on the board. Listing
-them takes organization admin access: GitHub documents that a classic token
-needs `admin:org` for self-hosted runners and `manage_runners:org` for larger
-runners. Without them, the jobs' runners are pooled by what the jobs say.
+status a run under way can have, page by page while the pages are full, and
+reads again by its id each run young enough that they name further down, since
+those lists can be behind, remembering those found completed; later reads under
+the connection need not, since every run started since the first was delivered.
+A run held that no list names is read again by its id. Then it reads the jobs of
+each run under way, starts afresh from what it read, takes in again what the
+relay delivered during the read, and sends every page a new snapshot. A held run
+found completed ends its jobs as it ended. A repository GitHub says does not
+exist has no runs. One the dashboard is forbidden to read keeps the jobs the
+relay told of, is named on the board, and does not keep the read from counting
+as current, since reading it again would be forbidden again. The jobs of a
+repository that could not be read for any other reason, or of a run whose jobs
+could not be read, are kept as they were, and the read does not count as
+current; a read that cannot list the repositories changes nothing. While no page
+is open, the server holds no jobs and takes in no deliveries, and the next page
+to open has them read afresh. A page tells the server whether a reader can see
+it, and the server reads GitHub, jobs and runners alike, only while one can: a
+page left open behind other tabs is still sent every delivery, which costs
+nothing, and what is not current is read when a reader looks at one again. When
+the relay falls silent for two minutes, or is heard again, open pages are told,
+and while it is silent the board says that jobs may have started or ended
+unseen. The organization's self-hosted and larger runners are read when a page
+opens, at most twice a minute, and on the server's tick every five minutes while
+a page is open, since no delivery says when a runner comes, goes, or loses its
+connection. A list that cannot be read is kept as it was, and named on the
+board. Listing them takes organization admin access: GitHub documents that a
+classic token needs `admin:org` for self-hosted runners and `manage_runners:org`
+for larger runners. Without them, the jobs' runners are pooled by what the jobs
+say.
 
 The page moves its balls in the browser, every frame while any moves, by the
 time the frame took (`runner-physics.ts`), and stops drawing once everything is

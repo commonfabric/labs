@@ -184,6 +184,7 @@ export class RunnersFeed {
   #tracker = new JobTracker();
   #sockets = new Set<RunnersSocket>();
   #hidden = new Set<RunnersSocket>();
+  #opening = 0;
   #runners: readonly Runner[] = [];
   #larger: readonly LargerRunner[] = [];
   #runnerProblems: readonly string[] = [];
@@ -238,7 +239,7 @@ export class RunnersFeed {
     if (new URL(request.url).searchParams.get("key") !== this.#key) {
       return new Response("The runners socket needs the page's key.", { status: 403 });
     }
-    if (this.#sockets.size >= MOST_SOCKETS) {
+    if (this.#sockets.size + this.#opening >= MOST_SOCKETS) {
       return new Response("The runners page is open in too many places.", { status: 503 });
     }
     let upgraded: { socket: WebSocket; response: Response };
@@ -248,7 +249,16 @@ export class RunnersFeed {
       return new Response(`Not a WebSocket request: ${describeFailure(error)}`, { status: 400 });
     }
     const { socket, response } = upgraded;
+    // A socket counts against the limit from its upgrade, before it opens.
+    this.#opening++;
+    let opening = true;
+    const opened = () => {
+      if (opening) this.#opening--;
+      opening = false;
+    };
+    socket.addEventListener("close", opened);
     socket.addEventListener("open", () => {
+      opened();
       this.serve(socket).catch((error) =>
         console.error("runners page: serving a socket failed:", describeFailure(error))
       );
@@ -397,6 +407,7 @@ export class RunnersFeed {
     const unread = new Set<string>();
     const unreadRuns = new Set<number>();
     const gone = new Set<string>();
+    let failed = false;
     const heldRuns = new Map<number, string>();
     const ended: News[] = [];
     for (const job of this.#tracker.jobs.values()) heldRuns.set(job.runId, `${job.owner}/${job.repository}`);
@@ -412,16 +423,17 @@ export class RunnersFeed {
               return read ? [{ repo, read }] : [];
             });
           } catch (error) {
-            // A repository GitHub no longer shows the dashboard has no runs
-            // for it to show.
-            if (
-              error instanceof GitHubStatusError && !error.rateLimited &&
-              (error.status === 403 || error.status === 404)
-            ) {
+            // A repository GitHub says does not exist has no runs to show. One
+            // the dashboard may not read keeps its jobs, as deliveries tell of
+            // them, and is named, but reading it again would be refused
+            // again, so it does not keep the read from counting as current.
+            if (error instanceof GitHubStatusError && !error.rateLimited && error.status === 404) {
               gone.add(repo);
               return [];
             }
+            const refused = error instanceof GitHubStatusError && !error.rateLimited && error.status === 403;
             problems.push(`${repo}: ${describeFailure(error)}`);
+            if (!refused) failed = true;
             unread.add(repo);
             return [];
           }
@@ -441,6 +453,7 @@ export class RunnersFeed {
               return read && read.status !== "completed" ? [{ repo, read }] : [];
             } catch (error) {
               problems.push(`${repo}: ${describeFailure(error)}`);
+              failed = true;
               unreadRuns.add(run);
               return [];
             }
@@ -460,6 +473,7 @@ export class RunnersFeed {
             }
           } catch (error) {
             problems.push(`${repo}: ${describeFailure(error)}`);
+            failed = true;
             unreadRuns.add(read.id);
           }
         }),
@@ -483,7 +497,7 @@ export class RunnersFeed {
       (job) => unread.has(`${job.owner}/${job.repository}`) || unreadRuns.has(job.runId),
     );
     this.#jobProblems = problems;
-    if (problems.length === 0) {
+    if (!failed) {
       this.#readUnder = stream;
       this.#readAt = startedAt;
     }

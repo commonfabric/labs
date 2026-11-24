@@ -239,11 +239,14 @@ export class JobTracker {
 
   /** Helper for `take()`, which takes in news of a run. */
   #takeRun(news: RunNews): boolean {
-    if (news.pullRequest !== null) {
+    // Learning which pull request a run is for changes how its jobs are named.
+    let renamed = false;
+    if (news.pullRequest !== null && this.#pullRequests.get(news.id) !== news.pullRequest) {
       this.#pullRequests.set(news.id, news.pullRequest);
       JobTracker.#prune(this.#pullRequests);
+      renamed = [...this.#jobs.values()].some((job) => job.runId === news.id);
     }
-    if (news.status !== "completed") return false;
+    if (news.status !== "completed") return renamed;
     this.#finished.set(news.id, news.attempt);
     JobTracker.#prune(this.#finished);
     const outcome = outcomeOf(news.conclusion) === "passed" ? "passed" : "neither";

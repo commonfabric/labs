@@ -990,11 +990,20 @@ export async function runsUnderWay(
   // The filtered lists are needed only when the top of the list holds fewer
   // than all the runs and does not reach back past the horizon.
   const reaches = top.some((run) => created(run) < horizon);
-  const filtered = !deep || total <= top.length || reaches ? [] : await Promise.all(
-    ["requested", "queued", "pending", "waiting", "in_progress"].map(async (status) =>
-      (await list(`status=${status}&`)).runs
-    ),
-  );
+  // A filtered list is read page by page while its pages are full, up to the
+  // thousand runs GitHub lists for a filter.
+  const all = async (status: string) => {
+    const runs: Record<string, unknown>[] = [];
+    for (let page = 1; page <= 10; page++) {
+      const { runs: found } = await list(`status=${status}&page=${page}&`);
+      for (const run of found) runs.push(run);
+      if (found.length < PAGE) break;
+    }
+    return runs;
+  };
+  const filtered = !deep || total <= top.length || reaches
+    ? []
+    : await Promise.all(["requested", "queued", "pending", "waiting", "in_progress"].map(all));
   const listed = new Set(top.map((run) => run.id));
   const further = new Map<number, string>();
   for (const runs of filtered) {

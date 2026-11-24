@@ -77,7 +77,8 @@ const ctx = makeCtx(
   greenBranchOf,
   new RunLists(dashboardCacheFile("fabric-wall-run-lists-tiles.json")),
 );
-const runnersFeed = new RunnersFeed(
+// The runners page's feed, which `start()` binds to the relay it follows.
+let runnersFeed = new RunnersFeed(
   dashboardRunnersGitHub(),
   githubWebhooks,
   SERVING_VERSION,
@@ -873,6 +874,9 @@ export function start(
   collect: () => void | Promise<void> = tick,
   webhooks: GitHubWebhooks = githubWebhooks,
 ) {
+  if (webhooks !== githubWebhooks) {
+    runnersFeed = new RunnersFeed(dashboardRunnersGitHub(), webhooks, SERVING_VERSION);
+  }
   // Taken in once every other listener, the run lists among them, has taken
   // the delivery in.
   webhooks.listen((delivery) =>

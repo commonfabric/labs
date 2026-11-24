@@ -697,7 +697,9 @@ export class RunnersView {
     for (const token of boardTokens(board)) if (!first.has(token.runId)) first.set(token.runId, token);
     const entries = board.runs.flatMap((run) => {
       const token = first.get(run.id);
-      return token ? [{ id: run.id, title: runTitle(token), jobs: run.jobs }] : [];
+      // A run's page is its job's, without the job.
+      const url = token?.url.replace(/\/job\/\d+$/, "");
+      return token ? [{ id: run.id, title: runTitle(token), jobs: run.jobs, url }] : [];
     }).sort((a, b) =>
       a.title.localeCompare(b.title, undefined, { numeric: true }) || (a.id < b.id ? -1 : 1)
     );
@@ -717,7 +719,18 @@ export class RunnersView {
       const dot = document.createElement("span");
       dot.className = "swatch";
       dot.style.background = this.#palette.color(entry.id);
-      const title = document.createElement("span");
+      // Each line links to its run on GitHub, so that a keyboard reaches every
+      // run on the board.
+      let title: HTMLElement;
+      if (entry.url?.startsWith("https://github.com/")) {
+        const link = document.createElement("a");
+        link.href = entry.url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        title = link;
+      } else {
+        title = document.createElement("span");
+      }
       title.className = "title";
       title.textContent = entry.title;
       title.title = entry.title;
