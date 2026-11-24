@@ -645,15 +645,15 @@ index ${gitBlobName(OLD)}..${gitBlobName(NEW)} 100644
       const jobs = pending.take();
 
       const before = source.parse(doc.text);
-      const countsBefore = source.diffCountContexts?.(doc.text);
+      const counts = source.diffCountContexts?.(doc.text);
+      const oldBefore = counts?.[0].oldLines?.();
       finishAll(jobs);
       const after = source.parse(doc.text);
-      const countsAfter = source.diffCountContexts?.(doc.text);
 
       expect(coloredSpans(before.lines.slice(5))).toBe(0);
       expect(after).toEqual(buildDiffDocument(DIFF, model, ws).doc);
-      expect(countsBefore?.[0].oldLines).toBeUndefined();
-      expect(coloredSpans(countsAfter?.[0].oldLines ?? [])).toBeGreaterThan(0);
+      expect(oldBefore).toBeUndefined();
+      expect(coloredSpans(counts?.[0].oldLines?.() ?? [])).toBeGreaterThan(0);
     });
   });
 });
