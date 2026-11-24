@@ -1111,8 +1111,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "gitattributes",
     // A pattern followed by one `name=value` attribute is also an Ansible
     // inventory host line, whose variable INI colors as Git attributes color
-    // the attribute.
-    highlightingPeers: ["ini"],
+    // the attribute. A `name=value` attribute is also a DOT attribute, whose
+    // value DOT colors as Git attributes color the attribute's value.
+    highlightingPeers: ["ini", "dot"],
     surveyRepository: "loom",
     surveyCommit: "f788015adc43cc8d7b3b3bb7f50f2066428a6dbc",
     surveyPath: "src/.gitattributes",
