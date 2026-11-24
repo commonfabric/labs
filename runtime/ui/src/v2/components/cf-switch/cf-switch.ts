@@ -117,7 +117,6 @@ export class CFSwitch extends BaseElement {
       transform: translateX(var(--cf-switch-thumb-travel));
     }
 
-
     /* Hover state */
     :host(:not([disabled]):hover) .switch:not(.checked) {
       background-color: var(--cf-switch-color-border, #e2e8f0);
