@@ -13,7 +13,10 @@ import {
   isStoredLink,
   normalizeFid,
   publishedBoardSources,
+  recreatedDocument,
   retiredKeys,
+  storedLink,
+  type TopicExportRow,
   WHOLE_VALUE,
   withoutKeys,
 } from "./topics-rehearsal-lib.ts";
@@ -528,6 +531,87 @@ describe("topics-rehearsal-lib", () => {
     it("throws on a link-valued field it does not understand", () => {
       expect(() => buildRestoreDocument({ attachments: [link] }, resolved))
         .toThrow("attachments");
+    });
+  });
+
+  describe("recreatedDocument", () => {
+    const recreated = new Map([["of:fid1:old-2", "of:fid1:new-2"]]);
+    const linkTo = (id: string, space?: string) => ({
+      $link: { id, ...(space ? { space } : {}) },
+    });
+
+    /** An exported topic whose raw argument holds `raw` besides its body. */
+    const exported = (raw: Record<string, unknown>): TopicExportRow => ({
+      fid: "of:fid1:old-1",
+      patternIdentity: "pattern",
+      argumentId: "argument",
+      content: { title: "t", body: "b", comments: [], links: [] },
+      rawArgument: { title: "t", body: "b", ...raw },
+    });
+
+    it("points a mention of an exported topic at the topic recreated from it, and keeps any other", () => {
+      const doc = recreatedDocument(
+        exported({
+          mentioned: [
+            linkTo("of:fid1:old-2"),
+            linkTo("of:fid1:elsewhere", "did:key:z"),
+          ],
+        }),
+        "1",
+        recreated,
+      );
+      expect(doc.mentioned).toEqual([
+        storedLink("of:fid1:new-2"),
+        storedLink("of:fid1:elsewhere", [], "did:key:z"),
+      ]);
+    });
+
+    it("points each reference's destination at the topic recreated from it, keeping its wording flag", () => {
+      const doc = recreatedDocument(
+        exported({
+          references: {
+            "0": { destination: linkTo("of:fid1:old-2"), modifiedTitle: true },
+          },
+        }),
+        "1",
+        recreated,
+      );
+      expect(doc.references).toEqual({
+        "0": { destination: storedLink("of:fid1:new-2"), modifiedTitle: true },
+      });
+    });
+
+    it("keeps a reference to a piece outside the exported board as it was", () => {
+      const doc = recreatedDocument(
+        exported({
+          references: {
+            pr: {
+              destination: linkTo("of:fid1:elsewhere", "did:key:z"),
+              modifiedTitle: false,
+            },
+          },
+        }),
+        "1",
+        recreated,
+      );
+      expect(doc.references).toEqual({
+        pr: {
+          destination: storedLink("of:fid1:elsewhere", [], "did:key:z"),
+          modifiedTitle: false,
+        },
+      });
+    });
+
+    it("throws for a reference whose destination is not a link", () => {
+      expect(() =>
+        recreatedDocument(
+          exported({
+            references: { "0": { destination: "#2", modifiedTitle: false } },
+          }),
+          "1",
+          recreated,
+        )
+      ).toThrow("of:fid1:old-1 references.0 is not a link");
     });
   });
 

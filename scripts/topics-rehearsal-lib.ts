@@ -638,6 +638,119 @@ export function buildRestoreDocument(
   return { doc, structural, legacy, unpublished, carried };
 }
 
+/** A link as `annotate` renders it in an export's `rawArgument`. */
+interface AnnotatedLink {
+  id: string;
+  path?: string[];
+  space?: string;
+}
+
+/** A link in the form the store writes, which a cell write takes as a link. */
+export function storedLink(
+  id: string,
+  path: readonly string[] = [],
+  linkSpace?: string,
+): Record<string, unknown> {
+  return {
+    "/": {
+      "link@1": {
+        id,
+        path: [...path],
+        ...(linkSpace ? { space: linkSpace } : {}),
+      },
+    },
+  };
+}
+
+/**
+ * `entry`, a link as an export renders it, as a stored link: to the topic
+ * recreated from the topic it names, or as it was when it names anything
+ * else. `what` names the entry in the error thrown for a value that is not a
+ * link.
+ */
+function recreatedLink(
+  entry: unknown,
+  recreated: ReadonlyMap<string, string>,
+  what: string,
+): Record<string, unknown> {
+  const link = isObjectNotArray(entry) ? entry.$link : undefined;
+  if (!isObjectNotArray(link) || typeof link.id !== "string") {
+    throw new Error(`${what} is not a link`);
+  }
+  const { id, path, space } = link as unknown as AnnotatedLink;
+  const to = recreated.get(id);
+  return to !== undefined
+    ? storedLink(to, path ?? [])
+    : storedLink(id, path ?? [], space);
+}
+
+/** Fields {@link recreatedDocument} writes itself rather than copying from
+ * the raw argument. */
+const RECREATED_FIELDS = new Set<string>([
+  ...SCALAR_CONTENT_FIELDS,
+  ...LINKED_ARRAY_FIELDS,
+  ...STRUCTURAL_LINK_FIELDS,
+  ...RETIRABLE_LINK_FIELDS,
+  "mentioned",
+  "references",
+  "shortName",
+]);
+
+/**
+ * The input fields `topics-recreate.ts` writes into the topic recreated from
+ * `topic`, numbered `name`. `recreated` maps each topic of the exported board
+ * to the topic recreated from it, and every link to one of them is pointed at
+ * that topic: in `mentioned`, and in the destination of each `references`
+ * entry, the `[Label][key]` mentions in the body. A link to anything else is
+ * kept as it was. The structural links and the inputs only an earlier topic
+ * pattern declared are left out; a plain field no list names is copied, and
+ * one that holds a link throws.
+ */
+export function recreatedDocument(
+  topic: TopicExportRow,
+  name: string,
+  recreated: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  const raw = topic.rawArgument as Record<string, unknown>;
+  const doc: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(raw)) {
+    if (RECREATED_FIELDS.has(field) || value === undefined) continue;
+    const at = findLink(value);
+    if (at) {
+      throw new Error(`${topic.fid} ${field} holds a link at ${at}`);
+    }
+    doc[field] = value;
+  }
+  for (const field of SCALAR_CONTENT_FIELDS) {
+    if (topic.content[field] !== undefined) doc[field] = topic.content[field];
+  }
+  doc.comments = topic.content.comments;
+  doc.links = topic.content.links;
+  doc.shortName = name;
+  const references = isObjectNotArray(raw.references) ? raw.references : {};
+  if (Object.hasOwn(references, "$link")) {
+    throw new Error(`${topic.fid} references holds a link at $`);
+  }
+  doc.references = Object.fromEntries(
+    Object.entries(references).map(([key, ref]) => {
+      const what = `${topic.fid} references.${key}`;
+      if (!isObjectNotArray(ref)) throw new Error(`${what} is not a reference`);
+      const { destination, ...rest } = ref;
+      const at = findLink(rest);
+      if (at) throw new Error(`${what} holds a link at ${at}`);
+      return [key, {
+        ...rest,
+        destination: recreatedLink(destination, recreated, what),
+      }];
+    }),
+  );
+  doc.mentioned = (Array.isArray(raw.mentioned) ? raw.mentioned : []).map(
+    (entry, at) =>
+      recreatedLink(entry, recreated, `${topic.fid} mentioned[${at}]`),
+  );
+  return doc;
+}
+
 /** The path below any node where a `$link` marker appears, or null. Used to
  * refuse an export that would silently record a reference as content. */
 export function findLink(node: unknown, path = "$"): string | null {

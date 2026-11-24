@@ -29,9 +29,10 @@
  *    that stopped is finished by running it again with the same file.
  * 2. Each topic's input document takes the export's fields: the title, body,
  *    comments and links, creation and activity times and authors, its number,
- *    and its `mentioned` list with every topic of the old board replaced by
- *    the topic recreated from it. A mention of anything else is kept as it
- *    was. The `board` and `mentionable` links `addTopic` wrote are kept, and
+ *    and its `mentioned` list and the destinations of its `references` (the
+ *    body's `[Label][key]` mentions) with every topic of the old board
+ *    replaced by the topic recreated from it. A mention of anything else is
+ *    kept as it was. The `board` and `mentionable` links `addTopic` wrote are kept, and
  *    the inputs only an earlier topic pattern declared are left out. The pass
  *    writes the same fields each time it runs.
  *
@@ -48,12 +49,8 @@ import {
 import { parseCellSelectionOptions } from "../runtime/cli/lib/cell-selection.ts";
 import { newSessionId } from "../runtime/cli/lib/session.ts";
 import {
-  findLink,
-  LINKED_ARRAY_FIELDS,
   normalizeFid,
-  RETIRABLE_LINK_FIELDS,
-  SCALAR_CONTENT_FIELDS,
-  STRUCTURAL_LINK_FIELDS,
+  recreatedDocument,
   type TopicExportRow,
   type TopicsExport,
 } from "./topics-rehearsal-lib.ts";
@@ -65,13 +62,6 @@ interface ProgressLine {
   to: string;
 }
 
-/** A link as `annotate` renders it in an export's `rawArgument`. */
-interface AnnotatedLink {
-  id: string;
-  path?: string[];
-  space?: string;
-}
-
 /**
  * What a create's readback selects: the number, and the topic as an address.
  * Reading the topic itself would subscribe this process to it, and the
@@ -81,18 +71,6 @@ interface AnnotatedLink {
 const CREATE_SELECTION = await parseCellSelectionOptions({
   select: "name,topic@",
 });
-
-/** Fields the second pass writes itself rather than copying from the raw
- * argument. */
-const WRITTEN_FIELDS = new Set<string>([
-  ...SCALAR_CONTENT_FIELDS,
-  ...LINKED_ARRAY_FIELDS,
-  ...STRUCTURAL_LINK_FIELDS,
-  ...RETIRABLE_LINK_FIELDS,
-  "mentioned",
-  "references",
-  "shortName",
-]);
 
 function usage(): never {
   console.error(
@@ -188,7 +166,7 @@ for (const [name, topic] of topics) {
   if (written >= limit) break;
   const to = created.get(topic.fid);
   if (to === undefined) continue;
-  await writeFields(to, documentFor(topic, name, created));
+  await writeFields(to, recreatedDocument(topic, name, created));
   written++;
   if (written % 100 === 0) console.error(`wrote ${written}`);
 }
@@ -276,62 +254,4 @@ function createdTopicId(topic: unknown): string {
     );
   }
   return address.slice(1);
-}
-
-/** A link in the form the store writes, which `setInput` takes as a link. */
-function storedLink(
-  id: string,
-  path: readonly string[] = [],
-  linkSpace?: string,
-): Record<string, unknown> {
-  return {
-    "/": {
-      "link@1": {
-        id,
-        path: [...path],
-        ...(linkSpace ? { space: linkSpace } : {}),
-      },
-    },
-  };
-}
-
-/**
- * The input fields the second pass writes for `topic`, numbered `name`, with
- * its mentions of the old board's topics pointed at the recreated ones.
- */
-function documentFor(
-  topic: TopicExportRow,
-  name: string,
-  recreated: Map<string, string>,
-): Record<string, unknown> {
-  const raw = topic.rawArgument as Record<string, unknown>;
-  const doc: Record<string, unknown> = {};
-  for (const [field, value] of Object.entries(raw)) {
-    if (WRITTEN_FIELDS.has(field) || value === undefined) continue;
-    const at = findLink(value);
-    if (at) {
-      throw new Error(`${topic.fid} ${field} holds a link at ${at}`);
-    }
-    doc[field] = value;
-  }
-  for (const field of SCALAR_CONTENT_FIELDS) {
-    if (topic.content[field] !== undefined) doc[field] = topic.content[field];
-  }
-  doc.comments = topic.content.comments;
-  doc.links = topic.content.links;
-  doc.shortName = name;
-  doc.references = {};
-  doc.mentioned = (Array.isArray(raw.mentioned) ? raw.mentioned : []).map(
-    (entry) => {
-      const link = (entry as { $link?: AnnotatedLink })?.$link;
-      if (link === undefined) {
-        throw new Error(`${topic.fid} mentions something that is not a link`);
-      }
-      const to = recreated.get(link.id);
-      return to !== undefined
-        ? storedLink(to)
-        : storedLink(link.id, link.path ?? [], link.space);
-    },
-  );
-  return doc;
 }
