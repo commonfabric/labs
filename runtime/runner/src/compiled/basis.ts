@@ -18,7 +18,9 @@
  *
  * The document of the basis holds the identity of the compiled pattern and
  * the list `recent`, and names the documents of the parts, which hold the
- * numbers of the sources (`basisPartOf`). Together they hold:
+ * numbers of the sources (`basisPartOf`), and the documents of the parts
+ * of the list of what the piece made (`basisMadePartDocumentOf`). Together
+ * they hold:
  *
  * - `inputs`: for a source, the sequence number the replica's confirmed
  *   view of it stood at when a derivation of the piece ran with no write of
@@ -52,10 +54,16 @@ export type StoredBasis = {
   inputs: Record<string, number>;
   recent: string[];
   /**
-   * The documents the piece made that are no rows, the entities of its
-   * streams among them: a resume brings each into the replica before the
-   * executor is started, since the stored result links to some of them by
-   * no link a sync follows.
+   * The documents of the space the piece made that are no rows, spread
+   * over the documents of the parts of the list by `basisPartOf`: a resume
+   * brings each into the replica before the executor is started, since the
+   * stored result links to some of them by no link a sync follows. The
+   * entities of streams and the documents of a scope narrower than the
+   * space are not listed: a piece that has documents of a scope resumes
+   * whole, and its derivation writes the marker of each stream it holds
+   * and the instance of each document of a scope for the key it acts for
+   * again, where the sync of a list would bring the instance of the
+   * identity of the resuming runtime alone (provisional decision P457).
    */
   documents?: Record<string, 1>;
 };
@@ -89,6 +97,16 @@ export const basisPartOf = (source: string): number => {
 export const basisPartDocumentOf = (result: string, part: number): string =>
   identifierOf({ type: "basis part", parent: result, part });
 
+/**
+ * The document that holds one part of the list of the documents the piece
+ * whose result is `result` made (`StoredBasis.documents`): a record from
+ * document to `1`, by `basisPartOf` of the document.
+ */
+export const basisMadePartDocumentOf = (
+  result: string,
+  part: number,
+): string => identifierOf({ type: "basis made part", parent: result, part });
+
 const identities = new WeakMap<Artifact, string>();
 
 /**
@@ -105,10 +123,17 @@ export const compiledIdentityOf = (artifact: Artifact): string => {
   return identity;
 };
 
-/** The parts a stored document of a basis names, where it is one. */
-export const basisPartsOf = (value: unknown): number[] => {
+/**
+ * The parts a stored document of a basis names, where it is one: those of
+ * the numbers of the sources, or with `member` set to `made`, those of the
+ * list of what the piece made.
+ */
+export const basisPartsOf = (
+  value: unknown,
+  member: "parts" | "made" = "parts",
+): number[] => {
   if (typeof value !== "object" || value === null) return [];
-  const { parts } = value as Record<string, unknown>;
+  const parts = (value as Record<string, unknown>)[member];
   return typeof parts !== "object" || parts === null
     ? []
     : Object.keys(parts).map(Number).filter((part) =>
@@ -118,18 +143,17 @@ export const basisPartsOf = (value: unknown): number[] => {
 
 /**
  * What the storage holds as a basis, where it holds one: `value` is what
- * the document of the basis holds, and `part` gives what the document of a
- * part holds.
+ * the document of the basis holds, `part` gives what the document of a
+ * part of the numbers holds, and `made` what the document of a part of the
+ * list of what the piece made holds.
  */
 export const storedBasisOf = (
   value: unknown,
   part: (index: number) => unknown,
+  made: (index: number) => unknown,
 ): StoredBasis | undefined => {
   if (typeof value !== "object" || value === null) return undefined;
-  const { pattern, revision, recent, documents } = value as Record<
-    string,
-    unknown
-  >;
+  const { pattern, revision, recent } = value as Record<string, unknown>;
   if (
     typeof pattern !== "string" || typeof revision !== "number" ||
     !Array.isArray(recent) || !recent.every((doc) => typeof doc === "string")
@@ -144,15 +168,14 @@ export const storedBasisOf = (
       inputs[doc] = seq;
     }
   }
-  return {
-    pattern,
-    revision,
-    inputs,
-    recent: [...recent],
-    documents: typeof documents === "object" && documents !== null
-      ? Object.fromEntries(Object.keys(documents).map((doc) => [doc, 1]))
-      : {},
-  };
+  const documents: Record<string, 1> = {};
+  for (const index of basisPartsOf(value, "made")) {
+    const held = made(index);
+    // A part the document names and the storage does not hold: no basis.
+    if (typeof held !== "object" || held === null) return undefined;
+    for (const doc of Object.keys(held)) documents[doc] = 1;
+  }
+  return { pattern, revision, inputs, recent: [...recent], documents };
 };
 
 /** The sequence number recorded for a source that is never current. */
@@ -206,11 +229,21 @@ export type BasisStorage<Tx extends object> = {
   seqOf(doc: string): number | undefined;
   /**
    * Writes `value` at `path` of the document of the basis, or of the
-   * document of a part where `part` names one, in `tx`.
+   * document of a part of the numbers where `part` names one, in `tx`.
    */
   write(
     tx: Tx,
     part: number | undefined,
+    path: readonly string[],
+    value: unknown,
+  ): void;
+  /**
+   * Writes `value` at `path` of the document of a part of the list of what
+   * the piece made, in `tx`.
+   */
+  writeMade(
+    tx: Tx,
+    part: number,
     path: readonly string[],
     value: unknown,
   ): void;
@@ -265,6 +298,8 @@ export class PieceBasis<Tx extends object> {
   readonly #made = new Set<string>();
   /** Those of `#made` that the storage does not list. */
   readonly #madeSince = new Set<string>();
+  /** The parts of the list of `#made` whose documents exist, as known. */
+  readonly #madeParts = new Set<number>();
   #revision: number;
 
   constructor(
@@ -283,7 +318,10 @@ export class PieceBasis<Tx extends object> {
     this.#exists = stored !== undefined && stored.pattern === this.#pattern;
     this.#revision = stored?.revision ?? 0;
     if (resumed === undefined || stored === undefined || !this.#exists) return;
-    for (const doc of Object.keys(stored.documents ?? {})) this.#made.add(doc);
+    for (const doc of Object.keys(stored.documents ?? {})) {
+      this.#made.add(doc);
+      this.#madeParts.add(basisPartOf(doc));
+    }
     this.#recent = stored.recent;
     const recent = new Set(stored.recent);
     for (const [doc, seq] of Object.entries(stored.inputs)) {
@@ -448,7 +486,8 @@ export class PieceBasis<Tx extends object> {
     this.#recent = recent;
     for (const [doc, seq] of inputs) this.#sources.set(doc, seq);
     if (!this.#exists) {
-      // The documents whole: every source that has a number, by part.
+      // The documents whole: every source that has a number, by part, and
+      // every document the piece made, by part.
       const byPart = new Map<number, Record<string, number>>();
       const written: string[] = [];
       for (const [doc, seq] of this.#sources) {
@@ -468,6 +507,18 @@ export class PieceBasis<Tx extends object> {
         this.#storage.write(tx, part, [], held);
         this.#parts.add(part);
       }
+      const madeByPart = new Map<number, Record<string, 1>>();
+      for (const doc of this.#made) {
+        const part = basisPartOf(doc);
+        const held = madeByPart.get(part) ?? {};
+        held[doc] = 1;
+        madeByPart.set(part, held);
+      }
+      this.#madeParts.clear();
+      for (const [part, held] of madeByPart) {
+        this.#storage.writeMade(tx, part, [], held);
+        this.#madeParts.add(part);
+      }
       this.#storage.write(
         tx,
         undefined,
@@ -476,21 +527,39 @@ export class PieceBasis<Tx extends object> {
           pattern: this.#pattern,
           revision: this.#revision,
           recent,
-          documents: Object.fromEntries(
-            [...this.#made].map((doc) => [doc, 1]),
-          ),
           parts: Object.fromEntries(
             [...byPart.keys()].map((part) => [part, 1]),
+          ),
+          made: Object.fromEntries(
+            [...madeByPart.keys()].map((part) => [part, 1]),
           ),
         },
       );
       this.#madeSince.clear();
       this.#exists = true;
-      return 1 + byPart.size;
+      return 1 + byPart.size + madeByPart.size;
     }
     this.#recorded.set(tx, inputs.map(([doc]) => doc));
+    // A document made goes into its part of the list, and a part that has
+    // no document yet is written whole.
+    let madeWrites = 0;
+    const freshMade = new Map<number, Record<string, 1>>();
     for (const doc of this.#madeSince) {
-      this.#storage.write(tx, undefined, ["documents", doc], 1);
+      const part = basisPartOf(doc);
+      if (this.#madeParts.has(part)) {
+        this.#storage.writeMade(tx, part, [doc], 1);
+        madeWrites += 1;
+        continue;
+      }
+      const held = freshMade.get(part) ?? {};
+      held[doc] = 1;
+      freshMade.set(part, held);
+    }
+    for (const [part, held] of freshMade) {
+      this.#storage.writeMade(tx, part, [], held);
+      this.#storage.write(tx, undefined, ["made", String(part)], 1);
+      this.#madeParts.add(part);
+      madeWrites += 2;
     }
     this.#madeSince.clear();
     // A part that has no document yet is written whole, with every number
@@ -516,6 +585,6 @@ export class PieceBasis<Tx extends object> {
     }
     if (!sameRecent) this.#storage.write(tx, undefined, ["recent"], recent);
     this.#storage.write(tx, undefined, ["revision"], this.#revision);
-    return inputs.length + (sameRecent ? 1 : 2);
+    return inputs.length + madeWrites + (sameRecent ? 1 : 2);
   }
 }

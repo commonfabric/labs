@@ -29,6 +29,7 @@ import {
 } from "../../../../base/pattern-compiler/exec/store.ts";
 import {
   basisDocumentOf,
+  basisMadePartDocumentOf,
   basisMatches,
   basisPartDocumentOf,
   basisPartOf,
@@ -115,9 +116,18 @@ const syncBasis = async (
   await Promise.all(
     parts.map((part) => at(basisPartDocumentOf(id, part)).sync()),
   );
+  // The parts of the list of what the piece made: a piece that resumes
+  // writes its part where it makes another document.
+  await Promise.all(
+    basisPartsOf(root, "made").map((part) =>
+      at(basisMadePartDocumentOf(id, part)).sync()
+    ),
+  );
   const basis = storedBasisOf(
     root,
     (part) => heldAt(runtime, space, entityOf(basisPartDocumentOf(id, part))),
+    (part) =>
+      heldAt(runtime, space, entityOf(basisMadePartDocumentOf(id, part))),
   );
   if (basis === undefined) return undefined;
   await Promise.all(

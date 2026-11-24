@@ -256,9 +256,10 @@ describe("resumeCompiledPiece()", () => {
       // the counts in the event's transaction, and the row and the result
       // in the derivation's, with the basis. The derivation behind an added
       // item also writes the part of the lists of the readers that names
-      // the item, and the document of the units where that part is new. No
-      // row that stayed is written.
-      expect(heard.filter((ids) => ids.length > 6)).toEqual([]);
+      // the item, the document of the units where that part is new, and
+      // the part of the list of the documents the piece made that names
+      // the item. No row that stayed is written.
+      expect(heard.filter((ids) => ids.length > 7)).toEqual([]);
     });
 
     it("derives again what an input that changed while no runtime ran the piece makes stale, and writes that and the basis alone", async () => {

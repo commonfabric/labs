@@ -65,6 +65,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 import {
   basisDocumentOf,
+  basisMadePartDocumentOf,
   basisPartDocumentOf,
   compiledIdentityOf,
   PieceBasis,
@@ -422,6 +423,13 @@ export class CompiledPiece {
             path,
             value as FabricValue,
           ),
+        writeMade: (handed, part, path, value) =>
+          transactions.writeOwn(
+            handed,
+            basisMadePartDocumentOf(result.id, part),
+            path,
+            value as FabricValue,
+          ),
         affirm: (handed, doc) => transactions.readWhole(handed, doc),
         confirmedAt: (handed) => handed.committedSeq?.(space),
         failed: (handed) => handed.status().status === "error",
@@ -706,6 +714,10 @@ export class CompiledPiece {
       this.transactions.heldOwn(document),
       (part) =>
         this.transactions.heldOwn(basisPartDocumentOf(this.#result, part)),
+      (part) =>
+        this.transactions.heldOwn(
+          basisMadePartDocumentOf(this.#result, part),
+        ),
     );
     const seq = this.transactions.confirmedSeqOf(document);
     return stored === undefined || seq === undefined
