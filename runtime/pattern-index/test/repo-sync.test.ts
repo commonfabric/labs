@@ -406,6 +406,19 @@ describe("repo-sync", () => {
       expect(former("elsewhere/apps/notes/main.tsx")).toEqual([]);
     });
 
+    it("reads keys from the repository root when that is the program root", () => {
+      const moves: Record<string, string> = {
+        "src/patterns/cf-calendar/main.tsx": "src/patterns/cf-calendar.tsx",
+      };
+      for (const root of [".", "./"]) {
+        expect(
+          formerPathsByKey(root, (key) => moves[key] ?? key)(
+            "src/patterns/cf-calendar/main.tsx",
+          ),
+        ).toEqual(["src/patterns/cf-calendar.tsx"]);
+      }
+    });
+
     it("stops at a key it already passed", () => {
       const cycle: Record<string, string> = {
         "a.tsx": "b.tsx",

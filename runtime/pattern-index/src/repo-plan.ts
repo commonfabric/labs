@@ -9,6 +9,7 @@ import {
   basename,
   globToRegExp,
   join,
+  normalize,
   relative,
   resolve,
   SEPARATOR,
@@ -213,7 +214,9 @@ export const formerPathsByKey = (
   programRoot: string,
   formerKey: (key: string) => string,
 ): (path: string) => readonly string[] => {
-  const prefix = `${programRoot.replace(/\/+$/, "")}/`;
+  // The repository root itself (`.`) prefixes nothing.
+  const root = normalize(programRoot).replace(/\/+$/, "");
+  const prefix = root === "." || root === "" ? "" : `${root}/`;
   return (path) => {
     if (!path.startsWith(prefix)) return [];
     const paths: string[] = [];
