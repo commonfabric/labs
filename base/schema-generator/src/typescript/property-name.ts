@@ -3,7 +3,14 @@ import ts from "typescript";
 import { isCommonFabricDeclaration } from "./common-fabric-symbols.ts";
 
 const COMMON_FABRIC_HELPERS_IDENTIFIER = "__cfHelpers";
-const COMMON_FABRIC_KEY_NAMES = ["NAME", "UI", "SELF", "FS", "VIEWS"] as const;
+const COMMON_FABRIC_KEY_NAMES = [
+  "NAME",
+  "UI",
+  "SELF",
+  "FS",
+  "VIEWS",
+  "SUGGESTIONS",
+] as const;
 const COMMON_FABRIC_KEY_NAME_SET: ReadonlySet<string> = new Set(
   COMMON_FABRIC_KEY_NAMES,
 );

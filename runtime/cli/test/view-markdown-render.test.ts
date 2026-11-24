@@ -13,7 +13,7 @@ import {
   _internal as diffDocumentInternals,
   buildDiffDocument,
   type DiffWorkspace,
-  type WorkspaceCache,
+  WorkspaceCache,
 } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
 import { renderLineColored } from "../lib/view/highlight.ts";
@@ -499,7 +499,7 @@ index 1234..5678 100644
     diffText,
     model,
     workspace,
-    new Map(),
+    new WorkspaceCache(),
     "rendered",
   ).doc;
 
@@ -527,7 +527,7 @@ index 1234..5678 100644
     diffText,
     model,
     workspace,
-    new Map(),
+    new WorkspaceCache(),
     "rendered",
   ).doc;
 
@@ -1489,7 +1489,7 @@ index 1234..5678 100644
     diffText,
     model,
     workspace,
-    new Map(),
+    new WorkspaceCache(),
     "rendered",
   ).doc;
   assertEquals(rendered.lines[5].text, "-# Removed heading");
@@ -1567,7 +1567,7 @@ Deno.test("diff expansion rebuilds the active rendered Markdown view", () => {
     resolve: () => absPath,
     read: (path) => path === absPath ? fileText : null,
   };
-  const cache: WorkspaceCache = new Map();
+  const cache = new WorkspaceCache();
   const model = parseDiff(diffText);
   assert(model);
   const { doc, edit } = buildDiffDocument(

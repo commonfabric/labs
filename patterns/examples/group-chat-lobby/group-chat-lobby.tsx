@@ -321,6 +321,7 @@ export default pattern<LobbyInput, LobbyOutput>(
                       }}
                     >
                       <cf-avatar
+                        blob={user.pictureBlob}
                         bytes={user.picture}
                         src={user.avatar}
                         name={user.name}

@@ -2505,9 +2505,9 @@ the per-epic implementation notes).
   records, judges each eligible cold root, and loads every root regardless:
   `currency.servable` counts the roots the store could have served, and
   `currency.falseClean` counts the pieces that were held clean and then
-  wrote a vouched output again, to a value other than the one it held, with
-  no input changed, each one a judgment that would have served a stale
-  value. A root may rest on a slice that
+  wrote an output they answered for again, to a value other than the one it
+  held, with no input changed, each one a judgment that would have served a
+  stale value. A root may rest on a slice that
   read another space the same memory server holds: that space is asked
   what changed before the judgment, and tells the reading space of its next
   change, which has a loop that left such a root unstarted judge it again.

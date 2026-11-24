@@ -14,6 +14,7 @@ const SUGGESTED_TYPE: Readonly<Record<string, string>> = {
   $UI: "VNode",
   $TILE_UI: "VNode",
   $CHIP_UI: "VNode",
+  $SUGGESTIONS: "ReadonlyCell<Suggestion>[]",
 };
 
 /**
