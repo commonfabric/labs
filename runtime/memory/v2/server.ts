@@ -2862,6 +2862,9 @@ class Connection {
       );
       if (response.type === "hello.ok") {
         response.sessionOpen = this.issueSessionOpenAuth();
+        if (this.#slotLimit !== MAX_UNTRUSTED_MESSAGE_SLOTS) {
+          response.messageSlots = this.#slotLimit;
+        }
       }
       this.#send(response);
       if (response.type !== "hello.ok") {
@@ -4183,10 +4186,13 @@ export class Server {
        * is). It bounds the work one message can cost the server, so a
        * higher one is for a bounded operation that needs it, such as moving
        * the source of a holder with thousands of members, whose update
-       * sends one watch per member document. It may only raise the default,
-       * and construction throws for one below it: a direct client sizes the
-       * parts it stages a watch set in by the default, and nothing tells it
-       * of a lower limit, so a set it would send in parts would be refused. */
+       * sends one watch per member document. A connection's `hello.ok`
+       * carries a limit other than the default (`messageSlots`), and a
+       * direct client holds its requests to it. It may only raise the
+       * default, and construction throws for one below it: a client that
+       * does not read `messageSlots` sizes the parts it stages a watch set
+       * in by the default, so a set it would send in parts would be
+       * refused. */
       untrustedMessageSlots?: number;
 
       authorizeSessionOpen: (
