@@ -182,6 +182,12 @@ export interface PatternIndexSearchResult {
    */
   standalone?: boolean;
 
+  /**
+   * The required input with no default that keeps it from standing alone,
+   * when that is why `standalone` is false.
+   */
+  standaloneFloor?: string;
+
   /** Evidence tier computed by the index from recorded run outcomes. */
   quality: PatternIndexQuality;
 
@@ -1090,11 +1096,17 @@ export interface PatternIndexPublishResponse {
   ignored?: readonly string[];
 
   /**
-   * Whether the index stored the version as standalone, which may differ
-   * from what was asked: a required input with no default makes it a part.
-   * Absent from deployments that predate the field.
+   * Whether the version stands alone, which may differ from what was
+   * asked: a required input with no default makes it a part. Absent from
+   * deployments that predate the field.
    */
   standalone?: boolean;
+
+  /**
+   * The required input with no default that made it a part, when that is
+   * why `standalone` is false.
+   */
+  standaloneFloor?: string;
 
   /**
    * The version recorded, or the head that already had this source. Absent

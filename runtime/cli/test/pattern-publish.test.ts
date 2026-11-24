@@ -299,7 +299,7 @@ describe("pattern-publish", () => {
       expect(Object.hasOwn(unstated[0].body, "standalone")).toBe(false);
     });
 
-    it("says a pattern published as standalone was stored as a part when it needs an input", async () => {
+    it("names the input that keeps a pattern published as standalone a part", async () => {
       const deps = depsWith(undefined);
       const compile = deps.compileEntry;
       const report = await publishedReport({ entry, standalone: true }, {
@@ -315,12 +315,10 @@ describe("pattern-publish", () => {
       });
 
       expect(report.standalone).toBe(false);
-      expect(report.storedAsPart).toBe(true);
-      expect(
-        publishReportLines(report).some((line) =>
-          line.startsWith("The index stored it as a part, not standalone.")
-        ),
-      ).toBe(true);
+      expect(report.standaloneFloor).toBe("home");
+      expect(publishReportLines(report)).toContain(
+        "Offered only as a part, not on its own: its input home is required and has no default. Give it a default to offer the pattern on its own.",
+      );
     });
 
     it("says the index did not record --part when it answers no standalone", async () => {

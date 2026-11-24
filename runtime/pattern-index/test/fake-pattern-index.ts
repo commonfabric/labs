@@ -66,16 +66,18 @@ const json = (status: number, value: unknown): Response =>
  */
 const storedStandalone = (
   body: Record<string, unknown>,
-): { standalone?: boolean } => {
+): { standalone?: boolean; standaloneFloor?: string } => {
   if (typeof body.standalone !== "boolean") return {};
   const schema = (body.schemas as { argumentSchema?: unknown } | undefined)
     ?.argumentSchema as
       | { required?: string[]; properties?: Record<string, object> }
       | undefined;
-  const needsInput = (schema?.required ?? []).some((name) =>
+  const floor = (schema?.required ?? []).find((name) =>
     !Object.hasOwn(schema?.properties?.[name] ?? {}, "default")
   );
-  return { standalone: body.standalone && !needsInput };
+  return body.standalone && floor !== undefined
+    ? { standalone: false, standaloneFloor: floor }
+    : { standalone: body.standalone };
 };
 
 export class FakePatternIndex {

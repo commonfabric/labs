@@ -239,10 +239,10 @@ export type PublishReport =
     standalone?: boolean;
 
     /**
-     * Set when it was published `--standalone` and the index stored it as a
-     * part anyway, as it does for a required input with no default.
+     * The required input with no default that keeps it from standing alone,
+     * when the index says that is why it is a part.
      */
-    storedAsPart?: true;
+    standaloneFloor?: string;
 
     /**
      * Set when `--standalone` or `--part` was given and the index recorded
@@ -514,8 +514,9 @@ export async function publishPatternFromDisk(
     ...(response.standalone !== undefined
       ? { standalone: response.standalone }
       : {}),
-    ...(options.standalone === true && response.standalone === false
-      ? { storedAsPart: true }
+    ...(response.standalone === false &&
+        response.standaloneFloor !== undefined
+      ? { standaloneFloor: response.standaloneFloor }
       : {}),
     ...(options.standalone !== undefined &&
         (response.standalone === undefined ||
@@ -875,9 +876,9 @@ export const publishReportLines = (report: PublishReport): string[] => {
       report.remixedFrom !== undefined ? `, built on ${report.remixedFrom}` : ""
     }.`,
   );
-  if (report.storedAsPart === true) {
+  if (report.standaloneFloor !== undefined) {
     lines.push(
-      "The index stored it as a part, not standalone. A pattern with a required input that has no default is always a part; give each input a default to offer it on its own.",
+      `Offered only as a part, not on its own: its input ${report.standaloneFloor} is required and has no default. Give it a default to offer the pattern on its own.`,
     );
   }
   if (report.standaloneNotRecorded === true) {
