@@ -273,9 +273,9 @@ document do not rewrite it at each other.
   documents, and rewrites a version-1 envelope it would otherwise leave
   alone. Off, it writes version 1 and leaves a stored version 2 as it is.
   A reader that predates version 2 fails closed on a version-2 envelope,
-  which is correct and also unusable, so a deployment whose readers
-  include a build from before version 2 runs with the flag off until they
-  update.
+  which is correct and also unusable, and nothing configures it otherwise;
+  while such a reader shares a space with newer builds, those builds'
+  writers run with the flag off until it updates.
 - **No data migration.** Version-1 envelopes read forever and age out as
   documents persist.
 
