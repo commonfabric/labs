@@ -286,6 +286,8 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "person-workbench/": "apps/person-workbench/",
   "plain-array-callback-locals/": "dev/plain-array-callback-locals/",
   "primitives/": "product/primitives/",
+  "product/lobby/main.test.tsx": "product/lobby/lobby.test.tsx",
+  "product/lobby/main.tsx": "product/lobby/lobby.tsx",
   "profile-group-chat/": "examples/profile-group-chat/",
   "profile-roster-live-demo.tsx":
     "examples/profile-roster-live-demo/profile-roster-live-demo.tsx",
@@ -314,6 +316,12 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "shared-profile-roster/": "examples/shared-profile-roster/",
   "shopping-list.test.tsx": "apps/shopping-list/shopping-list.test.tsx",
   "shopping-list.tsx": "apps/shopping-list/shopping-list.tsx",
+  "showcase/battleship/multiplayer/lobby.tsx":
+    "showcase/battleship/multiplayer/main.tsx",
+  "showcase/dice/dice.tsx": "showcase/dice/main.tsx",
+  "showcase/inductor/lofi/lofi-inductor.tsx": "showcase/inductor/lofi/main.tsx",
+  "showcase/inductor/pool/inductor-pool.tsx": "showcase/inductor/pool/main.tsx",
+  "showcase/scrabble/scrabble.tsx": "showcase/scrabble/main.tsx",
   "simple-list/": "examples/simple-list/",
   "store-mapper.test.tsx": "apps/store-mapper/store-mapper.test.tsx",
   "store-mapper.tsx": "apps/store-mapper/store-mapper.tsx",

@@ -49,7 +49,7 @@ import InductorPool, {
   type Contribution,
   type InductorPoolOutput,
   type ReleasedRule,
-} from "./inductor-pool.tsx";
+} from "./main.tsx";
 import {
   releaseConsensus,
   type StoredContribution,

@@ -91,7 +91,7 @@ describe("pattern-key-moves", () => {
         "system/home/home.tsx",
       );
       expect(currentPatternKey("counter.tsx")).toBe("counter.tsx");
-      expect(currentPatternKey("dice.tsx")).toBe("showcase/dice/dice.tsx");
+      expect(currentPatternKey("dice.tsx")).toBe("showcase/dice/main.tsx");
     });
 
     it("returns the new key of a file below a directory the table names", () => {

@@ -14,11 +14,9 @@
  */
 import { action, assert, multiUserTest, pattern, TESTS } from "commonfabric";
 import { MIN_SEALED_THRESHOLD } from "../pool/consensus.ts";
-import InductorPool, {
-  type InductorPoolOutput,
-} from "../pool/inductor-pool.tsx";
+import InductorPool, { type InductorPoolOutput } from "../pool/main.tsx";
 import { INVOICE_ONLY, rule } from "./lofi-inductor-test-fixture.ts";
-import LofiInductor from "./lofi-inductor.tsx";
+import LofiInductor from "./main.tsx";
 
 const GOAL = "Is this email a bill?";
 

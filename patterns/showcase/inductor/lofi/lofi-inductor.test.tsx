@@ -21,7 +21,7 @@ import {
   INVOICE_ONLY,
   rewriteMock,
 } from "./lofi-inductor-test-fixture.ts";
-import LofiInductor from "./lofi-inductor.tsx";
+import LofiInductor from "./main.tsx";
 
 const GOAL = "Is this email a bill?";
 const LUNCH_GOAL = "Is this email about lunch?";

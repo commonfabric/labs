@@ -187,7 +187,7 @@ has to be decided by the caller, before the state the handler would need to
 check it against has moved.
 
 `patterns/dev/factory-outputs/parking-coordinator/main.tsx` follows all five.
-`patterns/product/lobby/main.tsx` binds its registry to a reviewed handler the
+`patterns/product/lobby/lobby.tsx` binds its registry to a reviewed handler the
 same way, with profiles rather than names as role subjects.
 `patterns/dev/factory-outputs/lot-watch/main.tsx` binds a registry whose
 subjects are names, and `patterns/examples/cfc-group-chat-demo/trusted.tsx`

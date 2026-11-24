@@ -29,7 +29,7 @@
  * seven, and each places tiles by id.
  */
 import { action, assert, multiUserTest, pattern, TESTS } from "commonfabric";
-import Scrabble, { type GameOutput, type Letter } from "./scrabble.tsx";
+import Scrabble, { type GameOutput, type Letter } from "./main.tsx";
 
 const tile = (char: string, id: string): Letter => ({
   char,
