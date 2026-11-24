@@ -22,8 +22,9 @@ relying on a detail here.
 - **`<name>/main.tsx` is the entry, and `main.tsx` means it stands alone**: a
   person can place it on a loom by itself, and it is offered to people choosing
   what to place. A file only other patterns build from gets a name that says
-  what it is (`<name>/card.tsx`), never `main.tsx`, and when it is shared on its
-  own, `cf pattern share` or `publish` takes `--part`.
+  what it is (`<name>/card.tsx`), never `main.tsx`. A new version keeps the
+  answer of the one before; `--standalone` or `--part` on `cf pattern share` or
+  `publish` changes it.
 - **Each pattern's piece is found by its slug**, `my-<name>`: the first save
   creates it with `--slug`, every later command names it with `--cell`. Never
   ask the person for a piece id.

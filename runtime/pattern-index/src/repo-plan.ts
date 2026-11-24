@@ -146,8 +146,8 @@ export const findEntries = async (
  * Whether a repository says this entry stands alone: in a repository a
  * pattern's folder is its name, `<name>/main.tsx` is the entry offered to a
  * person choosing what to place, and every other file is a part. Sent
- * either way, so a file renamed to or from `main.tsx` changes the stored
- * answer on its next sync rather than inheriting the old one.
+ * either way, so the repository's answer is stated rather than left to the
+ * index's default for a first version.
  */
 export const isStandaloneEntry = (path: string): boolean =>
   basename(path) === "main.tsx";

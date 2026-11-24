@@ -175,8 +175,10 @@ export interface PatternIndexSearchResult {
   kind: PatternIndexPatternKind;
 
   /**
-   * Whether its author offers it to a person choosing what to place, rather
-   * than only as a part. Absent from deployments that predate the field.
+   * Whether its author offers it to a person choosing what to place, on its
+   * own at the top of a loom. Unlike `kind`, which reads only the argument
+   * schema, this is the author's answer, set when published. Absent from
+   * deployments that predate the field.
    */
   standalone?: boolean;
 

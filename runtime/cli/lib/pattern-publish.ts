@@ -240,7 +240,7 @@ export type PublishReport =
 
     /**
      * Set when it was published `--standalone` and the index stored it as a
-     * part anyway, because it has a required input with no default.
+     * part anyway, as it does for a required input with no default.
      */
     storedAsPart?: true;
 
@@ -866,7 +866,7 @@ export const publishReportLines = (report: PublishReport): string[] => {
   );
   if (report.storedAsPart === true) {
     lines.push(
-      "Stored as a part, not standalone: it has a required input with no default, so it cannot run on its own. Give that input a default to offer it on its own.",
+      "The index stored it as a part, not standalone. A pattern with a required input that has no default is always a part; give each input a default to offer it on its own.",
     );
   }
   const listing = report.listing;

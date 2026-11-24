@@ -3746,14 +3746,15 @@ what to place, on its own at the top of a loom; `--part` offers it only as a
 part other patterns build from. With neither, the index decides: a new version
 keeps its predecessor's answer, and a first version stands alone when its entry
 file is `main.tsx`. A pattern with a required input and no default is stored as
-a part whatever was asked, and the command says so. Sharing then shares that
-version on **beta**: once the index's check passes it becomes the lineage's next
-numbered shared version (1, 2, 3…), which anyone with its link can open, and
-nobody finds in search or a listing. Past the index's daily limit it says when
-the limit resets, and running the same command then shares it again. The next
-step it prints is deploying the pattern with `cf piece new --from-index <id>`,
-or opening it in a loom with `/deploy index:<id>`. Once stable, a listed pattern
-moves from Unvetted to Main once its author opens it in a loom.
+a part whatever was asked, and with `--standalone` the command says so. Sharing
+then shares that version on **beta**: once the index's check passes it becomes
+the lineage's next numbered shared version (1, 2, 3…), which anyone with its
+link can open, and nobody finds in search or a listing. Past the index's daily
+limit it says when the limit resets, and running the same command then shares it
+again. The next step it prints is deploying the pattern with
+`cf piece new --from-index <id>`, or opening it in a loom with
+`/deploy index:<id>`. Once stable, a listed pattern moves from Unvetted to Main
+once its author opens it in a loom.
 
 `cf pattern stable <entry>` makes the newest shared version **stable**: what
 search, listings and a plain link give. It passed the check when it was shared,

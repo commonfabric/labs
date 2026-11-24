@@ -317,7 +317,7 @@ describe("pattern-publish", () => {
       expect(report.storedAsPart).toBe(true);
       expect(
         publishReportLines(report).some((line) =>
-          line.startsWith("Stored as a part, not standalone")
+          line.startsWith("The index stored it as a part, not standalone.")
         ),
       ).toBe(true);
     });
