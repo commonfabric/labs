@@ -3760,14 +3760,21 @@ predecessor (`priorPatternId`), so the new version keeps the old one's standing.
 A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
 created is published as a remix of that pattern (`remixedFrom`), or as a new
 version of it when it was the caller's own; `--remixed-from` names the source
-where `cf` has no record. Sharing then shares that version on **beta**: once the
-index's check passes it becomes the lineage's next numbered shared version (1,
-2, 3…), which anyone with its link can open, and nobody finds in search or a
-listing. Past the index's daily limit it says when the limit resets, and running
-the same command then shares it again. The next step it prints is deploying the
-pattern with `cf piece new --from-index <id>`, or opening it in a loom with
-`/deploy index:<id>`. Once stable, a listed pattern moves from Unvetted to Main
-once its author opens it in a loom.
+where `cf` has no record. `--standalone` offers the pattern to a person choosing
+what to place, on its own at the top of a loom; `--part` offers it only as a
+part other patterns build from. With neither, the index decides: a new version
+keeps its predecessor's answer, a remix its source's, and any other first
+version stands alone when its entry file is `main.tsx`. A pattern with a
+required input and no default is a part whatever was asked, and the command
+names that input. Sharing then shares that version on **beta**: once the index's
+check passes it becomes the lineage's next numbered shared version (1, 2, 3…),
+which anyone with its link can open, and nobody finds in search or a listing.
+Source unchanged since the version already shared makes no new version, and the
+command says `Already shared`. Past the index's daily limit it says when the
+limit resets, and running the same command then shares it again. The next step
+it prints is deploying the pattern with `cf piece new --from-index <id>`, or
+opening it in a loom with `/deploy index:<id>`. Once stable, a listed pattern
+moves from Unvetted to Main once its author opens it in a loom.
 
 `cf pattern stable <entry>` makes the newest shared version **stable**: what
 search, listings and a plain link give. It passed the check when it was shared,

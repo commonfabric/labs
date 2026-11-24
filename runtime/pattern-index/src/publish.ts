@@ -210,6 +210,9 @@ export interface PublicationFields {
   resultSchema?: unknown;
   priorPatternId?: string;
   remixedFrom?: string;
+
+  /** Sent only when known; see `PatternIndexPublishRequest.standalone`. */
+  standalone?: boolean;
 }
 
 /**
@@ -254,6 +257,7 @@ export const publishRequestFor = (
   ...(fields.remixedFrom !== undefined
     ? { remixedFrom: fields.remixedFrom }
     : {}),
+  ...(fields.standalone !== undefined ? { standalone: fields.standalone } : {}),
   dependencies: patternIndexDependencies(sourceFiles(fields.program)),
 });
 
