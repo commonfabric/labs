@@ -129,7 +129,7 @@ before and the run after separated by a slash:
 | Recorded elapsed medians | 22.55 | 17.49 | 26.97 | 10.89 |
 
 Across the eighteen TOML runs beside every subject, the processor-time medians
-were between 1.67 and 2.44 times the elapsed medians the Android formats report
+were between 1.62 and 2.70 times the elapsed medians the Android formats report
 recorded. For each operation, the largest median was 1.18 to 1.53 times the
 smallest, against 1.8 to 10.8 times for the elapsed medians. I'd
 guess that processor time exceeds unloaded elapsed time because `cpuUsage`
