@@ -53,6 +53,7 @@ const ENTRIES: CatalogEntry[] = [
     patternId: "split-1",
     title: "Bill splitter",
     blurb: "Split a dinner bill between friends",
+    standalone: true,
     tags: ["money"],
     quality: "proven",
   },
@@ -60,6 +61,7 @@ const ENTRIES: CatalogEntry[] = [
     patternId: "read-1",
     title: "Reading tracker",
     blurb: "Books you are reading",
+    standalone: false,
     tags: ["books"],
   },
 ];
@@ -156,6 +158,7 @@ export default pattern(() => {
     entry: {
       patternId: "habit-2",
       title: "Habit tracker",
+      standalone: true,
       author: "a-3kf9q2xxxxx",
       authorTier: 4,
       remixOf: [
@@ -170,18 +173,20 @@ export default pattern(() => {
     entry: {
       patternId: "habit-3",
       title: "Habit tracker",
+      standalone: true,
       author: "a-7hh2m0xxxxx",
       authorTier: 6,
       authorProfile: samProfile,
     },
   });
   const plain = CatalogByline({
-    entry: { patternId: "plain-1", title: "Plain" },
+    entry: { patternId: "plain-1", title: "Plain", standalone: true },
   });
   const takenDown = CatalogByline({
     entry: {
       patternId: "remix-9",
       title: "Remix",
+      standalone: true,
       remixOf: [{ unavailable: true }, {
         patternId: "behind-1",
         title: "Hidden",
@@ -192,6 +197,7 @@ export default pattern(() => {
     entry: {
       patternId: "remix-8",
       title: "Remix",
+      standalone: true,
       remixOf: [
         { patternId: "", title: "No id" },
         { patternId: "behind-2", title: "Hidden" },
@@ -201,6 +207,7 @@ export default pattern(() => {
   const changing = new Writable<CatalogEntry>({
     patternId: "habit-4",
     title: "Habit tracker",
+    standalone: true,
     author: "a-9zz1q0xxxxx",
   });
   const unpublished = CatalogByline({ entry: changing });
@@ -209,6 +216,10 @@ export default pattern(() => {
     catalog.page.send({ text: " MONEY ", result: searched });
     catalog.page.send({ text: "  ", result: listed });
   });
+  const assert_entries_say_which_stand_alone = assert(() =>
+    listed.get()?.entries.map((e) => `${e.patternId}:${e.standalone}`)
+      .join() === "split-1:true,read-1:false"
+  );
   const assert_page_answers_in_callers_cell = assert(() =>
     searched.get()?.entries.map((e) => e.patternId).join() === "split-1" &&
     searched.get()?.status.state === "ready" &&
@@ -253,6 +264,7 @@ export default pattern(() => {
     changing.set({
       patternId: "habit-4",
       title: "Habit tracker",
+      standalone: true,
       author: "a-9zz1q0xxxxx",
       authorProfile: samProfile,
       remixOf: [{ patternId: "habit-1", title: "Habit tracker" }],
@@ -267,6 +279,7 @@ export default pattern(() => {
     changing.set({
       patternId: "habit-4",
       title: "Habit tracker",
+      standalone: true,
       author: "a-9zz1q0xxxxx",
     });
   });
@@ -403,6 +416,7 @@ export default pattern(() => {
     [TESTS]: [
       { action: action_page },
       { assertion: assert_page_answers_in_callers_cell },
+      { assertion: assert_entries_say_which_stand_alone },
       { assertion: assert_button_names_catalog_title_and_destination },
       { assertion: assert_anonymous_shows_pseudonym_only },
       { assertion: assert_named_shows_profile_not_pseudonym },

@@ -29,7 +29,10 @@ it for Git hooks and other extensionless programs viewed directly, and a
 heredoc's body is a string with the expansions its delimiter allows. Makefiles
 have syntax highlighting, with recipes and the other commands make passes to the
 shell colored by the shell grammar, and a structure tree of targets and
-variables. TOML, which covers Gradle version catalogs and Cargo manifests and
+variables. Dockerfiles have syntax highlighting, with the shell form of their
+commands colored by the shell grammar, and a structure tree of build stages and
+the variables they set.
+TOML, which covers Gradle version catalogs and Cargo manifests and
 lock files, has syntax highlighting and a structure tree of tables and keys. HCL,
 which covers OpenTofu and Terraform configuration, variable definitions files,
 backend configuration files, and dependency lock files, has syntax highlighting
@@ -39,10 +42,14 @@ interpolations and template directives are code inside the string. C, C++, and
 CUDA have syntax highlighting and a structure tree of functions, declarations,
 named types, type aliases, and macros, and of C++'s namespaces and classes. A
 `.h` header, which C and C++ both write, uses a mode that claims neither dialect
-and parses with the C++ grammar until an explicit language names one. Java
-properties files, ProGuard and R8 keep rules, and XML, which covers Android
-manifests and resources, SVG, and Apple property lists, have syntax
-highlighting; properties files list their keys, and XML lists its elements.
+and parses with the C++ grammar until an explicit language names one. Starlark,
+which covers Bazel's build, module, workspace, and extension files, has syntax
+highlighting and a structure tree of functions, assigned names, and build
+targets, and Bazel rc files have syntax highlighting and a structure tree of
+imports and configurations. Java properties files, ProGuard and R8 keep rules,
+and XML, which covers Android manifests and resources, SVG, and Apple property
+lists, have syntax highlighting; properties files list their keys, and XML lists
+its elements.
 INI, which covers Ansible configuration and inventories and the configuration
 files of Python tools, has syntax highlighting and a structure tree of sections
 and the keys and hosts in each. Org mode has syntax highlighting, with each
@@ -57,6 +64,8 @@ blocks, sections, and alert entries. Logs, checksums, version files, PID files,
 keys, and short prose files are plain text by name. Git, Docker, and Bazel
 ignore files have syntax highlighting that follows each tool's comments,
 negation, wildcards, and white space.
+Graphviz DOT has syntax highlighting and a structure tree of graphs, subgraphs,
+and the nodes that node statements declare.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -75,20 +84,21 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, and C++ run on
+Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org
-mode, Lean, ignore files, and Go's module and checksum files use focused
-scanners.
+mode, Lean, ignore files, Go's module and checksum files, Bazel rc files,
+Graphviz DOT, and Dockerfiles use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
-Swift, Kotlin, Rust, TOML, HCL, Lean, shell, C, C++, CUDA, makefile, Java
-properties, INI, ProGuard, Git attributes, XML, Org mode, directive
-configuration, ignore-file, and diff support to honest handling of every
-textual syntax in the active `commonfabric` repositories.
+Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
+makefile, Dockerfile, Java properties, INI, ProGuard, Git attributes, XML, Org
+mode, directive configuration, ignore-file, Graphviz DOT, and diff support to
+honest handling of every textual syntax in the active `commonfabric`
+repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -194,16 +204,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Shipped Starlark | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 50.8 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 29.5 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 31.1 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 16.8 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 0.13 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 0 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 91 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -298,6 +308,15 @@ one holding its WebAssembly grammar, such as generated C source and native
 builds, which the pager never reads. Shell's compiled figure is measured with
 that in place. The Python and TOML figures above were measured before it, and
 it removes 7.37 MiB of their packages from the binary.
+
+The Starlark column is the
+[November 2026 Starlark measurement](../history/packages/cli/cf-view-starlark-2026-11.md).
+Starlark runs on the Python grammar and adds no package. The machine was so
+loaded that elapsed times could not be scaled, so its timings are estimates
+from processor time: TOML's recorded 95th percentiles multiplied by the largest
+ratio of Starlark's processor time to that of a TOML control run beside each of
+three rounds. The report gives reasons to think the initialization estimate is
+high.
 
 Each later host grammar may add at most 10 MiB to both byte measures and 200
 owned source lines. The common runtime and the Python, Go, Bash, and HTML host
@@ -879,14 +898,58 @@ contract. The gate passes.
 
 ## Stage 7: Starlark and Bazel
 
-- [ ] Use one Starlark implementation for `BUILD`, `BUILD.bazel`,
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found Starlark and Bazel files in gVisor alone. At its `5e59860`
+commit, 537 files are Starlark: 502 `BUILD` files, 33 `.bzl` files,
+`MODULE.bazel`, and one `.BUILD` file that a repository rule adds to an
+external repository. These are the 537 files the July survey counted. gVisor
+also holds `.bazelrc`, `.bazelversion`, and `.bazelignore`. The six months
+before the read hold 11 path-change events on these files, all on `BUILD`
+files, against the survey's 259.
+
+- [x] Use one Starlark implementation for `BUILD`, `BUILD.bazel`,
   `MODULE.bazel`, workspace files, and `.bzl`.
-- [ ] Add small selectors for `.bazelrc`, `.bazelignore`, and
-  `.bazelversion`.
-- [ ] Add representative gVisor build fixtures.
+- [x] Add small selectors for `.bazelrc` and `.bazelversion`.
+- [x] Add representative gVisor build fixtures.
+
+`.bazelignore` is an ignore file, and Stage 9 covers it with the others.
+
+Starlark's syntax is a subset of Python's, so Starlark runs on the Tree-sitter
+adapter with the Python grammar the pager already ships, using Python's
+highlight query and one pattern of its own that colors `load` as the statement
+it is. The separately maintained
+[`tree-sitter-grammars/tree-sitter-starlark`](https://github.com/tree-sitter-grammars/tree-sitter-starlark)
+grammar is built by extending the Python grammar, and its npm package declares
+an older `tree-sitter-python` as a runtime dependency. Depending on it would
+add 12.39 MiB of unpacked packages, over the 10 MiB maximum for a later
+grammar, while the Python grammar adds nothing. The adapter compiles a grammar
+file once however many languages use it.
+
+`BUILD`, `WORKSPACE`, and `WORKSPACE.bzlmod` select Starlark by name, a
+`.BUILD` suffix selects it in that case only, so that Meson's `meson.build` is
+not claimed, and `.bzl`, `.bazel`, and `.star` select it in any case. `.bazel`
+covers `BUILD.bazel`, `MODULE.bazel`, `REPO.bazel`, and `WORKSPACE.bazel`.
+Structure lists functions, each single name assigned outside functions, and
+each target that a call outside functions declares through a string `name`
+argument.
+
+`.bazelrc` files use a focused scanner that reads them as Bazel does: a
+backslash at a line's end joins it to the next, quotes and backslashes group
+characters into words, and `#` outside quotes starts a comment. The scanner colors the
+command, the configuration a line defines, such as `race` in `build:race`, and
+each option and value. It leaves plain a line for a command Bazel does not
+have, which Bazel ignores, and an import with the wrong number of words, which
+Bazel refuses. Structure lists imports and configurations.
+`.bazelversion` is plain text by name.
+
+A coverage check over the 537 Starlark files found every file parsed without an
+error and reconstructed exactly, with no character other than white space left
+without a token class. The same holds for gVisor's `.bazelrc`. The
+[November 2026 Starlark measurement](../history/packages/cli/cf-view-starlark-2026-11.md)
+records the coverage checks and the costs.
 
 Completion gate: all 537 surveyed Starlark and Bazel files have an honest
-selection path.
+selection path. The gate passes.
 
 ## Stage 8: OpenTofu, HCL, and infrastructure templates
 
@@ -914,7 +977,7 @@ file reconstructed exactly.
 
 ## Stage 9: build and operational configuration
 
-- [ ] Add Dockerfile, including every `Dockerfile.*` variant.
+- [x] Add Dockerfile, including every `Dockerfile.*` variant.
 - [x] Add Makefile and `.mk`.
 - [x] Add Git, Docker, Deno, and Bazel ignore files.
 - [x] Add Git attributes files.
@@ -1124,6 +1187,65 @@ on 50,000 lines holding one `a` each. The scanner looks at each character a
 bounded number of times, so its work grows in proportion to the input's size.
 The fixtures come from Infra and gVisor.
 
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found 96 Dockerfiles in 6 repositories: 79 in gVisor, 7 in Common
+Cluster, 6 in Infra, 2 in Labs, and one each in CRM and Web Weaver. 57 are named
+`Dockerfile`, and the other 39 add a suffix to that name, such as
+`Dockerfile.x86_64` and `Dockerfile.sandbox-rootfs`. The six months before the
+read hold 53 path-change events on them. Infra also holds three ignore files
+that BuildKit pairs with a Dockerfile, such as `Dockerfile.build.dockerignore`.
+They are not Dockerfiles, and they belong with the Docker ignore files.
+
+`Dockerfile` and `Containerfile`, their lowercase spellings, and the
+`.dockerfile` and `.containerfile` extensions select the language. So does a
+name that adds a dot and a suffix to either name, in any case, unless it is such
+an ignore file or its last suffix is an extension another language claims
+whatever the source holds, as shell claims `Dockerfile.sh`. It uses a focused
+scanner rather than Tree-sitter. No npm package carries a WebAssembly build of a
+Dockerfile grammar: the `tree-sitter-dockerfile` package holds only a security
+placeholder, and the
+[`camdencheek/tree-sitter-dockerfile`](https://github.com/camdencheek/tree-sitter-dockerfile)
+grammar's releases attach no build. A Dockerfile's own syntax is line-oriented,
+and the shell commands that make up most of its text are colored through the
+shell language's grammar, as makefile recipes are.
+
+The scanner reads the syntax of BuildKit's Dockerfile frontend. Parser
+directives open the file, and the `escape` directive can make the backtick the
+escape character. A line that ends in the escape character continues on the next
+line other than a blank line or a comment, and the shell grammar reads the
+continued command as BuildKit joins it, without the escape character and line
+break. The shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a `HEALTHCHECK` command
+is colored as shell, unless a `SHELL` instruction earlier in the stage, or in
+the stage it is built from, names a shell other than `sh`, `bash`, `dash`, or
+`ash`. The exec form is colored as a JSON array of strings. A `RUN` whose
+command is a single heredoc runs that heredoc's body as a script, with the
+interpreter its shebang names or else the stage's shell, and the shell grammar
+colors the body when that is one of those shells. The shell reads the heredocs
+of any other `RUN` as part of its command, and the bodies of `COPY` and `ADD`
+heredocs are strings. Other arguments color quoted strings and variable
+references. The structure tree lists build stages, by name or by base image, and
+the variables that `ARG` and `ENV` set in each.
+
+A coverage check over the 96 files found every file selected by its name and
+reconstructed exactly. Outside shell commands, 4,761 of the 22,209 characters
+other than white space, 21.4 percent, have no token class: almost all are the
+paths that `COPY` and `WORKDIR` name and the values that `ENV` and `ARG` set.
+Inside shell commands, 49.4 percent have none, almost all package names and the
+other command arguments that the shell grammar reads as plain words. None of the
+files uses a heredoc or a parser directive. Fixtures come from Common Cluster,
+Infra, and gVisor.
+
+On 100 kilobytes of Common Cluster's `Dockerfile.sandbox-kitchensink`, repeated,
+the 95th-percentile lazy initialization is estimated at 33.5 milliseconds, the
+full highlight at 17.6, the document parse at 18.8, and the re-color after one
+edit at 13.6. All four are inside the maximums for a parser-backed language. The
+estimates are made as the shell column's are, from seven rounds, each between
+two TOML control runs: TOML's recorded 95th percentiles multiplied by the
+largest ratio of Dockerfile to TOML seen in any round. The machine was loaded so
+heavily that the controls ran 12.6 to 46 times slower than TOML's recorded
+medians, so no round met the condition the HCL measurement set on its controls,
+and these figures are less certain than HCL's.
+
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.
 
@@ -1304,7 +1426,7 @@ passes direct-file and diff fixtures.
 - [x] Add Org mode.
 - [ ] Add SQL.
 - [ ] Add CSV, TSV, numeric `.dat` tables, and structured JSON log records.
-- [ ] Add Graphviz DOT.
+- [x] Add Graphviz DOT.
 - [ ] Add Handlebars and generic `.in` templates.
 - [x] Classify application-specific configuration when it has stable syntax.
 - [x] Keep prose, logs, checksums, versions, PID files, and opaque task records
@@ -1393,6 +1515,38 @@ a headline of white space, block openings before their end lines, and Org
 blocks nested 300 deep. Each source block is colored by a parse of its own, so
 about 3,000 one-line `bash` blocks took 118 to 146 milliseconds and as many
 `python` blocks 36 to 72; the surveyed files hold 18 blocks. The fixture comes from gVisor.
+
+Graphviz DOT is implemented. A November 13, 2026 read of the local checkouts
+of the organization's repositories found one DOT file, gVisor's
+`pkg/sentry/kernel/g3doc/run_states.dot`, which no commit changed in the six
+months before the read, and no other file whose source opens a graph. Labs
+prints DOT from `cf inspect graph --dot` and `cf piece map --format dot`, and
+`--language dot` selects it for that output when it is piped in. `.dot` and
+`.gv` select the language, and `graphviz` and `gv` name it as well. A `.dot`
+file holding a NUL byte, as a Word template does, is binary.
+
+The language uses a focused scanner. The one Tree-sitter DOT grammar on npm,
+`tree-sitter-dot` 0.1.5, is not an official grammar, was last published in
+2021, and ships no WebAssembly build. DOT's lexical syntax is small: comments,
+four forms of ID, six keywords, two edge operators, and punctuation. The scanner
+colors an ID by what it names: a graph, an attribute, an attribute's value, a
+port, or a node. Every character other than white space in the gVisor file, and
+in the DOT that `cf inspect graph --dot` prints, has a token class, and each
+reconstructs exactly.
+
+The timings were measured in processor time, because the machine was so loaded
+that elapsed time mostly measured waiting for a processor. INI control runs
+beside them took 2.9 to 8.1 milliseconds at the 95th percentile, against the
+under 2 recorded for INI. The scanner re-colors 100 kilobytes of DOT shaped like
+the gVisor file, or like the output of `cf inspect graph --dot`, in under 7
+milliseconds at the 95th percentile, and parses it with structure in under 7.
+The inputs built to slow it are slower. Each fills 100 kilobytes with tens of
+thousands of tokens, such as a single chain of 51,200 ports or 51,200 node
+statements. They re-color in 24 to 59 milliseconds at the 95th percentile, and
+parse in 29 to 130. The parse is slowest where every token is a node that the
+structure tree lists. In the same runs, INI took 91 to 115 milliseconds to parse
+51,200 keys, and DOT took 90 to 136 to parse 51,200 nodes. The fixture comes
+from gVisor.
 
 Completion gate: every textual syntax in the survey's 24 active repositories
 has a tested selector and highlighter or an explicit plain-text classification.

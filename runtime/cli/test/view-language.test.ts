@@ -57,8 +57,11 @@ import {
   cppLanguage,
   cudaLanguage,
 } from "../lib/view/languages/c-family/language.ts";
+import { starlarkLanguage } from "../lib/view/languages/starlark/language.ts";
+import { bazelrcLanguage } from "../lib/view/languages/bazelrc/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
+import { dockerfileLanguage } from "../lib/view/languages/dockerfile/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
 import { directiveLanguage } from "../lib/view/languages/directive/language.ts";
@@ -67,6 +70,7 @@ import { orgLanguage } from "../lib/view/languages/org/language.ts";
 import { gitAttributesLanguage } from "../lib/view/languages/gitattributes/language.ts";
 import { leanLanguage } from "../lib/view/languages/lean/language.ts";
 import { leanToolchainLanguage } from "../lib/view/languages/lean-toolchain/language.ts";
+import { dotLanguage } from "../lib/view/languages/dot/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -93,6 +97,11 @@ Deno.test("languageForFile: named files resolve and missing names use plain text
   expect(languageForFile("payload.bin").id).toBe("binary");
   assertEquals(languageForFile("notes.xyz").id, "plain-text");
   assertEquals(languageForFile("LICENSE").id, "plain-text");
+  // A version file is plain text by name, whatever its content looks like.
+  assertEquals(
+    languageForSource(".bazelversion", "<?xml 8.3.1").id,
+    "plain-text",
+  );
   assertEquals(languageForFile(undefined).id, "plain-text");
   assertEquals(languageForTransformedOutput().id, "typescript");
 });
@@ -190,12 +199,19 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("c++"), cppLanguage);
   assertEquals(languageForName("cuda"), cudaLanguage);
   assertEquals(languageForName("h"), cFamilyHeaderLanguage);
+  assertEquals(languageForName("starlark"), starlarkLanguage);
+  assertEquals(languageForName("bazel"), starlarkLanguage);
+  assertEquals(languageForName("bzl"), starlarkLanguage);
+  assertEquals(languageForName("bazelrc"), bazelrcLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
   assertEquals(languageForName("make"), makeLanguage);
   assertEquals(languageForName("makefile"), makeLanguage);
   assertEquals(languageForName("mk"), makeLanguage);
+  assertEquals(languageForName("dockerfile"), dockerfileLanguage);
+  assertEquals(languageForName("docker"), dockerfileLanguage);
+  assertEquals(languageForName("containerfile"), dockerfileLanguage);
   assertEquals(languageForName("properties"), propertiesLanguage);
   assertEquals(languageForName("java-properties"), propertiesLanguage);
   assertEquals(languageForName("proguard"), proguardLanguage);
@@ -203,6 +219,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("ini"), iniLanguage);
   assertEquals(languageForName("dosini"), iniLanguage);
   assertEquals(languageForName("gitattributes"), gitAttributesLanguage);
+  assertEquals(languageForName("dot"), dotLanguage);
+  assertEquals(languageForName("graphviz"), dotLanguage);
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
@@ -240,10 +258,13 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "cpp",
     "cuda",
     "c-family-header",
+    "starlark",
+    "bazelrc",
     "shell",
     "make",
     "properties",
     "ini",
+    "dot",
     "proguard",
     "gitattributes",
     "xml",
@@ -251,6 +272,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "directive",
     "binary",
     "plain-text",
+    "dockerfile",
   ]);
   expect(languageNames()).toEqual([
     "typescript",
@@ -299,6 +321,11 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "cuda",
     "c-family-header",
     "h",
+    "starlark",
+    "bazel",
+    "bzl",
+    "star",
+    "bazelrc",
     "shell",
     "sh",
     "bash",
@@ -310,6 +337,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "ini",
     "dosini",
     "cfg",
+    "dot",
+    "graphviz",
+    "gv",
     "proguard",
     "r8",
     "gitattributes",
@@ -331,6 +361,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "plain-text",
     "text",
     "plaintext",
+    "dockerfile",
+    "docker",
+    "containerfile",
   ]);
 });
 

@@ -281,7 +281,9 @@ export class CFCard extends BaseElement {
   };
 
   private _handleKeydown = (event: KeyboardEvent): void => {
-    if (!this.clickable) return;
+    // A control inside that already handled the key (a checkbox on Space)
+    // also clicked, and the click reached this card.
+    if (!this.clickable || event.defaultPrevented) return;
 
     // Handle Enter and Space keys for accessibility
     if (event.key === "Enter" || event.key === " ") {

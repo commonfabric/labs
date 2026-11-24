@@ -7,6 +7,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { join, toFileUrl } from "@std/path";
 
 import {
   createHighlighter,
@@ -59,6 +60,50 @@ describe("adapter", () => {
 
       expect(reads).toBe(1);
       expect(verbatim(highlightLines(counted, "x = 1"))).toBe("x = 1");
+    });
+
+    it("compiles a grammar file that two grammars share once", async () => {
+      // The second grammar loads after the file is gone, from the first's
+      // compilation.
+      const directory = await Deno.makeTempDir();
+      const copy = join(directory, "shared.wasm");
+      await Deno.copyFile(new URL(pythonGrammar.wasmUrl()), copy);
+      const wasmUrl = () => toFileUrl(copy).href;
+      try {
+        await prepareGrammar({
+          ...pythonGrammar,
+          id: "python-shared-a",
+          wasmUrl,
+        });
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+      const second = { ...pythonGrammar, id: "python-shared-b", wasmUrl };
+      await prepareGrammar(second);
+
+      expect(classesOf(highlightLines(second, "x = 1"), "1")).toEqual([
+        "number",
+      ]);
+    });
+
+    it("reads a shared grammar file again after a failed read", async () => {
+      const directory = await Deno.makeTempDir();
+      const copy = join(directory, "late.wasm");
+      const wasmUrl = () => toFileUrl(copy).href;
+      try {
+        await expect(
+          prepareGrammar({ ...pythonGrammar, id: "python-late-a", wasmUrl }),
+        ).rejects.toThrow(/the python-late-a grammar could not be read/);
+        await Deno.copyFile(new URL(pythonGrammar.wasmUrl()), copy);
+        const second = { ...pythonGrammar, id: "python-late-b", wasmUrl };
+        await prepareGrammar(second);
+
+        expect(classesOf(highlightLines(second, "x = 1"), "1")).toEqual([
+          "number",
+        ]);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
     });
 
     it("names the grammar when its parser cannot be read", async () => {

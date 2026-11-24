@@ -159,6 +159,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "json-lines",
+    // Quoted strings joined by `:` read in DOT as nodes and their ports, and
+    // DOT colors a port as JSON Lines colors a key.
+    highlightingPeers: ["dot"],
     surveyRepository: "labs",
     surveyCommit: "69fcd7efa983a143d1fbe0bc8167b0a6a9be6835",
     surveyPath: "tasks/test-identity-aliases.jsonl",
@@ -272,8 +275,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
-    // it declares as Python does.
-    highlightingPeers: ["lean", ...C_FAMILY],
+    // it declares as Python does. Starlark runs on the Python grammar and
+    // query, and colors Python's syntax as Python does.
+    highlightingPeers: ["lean", ...C_FAMILY, "starlark"],
     surveyRepository: "loom",
     surveyCommit: "43a4afe18fbfc37ab8a11da8fe5011f0be81f6e7",
     surveyPath: "src/bin/loom-size-report.py",
@@ -306,7 +310,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean", ...C_FAMILY],
+    highlightingPeers: ["lean", ...C_FAMILY, "starlark"],
     surveyRepository: "specs",
     surveyCommit: "34fb8680caa9f68005a438854fa5dc2ef15ff953",
     surveyPath: "cfc/formal/scripts/check-architecture.py",
@@ -321,7 +325,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean", ...CPP_GRAMMAR],
+    highlightingPeers: ["lean", ...CPP_GRAMMAR, "starlark"],
     surveyRepository: "legibility",
     surveyCommit: "ff46a8e811e0f75246b2fe1cafa8e18954dede3f",
     surveyPath: "src/probe/artifact_refs.py",
@@ -336,7 +340,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean"],
+    highlightingPeers: ["lean", "starlark"],
     surveyRepository: "raia",
     surveyCommit: "a9998da33e2a04df830d684cd6eef1a3ec2a4f59",
     surveyPath: "bench/analyze.py",
@@ -351,7 +355,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean", "c"],
+    highlightingPeers: ["lean", "c", "starlark"],
     surveyRepository: "gvisor",
     surveyCommit: "0da391ef9ab8d513fba6412f4b14680917a00556",
     surveyPath: "vdso/check_vdso.py",
@@ -841,6 +845,53 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "gvisor", className: "interfaceName" },
   },
   {
+    languageId: "starlark",
+    // GNU make's `load` directive starts a line as Starlark's `load` statement
+    // does, and make colors it as a keyword too. Directive configuration colors
+    // the word that opens a line as a keyword.
+    highlightingPeers: ["make", "directive"],
+    surveyRepository: "gvisor",
+    surveyCommit: "e5b1277ac5f1e431780b2aacb2c4ac0d335c27d3",
+    surveyPath: "runsc/container/BUILD",
+    before: new URL("./starlark-gvisor/before.BUILD", import.meta.url),
+    after: new URL("./starlark-gvisor/after.BUILD", import.meta.url),
+    incomplete: new URL("./starlark-gvisor/incomplete.BUILD", import.meta.url),
+    selection: {
+      filenames: [
+        "runsc/container/BUILD",
+        "tools/defs.bzl",
+        "MODULE.bazel",
+        "external/tools/plugin-stack/plugin-stack.BUILD",
+        "pkg/BUILD.bazel",
+        "REPO.bazel",
+        "WORKSPACE",
+        "WORKSPACE.bazel",
+        "WORKSPACE.bzlmod",
+        ".drone.star",
+      ],
+      aliases: ["starlark", "bazel", "bzl", "star"],
+    },
+    beforeEvidence: { text: "load", className: "keyword" },
+    afterEvidence: { text: "load", className: "keyword" },
+    incompleteEvidence: { text: "load", className: "keyword" },
+  },
+  {
+    languageId: "bazelrc",
+    surveyRepository: "gvisor",
+    surveyCommit: "eae8b050925fb1ce0b3cfc324daa166ae6b72000",
+    surveyPath: ".bazelrc",
+    before: new URL("./bazelrc-gvisor/before.bazelrc", import.meta.url),
+    after: new URL("./bazelrc-gvisor/after.bazelrc", import.meta.url),
+    incomplete: new URL("./bazelrc-gvisor/incomplete.bazelrc", import.meta.url),
+    selection: {
+      filenames: [".bazelrc", "tools/user.bazelrc"],
+      aliases: ["bazelrc"],
+    },
+    beforeEvidence: { text: "race", className: "interfaceName" },
+    afterEvidence: { text: "race", className: "interfaceName" },
+    incompleteEvidence: { text: "race", className: "interfaceName" },
+  },
+  {
     languageId: "shell",
     // `local` is also a Lean declaration modifier, which Lean colors as shell
     // colors the declaration.
@@ -921,10 +972,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "properties",
-    // A shell or make variable assignment, an HCL attribute, and an INI key are
-    // each a `name=value` line, and shell, make, HCL, and INI color the name as
-    // properties files color their keys.
-    highlightingPeers: ["hcl", "shell", "make", "ini"],
+    // A shell or make variable assignment, an HCL or DOT attribute, and an INI
+    // key are each a `name=value` line, and shell, make, HCL, DOT, and INI
+    // color the name as properties files color their keys.
+    highlightingPeers: ["hcl", "shell", "make", "ini", "dot"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "b457431c6f5e32305a2e6feb7901f8d05a9b2f6e",
     surveyPath: "android/gradle/wrapper/gradle-wrapper.properties",
@@ -948,12 +999,13 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "ini",
-    // An INI `name=value` line is a valid make assignment, and make colors
-    // the name as INI colors its keys. An Ansible inventory host line is also
-    // a Git attributes line, whose attributes color as the host's variables.
-    // Rust reads the host line as an expression ending in a field access, and
-    // colors the field, which is the host's variable, as INI colors it.
-    highlightingPeers: ["make", "gitattributes", "rust"],
+    // An INI `name=value` line is a valid make assignment and a valid DOT
+    // attribute, and make and DOT color the name as INI colors its keys. An
+    // Ansible inventory host line is also a Git attributes line, whose
+    // attributes color as the host's variables. Rust reads the host line as an
+    // expression ending in a field access, and colors the field, which is the
+    // host's variable, as INI colors it.
+    highlightingPeers: ["make", "dot", "gitattributes", "rust"],
     surveyRepository: "infra",
     surveyCommit: "cfe4ac630b0b1e223d57bed12ae02fa6c53b9eb2",
     surveyPath: "ansible/rapids-inventory.ini",
@@ -972,6 +1024,22 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "ansible_user", className: "propertyName" },
     afterEvidence: { text: "ansible_user", className: "propertyName" },
     incompleteEvidence: { text: "ansible_user", className: "propertyName" },
+  },
+  {
+    languageId: "dot",
+    surveyRepository: "gvisor",
+    surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
+    surveyPath: "pkg/sentry/kernel/g3doc/run_states.dot",
+    before: new URL("./dot-gvisor/before.dot", import.meta.url),
+    after: new URL("./dot-gvisor/after.dot", import.meta.url),
+    incomplete: new URL("./dot-gvisor/incomplete.dot", import.meta.url),
+    selection: {
+      filenames: ["pkg/sentry/kernel/g3doc/run_states.dot", "space.gv"],
+      aliases: ["dot", "graphviz", "gv"],
+    },
+    beforeEvidence: { text: "subgraph", className: "storageKeyword" },
+    afterEvidence: { text: "subgraph", className: "storageKeyword" },
+    incompleteEvidence: { text: "subgraph", className: "storageKeyword" },
   },
   {
     languageId: "proguard",
@@ -1043,8 +1111,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "gitattributes",
     // A pattern followed by one `name=value` attribute is also an Ansible
     // inventory host line, whose variable INI colors as Git attributes color
-    // the attribute.
-    highlightingPeers: ["ini"],
+    // the attribute. A `name=value` attribute is also a DOT attribute, whose
+    // value DOT colors as Git attributes color the attribute's value.
+    highlightingPeers: ["ini", "dot"],
     surveyRepository: "loom",
     surveyCommit: "f788015adc43cc8d7b3b3bb7f50f2066428a6dbc",
     surveyPath: "src/.gitattributes",
@@ -1230,5 +1299,67 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
       text: "# THE SOFTWARE IS PROVIDED “AS IS",
       className: "plain",
     },
+  },
+  {
+    languageId: "dockerfile",
+    surveyRepository: "common-cluster",
+    surveyCommit: "5abd12028c06b63ff953fa09ed56918461ac209a",
+    surveyPath: "Dockerfile",
+    before: new URL("./dockerfile-common-cluster/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-common-cluster/after.dockerfile", import.meta.url),
+    incomplete: new URL(
+      "./dockerfile-common-cluster/incomplete.dockerfile",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "Dockerfile",
+        "Dockerfile.k8s-sandbox-service",
+        "memory-router/Dockerfile.build",
+        "images/arm-qemu/Dockerfile.x86_64",
+        "images/benchmarks/build-grpc/Dockerfile.aarch64",
+        "dockerfile",
+        "Containerfile",
+        "Containerfile.dev",
+        "images/build.dockerfile",
+        "images/build.Containerfile",
+      ],
+      aliases: ["dockerfile", "docker", "containerfile"],
+    },
+    beforeEvidence: { text: "builder", className: "functionName" },
+    afterEvidence: { text: "builder", className: "functionName" },
+    incompleteEvidence: { text: "--from", className: "parameter" },
+  },
+  {
+    languageId: "dockerfile",
+    // An instruction line is a directive statement, a word and its arguments,
+    // and the directive configuration language colors its first word as a
+    // keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive"],
+    surveyRepository: "infra",
+    surveyCommit: "5b65688a0431cda75329734aa7784ba6fb3f76bb",
+    surveyPath: "fly/pds/Dockerfile",
+    before: new URL("./dockerfile-infra/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-infra/after.dockerfile", import.meta.url),
+    incomplete: new URL("./dockerfile-infra/incomplete.dockerfile", import.meta.url),
+    beforeEvidence: { text: "build", className: "functionName" },
+    afterEvidence: { text: "build", className: "functionName" },
+    incompleteEvidence: { text: "EXPOSE", className: "keyword" },
+  },
+  {
+    languageId: "dockerfile",
+    // An instruction line is a directive statement, a word and its arguments,
+    // and the directive configuration language colors its first word as a
+    // keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive"],
+    surveyRepository: "gvisor",
+    surveyCommit: "90dc8548a354d618d05c968111931ba2c4764dd6",
+    surveyPath: "images/default/Dockerfile",
+    before: new URL("./dockerfile-gvisor/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-gvisor/after.dockerfile", import.meta.url),
+    incomplete: new URL("./dockerfile-gvisor/incomplete.dockerfile", import.meta.url),
+    beforeEvidence: { text: "ENTRYPOINT", className: "keyword" },
+    afterEvidence: { text: "gcloud", className: "functionName" },
+    incompleteEvidence: { text: "WORKDIR", className: "keyword" },
   },
 ];

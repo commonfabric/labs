@@ -171,8 +171,6 @@ await input.pressSequentially("user@example.com");
 
 - `checked` - boolean
 - `disabled` - boolean
-- `name` - string
-- `value` - string
 - `required` - boolean
 - `indeterminate` - boolean **Events**:
 - `cf-change` - Fired on change with detail: `{ checked, indeterminate }`
@@ -180,7 +178,7 @@ await input.pressSequentially("user@example.com");
 **Example**:
 
 ```html
-<cf-checkbox name="terms" checked>Accept terms</cf-checkbox>
+<cf-checkbox checked>Accept terms</cf-checkbox>
 ```
 
 ### 5. cf-radio
@@ -189,14 +187,13 @@ await input.pressSequentially("user@example.com");
 
 - `checked` - boolean
 - `disabled` - boolean
-- `name` - string (required for grouping)
 - `value` - string (required)
 - `required` - boolean **Events**:
 - `cf-change` - Fired on change with detail: `{ value, checked }` **Note**: Must
   be used within `cf-radio-group` for proper functionality **Example**:
 
 ```html
-<cf-radio-group name="color" value="blue">
+<cf-radio-group value="blue">
   <cf-radio value="red">Red</cf-radio>
   <cf-radio value="blue">Blue</cf-radio>
 </cf-radio-group>
@@ -207,7 +204,7 @@ await input.pressSequentially("user@example.com");
 **Purpose**: Container for radio buttons **Tag**: `<cf-radio-group>`
 **Attributes**:
 
-- `name` - string (required)
+- `name` - string (names the radios it renders from `items`)
 - `value` - string (currently selected value)
 - `disabled` - boolean **Events**:
 - `cf-change` - Fired when selection changes with detail: `{ value }` **Slots**:
@@ -218,12 +215,11 @@ await input.pressSequentially("user@example.com");
 **Purpose**: Toggle switch **Tag**: `<cf-switch>` **Attributes**:
 
 - `checked` - boolean
-- `disabled` - boolean
-- `name` - string **Events**:
+- `disabled` - boolean **Events**:
 - `cf-change` - Fired on toggle with detail: `{ checked }` **Example**:
 
 ```html
-<cf-switch name="notifications" checked>Enable notifications</cf-switch>
+<cf-switch checked>Enable notifications</cf-switch>
 ```
 
 ### 8. cf-slider

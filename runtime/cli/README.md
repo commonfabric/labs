@@ -515,47 +515,56 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, Rust, TOML, HCL, Lean, C, C++, CUDA, shell, makefile, Java
-properties, INI, ProGuard, XML, and Org mode files use their own highlighting. A
-lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`,
-`.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select
-CUDA. C++ and CUDA share one grammar, which colors CUDA's qualifiers, such as
-`__global__`, as keywords. C and C++ both write `.h` headers, so a `.h` file is
-colored in a mode that claims neither dialect, using the C++ grammar, which
-reads the declarations C headers usually make; a C header that uses one of C++'s
-keywords, such as `new`, as a name is colored as C when piped with
-`--language
-c`. HCL covers OpenTofu and Terraform configuration named `.tf` or
-`.tofu`, variable definitions files named `.tfvars`, backend configuration files
-named `.tfbackend`, and other `.hcl` files, such as dependency lock files. A
-string's interpolations and template directives are colored as code inside the
-string. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
-`.command`, and Bash's startup files, such as `.bashrc` and `.profile`. A
-heredoc's body is colored as a string, with the expansions its delimiter allows.
-The makefile language reads GNU make's syntax in files named `Makefile`,
-`makefile`, `GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so
-they are colored as shell. The same is true of the command in a `!=` assignment
-and the argument of the `shell` function. Make's own variable references and
-function calls are colored inside that shell text. A Swift package manifest is
-Swift source under its `.swift` extension, and a module's `.swiftinterface` is
-Swift as well. Gradle build and settings scripts are Kotlin scripts under the
-`.kts` extension. Gradle version catalogs and Cargo manifests are TOML, as are
-Cargo lock files. The ProGuard language covers the keep rules that ProGuard and
-R8 read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
-another `.pro` file uses it when one of its lines starts with one of ProGuard's
-option names, because Qt project files and Prolog use that suffix as well. XML
-covers Android manifests, resources, and layouts, SVG images, and Apple property
-lists, entitlements, and privacy manifests. Web manifests, TLDraw documents,
-Deno lock files, editor workspace files, and Swift package resolutions use the
-JSON highlighting their suffixes do not announce. A `.cfg` file uses JSON
-highlighting when the source in view opens a JSON object; that suffix is shared
-with unrelated syntaxes, so its name alone leaves it as plain text. Transformed
-compiler output piped without a filename keeps TypeScript highlighting when its
-module header identifies it. Python interpreter shebangs select Python for
-otherwise unrecognized names, `swift` and `xcrun swift` shebangs select Swift,
-and `kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs
-select shell, which covers Git hooks and other extensionless programs. `make`
-and `gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
+Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, shell,
+makefile, Dockerfile, Java properties, INI, Graphviz DOT, ProGuard, XML, and Org
+mode files use their own highlighting. A lowercase `.c` selects C; `.cc`,
+`.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase
+`.C` select C++; and `.cu` and `.cuh` select CUDA. C++ and CUDA share one
+grammar, which colors CUDA's qualifiers, such as `__global__`, as keywords. C
+and C++ both write `.h` headers, so a `.h` file is colored in a mode that claims
+neither dialect, using the C++ grammar, which reads the declarations C headers
+usually make; a C header that uses one of C++'s keywords, such as `new`, as a
+name is colored as C when piped with `--language
+c`. HCL covers OpenTofu and
+Terraform configuration named `.tf` or `.tofu`, variable definitions files named
+`.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
+files, such as dependency lock files. A string's interpolations and template
+directives are colored as code inside the string. Starlark covers Bazel's build
+files, named `BUILD`, `BUILD.bazel`, or with a `.BUILD` suffix, its module,
+repository, and workspace files, `.bzl` extension files, and other `.star`
+files. Its structure tree lists functions, each name that a statement outside
+functions assigns a value to on its own, and the target that each rule call
+outside functions declares when its `name` argument is a string literal. The
+Bazel rc language covers `.bazelrc` and other files named with that suffix, and
+lists the files an rc file imports and the configurations it defines, such as
+`race` in `build:race`. `.bazelversion` is plain text. Shell covers Bash and
+POSIX shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup
+files, such as `.bashrc` and `.profile`. A heredoc's body is colored as a
+string, with the expansions its delimiter allows. The makefile language reads
+GNU make's syntax in files named `Makefile`, `makefile`, `GNUmakefile`, or
+`.mk`. Make passes recipe lines to the shell, so they are colored as shell. The
+same is true of the command in a `!=` assignment and the argument of the `shell`
+function. Make's own variable references and function calls are colored inside
+that shell text. A Swift package manifest is Swift source under its `.swift`
+extension, and a module's `.swiftinterface` is Swift as well. Gradle build and
+settings scripts are Kotlin scripts under the `.kts` extension. Gradle version
+catalogs and Cargo manifests are TOML, as are Cargo lock files. The ProGuard
+language covers the keep rules that ProGuard and R8 read: `proguard-rules.pro`
+and `consumer-rules.pro` select it by name, and another `.pro` file uses it when
+one of its lines starts with one of ProGuard's option names, because Qt project
+files and Prolog use that suffix as well. XML covers Android manifests,
+resources, and layouts, SVG images, and Apple property lists, entitlements, and
+privacy manifests. Web manifests, TLDraw documents, Deno lock files, editor
+workspace files, and Swift package resolutions use the JSON highlighting their
+suffixes do not announce. A `.cfg` file uses JSON highlighting when the source
+in view opens a JSON object; that suffix is shared with unrelated syntaxes, so
+its name alone leaves it as plain text. Transformed compiler output piped
+without a filename keeps TypeScript highlighting when its module header
+identifies it. Python interpreter shebangs select Python for otherwise
+unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
+`kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
+shell, which covers Git hooks and other extensionless programs. `make` and
+`gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
 select the TypeScript and JavaScript language family. For an otherwise
 unrecognized name, source that starts with an XML declaration (`<?xml`), after
 any byte order mark, selects XML, which covers Interface Builder documents,
@@ -587,6 +596,25 @@ lines and comments heads a section whose name does not start the way a JSON
 array's first value does. A line in an Ansible inventory that names a host and
 then sets `name=value` variables colors the host and each variable. The
 structure tree lists sections with the keys and hosts in each.
+
+The Dockerfile language reads the syntax of BuildKit's Dockerfile frontend in
+files named `Dockerfile`, `dockerfile`, `Containerfile`, or `containerfile`, in
+names that add a dot and a suffix to `Dockerfile` or `Containerfile`, in any
+case, such as `Dockerfile.x86_64`, and in `.dockerfile` and `.containerfile`
+files. A suffix that is an extension another language claims whatever the source
+holds, as shell claims `.sh`, selects that language. The ignore file BuildKit
+pairs with a Dockerfile, such as `Dockerfile.build.dockerignore`, is not a
+Dockerfile. The shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a health check's
+command is colored as shell, unless a `SHELL` instruction earlier in the build
+stage, or in the stage it is built from, names a shell other than `sh`, `bash`,
+`dash`, or `ash`. The exec form is colored as a JSON array of strings. The body
+of a `RUN` whose command is a single heredoc is a script, colored as shell when
+its shebang names one of those shells or, without a shebang, when the shell form
+is. The bodies of `COPY` and `ADD` heredocs are colored as strings. A
+continuation line skips blank lines and comments, as BuildKit does, and an
+`escape` parser directive can make the backtick the escape character. The
+structure tree lists build stages and the variables that `ARG` and `ENV` set in
+each.
 
 Org mode covers `.org` files. Headlines, keywords, blocks, comments, drawers,
 tables, lists, links, code, and timestamps are colored, and the structure tree
@@ -670,6 +698,13 @@ workspace files, `go.mod` and `go.work`, have a language of their own, whose
 structure tree lists each directive and the lines of its block. So do Go
 checksum files, `go.sum` and `go.work.sum`, whose structure tree lists each
 module over the lines that name it.
+
+Graphviz DOT covers graph descriptions named `.dot` or `.gv`. The DOT that
+`cf inspect graph --dot` and `cf piece map --format dot` print can be piped into
+`cf view --language dot`. Each ID is colored by what it names: a graph, an
+attribute, an attribute's value, a port, or a node. The structure tree lists
+graphs and subgraphs, with the nodes that node statements declare in each. A
+node that only an edge names is not listed.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
@@ -3725,14 +3760,21 @@ predecessor (`priorPatternId`), so the new version keeps the old one's standing.
 A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
 created is published as a remix of that pattern (`remixedFrom`), or as a new
 version of it when it was the caller's own; `--remixed-from` names the source
-where `cf` has no record. Sharing then shares that version on **beta**: once the
-index's check passes it becomes the lineage's next numbered shared version (1,
-2, 3…), which anyone with its link can open, and nobody finds in search or a
-listing. Past the index's daily limit it says when the limit resets, and running
-the same command then shares it again. The next step it prints is deploying the
-pattern with `cf piece new --from-index <id>`, or opening it in a loom with
-`/deploy index:<id>`. Once stable, a listed pattern moves from Unvetted to Main
-once its author opens it in a loom.
+where `cf` has no record. `--standalone` offers the pattern to a person choosing
+what to place, on its own at the top of a loom; `--part` offers it only as a
+part other patterns build from. With neither, the index decides: a new version
+keeps its predecessor's answer, a remix its source's, and any other first
+version stands alone when its entry file is `main.tsx`. A pattern with a
+required input and no default is a part whatever was asked, and the command
+names that input. Sharing then shares that version on **beta**: once the index's
+check passes it becomes the lineage's next numbered shared version (1, 2, 3…),
+which anyone with its link can open, and nobody finds in search or a listing.
+Source unchanged since the version already shared makes no new version, and the
+command says `Already shared`. Past the index's daily limit it says when the
+limit resets, and running the same command then shares it again. The next step
+it prints is deploying the pattern with `cf piece new --from-index <id>`, or
+opening it in a loom with `/deploy index:<id>`. Once stable, a listed pattern
+moves from Unvetted to Main once its author opens it in a loom.
 
 `cf pattern stable <entry>` makes the newest shared version **stable**: what
 search, listings and a plain link give. It passed the check when it was shared,

@@ -16,13 +16,8 @@
  */
 
 import type { Document, Line, TokenClass } from "../../model.ts";
-import { flattenStructure } from "../../model.ts";
 import { linesFromClasses } from "../classes.ts";
-import {
-  type LocatedEntry,
-  structureSource,
-  structureTree,
-} from "../structure.ts";
+import { type LocatedEntry, scannedDocument } from "../structure.ts";
 
 const HOST_LINE = /^[^\s=]*[^\s=:]\s+(?:[^\s=]+=|#)/;
 const QUOTED = String.raw`"(?:[^"\\]|\\.)*"?|'[^']*'?`;
@@ -188,18 +183,5 @@ export function iniLines(text: string): Line[] {
 /** Color `text` and list its sections and the keys each one sets. */
 export function iniDocument(text: string): Document {
   const scanner = new Scanner(text);
-  const source = structureSource(text);
-  const structure = structureTree(
-    source,
-    scanner.entries,
-    (entry) => entry,
-    (entry) => entry.children,
-  );
-  return {
-    text,
-    lines: linesFromClasses(text, scanner.classes, source.lineStarts),
-    structure,
-    flatStructure: flattenStructure(structure),
-    definitions: source.definitions,
-  };
+  return scannedDocument(text, scanner.classes, scanner.entries);
 }

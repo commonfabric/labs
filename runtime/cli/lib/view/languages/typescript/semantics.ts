@@ -81,7 +81,7 @@ export function createSemantics(
     libDir: safe(() => defaultLibDir()),
     cwd: options.cwd,
     root,
-    extraRoots: [],
+    realRoots: [],
   });
 
   const sectionAt = (offset: number): SectionFile | undefined =>
@@ -164,11 +164,12 @@ export function createSemantics(
 }
 
 /**
- * Build a semantic service for a DIFF view: the program's root files are the
- * real, current workspace files whose hunks the diff shows, and every query
- * translates diff-text offsets to file offsets (and back) through
- * {@link DiffMaps}. So "what type is this?" and "where is this defined?" are
- * answered against the workspace as it is now — not the old side of the diff.
+ * Build a semantic service for a DIFF view: each query is answered from the
+ * real, current workspace file whose hunk holds the offset, and what that file
+ * imports, and every query translates diff-text offsets to file offsets (and
+ * back) through {@link DiffMaps}. So "what type is this?" and "where is this
+ * defined?" are answered against the workspace as it is now — not the old side
+ * of the diff.
  */
 export function createDiffSemantics(
   diffText: string,
@@ -177,15 +178,15 @@ export function createDiffSemantics(
 ): Semantics | undefined {
   const { importMap, root } = safe(() => discoverConfig(options.cwd)) ??
     { importMap: {}, root: options.cwd };
-  const rootFiles = [...maps.rootFiles.keys()].filter((p) => within(p, root));
-  if (rootFiles.length === 0) return undefined;
+  const diffFiles = [...maps.rootFiles.keys()].filter((p) => within(p, root));
+  if (diffFiles.length === 0) return undefined;
   const program = programBackend({
     sections: [],
     importMap,
     libDir: safe(() => defaultLibDir()),
     cwd: options.cwd,
     root,
-    extraRoots: rootFiles,
+    realRoots: diffFiles,
   });
 
   const defCache = new Map<number, DefTarget[]>();
@@ -428,8 +429,9 @@ function makeHost(
   libDir: string | undefined,
   cwd: string,
   readRoot: string,
-  /** Real on-disk files to include as program roots (the diff mode's files). */
-  extraRoots: readonly string[] = [],
+  /** The real on-disk file that is a program root besides the sections, if
+   * any, asked for each time the service brings its program up to date. */
+  realRoot: () => string | undefined = () => undefined,
 ): ts.LanguageServiceHost {
   const sectionPaths = new Set(sections.map((s) => s.name));
   const sectionByName = new Map(sections.map((s) => [s.name, s] as const));
@@ -493,7 +495,11 @@ function makeHost(
   };
 
   return {
-    getScriptFileNames: () => [...sections.map((s) => s.name), ...extraRoots],
+    getScriptFileNames: () => {
+      const names = sections.map((s) => s.name);
+      const real = realRoot();
+      return real === undefined ? names : [...names, real];
+    },
     getScriptVersion: () => "1",
     getScriptSnapshot: (name) => {
       const t = getText(name);
@@ -719,17 +725,17 @@ function safe<T>(fn: () => T): T | undefined {
 }
 
 /**
- * A TypeScript program built lazily from `make` and cached. A `make` that throws
- * or yields no program latches `failed`, so a broken setup is not retried on
- * every keystroke. `prewarm` builds eagerly (and silently, since `build`
- * already swallows its own failure). Shared by the blob and diff factories.
+ * A TypeScript program, or a language service holding one, built lazily from
+ * `make` and cached. A `make` that throws or yields nothing latches `failed`,
+ * so a broken setup is not retried on every keystroke. `prewarm` builds
+ * eagerly (and silently, since `build` already swallows its own failure).
  */
-function lazyProgram(
-  make: () => ts.Program | undefined,
-): { build: () => ts.Program | undefined; prewarm: () => void } {
-  let program: ts.Program | undefined;
+function lazyProgram<T>(
+  make: () => T | undefined,
+): { build: () => T | undefined; prewarm: () => void } {
+  let program: T | undefined;
   let failed = false;
-  const build = (): ts.Program | undefined => {
+  const build = (): T | undefined => {
     if (program) return program;
     if (failed) return undefined;
     try {
@@ -774,15 +780,34 @@ export interface ProgramSpec {
   /** The directory real-file reads stay within. */
   readonly root: string;
 
-  /** Real files to include as program roots. */
-  readonly extraRoots: readonly string[];
+  /**
+   * Real files the program can be rooted at. Its root is the one the latest
+   * query named, or the first of them before any query. So a query about one
+   * of them is answered from that file and what it imports, as Deno checks a
+   * module, and the program parses only the files it has been rooted at and
+   * what those import.
+   */
+  readonly realRoots: readonly string[];
 }
 
+/** How many moves of a program's root each file stays parsed for after the
+ * program stops reaching it, so that going back to a file the viewer asked
+ * about recently parses nothing again. */
+const KEPT_ROOT_MOVES = 16;
+
 /** The program `spec` describes, built on this thread when first queried, or
- * at once by `prewarm`. Every query degrades to null or empty. */
-export function localProgram(spec: ProgramSpec): LocalProgram {
-  // The LanguageService stays reachable here for definition lookups.
-  let service: ts.LanguageService | undefined;
+ * at once by `prewarm`, with its parsed files kept in `registry`. Every query
+ * degrades to null or empty. */
+export function localProgram(
+  spec: ProgramSpec,
+  registry: ts.DocumentRegistry = ts.createDocumentRegistry(),
+): LocalProgram {
+  const realRoots = new Set(spec.realRoots);
+  let realRoot = spec.realRoots.at(0);
+  // The service's releases of the files the program stopped reaching, by the
+  // move of the root after which it made them, held back until
+  // KEPT_ROOT_MOVES more moves.
+  const heldReleases: (() => void)[][] = [[]];
   const { build, prewarm } = lazyProgram(() => {
     const host = makeHost(
       spec.sections,
@@ -790,16 +815,49 @@ export function localProgram(spec: ProgramSpec): LocalProgram {
       spec.libDir,
       spec.cwd,
       spec.root,
-      spec.extraRoots,
+      () => realRoot,
     );
-    service = ts.createLanguageService(host, ts.createDocumentRegistry());
-    return service.getProgram();
+    const service = ts.createLanguageService(host, {
+      ...registry,
+      releaseDocumentWithKey: (
+        path: ts.Path,
+        key: ts.DocumentRegistryBucketKey,
+        scriptKind: ts.ScriptKind,
+        impliedNodeFormat?: ts.ResolutionMode,
+      ) => {
+        heldReleases[heldReleases.length - 1].push(() =>
+          registry.releaseDocumentWithKey(
+            path,
+            key,
+            scriptKind,
+            impliedNodeFormat,
+          )
+        );
+      },
+    });
+    service.getProgram();
+    return service;
   });
+  // The service, with its program rooted at `fileName` when that is one of
+  // the real roots. The releases held back longest are made once the program
+  // has taken back what it still reaches.
+  const serviceFor = (fileName: string) => {
+    if (realRoots.has(fileName) && fileName !== realRoot) {
+      realRoot = fileName;
+      heldReleases.push([]);
+    }
+    const service = build();
+    service?.getProgram();
+    if (heldReleases.length > KEPT_ROOT_MOVES) {
+      for (const release of heldReleases.shift() ?? []) release();
+    }
+    return service;
+  };
   return {
     prewarm,
     typeAt(fileName, offset) {
       try {
-        const program = build();
+        const program = serviceFor(fileName)?.getProgram();
         return program ? typeStringAt(program, fileName, offset) : null;
       } catch {
         return null;
@@ -807,8 +865,9 @@ export function localProgram(spec: ProgramSpec): LocalProgram {
     },
     definitionsAt(fileName, offset) {
       try {
-        const program = build();
-        if (!program || !service) return [];
+        const service = serviceFor(fileName);
+        const program = service?.getProgram();
+        if (!service || !program) return [];
         // Copy each site to plain data, which a worker can send.
         return definitionsAtPosition(service, program, fileName, offset)
           .map(({ name, fileName, textSpan: { start, length } }) => ({
