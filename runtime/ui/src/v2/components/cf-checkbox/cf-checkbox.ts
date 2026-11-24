@@ -5,6 +5,7 @@ import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 import { createBooleanCellController } from "../../core/cell-controller.ts";
 import { createFormFieldController } from "../../core/form-field-controller.ts";
+import { HostActivationController } from "../../core/host-activation-controller.ts";
 
 /**
  * CFCheckbox - Binary selection input with support for indeterminate state
@@ -188,6 +189,13 @@ export class CFCheckbox extends BaseElement {
       },
     });
 
+    #activation = new HostActivationController(this, {
+      role: "checkbox",
+      keys: [" "],
+      isDisabled: () => this.disabled,
+      activate: () => this._toggle(),
+    });
+
     constructor() {
       super();
       this.checked = false;
@@ -211,9 +219,6 @@ export class CFCheckbox extends BaseElement {
       // Set host attributes before super.connectedCallback() triggers rendering.
       // Cannot be in the constructor — the custom element spec forbids
       // setAttribute during construction.
-      if (!this.hasAttribute("role")) {
-        this.setAttribute("role", "checkbox");
-      }
       if (!this.hasAttribute("exportparts")) {
         this.setAttribute("exportparts", "checkbox,checkmark");
       }
@@ -221,22 +226,11 @@ export class CFCheckbox extends BaseElement {
       this._updateAriaAttributes();
       // Bind initial checked value
       this._checkedCellController.bind(this.checked, booleanSchema);
-      // Add event listeners to the host element to make entire component clickable
-      this.addEventListener("click", this._handleClick);
-      this.addEventListener("keydown", this._handleKeydown);
     }
 
     override firstUpdated() {
       // Register with form after first render when context is available
       this._formField.register();
-    }
-
-    override disconnectedCallback() {
-      super.disconnectedCallback();
-      // Clean up event listeners
-      this.removeEventListener("click", this._handleClick);
-      this.removeEventListener("keydown", this._handleKeydown);
-      // Controllers handle form cleanup automatically via ReactiveController
     }
 
     override willUpdate(
@@ -290,17 +284,9 @@ export class CFCheckbox extends BaseElement {
         "aria-checked",
         this.indeterminate ? "mixed" : String(isChecked),
       );
-      this.setAttribute("aria-disabled", String(this.disabled));
-      this.tabIndex = this.disabled ? -1 : 0;
     }
 
-    private _handleClick(event: Event) {
-      if (this.disabled) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-
+    private _toggle() {
       // A click settles an indeterminate checkbox, so the change it makes
       // reports `indeterminate: false`.
       if (this.indeterminate) {
@@ -326,18 +312,6 @@ export class CFCheckbox extends BaseElement {
           checked: this.checked,
           indeterminate: this.indeterminate,
         });
-      }
-    }
-
-    private _handleKeydown(event: KeyboardEvent) {
-      if (this.disabled) {
-        return;
-      }
-
-      // Handle Space key
-      if (event.key === " " || event.key === "Spacebar") {
-        event.preventDefault();
-        this._handleClick(event);
       }
     }
   }

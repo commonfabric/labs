@@ -25,6 +25,17 @@ the pattern attaches it, so a pattern that reads one is checkable, testable, and
 deployable with no extra flag. `--datafile` remains for a file the source cannot
 name, such as one read by a computed path.
 
+Name a pattern's entry `<name>/main.tsx` only when it stands alone: a person can
+place it on a loom by itself, and it is offered to people choosing what to
+place. Every pattern is also a part others may import; a file that is only a
+part gets a name that says what it is (`<name>/option-card.tsx`). The repository
+sync, and the index for a first version published with neither `--standalone`
+nor `--part`, read `main.tsx` this way, so a part named `main.tsx` is marked as
+something to place. A new version keeps its predecessor's answer, and a remix
+its source's; `--standalone` or `--part` on `cf pattern publish` changes it. A
+pattern with a required input and no default is a part whatever it is named or
+asked, so give a standalone entry's inputs defaults.
+
 Also read the foundational reactivity references before implementing or
 debugging pattern state:
 

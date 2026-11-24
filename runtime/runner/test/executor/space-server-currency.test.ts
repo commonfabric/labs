@@ -592,6 +592,7 @@ describe("SpaceServer", () => {
           servable: 0,
           refused: {},
           servedFromStore: 0,
+          underived: 0,
           rearmed: 0,
           indexWakes: 0,
           expiryWakes: 0,
@@ -921,6 +922,89 @@ describe("SpaceServer", () => {
 
         await awaitEach(cycles, () => serves(piece.root));
         expect(host.stats().currency.rearmed).toBe(1);
+      });
+
+      describe("with a demanded document that nothing derives", () => {
+        /**
+         * Writes, as a client, a document that carries neither a back-link
+         * nor a pattern pointer, and returns its link.
+         */
+        const writeData = async (): Promise<NormalizedFullLink> => {
+          const writer = openRuntime(setupSigner);
+          const data = writer.getCell<{ title: string }>(
+            space,
+            "currency underived data",
+            { type: "object", properties: { title: { type: "string" } } },
+          );
+          await data.sync();
+          const tx = writer.edit();
+          data.withTx(tx).set({ title: "typed" });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          const link = data.getAsNormalizedFullLink();
+          await closeLastRuntime();
+          return link;
+        };
+
+        it("parks it unloaded, as a load that finds no piece would, under `skip`", async () => {
+          host = newHost("skip");
+          const data = await writeData();
+
+          await demand({ link: data, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.underived === 1,
+          );
+          await settled();
+
+          const stats = host.stats();
+          expect(stats.structureLoadTerminal).toBe(0);
+          expect(stats.currency.servedFromStore).toBe(0);
+          expect(stats.currency.refused).toEqual({});
+        });
+
+        it("loads it once a client commits to it, and starts the piece it then leads to, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpTripler();
+          const data = await writeData();
+          await demand({ link: data, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.underived === 1,
+          );
+          expect(serves(piece.root)).toBe(false);
+
+          const writer = openRuntime(setupSigner);
+          const document = writer.getCellFromLink(data);
+          await document.sync();
+          const tx = writer.edit();
+          document.withTx(tx).setMetaRaw(
+            "result",
+            writer.getCellFromLink(piece.root).getAsWriteRedirectLink({
+              includeSchema: true,
+            }),
+            rawMetaWriteAuthorization,
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+
+          await awaitEach(cycles, () => serves(piece.root));
+          expect(host.stats().structureLoadRearmed).toBe(1);
+        });
+
+        it("loads it, and parks it once the load finds no piece, under `record`", async () => {
+          host = newHost("record");
+          const data = await writeData();
+
+          await demand({ link: data, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().structureLoadTerminal === 1,
+          );
+
+          expect(host.stats().currency.underived).toBe(1);
+        });
       });
 
       it("keeps the record of a piece an enclosing piece's start instantiates and no session demands, under `skip`", async () => {
