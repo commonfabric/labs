@@ -11,6 +11,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-redundant-collapse");
 
@@ -25,11 +26,12 @@ const replicaEntries = (
   id: string,
 ): StoredEntry[] => {
   const replica = storageManager.open(signer.did()).replica as unknown as {
-    getDocument(id: string): {
-      cfc?: { labelMap?: { entries: StoredEntry[] } };
-    } | undefined;
+    getDocument(id: string): { cfc?: unknown } | undefined;
   };
-  return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+  return storedLabelEntries<StoredEntry>(
+    replica.getDocument(id)?.cfc,
+    (labelId) => replica.getDocument(labelId),
+  );
 };
 
 const newRuntime = (

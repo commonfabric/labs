@@ -17,6 +17,7 @@ import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-observation-classes");
 const space = signer.did();
@@ -111,7 +112,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     }).getDocument(id);
 
   const entriesOf = (id: string): StoredEntry[] =>
-    storedDocument(id)?.cfc?.labelMap?.entries ?? [];
+    storedLabelEntries<StoredEntry>(storedDocument(id)?.cfc, storedDocument);
 
   const derivedConfidentiality = (id: string): unknown[] | undefined =>
     entriesOf(id).find((e) => e.origin === "derived")?.label.confidentiality;

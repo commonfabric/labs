@@ -18,6 +18,7 @@ import {
   seedReferenceGraphLeaf,
   stageReferenceGraph,
 } from "../support/staged-reference-graph.ts";
+import { storedLabelEntries } from "../cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("cfc preparation cancellation");
 const space = signer.did();
@@ -107,11 +108,28 @@ async function prepareRows(cooperative: boolean, closed: boolean) {
         tx.prepareForCommit();
       }
       const prepared = tx.getCfcState().prepare;
+      const documents = rows.map((row) =>
+        tx.readOrThrow({ ...row, type: "application/json", path: [] })
+      );
+      const read = (id: string) =>
+        tx.readOrThrow({
+          space,
+          scope: "space",
+          id: id as `${string}:${string}`,
+          type: "application/json",
+          path: [],
+        });
       return {
         status: prepared.status,
         reasons: prepared.status === "invalidated" ? prepared.reasons : [],
-        documents: rows.map((row) =>
-          tx.readOrThrow({ ...row, type: "application/json", path: [] })
+        documents,
+        // Each row's label entries, a label held by reference read out of
+        // its label document, so the assertions read the labels either way.
+        rowLabels: documents.map((document) =>
+          storedLabelEntries(
+            (document as { cfc?: unknown } | undefined)?.cfc,
+            read,
+          )
         ),
       };
     } finally {
@@ -364,16 +382,14 @@ describe("preparation-cancellation", () => {
           expect(cooperative.status).toBe("prepared");
           expect(cooperative.documents[0]).toMatchObject({
             value: { content: "message" },
-            cfc: {
-              labelMap: {
-                entries: expect.arrayContaining([
-                  expect.objectContaining({
-                    label: { confidentiality: [cfcAtom.space(space)] },
-                  }),
-                ]),
-              },
-            },
           });
+          expect(cooperative.rowLabels[0]).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                label: { confidentiality: [cfcAtom.space(space)] },
+              }),
+            ]),
+          );
         }
       },
     );
