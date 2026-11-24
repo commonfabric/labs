@@ -48,6 +48,7 @@ import {
   type MemorySpace,
   mergeSchemaDefaults,
   NAME,
+  type NormalizedFullLink,
   type NormalizedLink,
   normalizePieceSourceOrigin,
   overlayUnreadableLinkPlaceholders,
@@ -65,6 +66,7 @@ import {
   type PieceSourceTransitionBaseline,
   preparePieceSourceTransitionBaseline,
   readResultSchemaMeta,
+  readStoredLinkChainRaw,
   resolveCellPath,
   resolveLink,
   type Runtime,
@@ -1917,11 +1919,14 @@ function suppliedLinks(
  * complete source intersection is accepted by the target intersection.
  * Possible absence of a source value rides the contracts' `mayBeMissing`
  * flags and is resolved per source/target pair inside the proof.
+ * `pieceEvolution` says the sources are the piece's own prior input contract,
+ * as `SchemaSubsetOptions.pieceEvolution` describes.
  */
 function assertContractSubset(
   sources: readonly PathSchemaContract[],
   targets: readonly PathSchemaContract[],
   label: string,
+  pieceEvolution: boolean = false,
 ): void {
   for (const target of targets) {
     let lastError: unknown;
@@ -1947,7 +1952,11 @@ function assertContractSubset(
           withoutTopLevelScope(sourceSchema),
           withoutTopLevelScope(target.schema),
           label,
-          { sourceRoot: source.root, targetRoot: target.root },
+          {
+            sourceRoot: source.root,
+            targetRoot: target.root,
+            pieceEvolution,
+          },
         );
         return true;
       } catch (error) {
@@ -2096,14 +2105,16 @@ const MAX_ROW_HOPS = 8;
  * The cell a row passes its reader on to, or `undefined` when `row` is not
  * one that is read on from.
  *
- * A row is a document with no contract of its own whose whole value is a
- * link. Its value is read only when the document is the input's own data by
- * the runner's rule (`isStoredArgumentOwnData`: the space and scope of
- * `baseCell`'s document, and no confidentiality label), which is asked before
- * the read: setup's validation of the stored input reads no other document,
- * and a read of a labeled one would join its label to the transaction.
- * `visited` holds the rows already read from in this chain, and a repeat ends
- * it.
+ * A row is a whole document with no contract of its own whose value is a
+ * link. A link to a place inside a document is not one: the path to that
+ * place could cross a link partway, into a document that is not the input's
+ * own data. A row's value is read only when the document is the input's own
+ * data by the runner's rule (`isStoredArgumentOwnData`: the space and scope
+ * of `baseCell`'s document, and no confidentiality label) and belongs to no
+ * piece ({@link carriesPieceMetadata}), which is asked before the read:
+ * setup's validation of the stored input reads no other document, and a read
+ * of a labeled one would join its label to the transaction. `visited` holds
+ * the rows already read from in this chain, and a repeat ends it.
  */
 function rowTarget(
   row: Cell<unknown>,
@@ -2112,13 +2123,15 @@ function rowTarget(
   visited: Set<string>,
 ): Cell<unknown> | undefined {
   const at = row.getAsNormalizedFullLink();
-  const key = JSON.stringify([at.space, at.scope, at.id, at.path]);
+  if (at.path.length > 0) return undefined;
+  const key = JSON.stringify([at.space, at.scope, at.id]);
   if (visited.has(key)) return undefined;
   visited.add(key);
   const tx = cellTx(row) ?? pieces.runtime.readTx();
-  if (!isStoredArgumentOwnData(tx, at, baseCell.getAsNormalizedFullLink())) {
-    return undefined;
-  }
+  if (
+    !isStoredArgumentOwnData(tx, at, baseCell.getAsNormalizedFullLink()) ||
+    carriesPieceMetadata(at, pieces, tx)
+  ) return undefined;
   const stored = row.getRaw();
   if (isCell(stored) || !isLink(stored)) return undefined;
   return pieces.runtime.getCellFromLink(
@@ -2523,11 +2536,16 @@ function policePreservedEnvelope(
   };
 }
 
-/** Prove a rebuilt link's payload flow from source to destination. */
+/**
+ * Prove a rebuilt link's payload flow from source to destination, under the
+ * piece-evolution policy when `pieceEvolution` says the source is the piece's
+ * own prior input contract.
+ */
 function proveRebuiltContracts(
   sourceContracts: readonly PathSchemaContract[],
   targetContracts: readonly PathSchemaContract[],
   displayPath: string,
+  pieceEvolution: boolean,
 ): void {
   // Nested (non-stream) Cell wrappers are read-side projections, not part
   // of the payload contract: a wrapper-declaring source may serve a plain
@@ -2555,6 +2573,7 @@ function proveRebuiltContracts(
     sourceContracts,
     proofTargets,
     `input link at ${displayPath}`,
+    pieceEvolution,
   );
 }
 
@@ -2583,6 +2602,124 @@ function provePreservedContracts(
       label,
     );
   }
+}
+
+/**
+ * The most links {@link holdsOwnPlainInput} follows from one element. An
+ * element that links into another is one deep; the bound ends a chain a write
+ * built on purpose.
+ */
+const MAX_OWN_INPUT_DEPTH = 8;
+
+/**
+ * Whether the document `link` is in belongs to a piece: it carries a result
+ * schema, a `result` backlink, or a pattern identity, in its own scope's
+ * metadata or the space's. Only metadata is read.
+ */
+function carriesPieceMetadata(
+  link: NormalizedFullLink,
+  pieces: PiecesController,
+  tx: IExtendedStorageTransaction,
+): boolean {
+  const scopes = link.scope === "space"
+    ? [link.scope]
+    : [link.scope, "space"] as const;
+  return scopes.some((scope) => {
+    const root = pieces.runtime.getCellFromLink(
+      { ...link, path: [], schema: undefined, scope },
+      undefined,
+      tx,
+    );
+    return root.getMetaRaw("schema") !== undefined ||
+      root.getMetaRaw("result") !== undefined ||
+      getPatternIdentityRef(root) !== undefined;
+  });
+}
+
+/**
+ * Whether what `linkedCell` holds is input that setup's validation of the
+ * stored input reads in full: a value present in this transaction, in
+ * documents that are the input's own data by the runner's rule
+ * (`isStoredArgumentOwnData`: the input document's own space and scope, and
+ * no confidentiality label) and belong to no piece, in which every link
+ * leads to more of the same. Setup validates such a value against the
+ * candidate and refuses one the candidate cannot read, which is what keeps
+ * the piece-evolution policy sound for it.
+ *
+ * Every document is read as setup reads it, one hop at a time
+ * (`readStoredLinkChainRaw`), and the rule is asked of each before its value
+ * is read: a path that starts in the input's own data can cross a link into
+ * another document partway, and neither a labeled document nor a piece's is
+ * read here. A document that belongs to a piece is told by its metadata
+ * alone ({@link carriesPieceMetadata}), since recovering its contract can
+ * read its owner's result.
+ *
+ * A link inside the value is followed where setup follows it: at a position
+ * the candidate reads as a value, which `readsAsValue` decides from the path
+ * below the link being proved. Setup reads only the top level behind a
+ * position typed as a cell handle. Links that lead back to a value on the
+ * way to itself reach nothing for setup to read.
+ */
+function holdsOwnPlainInput(
+  linkedCell: Cell<unknown>,
+  baseCell: Cell<unknown>,
+  pieces: PiecesController,
+  readsAsValue: (path: readonly (string | number)[]) => boolean,
+): boolean {
+  const home = baseCell.getAsNormalizedFullLink();
+  const tx = cellTx(linkedCell) ?? pieces.runtime.readTx();
+  const ownPlainDocument = (link: NormalizedFullLink) =>
+    isStoredArgumentOwnData(tx, link, home) &&
+    !carriesPieceMetadata(link, pieces, tx);
+  // Values judged plain, and the values on the way to the one being judged.
+  const judged = new Set<string>();
+  const reading = new Set<string>();
+  const plain = (
+    start: NormalizedFullLink,
+    path: readonly (string | number)[],
+    depth: number,
+  ): boolean => {
+    const read = readStoredLinkChainRaw(tx, start, new Set(), ownPlainDocument);
+    if (
+      read.outside === true || read.cyclic === true ||
+      read.value === undefined
+    ) return false;
+    const at = read.base;
+    const key = JSON.stringify([at.id, at.path, path]);
+    if (reading.has(key)) return false;
+    if (judged.has(key)) return true;
+    reading.add(key);
+    const holder = pieces.runtime.getCellFromLink(
+      { ...at, schema: undefined },
+      undefined,
+      tx,
+    );
+    for (const nested of suppliedLinks(read.value)) {
+      const nestedPath = [...path, ...nested.path];
+      if (depth === MAX_OWN_INPUT_DEPTH || !readsAsValue(nestedPath)) {
+        return false;
+      }
+      let from = holder;
+      for (const segment of nested.path) {
+        from = from.key(segment as keyof unknown) as Cell<unknown>;
+      }
+      let target: NormalizedFullLink;
+      try {
+        target = pieces.runtime.getCellFromLink(
+          { ...parseLinkOrThrow(nested.value, from), schema: undefined },
+          undefined,
+          tx,
+        ).getAsNormalizedFullLink();
+      } catch {
+        return false;
+      }
+      if (!plain(target, nestedPath, depth + 1)) return false;
+    }
+    reading.delete(key);
+    judged.add(key);
+    return true;
+  };
+  return plain(linkedCell.getAsNormalizedFullLink(), [], 0);
 }
 
 /**
@@ -2679,7 +2816,11 @@ export function assertSuppliedLinkSchemasCompatible(
      * handle's consumer contract unchanged. Such a handle keeps the linked
      * producer's policy without requiring that policy on the consumer schema.
      * The same proof admits a committed link to a metadata-less document
-     * whose contract is unchanged, without the new-link proof.
+     * whose contract is unchanged, without the new-link proof. Where that
+     * contract changed, a committed link at a position read as a value, to
+     * such a document holding plain input in the piece's own space and
+     * scope, is proved under the piece-evolution policy, as the same value
+     * written inline in the input is (`holdsOwnPlainInput`).
      */
     priorArgumentSchema?: JSONSchema;
 
@@ -2772,12 +2913,47 @@ export function assertSuppliedLinkSchemasCompatible(
         displayPath,
       );
     }
+    // A metadata-less document is held to the piece's prior input contract,
+    // so the proof below compares that contract with the candidate's at this
+    // path. Where the link is also the one already committed, at a position
+    // the candidate reads as a value, and what it reaches is the piece's own
+    // plain input one hop away, the update judges that input as it judges
+    // the same value written inline: under the piece-evolution policy. A link
+    // staged by this update, or one a caller rebuilds, is a new binding and
+    // keeps the proof without it, as does a handle and anything setup's
+    // validation of the stored input does not read in full.
+    const pieceEvolution = heldToPriorContract &&
+      targetOuter === undefined &&
+      options.linksPreservedVerbatim === true &&
+      options.destinationIsStream !== true &&
+      linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
+      holdsOwnPlainInput(linkedCell, baseCell, pieces, (below) => {
+        // A position the candidate reads as a value localizes without an
+        // issue and has no outer Cell wrapper. One whose wrappers it cannot
+        // settle, or that it cannot place, is not known to be read as a
+        // value.
+        try {
+          const localized = localizeUniformOuter(
+            deriveTargetContracts(
+              destinationSchema,
+              options.destinationRoot ?? destinationSchema,
+              false,
+              basePath,
+              [...suppliedLink.path, ...below],
+              displayPath,
+            ),
+            "destination Cell constraints disagree",
+          );
+          return localized.issue === undefined &&
+            localized.outer === undefined;
+        } catch {
+          return false;
+        }
+      });
     if (preservedOuter === undefined) {
-      // A metadata-less document is held to the prior contract, so its
-      // producer proof compares that contract with the candidate's. When the
-      // link is the one already committed and the contract is unchanged, that
-      // proof can only refuse what new-link default insertion refuses, and a
-      // link carried over byte for byte is not new.
+      // When the contract is also unchanged, the proof can only refuse what
+      // new-link default insertion refuses, and a link carried over byte for
+      // byte is not new.
       if (
         heldToPriorContract &&
         options.linksPreservedVerbatim === true &&
@@ -2790,7 +2966,12 @@ export function assertSuppliedLinkSchemasCompatible(
           targetContracts,
         )
       ) continue;
-      proveRebuiltContracts(sourceContracts, targetContracts, displayPath);
+      proveRebuiltContracts(
+        sourceContracts,
+        targetContracts,
+        displayPath,
+        pieceEvolution,
+      );
     } else {
       const localized = policePreservedEnvelope(
         suppliedLink,

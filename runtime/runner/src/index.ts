@@ -489,6 +489,7 @@ export {
   isStoredArgumentOwnData,
   materializeStoredValueForValidation,
   overlayUnreadableLinkPlaceholders,
+  readStoredLinkChainRaw,
   storedArgumentValidationIssue,
 } from "./stored-argument-validation.ts";
 
