@@ -69,7 +69,7 @@
             "type": "array"
           },
           "standalone": {
-            "description": "Whether its author offers it to a person choosing what to place, on its\nown at the top of a loom. Every pattern is also a part other patterns\nmay build from; one that is not standalone is only that. A host sets it\non every entry; an entry without it, stored before the field existed,\nis a part.",
+            "description": "Whether its author offers it to a person choosing what to place, on its\nown at the top of a loom. Every pattern is also a part other patterns\nmay build from; one that is not standalone is only that. A host copies\nthe index's answer onto every entry and never fills in its own; a caller\nreads an entry without it as not offered on its own.",
             "type": "boolean"
           },
           "tags": {
@@ -220,7 +220,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/pattern-catalog/pattern-catalog.tsx",
-              "moduleIdentity": "NN52gLHouYStDTE4bBFENLAZfPxhPpNKB261mqUiUL0",
+              "moduleIdentity": "7CScuaOK8pC6tvVKairNkf-rBQPq58XwI6QsC1yaSEI",
               "path": [
                 "requestGetIt"
               ]
@@ -379,7 +379,7 @@
             "type": "array"
           },
           "standalone": {
-            "description": "Whether its author offers it to a person choosing what to place, on its\nown at the top of a loom. Every pattern is also a part other patterns\nmay build from; one that is not standalone is only that. A host sets it\non every entry; an entry without it, stored before the field existed,\nis a part.",
+            "description": "Whether its author offers it to a person choosing what to place, on its\nown at the top of a loom. Every pattern is also a part other patterns\nmay build from; one that is not standalone is only that. A host copies\nthe index's answer onto every entry and never fills in its own; a caller\nreads an entry without it as not offered on its own.",
             "type": "boolean"
           },
           "tags": {
@@ -578,7 +578,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/pattern-catalog/pattern-catalog.tsx",
-              "moduleIdentity": "NN52gLHouYStDTE4bBFENLAZfPxhPpNKB261mqUiUL0",
+              "moduleIdentity": "7CScuaOK8pC6tvVKairNkf-rBQPq58XwI6QsC1yaSEI",
               "path": [
                 "requestGetIt"
               ]

@@ -244,6 +244,12 @@ export type PublishReport =
      */
     storedAsPart?: true;
 
+    /**
+     * Set when `--standalone` or `--part` was given and the index recorded
+     * no answer: it predates the field.
+     */
+    standaloneNotRecorded?: true;
+
     localCheck: LocalCheckReport;
     listing: ListingReport;
 
@@ -510,6 +516,11 @@ export async function publishPatternFromDisk(
       : {}),
     ...(options.standalone === true && response.standalone === false
       ? { storedAsPart: true }
+      : {}),
+    ...(options.standalone !== undefined &&
+        (response.standalone === undefined ||
+          response.ignored?.includes("standalone") === true)
+      ? { standaloneNotRecorded: true }
       : {}),
     localCheck,
     listing,
@@ -867,6 +878,11 @@ export const publishReportLines = (report: PublishReport): string[] => {
   if (report.storedAsPart === true) {
     lines.push(
       "The index stored it as a part, not standalone. A pattern with a required input that has no default is always a part; give each input a default to offer it on its own.",
+    );
+  }
+  if (report.standaloneNotRecorded === true) {
+    lines.push(
+      "The index did not record whether it stands alone: it predates --standalone and --part.",
     );
   }
   const listing = report.listing;

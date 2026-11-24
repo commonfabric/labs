@@ -96,9 +96,9 @@ export interface CatalogEntry {
   /**
    * Whether its author offers it to a person choosing what to place, on its
    * own at the top of a loom. Every pattern is also a part other patterns
-   * may build from; one that is not standalone is only that. A host sets it
-   * on every entry; an entry without it, stored before the field existed,
-   * is a part.
+   * may build from; one that is not standalone is only that. A host copies
+   * the index's answer onto every entry and never fills in its own; a caller
+   * reads an entry without it as not offered on its own.
    */
   standalone?: boolean;
   tags?: string[];

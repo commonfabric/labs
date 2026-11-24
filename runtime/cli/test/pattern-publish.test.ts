@@ -294,6 +294,7 @@ describe("pattern-publish", () => {
       index.calls.length = 0;
       await publishedReport({ entry }, depsWith(undefined));
       const unstated = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(stated.length).toBe(2);
       expect(unstated).toHaveLength(1);
       expect(Object.hasOwn(unstated[0].body, "standalone")).toBe(false);
     });
@@ -320,6 +321,23 @@ describe("pattern-publish", () => {
           line.startsWith("The index stored it as a part, not standalone.")
         ),
       ).toBe(true);
+    });
+
+    it("says the index did not record --part when it answers no standalone", async () => {
+      const deps = depsWith(undefined);
+      const client = deps.client as PatternIndexClient;
+      const publish = client.publishPattern.bind(client);
+      // An index that predates the field: it answers without `standalone`.
+      client.publishPattern = async (request) => {
+        const { standalone: _, ...answer } = await publish(request);
+        return answer;
+      };
+      const report = await publishedReport({ entry, standalone: false }, deps);
+
+      expect(report.standaloneNotRecorded).toBe(true);
+      expect(publishReportLines(report)).toContain(
+        "The index did not record whether it stands alone: it predates --standalone and --part.",
+      );
     });
 
     it("keeps the source as a version before a rewrite it writes over uncommitted edits with allowDirty", async () => {
