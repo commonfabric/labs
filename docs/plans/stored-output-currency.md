@@ -57,8 +57,8 @@ index. The names are `CURRENCY_INDEX_MODES` in
   the same for a running piece that is stale that way ("Starting what is
   stale upstream"). This answers the second problem too.
 
-The two levels differ in that one case, so a deployment can run `skip`
-without the upstream starts. Under `skip` a root that is stale only upstream
+The two levels differ in the upstream starts and in the demand the loop
+carries, so a deployment can run `skip` without either. Under `skip` a root that is stale only upstream
 is treated as a root the judgment refuses: its piece starts, and derives
 from what the store holds of the pieces upstream, as a loop with no index
 derives it. "Known limits" says what that leaves.
