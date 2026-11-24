@@ -880,14 +880,18 @@ export type ServingLoopStats = {
   /**
    * The actions that have cost the serving runtimes the most wall time, most
    * expensive first, as `action-costs.ts` keeps them. A listed action's time
-   * is counted from the run that gave it a row; `dropped` counts the rows
-   * that are not listed, because the list is bounded or because a host stopped
-   * tracking them, and `droppedMs` the wall time those rows, and runs no row
-   * took, accounted for. An action whose run is still going has no row yet.
+   * is counted from the run that gave it a row. A row is unlisted because the
+   * list is bounded or because a host stopped tracking it. An action whose
+   * run is still going has no row yet.
    */
   actions: {
+    /** The listed actions, most total wall time first. */
     entries: ServingActionCost[];
+
+    /** How many tracked actions are not listed. */
     dropped: number;
+
+    /** The wall time of the unlisted actions and of runs no row took. */
     droppedMs: number;
   };
 };
@@ -907,19 +911,28 @@ export type ServingActionCost = {
   /** The result cell of the piece the action belongs to. */
   piece?: string;
 
-  /** The pattern and module names the action carries. */
+  /** The name of the pattern the action belongs to. */
   pattern?: string;
+
+  /** The name of the module the action runs. */
   module?: string;
 
   /** Where the action is authored, as `cf:module/<identity>/<path>:<l>:<c>`. */
   src?: string;
 
-  /** Runs, and how many of them a change to the action's inputs caused. */
+  /** How many of the action's runs have ended. */
   runs: number;
+
+  /** How many of those runs a change to the action's inputs caused. */
   inputRuns: number;
 
+  /** The wall time of all those runs together. */
   totalMs: number;
+
+  /** The wall time of the longest of those runs. */
   longestMs: number;
+
+  /** The wall time of the latest of those runs. */
   lastMs: number;
 };
 
