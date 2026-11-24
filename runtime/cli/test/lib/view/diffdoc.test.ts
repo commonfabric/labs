@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { parse, PendingParses } from "../../../lib/view/backgroundparse.ts";
 import { parseDiff } from "../../../lib/view/diff.ts";
 import {
   _internal,
@@ -75,13 +76,22 @@ function harness() {
     text: string,
     cache?: WorkspaceCache,
     viewMode: ViewMode = "source",
+    pending?: PendingParses,
   ) => {
     const model = parseDiff(text)!;
     const languages: DiffFileLanguages[] = model.files.map(() => ({
       oldLanguage: counted,
       newLanguage: counted,
     }));
-    return buildDiffDocument(text, model, ws, cache, viewMode, languages);
+    return buildDiffDocument(
+      text,
+      model,
+      ws,
+      cache,
+      viewMode,
+      languages,
+      pending,
+    );
   };
   return { reads, parses, build };
 }
@@ -381,12 +391,12 @@ describe("diffdoc", () => {
         });
       });
 
-      describe("without()", () => {
-        it("returns a copy that has forgotten the paths, leaving the original whole", () => {
+      describe("editing()", () => {
+        it("returns a cache that reads the paths afresh, leaving the original's sections of them whole", () => {
           const { parses, build } = harness();
           const cache = new WorkspaceCache();
           build(LOG, cache);
-          const copy = cache.without(["/ws/a.ts"]);
+          const copy = cache.editing(["/ws/a.ts"]);
           expect(copy.file("/ws/a.ts")).toBe(undefined);
           expect(copy.file("/ws/b.ts")?.fileText).toBe(FILES.get("/ws/b.ts"));
 
@@ -396,6 +406,89 @@ describe("diffdoc", () => {
           parses.length = 0;
           build(LOG, cache);
           expect(parses).toEqual([]);
+        });
+
+        it("records in this cache the files its builds read, except the paths", () => {
+          const { build } = harness();
+          const cache = new WorkspaceCache();
+          build(LOG, cache);
+          cache.forget("/ws/a.ts");
+          cache.forget("/ws/b.ts");
+
+          build(LOG, cache.editing(["/ws/a.ts"]));
+
+          expect(cache.file("/ws/a.ts")).toBe(undefined);
+          expect(cache.file("/ws/b.ts")?.fileText).toBe(FILES.get("/ws/b.ts"));
+        });
+      });
+
+      describe("waitedOn()", () => {
+        /** Finishes each of `pending`'s parses with what a parse here gives. */
+        function finishAll(pending: PendingParses): number {
+          const jobs = pending.take();
+          for (const taken of jobs) {
+            taken.finish(
+              parse(taken.kind, taken.language, taken.text, taken.fileName),
+            );
+          }
+          return jobs.length;
+        }
+
+        it("returns the parses a build left pending until a build gives them to their sections", () => {
+          const { build } = harness();
+          const cache = new WorkspaceCache();
+          const pending = new PendingParses(0);
+          build(LOG, cache, "source", pending);
+
+          const waited = cache.waitedOn().size;
+          const left = finishAll(pending);
+          const before = cache.waitedOn().size;
+          build(LOG, cache, "source", pending);
+
+          expect(waited).toBe(left);
+          expect(left).toBeGreaterThan(0);
+          expect(before).toBe(left);
+          expect(cache.waitedOn().size).toBe(0);
+        });
+
+        it("leaves out a section the other view mode's latest build used as built with every parse", () => {
+          // A section that neither side renders builds alike in both view
+          // modes, so the rendered build reuses no section and builds it from
+          // the finished parses, while the source build's stays waiting.
+
+          const { build } = harness();
+          const cache = new WorkspaceCache();
+          const pending = new PendingParses(0);
+          build(LOG, cache, "source", pending);
+          finishAll(pending);
+
+          build(LOG, cache, "rendered", pending);
+
+          expect(cache.sections("source").size).toBeGreaterThan(0);
+          expect(
+            [...cache.sections("source").values()].every((section) =>
+              section.waitingOn.length > 0
+            ),
+          ).toBe(true);
+          expect(cache.waitedOn().size).toBe(0);
+        });
+
+        it("answers for the cache an editing cache was made from", () => {
+          const { build } = harness();
+          const cache = new WorkspaceCache();
+          const pending = new PendingParses(0);
+          build(LOG, cache, "source", pending);
+          const editing = cache.editing(["/ws/a.ts"]);
+          finishAll(pending);
+
+          build(LOG, cache, "source", pending);
+
+          expect(editing.waitedOn()).toEqual(new Set());
+          expect(
+            [...editing.sections("source").values()].some((section) =>
+              section.waitingOn.length > 0
+            ),
+          ).toBe(true);
         });
       });
     });

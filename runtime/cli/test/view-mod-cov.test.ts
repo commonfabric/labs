@@ -5,7 +5,12 @@
  * closure directly to exercise both the diff and source semantics paths.
  */
 
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertNotEquals,
+  assertThrows,
+} from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { IN_PLACE_PARSE_BUDGET, parse } from "../lib/view/backgroundparse.ts";
@@ -220,6 +225,37 @@ Deno.test("buildPreparedView: deferring parses leaves a large complete file for 
     job.finish(parse(job.kind, job.language, job.text, job.fileName));
   }
   assertEquals(deferred.editSource.parse(diff), whole.doc);
+});
+
+Deno.test("buildPreparedView: once the parses end, a build parses again what they left", async () => {
+  // Each parse finishes with plain text, so that a build that uses the
+  // finished results shows plain text, and one that parses again colors.
+  const path = "runtime/cli/lib/view/session.ts";
+  const text = Deno.readTextFileSync("lib/view/session.ts");
+  const diff = [
+    `diff --git a/${path} b/${path}`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    "@@ -1 +1 @@",
+    "-/** old */",
+    `+${text.split("\n")[0]}`,
+    "",
+  ].join("\n");
+  const kept = await buildPreparedView(diff, undefined, undefined, {}, true);
+  const ended = await buildPreparedView(diff, undefined, undefined, {}, true);
+  const whole = await buildPreparedView(diff);
+  for (const job of [...kept.parses, ...ended.parses]) {
+    job.finish(parse(job.kind, plainTextLanguage, job.text, job.fileName));
+  }
+
+  ended.parsesEnded();
+
+  assertEquals(ended.editSource.parse(diff), whole.doc);
+  assertNotEquals(
+    kept.editSource.parse(diff).lines,
+    whole.doc.lines,
+    "a view whose parses have not ended builds from their results",
+  );
 });
 
 Deno.test("buildView: a shebang selects an extensionless source and its editor", () => {

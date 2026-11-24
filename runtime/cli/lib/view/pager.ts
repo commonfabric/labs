@@ -110,6 +110,13 @@ export type PagerOptions = SessionOptions & {
   /** Whole-file parses the view left for the pager to finish while it takes
    * keys, whose file sides it shows as plain text until then. */
   readonly parses?: readonly ParseJob[];
+
+  /**
+   * Called once the pager stops finishing `parses` while it is open: after it
+   * has parsed the document again with the last of them, or when opening
+   * another file or a failure stops them early.
+   */
+  readonly parsesEnded?: () => void;
 };
 
 /** Why `error` happened, to follow a colon in the task dialog, with the
@@ -483,12 +490,17 @@ export async function runPager(
   // since it was last parsed again, and once more when every parse has ended.
   // Parsing it again builds only the file sections whose parses finished, so
   // the batch bounds how long that takes. The parses stop when the viewer
-  // closes, or when opening another file ends the progress.
+  // closes, or when opening another file ends the progress. Once they end,
+  // other than by the viewer closing, `parsesEnded` lets the view forget
+  // their results.
   const parses = options.parses ?? [];
   let stopParses: (() => void) | undefined;
+  let parsesEnded = options.parsesEnded;
   const endParses = (message?: string) => {
     stopParses?.();
     stopParses = undefined;
+    parsesEnded?.();
+    parsesEnded = undefined;
     session.showHighlightProgress(null);
     if (message !== undefined) session.showMessage(message);
   };

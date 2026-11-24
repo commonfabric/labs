@@ -29,9 +29,11 @@ import {
 } from "../../../lib/view/languages/language.ts";
 import { plainTextLanguage } from "../../../lib/view/languages/plain-text/language.ts";
 import {
+  type Document,
   flattenStructure,
   type Line,
   type StructureNode,
+  type ViewMode,
 } from "../../../lib/view/model.ts";
 import { gitBlobName } from "../../view-helpers.ts";
 
@@ -176,7 +178,7 @@ describe("backgroundparse", () => {
           expect(after).toBe(result.kind === "document" && result.document);
         });
 
-        it("gives a finished result once, and then parses at once", () => {
+        it("gives a finished result to every build that asks", () => {
           const pending = new PendingParses(0);
           pending.document("a", typescript, SOURCE, "a.ts");
           const [taken] = pending.take();
@@ -187,8 +189,7 @@ describe("backgroundparse", () => {
           const second = pending.document("a", typescript, SOURCE, "a.ts");
 
           expect(first).toBe(result.kind === "document" && result.document);
-          expect(second).not.toBe(first);
-          expect(second).toEqual(first);
+          expect(second).toBe(first);
         });
 
         it("forgets a pending parse once its key is asked for with other text", () => {
@@ -297,6 +298,57 @@ describe("backgroundparse", () => {
 
           expect(pending.waiting("a")).toBe(false);
           expect(pending.waiting("b")).toBe(false);
+        });
+      });
+
+      describe("keepOnly()", () => {
+        it("forgets a finished result the keys do not name, so that the parse runs at once", () => {
+          const pending = new PendingParses(0);
+          pending.document("a", typescript, SOURCE, "a.ts");
+          pending.document("b", typescript, SOURCE, "a.ts");
+          const jobs = pending.take();
+          const results = jobs.map((taken) =>
+            parse(taken.kind, taken.language, taken.text, taken.fileName)
+          );
+          for (const [at, taken] of jobs.entries()) taken.finish(results[at]);
+
+          pending.keepOnly(new Set(["b"]));
+
+          const forgotten = pending.document("a", typescript, SOURCE, "a.ts");
+          expect(forgotten).not.toBe(
+            results[0].kind === "document" && results[0].document,
+          );
+          expect(forgotten).toEqual(typescript.parseDocument(SOURCE));
+          expect(pending.document("b", typescript, SOURCE, "a.ts")).toBe(
+            results[1].kind === "document" && results[1].document,
+          );
+        });
+
+        it("keeps a parse that has not finished, and its result once it does", () => {
+          const pending = new PendingParses(0);
+          pending.document("a", typescript, SOURCE, "a.ts");
+          const [taken] = pending.take();
+          const result = parse("document", typescript, SOURCE, "a.ts");
+
+          pending.keepOnly(new Set());
+          taken.finish(result);
+
+          expect(pending.document("a", typescript, SOURCE, "a.ts")).toBe(
+            result.kind === "document" && result.document,
+          );
+        });
+
+        it("keeps the plain lines of a failed parse", () => {
+          const pending = new PendingParses(0);
+          pending.lines("a", typescript, SOURCE, "a.ts");
+          const [taken] = pending.take();
+          taken.fail();
+
+          pending.keepOnly(new Set());
+
+          const lines = pending.lines("a", typescript, SOURCE, "a.ts");
+          expect(lines).toEqual(plainTextLanguage.highlightLines(SOURCE));
+          expect(coloredSpans(lines ?? [])).toBe(0);
         });
       });
 
@@ -890,6 +942,7 @@ describe("backgroundparse", () => {
     // A workspace holding one TypeScript file, whose old version is a Git
     // blob the diff's `index` line names, so both sides parse in full.
 
+    const OLDER = "export const answer = 40; // the answer\n";
     const OLD = "export const answer = 41; // the answer\n";
     const NEW = "export const answer = 42; // the answer\n";
     const DIFF = `diff --git a/answer.ts b/answer.ts
@@ -900,17 +953,93 @@ index ${gitBlobName(OLD)}..${gitBlobName(NEW)} 100644
 -${OLD}+${NEW}`;
     const model = parseDiff(DIFF)!;
 
-    /** A workspace over `files`, which can change, holding the old blob. */
+    /**
+     * A workspace over `files`, which can change, holding the blobs of `OLD`
+     * and `OLDER`.
+     */
     function workspace(files: Map<string, string>): DiffWorkspace {
+      const blobs = new Map(
+        [OLD, OLDER].map((text) => [gitBlobName(text), text]),
+      );
       return {
         resolve: (path) => `/workspace/${path}`,
         read: (path) => files.get(path) ?? null,
         readBlobs: (objects) =>
           new Map(
-            objects.filter((object) => object === gitBlobName(OLD)).map((
-              object,
-            ) => [object, OLD]),
+            objects.flatMap((object) => {
+              const text = blobs.get(object);
+              return text === undefined ? [] : [[object, text]];
+            }),
           ),
+      };
+    }
+
+    /**
+     * `language`, counting in `count` each parse it runs of a complete file,
+     * `OLDER`, `OLD`, or `NEW`, and not of the fragments of a hunk that the
+     * workspace file does not match.
+     */
+    function counted(
+      language: Language,
+      count: { documents: number; lines: number },
+    ): Language {
+      const complete = new Set([OLDER, OLD, NEW]);
+      return {
+        ...language,
+        parseDocument: (text, fileName) => {
+          if (complete.has(text)) count.documents++;
+          return language.parseDocument(text, fileName);
+        },
+        highlightLines: (text, fileName) => {
+          if (complete.has(text)) count.lines++;
+          return language.highlightLines(text, fileName);
+        },
+      };
+    }
+
+    /**
+     * Builds, in either view mode, a diff of two Markdown files whose
+     * complete-file parses are pending, sharing one cache. Once `finish` has
+     * finished every parse, `count` counts the parses each build runs at once.
+     */
+    function markdownBuilds(): {
+      build(viewMode: ViewMode): Document;
+      finish(): void;
+      readonly count: { documents: number; lines: number };
+      readonly cache: WorkspaceCache;
+    } {
+      const text = ["answer.md", "other.md"].map((name) =>
+        DIFF.replaceAll("answer.ts", name)
+      ).join("\n");
+      const model = parseDiff(text)!;
+      const count = { documents: 0, lines: 0 };
+      const markdown = counted(languageForName("markdown")!, count);
+      const languages = model.files.map(() => ({
+        oldLanguage: markdown,
+        newLanguage: markdown,
+      }));
+      const ws = workspace(
+        new Map([
+          ["/workspace/answer.md", NEW],
+          ["/workspace/other.md", NEW],
+        ]),
+      );
+      const cache = new WorkspaceCache();
+      const pending = new PendingParses(0);
+      const build = (viewMode: ViewMode) =>
+        buildDiffDocument(text, model, ws, cache, viewMode, languages, pending)
+          .doc;
+      build("source");
+      const jobs = pending.take();
+      return {
+        build,
+        finish: () => {
+          finishAll(jobs);
+          count.documents = 0;
+          count.lines = 0;
+        },
+        count,
+        cache,
       };
     }
 
@@ -1037,21 +1166,15 @@ index ${gitBlobName(OLD)}..${gitBlobName(NEW)} 100644
     });
 
     it("reuses a section the other view mode built once its parses finished", () => {
-      let parses = 0;
-      const counted: Language = {
-        ...typescript,
-        parseDocument: (text, fileName) => {
-          parses++;
-          return typescript.parseDocument(text, fileName);
-        },
-      };
+      const count = { documents: 0, lines: 0 };
+      const ts = counted(typescript, count);
       // Two files, so that the first file's parse is not among those the
       // cache keeps of the section built last.
       const both = `${DIFF}\n${DIFF.replaceAll("answer.ts", "other.ts")}`;
       const bothModel = parseDiff(both)!;
       const languages = bothModel.files.map(() => ({
-        oldLanguage: counted,
-        newLanguage: counted,
+        oldLanguage: ts,
+        newLanguage: ts,
       }));
       const ws = workspace(
         new Map([
@@ -1075,11 +1198,194 @@ index ${gitBlobName(OLD)}..${gitBlobName(NEW)} 100644
       finishAll(pending.take());
       build("rendered");
 
-      parses = 0;
+      count.documents = 0;
       const source = build("source");
 
-      expect(parses).toBe(0);
+      expect(count.documents).toBe(0);
       expect(coloredSpans(source.lines.slice(5))).toBeGreaterThan(0);
+    });
+
+    it("keeps a parse two sections wait for until both have built from it, and then forgets it", () => {
+      // Two sections show the one workspace file, as in `git log -p` output,
+      // each with its own old blob. A third section is built after the first,
+      // so that the parses the cache keeps of the section built last do not
+      // hold the workspace file's parse.
+      const older = `diff --git a/answer.ts b/answer.ts
+index ${gitBlobName(OLDER)}..${gitBlobName(OLD)} 100644
+--- a/answer.ts
++++ b/answer.ts
+@@ -1 +1 @@
+-${OLDER}+${OLD}`;
+      const log = [DIFF, older, DIFF.replaceAll("answer.ts", "other.ts")]
+        .join("\n");
+      const logModel = parseDiff(log)!;
+      const count = { documents: 0, lines: 0 };
+      const ts = counted(typescript, count);
+      const languages = logModel.files.map(() => ({
+        oldLanguage: ts,
+        newLanguage: ts,
+      }));
+      const ws = workspace(
+        new Map([
+          ["/workspace/answer.ts", NEW],
+          ["/workspace/other.ts", NEW],
+        ]),
+      );
+      const cache = new WorkspaceCache();
+      const pending = new PendingParses(0);
+      const build = () =>
+        buildDiffDocument(
+          log,
+          logModel,
+          ws,
+          cache,
+          "source",
+          languages,
+          pending,
+        )
+          .doc;
+      build();
+      const jobs = pending.take();
+      finishAll(jobs.filter((taken) => taken.text !== OLDER));
+      build();
+      finishAll(jobs.filter((taken) => taken.text === OLDER));
+
+      count.documents = 0;
+      const finished = build();
+      const finishedParses = count.documents;
+      cache.forget("/workspace/answer.ts");
+      build();
+
+      expect(finishedParses).toBe(0);
+      expect(finished).toEqual(buildDiffDocument(log, logModel, ws).doc);
+      expect(coloredSpans(finished.lines.slice(logModel.files[1].headerLine)))
+        .toBeGreaterThan(0);
+      expect(count.documents).toBe(1);
+    });
+
+    it("gives a Markdown file's parse to the builds in both view modes", () => {
+      const { build, finish, count } = markdownBuilds();
+      build("rendered");
+      finish();
+
+      build("source");
+      const rendered = build("rendered");
+
+      expect(count).toEqual({ documents: 0, lines: 0 });
+      expect(coloredSpans(rendered.lines.slice(5))).toBeGreaterThan(0);
+    });
+
+    it("gives a Markdown file's parse to the rendered build after builds in source mode alone", () => {
+      // Switching the view back to source builds nothing.
+
+      const { build, finish, count } = markdownBuilds();
+      build("rendered");
+      finish();
+
+      build("source");
+      build("source");
+      build("rendered");
+
+      expect(count.documents).toBe(0);
+    });
+
+    it("gives a Markdown file's parse to the source build after builds in rendered mode alone", () => {
+      // Switching the view to rendered builds in rendered mode alone.
+
+      const { build, finish, count } = markdownBuilds();
+      finish();
+
+      build("rendered");
+      build("rendered");
+      build("source");
+
+      expect(count.documents).toBe(0);
+    });
+
+    it("gives a finished parse to a build after the old file's lines were read", () => {
+      const both = `${DIFF}\n${DIFF.replaceAll("answer.ts", "other.ts")}`;
+      const bothModel = parseDiff(both)!;
+      const count = { documents: 0, lines: 0 };
+      const ts = counted(typescript, count);
+      const languages = bothModel.files.map(() => ({
+        oldLanguage: ts,
+        newLanguage: ts,
+      }));
+      const ws = workspace(
+        new Map([
+          ["/workspace/answer.ts", NEW],
+          ["/workspace/other.ts", NEW],
+        ]),
+      );
+      const cache = new WorkspaceCache();
+      const pending = new PendingParses(0);
+      const build = () =>
+        buildDiffDocument(
+          both,
+          bothModel,
+          ws,
+          cache,
+          "source",
+          languages,
+          pending,
+        );
+      const { edit } = build();
+      finishAll(pending.take());
+      count.lines = 0;
+
+      const read = edit.oldFileLines(0);
+      build();
+
+      expect(coloredSpans(read ?? [])).toBeGreaterThan(0);
+      expect(count.lines).toBe(0);
+    });
+
+    it("forgets a parse once every section has built from it", () => {
+      const { build, finish, count, cache } = markdownBuilds();
+      build("rendered");
+      finish();
+
+      build("source");
+      build("rendered");
+      cache.forget("/workspace/answer.md");
+      build("source");
+
+      expect(count.documents).toBe(1);
+    });
+
+    it("records in the cache an editing cache came from the sections it built of other files", () => {
+      const both = `${DIFF}\n${DIFF.replaceAll("answer.ts", "other.ts")}`;
+      const bothModel = parseDiff(both)!;
+      const ws = workspace(
+        new Map([
+          ["/workspace/answer.ts", NEW],
+          ["/workspace/other.ts", NEW],
+        ]),
+      );
+      const cache = new WorkspaceCache();
+      const pending = new PendingParses(0);
+      const build = (into: WorkspaceCache) =>
+        buildDiffDocument(
+          both,
+          bothModel,
+          ws,
+          into,
+          "source",
+          undefined,
+          pending,
+        )
+          .doc;
+      build(cache);
+      finishAll(pending.take());
+      const answerLine = bothModel.files[0].endLine;
+      const otherLine = bothModel.files[1].endLine;
+
+      const fromCopy = build(cache.editing(["/workspace/answer.ts"]));
+      const fromCache = build(cache);
+
+      expect(fromCache.lines[otherLine]).toBe(fromCopy.lines[otherLine]);
+      expect(fromCache.lines[answerLine]).not.toBe(fromCopy.lines[answerLine]);
+      expect(fromCache).toEqual(buildDiffDocument(both, bothModel, ws).doc);
     });
 
     it("builds from a file saved while its parse was pending", () => {
