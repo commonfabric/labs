@@ -127,7 +127,7 @@ describe("pattern-key-moves", () => {
       );
     });
 
-    it("returns the key currentPatternKey() was given, for every key the table moves", () => {
+    it("returns a key whose pattern moved once to the key currentPatternKey() was given", () => {
       for (
         const key of [
           "system/profile-home.tsx",
@@ -244,6 +244,23 @@ describe("pattern-key-moves", () => {
           .toEqual({ from, to, again: to });
         expect({ from, returns: formerPatternKeys(to).includes(to) })
           .toEqual({ from, returns: false });
+      }
+    });
+
+    it("maps each key a baseline was recorded under to a pattern that lists it among its former keys", () => {
+      // A baseline directory is named for a key its pattern had, so each one
+      // stands for keys stored data can name. Two keys mapping to one
+      // pattern when only one of them was that pattern's would hand a piece
+      // made from the other to the wrong pattern.
+
+      const baselines = `${patterns}/baselines`;
+      for (const entry of walkSync(baselines, { includeFiles: false })) {
+        if (!/\.tsx?$/.test(entry.name)) continue;
+        const key = relative(baselines, entry.path).replaceAll("\\", "/");
+        const current = currentPatternKey(key);
+        if (current === key) continue;
+        expect({ key, former: formerPatternKeys(current).includes(key) })
+          .toEqual({ key, former: true });
       }
     });
 

@@ -20,11 +20,7 @@
  * files it read off disk.
  */
 
-import {
-  formerPatternKeys,
-  type JSONSchema,
-  type Pattern,
-} from "@commonfabric/runner";
+import type { JSONSchema, Pattern } from "@commonfabric/runner";
 import { inputsNeededToRun } from "@commonfabric/pattern-index/standalone";
 import { validateSchemaDefinition } from "@commonfabric/runner/cfc";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
@@ -288,7 +284,8 @@ export function checkPattern(
  * The `main.tsx` entries under `patterns/` that cannot run alone, each
  * waiting on a rename that is held until the pattern index keeps a pattern's
  * history across a move. The list can only shrink: an entry that runs alone
- * again fails the run until it leaves.
+ * again fails the run, and one whose file is gone fails a unit test, until it
+ * leaves.
  */
 export const PENDING_STANDALONE_RENAMES: ReadonlySet<string> = new Set([
   // Needs `originatorProfile`. Its standalone entry is `library.tsx`, which
@@ -331,19 +328,18 @@ export function checkRunsAlone(
 //
 
 /**
- * Read every recorded contract for a pattern: those recorded under `key`, and
- * those recorded under each key it had before it moved (`formerKeys`, the
- * runtime's table of moves by default), since a piece made at an old key rolls
- * forward to the new one. A baseline is never moved, so a pattern's move
- * deletes none. Absent directories → none.
+ * Read every recorded contract for a pattern: those recorded under each of
+ * `recordedKeys`, which are `key` alone unless the pattern moved, when
+ * `baselineKeysByPattern` gives every key it had. A baseline never moves, so
+ * a pattern's move deletes none. Absent directories → none.
  */
 export async function readBaselines(
   baselinesDir: string,
   key: string,
-  formerKeys: (key: string) => readonly string[] = formerPatternKeys,
+  recordedKeys: readonly string[] = [key],
 ): Promise<Baseline[]> {
   const baselines: Baseline[] = [];
-  for (const recordedKey of [key, ...formerKeys(key)]) {
+  for (const recordedKey of recordedKeys) {
     for (
       const baseline of await readBaselinesUnder(baselinesDir, recordedKey)
     ) {

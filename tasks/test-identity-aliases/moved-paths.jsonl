@@ -1119,7 +1119,7 @@
 {"date": "2026-11-20", "from": {"p": "runtime/cli/test/buildCreateSpaceCommand.test.ts"}, "to": {"p": "runtime/cli/test/buildCreateSpaceCommand.serial.test.ts"}}
 {"date": "2026-11-20", "from": {"p": "runtime/cli/test/mod-exit-status.test.ts"}, "to": {"p": "runtime/cli/test/mod.serial.test.ts"}}
 {"date": "2026-11-20", "from": {"p": "runtime/cli/test/multi-user-test-completion.test.ts"}, "to": {"p": "runtime/cli/test/multi-user-test-completion.serial.test.ts"}}
-{"date": "2026-11-25", "from": {"p": "patterns/dev/map-captured-object-spread/main.test.tsx"}, "to": {"p": "patterns/dev/map-captured-object-spread/map-captured-object-spread.test.tsx"}}
-{"date": "2026-11-25", "from": {"p": "patterns/dev/map-captured-object-spread/main.tsx"}, "to": {"p": "patterns/dev/map-captured-object-spread/map-captured-object-spread.tsx"}}
-{"date": "2026-11-25", "from": {"p": "dev/map-captured-object-spread/main.test.tsx"}, "to": {"p": "dev/map-captured-object-spread/map-captured-object-spread.test.tsx"}}
-{"date": "2026-11-25", "from": {"p": "dev/map-captured-object-spread/main.tsx"}, "to": {"p": "dev/map-captured-object-spread/map-captured-object-spread.tsx"}}
+{"date": "2026-11-24", "from": {"p": "patterns/dev/map-captured-object-spread/main.test.tsx"}, "to": {"p": "patterns/dev/map-captured-object-spread/map-captured-object-spread.test.tsx"}}
+{"date": "2026-11-24", "from": {"p": "patterns/dev/map-captured-object-spread/main.tsx"}, "to": {"p": "patterns/dev/map-captured-object-spread/map-captured-object-spread.tsx"}}
+{"date": "2026-11-24", "from": {"p": "dev/map-captured-object-spread/main.test.tsx"}, "to": {"p": "dev/map-captured-object-spread/map-captured-object-spread.test.tsx"}}
+{"date": "2026-11-24", "from": {"p": "dev/map-captured-object-spread/main.tsx"}, "to": {"p": "dev/map-captured-object-spread/map-captured-object-spread.tsx"}}

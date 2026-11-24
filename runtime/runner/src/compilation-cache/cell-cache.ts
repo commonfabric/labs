@@ -282,13 +282,6 @@ const formerModuleNames = (name: string): string[] => {
 };
 
 /**
- * The name `name` had before its pattern's `moves`-th latest move, counting
- * the latest as 0, or `name` itself when its pattern moved fewer times.
- */
-const formerModuleName = (name: string, moves: number): string =>
-  formerModuleNames(name)[moves] ?? name;
-
-/**
  * Match a previous verified source closure to a newly emitted module set by
  * canonical full filename. Matching deliberately uses the whole normalized
  * path, never a basename: `../shared/writer.ts` has already resolved to the
@@ -378,28 +371,31 @@ export function deriveModulePredecessors<
     : undefined;
   // The entries' shared tail is taken as the entries are named, and with the
   // next entry under each key its pattern had before it moved. Each gives the
-  // roots its own names shift between.
-  const rootPairs = entryPair === undefined ? [] : [
-    { rename: (name: string) => name },
-    ...formerModuleNames(canonicalModuleFilename(entryPair.next.filename))
-      .map((_, moves) => ({
-        rename: (name: string) => formerModuleName(name, moves),
-      })),
-  ].flatMap(({ rename }) => {
-    const roots = rootsOfSharedTail(
-      canonicalModuleFilename(entryPair.previous.doc.filename),
-      rename(canonicalModuleFilename(entryPair.next.filename)),
-    );
-    return roots === undefined ? [] : [{ rename, roots }];
-  });
+  // roots its own names shift between. Another module may have moved fewer
+  // times than the entry, or more, so each module is tried under its own name
+  // and each of its former names against every pair of roots.
+  const nextEntryName = entryPair === undefined
+    ? undefined
+    : canonicalModuleFilename(entryPair.next.filename);
+  const rootPairs = entryPair === undefined || nextEntryName === undefined
+    ? []
+    : [nextEntryName, ...formerModuleNames(nextEntryName)].flatMap((name) => {
+      const roots = rootsOfSharedTail(
+        canonicalModuleFilename(entryPair.previous.doc.filename),
+        name,
+      );
+      return roots === undefined || roots.previous === roots.next
+        ? []
+        : [roots];
+    });
   const namesFor = (name: string): string[] => {
-    const names = new Set([name, ...formerModuleNames(name)]);
-    for (const { rename, roots } of rootPairs) {
-      const renamed = rename(name);
-      if (
-        roots.previous !== roots.next && renamed.startsWith(`${roots.next}/`)
-      ) {
-        names.add(`${roots.previous}${renamed.slice(roots.next.length)}`);
+    const own = [name, ...formerModuleNames(name)];
+    const names = new Set(own);
+    for (const roots of rootPairs) {
+      for (const candidate of own) {
+        if (candidate.startsWith(`${roots.next}/`)) {
+          names.add(`${roots.previous}${candidate.slice(roots.next.length)}`);
+        }
       }
     }
     return [...names];

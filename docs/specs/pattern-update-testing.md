@@ -126,8 +126,8 @@ proved able to roll forward to the new one.
   input a host fills in, such as the loom id, is optional), or give the file a
   descriptive name, since `main.tsx` is kept for a pattern that stands alone.
   `PENDING_STANDALONE_RENAMES` in `tasks/pattern-compat-lib.ts` lists entries
-  whose rename is held; it can only shrink, and an entry that runs alone again
-  fails the run until it leaves.
+  whose rename is held; it can only shrink: an entry that runs alone again
+  fails the run, and one whose file is gone fails a unit test, until it leaves.
 - **`newly fails to evaluate`** — a pattern that cannot evaluate gets no
   contract, so no baseline, so no check, forever. Fix it, or add it to
   `tasks/pattern-compat-unevaluable.ts` with a reason. That allowlist can only

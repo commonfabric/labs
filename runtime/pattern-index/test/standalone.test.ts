@@ -27,6 +27,15 @@ describe("standalone", () => {
       })).toEqual([]);
     });
 
+    it("returns none for an input the object's own default fills in", () => {
+      expect(inputsNeededToRun({
+        type: "object",
+        properties: { ids: { type: "array" } },
+        required: ["ids"],
+        default: { ids: [] },
+      })).toEqual([]);
+    });
+
     it("returns none for a boolean schema", () => {
       expect(inputsNeededToRun(true)).toEqual([]);
       expect(inputsNeededToRun(false)).toEqual([]);

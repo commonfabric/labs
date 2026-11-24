@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { existsSync } from "@std/fs/exists";
 import { type JSONSchema, patternKeyMovesIn } from "@commonfabric/runner";
 import {
   acceptedBreakKey,
@@ -13,6 +14,7 @@ import {
   parseArgs,
   partitionAcceptedBreaks,
   type PatternContract,
+  PENDING_STANDALONE_RENAMES,
   readBaselines,
   selectItems,
   shouldRecord,
@@ -21,8 +23,11 @@ import {
 } from "./pattern-compat-lib.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import {
+  baselineKeysByPattern,
   collectBaselineKeys,
   collectCompatibilityPaths,
+  PATTERNS_DIR,
+  REPO_ROOT,
 } from "./pattern-files.ts";
 
 const contract = (
@@ -508,9 +513,12 @@ describe("baseline store", () => {
         await writeBaseline(baselines, key, contractOf(), new Date(at));
       }
 
-      const labels =
-        (await readBaselines(baselines, "apps/a/main.tsx", moves.formers))
-          .map((baseline) => baseline.label.slice(0, 8));
+      const recorded = await baselineKeysByPattern(baselines, moves.current);
+      const labels = (await readBaselines(
+        baselines,
+        "apps/a/main.tsx",
+        recorded.get("apps/a/main.tsx"),
+      )).map((baseline) => baseline.label.slice(0, 8));
       const files = ["patterns/apps/a/main.tsx"];
       const paths = await collectCompatibilityPaths(
         files,
@@ -521,6 +529,24 @@ describe("baseline store", () => {
 
       expect(labels).toEqual(["20260101", "20260201", "20260301"]);
       expect(paths).toEqual(["patterns/apps/a/main.tsx"]);
+    });
+  });
+
+  it("lists a pattern that moved and then went once, under the key it had last", async () => {
+    await withTree(async ({ baselines }) => {
+      // `a.tsx` moved to `apps/a/a.tsx` and was later deleted there.
+      const moves = patternKeyMovesIn({ "a.tsx": "apps/a/a.tsx" });
+      await writeBaseline(baselines, "a.tsx", contractOf(), new Date());
+      await writeBaseline(baselines, "apps/a/a.tsx", contractOf(), new Date());
+
+      const paths = await collectCompatibilityPaths(
+        [],
+        baselines,
+        [],
+        moves.current,
+      );
+
+      expect(paths).toEqual(["patterns/apps/a/a.tsx"]);
     });
   });
 
@@ -790,5 +816,20 @@ describe("unusedAcceptances", () => {
     const entries = [entry(["v1"], ["result.x"])];
     expect(unusedAcceptances(entries, new Set(["b.tsx"]), []))
       .toEqual({ pairs: [], paths: [] });
+  });
+});
+
+describe("PENDING_STANDALONE_RENAMES", () => {
+  it("names only main.tsx files the patterns tree holds", () => {
+    // An entry whose file is gone yields no contract, so the gate can never
+    // find it stale; its rename landed and the entry has to leave.
+
+    for (const key of PENDING_STANDALONE_RENAMES) {
+      expect({
+        key,
+        main: key.endsWith("/main.tsx"),
+        exists: existsSync(`${REPO_ROOT}/${PATTERNS_DIR}/${key}`),
+      }).toEqual({ key, main: true, exists: true });
+    }
   });
 });

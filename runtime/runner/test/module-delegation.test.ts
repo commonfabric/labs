@@ -1108,6 +1108,47 @@ describe("module identity delegation", () => {
     expect(delegations.get("new-naming")).toEqual(new Set(["old-naming"]));
   });
 
+  it("matches each module of a pattern whose entry moved twice to the module the checkout compiled before both moves", () => {
+    // The fixture's folder moved into `dev/`, and then its entry alone was
+    // renamed, so the entry moved twice and a module beside it once.
+    const module = (identity: string, filename: string): CacheableModule => ({
+      identity,
+      filename,
+      source: "export {};",
+      js: "export {};",
+      imports: [],
+    });
+    const doc = (filename: string): SourceDoc => ({
+      kind: "source",
+      code: "export {};",
+      filename,
+      imports: [],
+    });
+    const previous = new Map<string, SourceDoc>([
+      [
+        "old-main",
+        doc("/packages/patterns/map-captured-object-spread/main.tsx"),
+      ],
+      [
+        "old-helper",
+        doc("/packages/patterns/map-captured-object-spread/helper.ts"),
+      ],
+    ]);
+    const delegations = deriveModuleDelegations(previous, [
+      module(
+        "new-main",
+        "/patterns/dev/map-captured-object-spread/map-captured-object-spread.tsx",
+      ),
+      module(
+        "new-helper",
+        "/patterns/dev/map-captured-object-spread/helper.ts",
+      ),
+    ], { previous: "old-main", next: "new-main" });
+
+    expect(delegations.get("new-main")).toEqual(new Set(["old-main"]));
+    expect(delegations.get("new-helper")).toEqual(new Set(["old-helper"]));
+  });
+
   it("matches a renamed entry to the entry it replaces, and nothing else across the rename", () => {
     // The update itself says which entry succeeds which, so the entry pair
     // matches whatever the two are called. With no root the two names

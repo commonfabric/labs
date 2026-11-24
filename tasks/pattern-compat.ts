@@ -36,6 +36,7 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import {
+  baselineKeysByPattern,
   BASELINES_DIR,
   collectAllPatternFiles,
   collectCompatibilityPaths,
@@ -126,6 +127,7 @@ export async function judgeCompatibility(
     ),
     input.only,
   );
+  const recordedUnder = await baselineKeysByPattern(input.baselinesDir);
   // An item with no file is a pattern that is gone. It has no contract, and
   // is judged below on its baselines and accepted breaks alone.
   const present = new Set(input.files);
@@ -218,7 +220,11 @@ export async function judgeCompatibility(
     // A file with no contract goes through the same check, so a file that
     // USED to export a pattern, or is gone, has its baselines reported.
     const current = contracts.get(key);
-    const baselines = await readBaselines(input.baselinesDir, key);
+    const baselines = await readBaselines(
+      input.baselinesDir,
+      key,
+      recordedUnder.get(key) ?? [key],
+    );
     const checkStarted = performance.now();
     const allFindings = [
       ...checkPattern(key, current, baselines),

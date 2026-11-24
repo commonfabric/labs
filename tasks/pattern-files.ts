@@ -261,6 +261,27 @@ export async function collectBaselineKeys(
 }
 
 /**
+ * The keys baselines are recorded under, grouped by the key each one's pattern
+ * has now (`currentKey`, the runtime's table of moves by default). A baseline
+ * directory is named for the key its pattern had when the baseline was
+ * recorded and never moves, so a pattern that moved has baselines under each
+ * key it had.
+ */
+export async function baselineKeysByPattern(
+  baselinesDir: string,
+  currentKey: (key: string) => string = currentPatternKey,
+): Promise<Map<string, string[]>> {
+  const byPattern = new Map<string, string[]>();
+  for (const key of await collectBaselineKeys(baselinesDir)) {
+    const current = currentKey(key);
+    const keys = byPattern.get(current);
+    if (keys === undefined) byPattern.set(current, [key]);
+    else keys.push(key);
+  }
+  return byPattern;
+}
+
+/**
  * Every pattern the update compatibility gate judges, as repository-relative
  * paths: each of `files`, then the path of each pattern whose file is gone but
  * which still has baselines under `baselinesDir` or is one of the
@@ -270,10 +291,10 @@ export async function collectBaselineKeys(
  * so no run has to ask about the tree as a whole. The gate and the lanes that
  * divide it both build their lists here, so the two agree.
  *
- * A pattern that moved is not gone: its baselines stay under the keys it had,
- * and are judged with it under the key it has now (`currentKey`, the runtime's
- * table of moves by default). An accepted break names the key a pattern has
- * now, so one naming a key the pattern moved from is reported as orphaned.
+ * A pattern that moved is judged once, under the key it has now
+ * (`baselineKeysByPattern`), with the baselines recorded under every key it
+ * had. An accepted break names the key a pattern has now, so one naming a key
+ * the pattern moved from is reported as orphaned.
  */
 export async function collectCompatibilityPaths(
   files: readonly string[],
@@ -282,11 +303,11 @@ export async function collectCompatibilityPaths(
   currentKey: (key: string) => string = currentPatternKey,
 ): Promise<string[]> {
   const present = new Set(files.map((file) => patternKey(file)));
-  const gone = new Set([
-    ...(await collectBaselineKeys(baselinesDir)).filter((key) =>
-      !present.has(currentKey(key))
+  const recorded = await baselineKeysByPattern(baselinesDir, currentKey);
+  const gone = new Set(
+    [...recorded.keys(), ...acceptedBreakPatterns].filter((key) =>
+      !present.has(key)
     ),
-    ...acceptedBreakPatterns.filter((key) => !present.has(key)),
-  ]);
+  );
   return [...files, ...[...gone].map((key) => patternPath(key))];
 }
