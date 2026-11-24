@@ -601,8 +601,8 @@ export const DIALS: readonly Dial[] = [
     value: FULL_LANES_MAX,
     unit: "lanes",
     setBy: "chosen",
-    why: "The full run may use up to GitHub's job-matrix limit. Runner " +
-      "capacity is reserved by the workflow's `max-parallel`, independently " +
+    why: "The full run may use up to GitHub's job-matrix limit. Concurrency " +
+      "per run is limited by the workflow's `max-parallel`, independently " +
       "of how many lanes the work needs.",
   },
   {
