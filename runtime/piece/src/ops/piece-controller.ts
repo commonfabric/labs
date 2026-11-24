@@ -38,6 +38,7 @@ import {
   isCell,
   isCellResultForDereferencing,
   isLink,
+  isStoredArgumentOwnData,
   isStream,
   type JSONSchema,
   KeepAsCell,
@@ -2092,55 +2093,79 @@ function deriveTargetContracts(
 const MAX_ROW_HOPS = 8;
 
 /**
+ * The cell a row passes its reader on to, or `undefined` when `row` is not
+ * one that is read on from.
+ *
+ * A row is a document with no contract of its own whose whole value is a
+ * link. Its value is read only when the document is the input's own data by
+ * the runner's rule (`isStoredArgumentOwnData`: the space and scope of
+ * `baseCell`'s document, and no confidentiality label), which is asked before
+ * the read: setup's validation of the stored input reads no other document,
+ * and a read of a labeled one would join its label to the transaction.
+ * `visited` holds the rows already read from in this chain, and a repeat ends
+ * it.
+ */
+function rowTarget(
+  row: Cell<unknown>,
+  baseCell: Cell<unknown>,
+  pieces: PiecesController,
+  visited: Set<string>,
+): Cell<unknown> | undefined {
+  const at = row.getAsNormalizedFullLink();
+  const key = JSON.stringify([at.space, at.scope, at.id, at.path]);
+  if (visited.has(key)) return undefined;
+  visited.add(key);
+  const tx = cellTx(row) ?? pieces.runtime.readTx();
+  if (!isStoredArgumentOwnData(tx, at, baseCell.getAsNormalizedFullLink())) {
+    return undefined;
+  }
+  const stored = row.getRaw();
+  if (isCell(stored) || !isLink(stored)) return undefined;
+  return pieces.runtime.getCellFromLink(
+    { ...parseLinkOrThrow(stored, row), schema: undefined },
+    undefined,
+    cellTx(row),
+  );
+}
+
+/**
  * Recover the contract of what `linkedCell` stands for, and the cell that
  * carries it.
  *
  * A document with no contract of its own whose whole value is a link only
  * passes its reader on: pushing a piece onto a list stores such a row, linked
  * from the list and linking to the piece. The link to the row stands for the
- * link the row holds, so the contract is the one found by following rows to
- * the first document that carries one.
+ * link the row holds, so the contract is the one found by following rows
+ * ({@link rowTarget}) to the first document that carries one.
  *
- * A row is read only in the input document's own space and scope. One
- * elsewhere is another audience's data, which setup's validation of the
- * stored input does not read either. Following ends, with no contract, at a
- * document elsewhere, one that is absent, one that holds anything but a link,
- * one already visited, and after {@link MAX_ROW_HOPS} rows.
+ * Following ends, with no contract, at a document that is not the input's own
+ * data, one that is absent, one that holds anything but a link, one already
+ * visited, and after {@link MAX_ROW_HOPS} rows.
  */
 function durableSourceThroughRows(
   linkedCell: Cell<unknown>,
   baseCell: Cell<unknown>,
   pieces: PiecesController,
 ): { durableSource: DurableSourceContract | undefined; source: Cell<unknown> } {
-  const base = baseCell.getAsNormalizedFullLink();
   const visited = new Set<string>();
-  let source = linkedCell;
-  for (let hops = 0;; hops++) {
+  let source: Cell<unknown> | undefined = linkedCell;
+  for (let hops = 0; source !== undefined && hops <= MAX_ROW_HOPS; hops++) {
     const durableSource = durableSourceContract(source, pieces);
     if (durableSource !== undefined) return { durableSource, source };
-    const at = source.getAsNormalizedFullLink();
-    const key = JSON.stringify([at.space, at.scope, at.id, at.path]);
-    if (
-      hops === MAX_ROW_HOPS || visited.has(key) ||
-      at.space !== base.space || at.scope !== base.scope
-    ) break;
-    visited.add(key);
-    const stored = source.getRaw();
-    if (isCell(stored) || !isLink(stored)) break;
-    source = pieces.runtime.getCellFromLink(
-      { ...parseLinkOrThrow(stored, source), schema: undefined },
-      undefined,
-      cellTx(linkedCell),
-    );
+    source = rowTarget(source, baseCell, pieces, visited);
   }
   return { durableSource: undefined, source: linkedCell };
 }
 
 /**
- * Parse a supplied link and recover its producer's durable schema contract,
- * through any rows between the link and the producer
- * ({@link durableSourceThroughRows}); `source` is the cell that carries the
- * contract, or the linked cell when none does.
+ * Parse a supplied link and recover its producer's durable schema contract.
+ * Under `followRows` the contract is recovered through any rows between the
+ * link and the producer ({@link durableSourceThroughRows}); `source` is the
+ * cell that carries the contract, or the linked cell when none does. A caller
+ * sets `followRows` for a link the piece already holds. A row can be pointed
+ * at another producer later, so a new binding through one would be proved
+ * against a contract the binding does not keep, and it takes the linked
+ * document's own contract or none.
  * A metadata-less linked document is held to the prior argument contract on
  * a pattern update, and `heldToPriorContract` says so. Dynamic binding can
  * explicitly accept an unproven source; other supplied-link operations
@@ -2155,6 +2180,7 @@ function resolveDurableSource(
   priorArgumentSchema: JSONSchema | undefined,
   displayPath: string,
   allowUnprovenSource: boolean,
+  followRows: boolean,
 ): {
   link: NormalizedLink;
   linkedCell: Cell<unknown>;
@@ -2171,7 +2197,12 @@ function resolveDurableSource(
   // A direct Cell view can be narrowed with asSchema() just as easily as a
   // serialized alias can carry a narrowed schema. Neither is a future-value
   // invariant, so a static producer proof needs producer-owned metadata.
-  const through = durableSourceThroughRows(linkedCell, baseCell, pieces);
+  const through = followRows
+    ? durableSourceThroughRows(linkedCell, baseCell, pieces)
+    : {
+      durableSource: durableSourceContract(linkedCell, pieces),
+      source: linkedCell,
+    };
   const source = through.source;
   let durableSource = through.durableSource;
   const heldToPriorContract = durableSource === undefined &&
@@ -2704,6 +2735,8 @@ export function assertSuppliedLinkSchemasCompatible(
         options.priorArgumentSchema,
         displayPath,
         options.allowUnprovenSource === true && isCell(suppliedLink.value),
+        options.linksPreservedVerbatim === true &&
+          linkMatchesCommittedState(suppliedLink, baseCell, basePath),
       );
     const { localizedTargets, targetOuter } = localizeTargetOuter(
       targetContracts,
@@ -5768,49 +5801,85 @@ async function syncRetainedLinkMetadata(
   argumentCell: Cell<unknown>,
   pieces: PiecesController,
 ): Promise<void> {
-  const roots = new Map<string, Cell<unknown>>();
-  for (const supplied of suppliedLinks(argumentCell.getRaw())) {
-    let base = argumentCell;
-    for (const segment of supplied.path) {
-      base = base.key(segment as keyof unknown) as Cell<unknown>;
-    }
-    const link = parseLinkOrThrow(supplied.value, base);
+  const loads = new Map<string, Promise<void>>();
+  // Loads the document `cell` is in, once, with the metadata its contract is
+  // recovered from.
+  const load = (cell: Cell<unknown>): Promise<void> => {
     const root = pieces.runtime.getCellFromLink({
-      ...link,
+      ...cell.getAsNormalizedFullLink(),
       path: [],
       schema: undefined,
     });
     const { space, id, scope } = root.getAsNormalizedFullLink();
-    roots.set(JSON.stringify([space, id, scope]), root);
-  }
-  await Promise.all([...roots.values()].map(async (root) => {
-    // Naming the source root loads the document with its metadata; a value
-    // crossing loads only the selected value and does not establish that
-    // contract evidence. The owner result an argument or internal document
-    // names through its `result` backlink is a document of its own, named
-    // in turn: the contract reads its metadata, and the store delivers no
-    // link target with the document that carries the link.
-    await root.sync();
-    const link = root.getAsNormalizedFullLink();
-    let metaRoot = root;
-    if (
-      link.scope !== "space" && root.getMetaRaw("schema") === undefined &&
-      root.getMetaRaw("result") === undefined
-    ) {
-      // Scoped input redirects keep their producer metadata in base scope;
-      // scoped results instead own their metadata in the selected partition.
-      metaRoot = pieces.runtime.getCellFromLink({ ...link, scope: "space" });
-      await metaRoot.sync();
+    const key = JSON.stringify([space, id, scope]);
+    let pending = loads.get(key);
+    if (pending === undefined) {
+      pending = loadSourceRoot(root, pieces);
+      loads.set(key, pending);
     }
-    const ownerLink = getMetaLink(metaRoot, "result");
-    if (ownerLink !== undefined) {
-      await pieces.runtime.getCellFromLink({
-        ...ownerLink,
-        path: [],
+    return pending;
+  };
+  await Promise.all(
+    suppliedLinks(argumentCell.getRaw()).map(async (supplied) => {
+      let base = argumentCell;
+      for (const segment of supplied.path) {
+        base = base.key(segment as keyof unknown) as Cell<unknown>;
+      }
+      // The proof recovers a contract through rows, and a row's target is a
+      // document of its own that the store delivers with nothing else, so
+      // each is loaded before the next is looked for.
+      const visited = new Set<string>();
+      let source: Cell<unknown> | undefined = pieces.runtime.getCellFromLink({
+        ...parseLinkOrThrow(supplied.value, base),
         schema: undefined,
-      }).sync();
-    }
-  }));
+      });
+      for (
+        let hops = 0;
+        source !== undefined && hops <= MAX_ROW_HOPS;
+        hops++
+      ) {
+        await load(source);
+        if (durableSourceContract(source, pieces) !== undefined) break;
+        source = rowTarget(source, argumentCell, pieces, visited);
+      }
+    }),
+  );
+}
+
+/**
+ * Helper for {@link syncRetainedLinkMetadata}, which loads `root`, a linked
+ * document, and the documents its contract is recovered from.
+ */
+async function loadSourceRoot(
+  root: Cell<unknown>,
+  pieces: PiecesController,
+): Promise<void> {
+  // Naming the source root loads the document with its metadata; a value
+  // crossing loads only the selected value and does not establish that
+  // contract evidence. The owner result an argument or internal document
+  // names through its `result` backlink is a document of its own, named
+  // in turn: the contract reads its metadata, and the store delivers no
+  // link target with the document that carries the link.
+  await root.sync();
+  const link = root.getAsNormalizedFullLink();
+  let metaRoot = root;
+  if (
+    link.scope !== "space" && root.getMetaRaw("schema") === undefined &&
+    root.getMetaRaw("result") === undefined
+  ) {
+    // Scoped input redirects keep their producer metadata in base scope;
+    // scoped results instead own their metadata in the selected partition.
+    metaRoot = pieces.runtime.getCellFromLink({ ...link, scope: "space" });
+    await metaRoot.sync();
+  }
+  const ownerLink = getMetaLink(metaRoot, "result");
+  if (ownerLink !== undefined) {
+    await pieces.runtime.getCellFromLink({
+      ...ownerLink,
+      path: [],
+      schema: undefined,
+    }).sync();
+  }
 }
 
 function assertPieceSourceRetainedLinksCompatible(
@@ -5839,7 +5908,8 @@ function assertPieceSourceRetainedLinksCompatible(
   }
 }
 
-function pieceSourceArgumentEvidence(
+/** @internal Exported for focused confirmation-evidence tests. */
+export function pieceSourceArgumentEvidence(
   argumentCell: Cell<unknown>,
   pieces: PiecesController,
 ): string {
@@ -5856,7 +5926,16 @@ function pieceSourceArgumentEvidence(
         undefined,
         cellTx(linkBase),
       );
-      const contract = durableSourceContract(linkedCell, pieces);
+      // The contract reviewed is the one the retained-link proof used, which
+      // a row passes on from its target, and a row can be pointed at another
+      // target without the link to it changing. So the evidence names the
+      // document the contract came from as well as the one the link names.
+      const { durableSource: contract, source } = durableSourceThroughRows(
+        linkedCell,
+        argumentCell,
+        pieces,
+      );
+      const reviewed = source.getAsNormalizedFullLink();
       return {
         path: suppliedLink.path,
         target: {
@@ -5865,6 +5944,14 @@ function pieceSourceArgumentEvidence(
           scope: linkedCell.getAsNormalizedFullLink().scope,
           path: linkedCell.getAsNormalizedFullLink().path,
         },
+        ...(source === linkedCell ? {} : {
+          source: {
+            space: reviewed.space,
+            id: reviewed.id,
+            scope: reviewed.scope,
+            path: reviewed.path,
+          },
+        }),
         contract: contract?.schemas.map((schema) => ({
           root: schema.root,
           path: schema.path,

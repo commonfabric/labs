@@ -52,12 +52,19 @@ import {
   materializedValueAtPath,
   omitMissingProjectionAliases,
   PieceController,
+  pieceSourceArgumentEvidence,
   rawResolvedValueAtPath,
   resolveDeclaredStreamCapability,
   selectCurrentContainerSchema,
 } from "../src/ops/piece-controller.ts";
 import { readPieceSourceState } from "../src/ops/piece-origin.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  storedFields,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
@@ -1618,6 +1625,114 @@ describe("piece pull materialization", () => {
     expect(await updateOver(first, candidate)).toThrow(
       /topics\.0\.createdBy/,
     );
+
+    // A row is followed only for a link the piece already holds. A row can
+    // be pointed at another producer later, so a new binding through one
+    // takes the row's own contract, which it has none of, and the same link
+    // supplied where it is not committed is a new one.
+    await updateOver(await rowTo(onCandidate), candidate);
+    const held = (base.getRaw() as { topics: unknown[] }).topics[0];
+    expect(() =>
+      assertSuppliedLinkSchemasCompatible(
+        [{ path: ["topics", 0], value: held }],
+        candidate,
+        base,
+        pieces,
+      )
+    ).toThrow(/no durable schema contract/);
+    expect(() =>
+      assertSuppliedLinkSchemasCompatible(
+        [{ path: ["topics", 1], value: held }],
+        candidate,
+        base,
+        pieces,
+        { priorArgumentSchema: prior, linksPreservedVerbatim: true },
+      )
+    ).toThrow(/topics\.1\.createdBy/);
+
+    // A row that stores a confidentiality label is not read, so it is not
+    // followed.
+    const labeled = await rowTo(onCandidate);
+    const address = {
+      space: pieces.getSpace(),
+      scope: "space" as const,
+      id: labeled.getAsNormalizedFullLink().id,
+      path: [],
+    };
+    const seed = runtime.edit();
+    writeSeedEnvelopeDoc(seed, pieces.getSpace());
+    seedStoredEnvelope(seed, address, {
+      ...(storedFields(seed, address) as Record<string, never>),
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+                owner: pieces.getSpace(),
+              }],
+            },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+    expect(await updateOver(labeled, candidate)).toThrow(
+      /topics\.0\.createdBy/,
+    );
+  });
+
+  it("names the producer a row passes on to in the evidence a confirmation is held to", async () => {
+    // A confirmation of an update is good only while the input it reviewed
+    // stands. A row can be pointed at another piece without the link to the
+    // row changing, so the evidence names the document the contract came
+    // from and the contract itself.
+    const producerWith = (extra: Record<string, JSONSchema>) =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: { type: "object", properties: {} },
+          resultSchema: {
+            type: "object",
+            properties: { title: { type: "string" }, ...extra },
+            required: ["title"],
+          },
+          result: { title: "a" },
+          nodes: [],
+        }),
+        {},
+        undefined,
+        { start: true },
+      );
+    const first = await producerWith({});
+    const second = await producerWith({ note: { type: "string" } });
+    const row = runtime.getCell(
+      pieces.getSpace(),
+      "evidence-row-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      row.withTx(tx).set(first);
+    });
+    const base = runtime.getCell(
+      pieces.getSpace(),
+      "evidence-argument-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      base.withTx(tx).set({ items: [row] });
+    });
+    const held = base.getRaw();
+    const before = pieceSourceArgumentEvidence(base, pieces);
+    expect(pieceSourceArgumentEvidence(base, pieces)).toBe(before);
+
+    await runtime.editWithRetry((tx) => {
+      row.withTx(tx).set(second);
+    });
+    // Guard the premise: the input's own bytes did not change.
+    expect(base.getRaw()).toEqual(held);
+    expect(pieceSourceArgumentEvidence(base, pieces)).not.toBe(before);
   });
 
   it("fails closed for ambiguous producer and destination Cell contracts", async () => {
@@ -8006,6 +8121,95 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
     } finally {
       await readerRuntime.dispose();
       await readerStorage.close();
+    }
+  });
+
+  it("a fresh replica proves a retained row against the piece the row links to", async () => {
+    // The proof recovers a row's contract from the piece the row links to,
+    // or from that piece's result when the row links to its argument. A
+    // replica that has pulled none of those documents has to load each before
+    // the proof runs, or the verdict turns on what it happens to hold.
+    const itemSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        pictureBlob: { type: "number" },
+      },
+      required: ["title"],
+    };
+    const producer = await writerPieces.runPersistent(
+      trustPattern(writerRuntime, {
+        argumentSchema: itemSchema,
+        resultSchema: itemSchema,
+        result: { title: "a" },
+        nodes: [],
+      }),
+      { title: "a" },
+      undefined,
+      { start: true },
+    );
+    for (
+      const [shape, target] of [
+        ["its result", producer],
+        ["its argument", writerPieces.getArgument(producer)],
+      ] as const
+    ) {
+      const compiled = await writerRuntime.patternManager.compilePattern(
+        compiledRowHolderProgram("v1"),
+        { space: writerPieces.getSpace() },
+      );
+      const holder = await writerPieces.runPersistent(
+        compiled,
+        {},
+        "cold-row-holder-" + crypto.randomUUID(),
+        { start: true },
+      );
+      await writerRuntime.idle();
+      const row = writerRuntime.getCell(
+        writerPieces.getSpace(),
+        "cold-row-" + crypto.randomUUID(),
+      );
+      await writerRuntime.editWithRetry((tx) => {
+        row.withTx(tx).set(target);
+      });
+      await writerRuntime.editWithRetry((tx) => {
+        writerPieces.getArgument(holder).withTx(tx).asSchema(
+          undefined as never,
+        ).key("items" as never).set([row] as never);
+      });
+      await writerRuntime.idle();
+      await writerPieces.synced();
+      expect(isLink(row.getRaw()), shape).toBe(true);
+
+      const readerStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const readerRuntime = new Runtime({
+        apiUrl: new URL("http://localhost:9999"),
+        storageManager: readerStorage,
+      });
+      const readerPieces = new PiecesController(
+        createSession({
+          identity: signer,
+          spaceDid: writerPieces.getSpace(),
+        }),
+        readerRuntime,
+      );
+      try {
+        await readerPieces.synced();
+        const piece = await readerPieces.get(
+          entityRefToString(holder.entityId),
+          false,
+        );
+        const report = await piece.checkPattern(
+          compiledRowHolderProgram("v2", "pictureBlob?: number;"),
+        );
+        expect(report.issues.retainedLinks, shape).toBe(undefined);
+        expect(report.compatible, shape).toBe(true);
+      } finally {
+        await readerRuntime.dispose();
+        await readerStorage.close();
+      }
     }
   });
 

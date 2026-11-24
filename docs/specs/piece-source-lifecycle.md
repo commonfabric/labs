@@ -853,16 +853,28 @@ accesses, so its policy does not have to be repeated on the unchanged consumer
 contract. Capability-kind and scope checks still apply. Changed handle contracts
 require the full producer-contract proof.
 
-A link to a document that carries no contract of its own, and whose whole value
-is a link, stands for the link that document holds. Pushing a piece onto an
-input list stores such a row, linked from the list and linking to the piece, and
-the producer contract proved for the list's link is the piece's: the one found
-by following rows to the first document that carries a contract. A row is read
-only in the input document's own space and scope. Following ends without a
-contract at a row elsewhere, an absent one, a document that holds anything but a
-link, a document already visited, and after eight rows, and the link is then
-proved as a link to a document with no contract is. A producer reached through
-rows is held to the destination's scope cap as the first document is.
+A link the piece already holds, to a document that carries no contract of its
+own and whose whole value is a link, stands for the link that document holds.
+Pushing a piece onto an input list stores such a row, linked from the list and
+linking to the piece, and the producer contract proved for the list's link is
+the piece's: the one found by following rows to the first document that carries
+a contract. A row's value is read only where stored-argument validation would
+read it: in the input document's own space and scope, and storing no
+confidentiality label. Following ends without a contract at a row that is not
+such a document, an absent one, a document that holds anything but a link, a
+document already visited, and after eight rows, and the link is then proved as a
+link to a document with no contract is. A producer reached through rows is held
+to the destination's scope cap as the first document is.
+
+Rows are followed for a retained link and not for a new binding. A row can be
+pointed at another producer after the binding is made, so a contract recovered
+through it is not one the binding keeps, and a new binding takes the linked
+document's own contract or none. Before the proof, each row and the documents
+its producer's contract is recovered from are loaded, so a replica that has
+pulled none of them reaches the verdict one that holds them all does. The
+evidence a confirmation is held to names the document the contract came from
+and the contract, so pointing a row at another producer makes an earlier
+confirmation stale.
 
 Retaining a handle proves continuity of the consumer contract, not a historical
 producer-contract check: writes that bypass `PiecesController.link`, such as
