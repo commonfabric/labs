@@ -4142,7 +4142,8 @@ Delta 2026-11-01 — stage L (the lease in memory,
 - §2's run beacon: `executor/run-beacon.test.ts` (a beacon marked around a
   body, cleared after a throw, numbering an action once and a served handler's
   run for an event each time, marking the outermost of nested runs, counting
-  the reads the read sites record, and a runtime's scheduler marking a
+  the reads the read sites record, a reading discarded when its run ended and
+  another started while it read, and a runtime's scheduler marking a
   derivation's run and a handler's); `executor/serving-thread.test.ts` (the
   buffer shared with both kinds of thread, and the post a run makes taken
   while its body holds the thread); `executor/serving-worker-recovery.test.ts`
@@ -4152,7 +4153,11 @@ Delta 2026-11-01 — stage L (the lease in memory,
   next worker ahead of its other notices and to no later one, and no event
   failed for a derivation's run or no run; under "a worker whose heap reaches
   its limit", the event of the run a thread ran out of memory in failed, and
-  none for a heap a heartbeat reported). `serving-worker.test.ts` ("writes the
+  none for a heap a heartbeat reported).
+  `executor/space-server-event-drain-arms.test.ts` ("writes the error of an
+  event its pool failed only once every event that arrived before it has its
+  consequence") holds that error behind an earlier event whose served copy
+  deferred. `serving-worker.test.ts` ("writes the
   error as the consequence of the event whose handler ran past the watchdog
   …") runs a handler that never returns in a real worker: the sender's commit
   callback reads the error naming the watchdog, and no second worker is

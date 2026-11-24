@@ -115,6 +115,12 @@ export function newRunBeaconBuffer(): SharedArrayBuffer {
 /**
  * Returns what `buffer` shows of the run whose body holds the worker's thread,
  * or `undefined` while no run's body does.
+ *
+ * The worker's thread runs on while the slots are read, so the run whose epoch
+ * the reading took can end, and another start and write its number, before the
+ * reading takes the number. The epoch is read again after the other slots, and
+ * a reading whose epoch moved is discarded, as a reading of no run, rather
+ * than pairing one run's epoch with another's number.
  */
 export function readRunBeacon(
   buffer: SharedArrayBuffer,
@@ -122,11 +128,10 @@ export function readRunBeacon(
   const slots = new Int32Array(buffer);
   const epoch = Atomics.load(slots, EPOCH);
   if ((epoch & 1) === 0) return undefined;
-  return {
-    epoch,
-    run: Atomics.load(slots, RUN),
-    reads: Atomics.load(slots, READS),
-  };
+  const run = Atomics.load(slots, RUN);
+  const reads = Atomics.load(slots, READS);
+  if (Atomics.load(slots, EPOCH) !== epoch) return undefined;
+  return { epoch, run, reads };
 }
 
 /**

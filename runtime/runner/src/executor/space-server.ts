@@ -5299,11 +5299,16 @@ export class SpaceServer implements TransactionSealDestination {
         ) {
           // events.md §5: the handler's run held the thread of a worker the
           // pool ended, so the error is the event's consequence and the
-          // handler does not run for it again. As a terminal notice it holds
-          // the later arrivals until its wave commits, whose outcome removes
-          // it from `failedEvents` and re-arms the scan for them; a seal or a
-          // wave that fails releases the guard, and the next pass seals it
-          // again.
+          // handler does not run for it again. The error completes the event
+          // at its arrival position (§2), so while an entry this pass queued
+          // or found in flight ahead of it is still pending, it waits with
+          // the later arrivals for the pass that entry's committed
+          // consequence, or its deferral's rescan, starts. As a terminal
+          // notice it holds the later arrivals until its wave commits, whose
+          // outcome removes it from `failedEvents` and re-arms the scan for
+          // them; a seal or a wave that fails releases the guard, and the
+          // next pass seals it again.
+          if (this.#anyStreamEntryPending(ahead, ahead.length)) break;
           if (!this.#drainInFlight.has(entry.eventId)) {
             this.#drainInFlight.set(entry.eventId, {
               phase: "marked",

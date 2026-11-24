@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
@@ -42,6 +43,30 @@ describe("run-beacon", () => {
 
   describe("readRunBeacon()", () => {
     it("returns `undefined` for a beacon no run has marked", () => {
+      expect(readRunBeacon(buffer)).toBeUndefined();
+    });
+
+    it("returns `undefined` for a reading the end of its run, and the start of another, overtook", () => {
+      // The worker's thread runs on while the pool reads, so the run whose
+      // epoch a reading took can end, and another start, before the reading
+      // takes the run's number.
+
+      const { enter, leave } = beacon.accessForTestingOnly;
+      enter(space, namedAction("first"), "id-1");
+      const load = Atomics.load;
+      let loads = 0;
+      using _load = stub(
+        Atomics,
+        "load",
+        ((slots: Int32Array, index: number) => {
+          if (++loads === 2) {
+            leave();
+            enter(space, namedAction("second"), "id-2");
+          }
+          return load(slots, index);
+        }) as typeof Atomics.load,
+      );
+
       expect(readRunBeacon(buffer)).toBeUndefined();
     });
   });

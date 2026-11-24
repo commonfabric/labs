@@ -810,8 +810,11 @@ the lease:
   thread without the worker's thread yielding, so it arrives while the run
   holds the thread, and a post per run, which would make every run a message
   the watchdog counts, is not made. Each of the watchdog's checks reads the
-  beacon (`Atomics.load`) and counts the checks in a row that find the same
-  odd `epoch`; `workers.running` reports that, with the run's name, without
+  beacon (`Atomics.load`), reading `epoch` again after the run's number and
+  discarding a reading whose `epoch` moved, since the run may have ended and
+  another started while the slots were read. It counts the checks in a row
+  that find the same odd `epoch`; `workers.running` reports that, with the
+  run's name, without
   asking the worker (§7). Pattern code cannot reach the buffer:
   `SharedArrayBuffer` and `Atomics` are withheld from pattern compartments.
 - A kill names, in its log line, the run its worker's beacon showed. When
@@ -819,7 +822,10 @@ the lease:
   not run again: the pool hands it to the worker the space is placed on
   next, ahead of anything else it sends that worker for the space
   (`host.failEvent`), and that worker's drain writes the error as the event's
-  consequence in place of running the handler (events.md §5). The error says
+  consequence in place of running the handler (events.md §5), at the event's
+  arrival position: an earlier event that is still pending, including one the
+  same drain pass has just queued, holds it (events.md §2, "Terminal
+  positions"). The error says
   that the handler held its worker's thread until the watchdog ended the
   worker, and it is the outcome the event's sender reads. Like every terminal
   notice it holds the space's later arrivals until its wave commits. Every
