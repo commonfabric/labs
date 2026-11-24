@@ -25,7 +25,7 @@ import {
   showsAll,
   showsNone,
 } from "./classifier-test-fixture.ts";
-import SelfImprovingClassifier from "./self-improving-classifier.tsx";
+import SelfImprovingClassifier from "./main.tsx";
 
 /** The view's one Undo button, which only Invoice 100's row has left. */
 const undoButton = (root: unknown): unknown =>

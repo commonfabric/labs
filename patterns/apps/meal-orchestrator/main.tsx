@@ -40,7 +40,7 @@ import {
   type PreparedFoodForMeal,
   type RecipeForMeal,
 } from "../food-recipe/schemas.tsx";
-import FoodRecipe from "../food-recipe/food-recipe.tsx";
+import FoodRecipe from "../food-recipe/main.tsx";
 import PreparedFood from "../food-recipe/prepared-food.tsx";
 import {
   clampCategory,

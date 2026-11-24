@@ -830,7 +830,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The second pattern of the same ruling. Its baseline appears in no other
     // entry, so the pairs stay disjoint.
-    pattern: "apps/deep-research/deep-research.tsx",
+    pattern: "apps/deep-research/main.tsx",
     baselines: [
       "20260729T022742Z-6PInVAlNOHThJNGH",
     ],

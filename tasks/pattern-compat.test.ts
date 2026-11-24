@@ -74,7 +74,6 @@ describe("pattern-compat", () => {
       baselinesDir,
       acceptedBreaks: [],
       unevaluable: new Set(),
-      pendingStandaloneRenames: new Set(),
       evaluate: (file) => {
         const module = modules[file];
         return module instanceof Error
@@ -134,30 +133,6 @@ describe("pattern-compat", () => {
 
         expect({ code: shown.code, err: shown.err })
           .toEqual({ code: 0, err: undefined });
-      });
-
-      it("passes while its rename is pending, and fails once it runs alone", async () => {
-        await record("demo/main.tsx", NEEDS_IDS);
-        const pending = {
-          pendingStandaloneRenames: new Set(["demo/main.tsx"]),
-        };
-
-        const waiting = await judge(
-          { "patterns/demo/main.tsx": patternModule(NEEDS_IDS) },
-          pending,
-        );
-        await record("demo/main.tsx", WITH_TITLE);
-        const stale = await judge(
-          { "patterns/demo/main.tsx": patternModule(WITH_TITLE) },
-          pending,
-        );
-
-        expect(waiting.code).toBe(0);
-        expect(stale.code).toBe(1);
-        expect(stale.err).toContain(
-          "demo/main.tsx\n  runs alone now. Remove it from " +
-            "PENDING_STANDALONE_RENAMES",
-        );
       });
     });
 

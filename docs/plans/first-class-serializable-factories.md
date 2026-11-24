@@ -890,9 +890,9 @@ input contains only the caller-supplied fields and whose closure invokes the
 original pattern with `entries`.
 
 - [ ] Migrate `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`.
-- [ ] Migrate `patterns/apps/deep-research/deep-research.tsx`.
+- [ ] Migrate `patterns/apps/deep-research/main.tsx`.
 - [ ] Migrate `patterns/system/notes/note.tsx`.
-- [ ] Migrate `patterns/apps/shopping-list/shopping-list.tsx`.
+- [ ] Migrate `patterns/apps/shopping-list/main.tsx`.
 - [ ] Migrate the affected files under `patterns/system/`, including
   default app, knowledge graph, omnibox, quick capture, space overview,
   suggestion, suggestion history, and summary index.

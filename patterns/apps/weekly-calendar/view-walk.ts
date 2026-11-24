@@ -15,7 +15,7 @@ import {
   styleOf,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import { parseDate } from "./weekly-calendar.tsx";
+import { parseDate } from "./main.tsx";
 
 /** The rendered children of `node`, with the arrays a `.map()` renders
  * spread in place. */

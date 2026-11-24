@@ -70,8 +70,8 @@ async function timeCapabilityErrors(rel: string): Promise<string[]> {
 // would be vacuous (it also throws an unrelated TypeError when instantiated
 // standalone without seeded input).
 const MIGRATED_OFFLINE_PATTERNS = [
-  "apps/habit-tracker/habit-tracker.tsx",
-  "apps/calendar/calendar.tsx",
+  "apps/habit-tracker/main.tsx",
+  "apps/calendar/main.tsx",
   "dev/factory-outputs/parking-coordinator/main.tsx",
   // Games — not part of the #now migration, but they read entropy/clock only in
   // handlers (move/join/reset actions), so they must stay gate-clean. Pinned here
@@ -87,7 +87,7 @@ const MIGRATED_OFFLINE_PATTERNS = [
 //   reads entropy at pattern body and daily-journal is gate-clean; it is swept
 //   by time-capability-full.test.ts rather than pinned in this fast offline
 //   subset (Suggestion pulls in llmDialog/bash, out of this subset's scope).
-// - weekly-calendar/weekly-calendar.tsx fails offline instantiation with a
+// - weekly-calendar/main.tsx fails offline instantiation with a
 //   ModuleVerificationError (its event.tsx sub-module is not verifiable against
 //   the in-memory store), which is unrelated to the time gate. It needs a
 //   verified-module environment to behaviorally verify.

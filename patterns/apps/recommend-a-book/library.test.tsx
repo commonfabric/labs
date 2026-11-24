@@ -6,7 +6,7 @@ import {
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Library from "./library.tsx";
+import Library from "./library/main.tsx";
 
 export default pattern(() => {
   const library = Library({});

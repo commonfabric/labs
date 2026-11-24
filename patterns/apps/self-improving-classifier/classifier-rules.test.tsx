@@ -15,7 +15,7 @@ import {
   showsNone,
   statsText,
 } from "./classifier-test-fixture.ts";
-import SelfImprovingClassifier from "./self-improving-classifier.tsx";
+import SelfImprovingClassifier from "./main.tsx";
 
 export default pattern(() => {
   const subject = SelfImprovingClassifier({

@@ -48,7 +48,7 @@ import {
   type Detection,
   type Substitution,
 } from "./redaction.ts";
-import PIIVault, { type SecretEntry } from "./vault.tsx";
+import PIIVault, { type SecretEntry } from "./main.tsx";
 
 const SYSTEM_PROMPT =
   "You are a helpful assistant. Some names, emails, phone numbers and other " +
