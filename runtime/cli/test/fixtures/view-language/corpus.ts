@@ -971,6 +971,68 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "if", className: "callName" },
   },
   {
+    languageId: "dockerfile",
+    surveyRepository: "common-cluster",
+    surveyCommit: "5abd12028c06b63ff953fa09ed56918461ac209a",
+    surveyPath: "Dockerfile",
+    before: new URL("./dockerfile-common-cluster/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-common-cluster/after.dockerfile", import.meta.url),
+    incomplete: new URL(
+      "./dockerfile-common-cluster/incomplete.dockerfile",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "Dockerfile",
+        "Dockerfile.k8s-sandbox-service",
+        "memory-router/Dockerfile.build",
+        "images/arm-qemu/Dockerfile.x86_64",
+        "images/benchmarks/build-grpc/Dockerfile.aarch64",
+        "dockerfile",
+        "Containerfile",
+        "Containerfile.dev",
+        "images/build.dockerfile",
+        "images/build.Containerfile",
+      ],
+      aliases: ["dockerfile", "docker", "containerfile"],
+    },
+    beforeEvidence: { text: "builder", className: "functionName" },
+    afterEvidence: { text: "builder", className: "functionName" },
+    incompleteEvidence: { text: "--from", className: "parameter" },
+  },
+  {
+    languageId: "dockerfile",
+    // An instruction line is a directive statement, a word and its arguments,
+    // and the directive configuration language colors its first word as a
+    // keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive"],
+    surveyRepository: "infra",
+    surveyCommit: "5b65688a0431cda75329734aa7784ba6fb3f76bb",
+    surveyPath: "fly/pds/Dockerfile",
+    before: new URL("./dockerfile-infra/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-infra/after.dockerfile", import.meta.url),
+    incomplete: new URL("./dockerfile-infra/incomplete.dockerfile", import.meta.url),
+    beforeEvidence: { text: "build", className: "functionName" },
+    afterEvidence: { text: "build", className: "functionName" },
+    incompleteEvidence: { text: "EXPOSE", className: "keyword" },
+  },
+  {
+    languageId: "dockerfile",
+    // An instruction line is a directive statement, a word and its arguments,
+    // and the directive configuration language colors its first word as a
+    // keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive"],
+    surveyRepository: "gvisor",
+    surveyCommit: "90dc8548a354d618d05c968111931ba2c4764dd6",
+    surveyPath: "images/default/Dockerfile",
+    before: new URL("./dockerfile-gvisor/before.dockerfile", import.meta.url),
+    after: new URL("./dockerfile-gvisor/after.dockerfile", import.meta.url),
+    incomplete: new URL("./dockerfile-gvisor/incomplete.dockerfile", import.meta.url),
+    beforeEvidence: { text: "ENTRYPOINT", className: "keyword" },
+    afterEvidence: { text: "gcloud", className: "functionName" },
+    incompleteEvidence: { text: "WORKDIR", className: "keyword" },
+  },
+  {
     languageId: "properties",
     // A shell or make variable assignment, an HCL or DOT attribute, an INI
     // key, and a dotenv variable are each a `name=value` line, and shell,
@@ -1045,8 +1107,8 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "dotenv",
     // A dotenv line is a `name=value` line, and properties files, INI, shell,
-    // make, and HCL color the name as dotenv colors a variable's.
-    highlightingPeers: ["properties", "ini", "shell", "make", "hcl"],
+    // make, HCL, and DOT color the name as dotenv colors a variable's.
+    highlightingPeers: ["properties", "ini", "shell", "make", "hcl", "dot"],
     surveyRepository: "labs",
     surveyCommit: "60cd866374f5b59bdf16c8469ad3f71cd35ac040",
     surveyPath: "runtime/toolshed/.env.example",
@@ -1074,9 +1136,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "dotenv",
-    // Shell colors the operator of a `${NAME:-default}` expansion as dotenv
-    // does.
-    highlightingPeers: ["shell"],
+    // Shell, and a Dockerfile's shell commands, color the operator of a
+    // `${NAME:-default}` expansion as dotenv does.
+    highlightingPeers: ["shell", "dockerfile"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "c62f7166d063baab093da0874f745b490c02c643",
     surveyPath: "apple/scripts/asc-account.env",
@@ -1348,67 +1410,5 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
       text: "# THE SOFTWARE IS PROVIDED “AS IS",
       className: "plain",
     },
-  },
-  {
-    languageId: "dockerfile",
-    surveyRepository: "common-cluster",
-    surveyCommit: "5abd12028c06b63ff953fa09ed56918461ac209a",
-    surveyPath: "Dockerfile",
-    before: new URL("./dockerfile-common-cluster/before.dockerfile", import.meta.url),
-    after: new URL("./dockerfile-common-cluster/after.dockerfile", import.meta.url),
-    incomplete: new URL(
-      "./dockerfile-common-cluster/incomplete.dockerfile",
-      import.meta.url,
-    ),
-    selection: {
-      filenames: [
-        "Dockerfile",
-        "Dockerfile.k8s-sandbox-service",
-        "memory-router/Dockerfile.build",
-        "images/arm-qemu/Dockerfile.x86_64",
-        "images/benchmarks/build-grpc/Dockerfile.aarch64",
-        "dockerfile",
-        "Containerfile",
-        "Containerfile.dev",
-        "images/build.dockerfile",
-        "images/build.Containerfile",
-      ],
-      aliases: ["dockerfile", "docker", "containerfile"],
-    },
-    beforeEvidence: { text: "builder", className: "functionName" },
-    afterEvidence: { text: "builder", className: "functionName" },
-    incompleteEvidence: { text: "--from", className: "parameter" },
-  },
-  {
-    languageId: "dockerfile",
-    // An instruction line is a directive statement, a word and its arguments,
-    // and the directive configuration language colors its first word as a
-    // keyword, as this fixture's evidence is.
-    highlightingPeers: ["directive"],
-    surveyRepository: "infra",
-    surveyCommit: "5b65688a0431cda75329734aa7784ba6fb3f76bb",
-    surveyPath: "fly/pds/Dockerfile",
-    before: new URL("./dockerfile-infra/before.dockerfile", import.meta.url),
-    after: new URL("./dockerfile-infra/after.dockerfile", import.meta.url),
-    incomplete: new URL("./dockerfile-infra/incomplete.dockerfile", import.meta.url),
-    beforeEvidence: { text: "build", className: "functionName" },
-    afterEvidence: { text: "build", className: "functionName" },
-    incompleteEvidence: { text: "EXPOSE", className: "keyword" },
-  },
-  {
-    languageId: "dockerfile",
-    // An instruction line is a directive statement, a word and its arguments,
-    // and the directive configuration language colors its first word as a
-    // keyword, as this fixture's evidence is.
-    highlightingPeers: ["directive"],
-    surveyRepository: "gvisor",
-    surveyCommit: "90dc8548a354d618d05c968111931ba2c4764dd6",
-    surveyPath: "images/default/Dockerfile",
-    before: new URL("./dockerfile-gvisor/before.dockerfile", import.meta.url),
-    after: new URL("./dockerfile-gvisor/after.dockerfile", import.meta.url),
-    incomplete: new URL("./dockerfile-gvisor/incomplete.dockerfile", import.meta.url),
-    beforeEvidence: { text: "ENTRYPOINT", className: "keyword" },
-    afterEvidence: { text: "gcloud", className: "functionName" },
-    incompleteEvidence: { text: "WORKDIR", className: "keyword" },
   },
 ];
