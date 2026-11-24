@@ -12,12 +12,10 @@ import {
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { isCfcLabelReference } from "../src/cfc/label-documents.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
   type ImplementationIdentity,
   runtimeWritePolicyAuthorization,
-  type StoredCfcMetadata,
 } from "../src/cfc/types.ts";
 import { stampWaveRunContext, WaveAccumulator } from "../src/executor/wave.ts";
 import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
@@ -39,12 +37,20 @@ import {
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-processed-claim");
 const space = signer.did() as MemorySpace;
 const foreign = (await Identity.fromPassphrase(
   "runner-cfc-processed-claim-foreign",
 )).did() as MemorySpace;
+
+/** A staged label-map entry, as far as these tests read one. */
+type StagedEntry = {
+  path: string[];
+  origin?: string;
+  label: { confidentiality?: unknown[]; integrity?: unknown[] };
+};
 
 /** The label on the foreign document the handler reads. */
 const FOREIGN_ATOM = "https://commonfabric.org/cfc/atom/Public/foreign-secret";
@@ -90,19 +96,26 @@ describe("cfc-processed-claim", () => {
     return tx;
   };
 
+  /**
+   * The label entries `tx` stages on the document `id` names, each label read
+   * out of its label document where the envelope holds it by reference.
+   */
+  const stagedEntries = (tx: ReturnType<Runtime["edit"]>, id: string) => {
+    const read = (docId: string) =>
+      tx.readOrThrow({ space, scope: "space", id: docId as URI, path: [] });
+    return storedLabelEntries<StagedEntry>(
+      (read(id) as { cfc?: unknown } | undefined)?.cfc,
+      read,
+    );
+  };
+
   /** The `derived` confidentiality `tx` stages on the entries document. */
   const stagedDerivedConfidentiality = (
     tx: ReturnType<Runtime["edit"]>,
   ): unknown[] =>
-    ((tx.readOrThrow({ space, scope: "space", id: entriesId, path: [] }) as
-      | { cfc?: StoredCfcMetadata }
-      | undefined)?.cfc?.labelMap.entries ?? [])
+    stagedEntries(tx, entriesId)
       .filter((entry) => entry.origin === "derived")
-      .flatMap((entry) =>
-        isCfcLabelReference(entry.label)
-          ? []
-          : entry.label.confidentiality ?? []
-      );
+      .flatMap((entry) => entry.label.confidentiality ?? []);
 
   beforeEach(async () => {
     server = newSharedServer();
@@ -600,13 +613,9 @@ describe("cfc-processed-claim", () => {
       id: URI,
       path: readonly string[],
     ): string[] =>
-      ((tx.readOrThrow({ space, scope: "space", id, path: [] }) as
-        | { cfc?: StoredCfcMetadata }
-        | undefined)?.cfc?.labelMap.entries ?? [])
+      stagedEntries(tx, id)
         .filter((entry) => path.every((key, i) => entry.path[i] === key))
-        .flatMap((entry) =>
-          isCfcLabelReference(entry.label) ? [] : entry.label.integrity ?? []
-        )
+        .flatMap((entry) => entry.label.integrity ?? [])
         .flatMap((atom) =>
           typeof atom === "object" && atom !== null &&
             "type" in atom && atom.type === CFC_ATOM_TYPE.TransformedBy &&

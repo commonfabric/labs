@@ -21,6 +21,7 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import { readProjected } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase(
   "runner-cfc-result-policy-binding",
@@ -108,11 +109,12 @@ describe("cfc-result-policy-binding", () => {
     const id = outCell.getAsNormalizedFullLink().id;
     expect(outCell.get()).toEqual({ whole: ["x", "y"], length: 2 });
     const replica = storageManager.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { cfc?: unknown } | undefined;
     };
-    const whole = (replica.getDocument(id)?.cfc?.labelMap?.entries ?? [])
+    const whole = storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    )
       .filter((entry) => entry.path[0] === "whole");
     const evaluated = evaluateExchangeRules(
       {

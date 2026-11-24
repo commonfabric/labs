@@ -16,6 +16,7 @@ import {
   LoopbackSessionFactory,
   TestStorageManager,
 } from "@/test/support/memory-acl.ts";
+import { storedLabelEntries } from "../../runner/test/cfc-stored-labels.ts";
 
 const channel: VouchedChannel = {
   channel: "did:key:test-channel",
@@ -56,11 +57,12 @@ describe("custodyIngest", () => {
 
   const ingestMarks = (id: string): unknown[] => {
     const replica = storageManager.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { value?: unknown; cfc?: unknown } | undefined;
     };
-    return (replica.getDocument(id)?.cfc?.labelMap?.entries ?? [])
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    )
       .filter((e) => e.origin === "external-ingest")
       .flatMap((e) => e.label.integrity ?? []);
   };
