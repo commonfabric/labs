@@ -157,6 +157,7 @@ export class InputsTable {
   readonly bindings: SlotBinding[] = [];
   readonly #inputIndex = new Map<string, number>();
   readonly #bindingIndex = new Map<string, number>();
+  readonly #bindingTexts: string[] = [];
 
   /** The index of a slot binding. */
   binding(binding: SlotBinding): number {
@@ -165,9 +166,19 @@ export class InputsTable {
     if (index === undefined) {
       index = this.bindings.length;
       this.bindings.push(binding);
+      this.#bindingTexts.push(text);
       this.#bindingIndex.set(text, index);
     }
     return index;
+  }
+
+  /**
+   * The text the binding at `index` was told from every other binding of
+   * the table by: two bindings of two tables hold the same content exactly
+   * where their texts are equal.
+   */
+  bindingText(index: number): string {
+    return this.#bindingTexts[index];
   }
 
   /** The index of a set of inputs. */

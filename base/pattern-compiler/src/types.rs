@@ -1334,18 +1334,20 @@ impl<'a> Resolver<'_, 'a> {
                             .and_then(|term| self.label_value(module, term, &[], 0))
                             .filter(serde_json::Value::is_string)
                     };
+                    // Where the alias names no integrity of the event, the
+                    // contract requires that of the pattern it names, as a
+                    // `TrustedActionWrite` of the same action does: the two
+                    // then declare one contract for one position.
                     let contract = text(1).zip(text(2)).map(|(action, pattern)| {
-                        let mut contract = serde_json::json!({
+                        let integrity = written(3)
+                            .and_then(|list| self.label_value(module, list, &[], 0))
+                            .unwrap_or_else(|| serde_json::json!([pattern]));
+                        serde_json::json!({
                             "helper": "UiAction",
                             "action": action,
                             "trustedPattern": pattern,
-                        });
-                        if let Some(integrity) =
-                            written(3).and_then(|list| self.label_value(module, list, &[], 0))
-                        {
-                            contract["requiredEventIntegrity"] = integrity;
-                        }
-                        contract
+                            "requiredEventIntegrity": integrity,
+                        })
                     });
                     let annotated = self.annotate(first(), "uiContract", name.to_string());
                     return self.valued(annotated, contract);
@@ -1827,7 +1829,12 @@ impl<'a> Resolver<'_, 'a> {
                         else {
                             return None;
                         };
-                        return self.binding_value(home, name);
+                        // The identity of the declaring module beside the
+                        // record: the pair `Body.code` of the handler holds.
+                        let mut body = self.binding_value(home, name)?;
+                        let declaring = self.module_at(body["module"].as_str()?)?;
+                        body["identity"] = json!(self.module_identity(declaring));
+                        return Some(body);
                     }
                     TSType::TSTypeReference(alias) => match self.label_term(home, alias) {
                         LabelTerm::Body(next, body, _) => {
@@ -2509,6 +2516,7 @@ impl<'a> Resolver<'_, 'a> {
             TSType::TSTypeReference(_) => true,
             _ => false,
         };
+        self.note_writer(module, binding);
         if !supported {
             self.report(
                 module,
@@ -2516,6 +2524,42 @@ impl<'a> Resolver<'_, 'a> {
                 alias,
                 "A writer binding that is not `typeof` of a handler definition or a function declaration",
             );
+        }
+    }
+
+    /// Notes the declaration that the binding of a writer policy denotes,
+    /// written as `typeof` of it or through aliases, as one a policy names
+    /// (`Resolver::note_named_writer`).
+    fn note_writer(&self, module: usize, binding: &TSType<'a>) {
+        let mut binding = binding;
+        let mut home = module;
+        for _ in 0..8 {
+            match binding {
+                TSType::TSTypeQuery(query) => {
+                    let TSTypeQueryExprName::IdentifierReference(name) = &query.expr_name else {
+                        return;
+                    };
+                    let Some(body) = self.binding_value(home, name) else {
+                        return;
+                    };
+                    let declaring = body["module"]
+                        .as_str()
+                        .and_then(|path| self.module_at(path));
+                    if let (Some(declaring), Some(declared)) = (declaring, body["binding"].as_str())
+                    {
+                        self.note_named_writer(declaring, declared);
+                    }
+                    return;
+                }
+                TSType::TSTypeReference(alias) => match self.label_term(home, alias) {
+                    LabelTerm::Body(next, body, _) => {
+                        home = next;
+                        binding = body;
+                    }
+                    _ => return,
+                },
+                _ => return,
+            }
         }
     }
 

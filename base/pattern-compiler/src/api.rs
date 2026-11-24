@@ -254,10 +254,21 @@ pub fn is_selector_method(name: &str) -> bool {
     )
 }
 
+/// The windows of a collection, which take a count and no callback:
+/// `xs.last(n)` holds the last `n` elements of `xs` and `xs.first(n)` the
+/// first `n`, each with the key it has in `xs` (note 921 of
+/// `SPEC-NOTES.md`).
+pub fn is_window_method(name: &str) -> bool {
+    matches!(name, "last" | "first")
+}
+
 /// The collection methods of a cell handle (§4.7), which are legal on a
 /// handle in the reactive tier only.
 pub fn is_handle_collection_method(name: &str) -> bool {
-    is_element_method(name) || is_selector_method(name) || name == "reduce"
+    is_element_method(name)
+        || is_selector_method(name)
+        || is_window_method(name)
+        || name == "reduce"
 }
 
 /// The methods of the runtime's cell object that the API does not declare

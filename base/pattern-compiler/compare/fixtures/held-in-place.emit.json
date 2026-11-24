@@ -23,7 +23,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/held-in-place.tsx",
-              "source": "const { \"Cell\": Cell, \"computed\": computed, \"handler\": handler, \"ifElse\": ifElse, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\n\nconst copyOf = $rt.fn(({ lat, lng }) => ({ lat, lng }));\nconst format = $rt.fn((value) =>\n  value != null ? value.toFixed(1) : \"none\");\nconst goTo = $rt.data(handler((event, { stops, center }) => {\n  center.set(copyOf(stops[event.index].position));\n}));\nconst goToArea = $rt.data(handler((_, { area, center }) => {\n  center.set(copyOf(area));\n}));\nconst $default = $rt.data((pattern(\"sha256:0e31c00acced26c9b77b1a8614f4d9e4e4bcf655afa8727b20751df34667a77e\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((value) =>\n  value != null ? value.toFixed(1) : \"none\")($a[\"value\"]));\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"span\", { \"style\": ({ color: (($h.v($h.slot(4)) === $h.slot(5)) ? (\"blue\") : (\"gray\")) }) }, [$h.slot(6)])));\n}\n$rt.value(8, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"span\", {  }, [$h.invoke(0, { \"value\": $h.at(($h.select(0, $h.v($h.slot(2)), true) ?? ({ lat: (1), lng: (2) })), [\"lat\"]) })]), $h.output(0)])));\n$rt.value(10, ($h) => (($h.select(2, $h.v($h.slot(1)), true) ?? ({ lat: (1), lng: (2) }))));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(4), center: $h.output(7), goTo: $h.stream(0), goToArea: $h.stream(1) })));\n});\n$rt.body(1, ($e, $s) => ((event, { stops, center }) => {\n  center.set(copyOf(stops[event.index].position));\n})($e, $s));\n$rt.body(2, ($e, $s) => ((_, { area, center }) => {\n  center.set(copyOf(area));\n})($e, $s));"
+              "source": "const { \"Cell\": Cell, \"computed\": computed, \"handler\": handler, \"ifElse\": ifElse, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\n\nconst copyOf = $rt.fn(({ lat, lng }) => ({ lat, lng }));\nconst format = $rt.fn((value) =>\n  value != null ? value.toFixed(1) : \"none\");\nconst goTo = $rt.data(handler((event, { stops, center }) => {\n  center.set(copyOf(stops[event.index].position));\n}));\nconst goToArea = $rt.data(handler((_, { area, center }) => {\n  center.set(copyOf(area));\n}));\nconst $default = $rt.data((pattern(\"sha256:0e31c00acced26c9b77b1a8614f4d9e4e4bcf655afa8727b20751df34667a77e\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((value) =>\n  value != null ? value.toFixed(1) : \"none\")($a[\"value\"]));\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"span\", { \"style\": ({ color: (($h.v($h.slot(4)) === $h.slot(5)) ? (\"blue\") : (\"gray\")) }) }, [$h.slot(6)])));\n}\n$rt.value(8, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"span\", {  }, [$h.invoke(0, { \"value\": $h.at($h.operand(\"??\", $h.select(0, $h.v($h.slot(2)), true), () => $h.slot(1), () => ({ lat: (1), lng: (2) })), [\"lat\"]) })]), $h.output(0)])));\n$rt.value(10, ($h) => ($h.operand(\"??\", $h.select(2, $h.v($h.slot(1)), true), () => $h.slot(1), () => ({ lat: (1), lng: (2) }))));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(4), center: $h.output(7), goTo: $h.stream(0), goToArea: $h.stream(1) })));\n});\n$rt.body(1, ($e, $s) => ((event, { stops, center }) => {\n  center.set(copyOf(stops[event.index].position));\n})($e, $s));\n$rt.body(2, ($e, $s) => ((_, { area, center }) => {\n  center.set(copyOf(area));\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -72,7 +72,9 @@
               "output": 7
             }
           ],
-          "valuesWithoutOutput": []
+          "valuesWithoutOutput": [
+            0
+          ]
         },
         "line": 40,
         "name": "default",

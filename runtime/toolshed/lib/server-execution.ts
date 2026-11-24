@@ -15,6 +15,7 @@ import {
   type RuntimeFetch,
 } from "@commonfabric/runner";
 import { buildInfo, toolshedClientBuild } from "./build-info.ts";
+import { compiledPatternsForServing } from "./compiled-patterns.ts";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
@@ -622,6 +623,10 @@ export function startServerExecutionHost(options: {
   // The other experimental flags reach the serving runtimes from env, over
   // the followed deployment's posture, as the toolshed's own runtime's do.
   const experimental = experimentalOptionsWithFollowedPosture(envGet);
+  // With the experimental option `compiledPatterns` on: what gives each
+  // serving runtime the loader of compiled pieces, or a refusal to start
+  // where no binary of the compiler is configured. Nothing with it off.
+  const serveCompiled = compiledPatternsForServing(experimental, envGet);
   console.log(
     `Server-execution v2: serving loop ON (service ${options.identity.did()})`,
   );
@@ -741,6 +746,14 @@ export function startServerExecutionHost(options: {
             pool.watchdogLimitMs / 1000
           } s without a message by SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`),
     );
+    if (serveCompiled !== undefined) {
+      console.log(
+        "Server-execution v2: EXPERIMENTAL_COMPILED_PATTERNS is on, and the " +
+          "serving loop runs in Workers, whose runtimes are given no pattern " +
+          "compiler yet: no compiled piece is served. " +
+          "SERVER_EXECUTION_WORKER=false serves them on the main thread.",
+      );
+    }
     // The workers' entry adds the lifecycle verbs and the self-directed fetch
     // (lib/serving-worker.ts); they compile in this process's compile workers
     // and share the host's cache.
@@ -785,6 +798,25 @@ export function startServerExecutionHost(options: {
     const shared = compile.compileCacheDir === undefined
       ? undefined
       : openSharedCompileCache(compile.compileCacheDir);
+    const createServingRuntime = servingRuntimeFactory({
+      clientBuild: toolshedClientBuild(),
+      server: options.server,
+      identity: options.identity,
+      apiUrl: options.apiUrl,
+      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+      experimental,
+      // One cache for every process on the host. A space's root pattern
+      // compiles into that space's own storage closure, which a fresh space
+      // never holds; the shared cache is what lets a later space's
+      // activation, here or in another process, skip the transform-and-emit
+      // step for modules already compiled.
+      moduleByteCache: shared?.moduleByteCache ??
+        new ProcessModuleByteCache(),
+      ...(shared === undefined ? {} : { compileClaims: shared.compileClaims }),
+      // Keeps the type-check, transform and emit step of every compile off
+      // the thread that answers requests.
+      moduleCompiler,
+    });
     const host = new ExecutorHost({
       policy,
       ensureSpaceRoots,
@@ -800,27 +832,13 @@ export function startServerExecutionHost(options: {
       // The serving runtimes' own flags: the environment's, with the ones
       // every serving runtime forces on top. `/api/meta` publishes those same
       // forced flags below.
-      createRuntime: servingRuntimeFactory({
-        clientBuild: toolshedClientBuild(),
-        server: options.server,
-        identity: options.identity,
-        apiUrl: options.apiUrl,
-        ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
-        experimental,
-        // One cache for every process on the host. A space's root pattern
-        // compiles into that space's own storage closure, which a fresh space
-        // never holds; the shared cache is what lets a later space's
-        // activation, here or in another process, skip the transform-and-emit
-        // step for modules already compiled.
-        moduleByteCache: shared?.moduleByteCache ??
-          new ProcessModuleByteCache(),
-        ...(shared === undefined
-          ? {}
-          : { compileClaims: shared.compileClaims }),
-        // Keeps the type-check, transform and emit step of every compile off
-        // the thread that answers requests.
-        moduleCompiler,
-      }),
+      createRuntime: serveCompiled === undefined
+        ? createServingRuntime
+        : async (space, context) => {
+          const made = await createServingRuntime(space, context);
+          await serveCompiled(made.runtime);
+          return made;
+        },
     });
     loop = {
       ...servedLifecycleRunner(host, options.identity),

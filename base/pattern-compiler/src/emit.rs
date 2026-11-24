@@ -27,6 +27,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
 use serde_json::{json, Value};
 
+use crate::api;
 use crate::plan::{Place, Root, SlotKey};
 use crate::program::Resolver;
 use crate::syntax::{offsets, static_key_name, unwrap, FunctionLike};
@@ -660,14 +661,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         // The container of a `pick`: the cone lists the slot of the
         // chosen child, at `*`, and "`host.slot` of such a slot returns
         // every child of the container" (ES §2.2).
-        let children = listed.iter().find(|slot| {
-            let (other, at, ..) = &slots[**slot];
-            other == root
-                && at.len() == path.len() + 1
-                && at.starts_with(path)
-                && at.last().is_some_and(|last| last == "*")
-        });
-        if let Some(slot) = children {
+        if let Some(slot) = self.children_slot(root, path) {
             return format!("$h.slot({slot})");
         }
         let cone = self.cone.map(|cone| self.generator.finished.position[cone]);
@@ -678,20 +672,75 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         format!("$h.read({}, {})", root_json(root), path_json(path))
     }
 
+    /// The slot of the chosen child of a `pick` whose container is the
+    /// path `path` of `root`: the slot the cone lists at `*` below it.
+    fn children_slot(&self, root: &Root, path: &[String]) -> Option<usize> {
+        let slots = &self.generator.finished.slots;
+        self.generator
+            .listed(self.cone)
+            .iter()
+            .find(|slot| {
+                let (other, at, ..) = &slots[**slot];
+                other == root
+                    && at.len() == path.len() + 1
+                    && at.starts_with(path)
+                    && at.last().is_some_and(|last| last == "*")
+            })
+            .copied()
+    }
+
     fn output_code(&mut self, value: usize, path: &[String]) -> String {
-        let base = match self.generator.finished.output_of.get(&(value, Vec::new())) {
-            Some(output) => format!("$h.output({output})"),
+        let path = path
+            .iter()
+            .map(|segment| json!(segment).to_string())
+            .collect();
+        self.output_code_at(value, path)
+    }
+
+    /// The code that reads a path of a value the instance computed, each
+    /// segment of the path as code: `$h.output` or `$h.value` given the
+    /// path, so that the reader depends on what the value holds there and
+    /// on nothing else of it.
+    fn output_code_at(&mut self, value: usize, path: Vec<String>) -> String {
+        let (call, index) = match self.generator.finished.output_of.get(&(value, Vec::new())) {
+            Some(output) => ("output", *output),
             None => {
                 if !self.generator.interim.contains(&value) {
                     self.generator.interim.push(value);
                 }
-                format!("$h.value({value})")
+                ("value", value)
             }
         };
         if path.is_empty() {
-            base
+            format!("$h.{call}({index})")
         } else {
-            format!("$h.at({base}, {})", path_json(path))
+            format!("$h.{call}({index}, [{}])", path.join(", "))
+        }
+    }
+
+    /// A member read below `place`, whose object reads as `code`, as one
+    /// read of the path with `key` after it, where `code` is the read of a
+    /// path of a value the instance computed or of the children of a
+    /// container: the reader then depends on that member alone, and not
+    /// on every member of the value or of the container.
+    fn keyed_read(&mut self, place: &Place, code: &str, key: &str) -> Option<String> {
+        match place {
+            Place::Value(value, path) => {
+                let mut path: Vec<String> = path
+                    .iter()
+                    .map(|segment| json!(segment).to_string())
+                    .collect();
+                if self.output_code_at(*value, path.clone()) != code {
+                    return None;
+                }
+                path.push(key.to_string());
+                Some(self.output_code_at(*value, path))
+            }
+            Place::Slot(root, path) => {
+                let slot = self.children_slot(root, path)?;
+                (code == format!("$h.slot({slot})")).then(|| format!("$h.slot({slot}, [{key}])"))
+            }
+            _ => None,
         }
     }
 
@@ -1374,6 +1423,28 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
             return;
         };
+        // The function of a window is its count, which no element decides.
+        if api::is_window_method(member.property.name.as_str()) {
+            let Some(count) = call.arguments.first().and_then(Argument::as_expression) else {
+                return;
+            };
+            if self.generator.registered_elements.contains(&collection) {
+                return;
+            }
+            self.source_of_construct(&member.object, collection);
+            let cone = self
+                .generator
+                .finished
+                .values
+                .iter()
+                .find(|(_, of, _)| *of == Some(collection))
+                .map(|(cone, ..)| *cone);
+            let returned = self.in_cone(cone, |rewriter| rewriter.render(count, Want::Pass));
+            self.generator
+                .hoist(format!("$rt.element({collection}, ($h) => ({returned}));"));
+            self.generator.registered_elements.push(collection);
+            return;
+        }
         let Some(function) = call.arguments.first().and_then(FunctionLike::of_argument) else {
             return;
         };
@@ -1487,16 +1558,25 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     format!("({test} ? {consequent} : {alternate})"),
                 ))
             }
+            // The left operand is rendered twice: for use, which is the
+            // test whose selection is reported, and to pass on, in a
+            // function `$h.operand` calls where the operator selects the
+            // left operand and it holds a record or an array, so the
+            // result is then the reference the operand is (PL §3.5).
             Expression::LogicalExpression(logical) => {
-                let left = self.render(&logical.left, Want::Use);
-                let left = self.selected(logical.span, left);
+                let test = self.render(&logical.left, Want::Use);
+                let test = self.selected(logical.span, test);
+                let left = self.render(&logical.left, Want::Pass);
                 let right = self.render(&logical.right, Want::Pass);
                 let operator = match logical.operator {
                     LogicalOperator::And => "&&",
                     LogicalOperator::Or => "||",
                     LogicalOperator::Coalesce => "??",
                 };
-                Some(Self::wanted(want, format!("({left} {operator} {right})")))
+                Some(Self::wanted(
+                    want,
+                    format!("$h.operand(\"{operator}\", {test}, () => {left}, () => {right})"),
+                ))
             }
             Expression::StaticMemberExpression(member) => self.member(
                 &member.object,
@@ -1536,9 +1616,12 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     fn member(&mut self, object: &Expression<'a>, key: String, want: Want) -> Option<String> {
         match self.place_of(object) {
             None | Some(Place::Const) => None,
-            Some(_) => {
+            Some(place) => {
                 let object = self.render(object, Want::Pass);
-                Some(Self::wanted(want, format!("$h.at({object}, [{key}])")))
+                let read = self
+                    .keyed_read(&place, &object, &key)
+                    .unwrap_or_else(|| format!("$h.at({object}, [{key}])"));
+                Some(Self::wanted(want, read))
             }
         }
     }
@@ -1550,8 +1633,13 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             .iter()
             .filter_map(Argument::as_expression)
             .collect();
-        // A pattern compiled in at a call.
-        if matches!(unwrap(&call.callee), Expression::Identifier(_)) {
+        // A pattern compiled in at a call: the callee is its name, or its
+        // name under the modifier `asScope(scope)`, which is itself a call
+        // and begins where this one begins.
+        if matches!(
+            unwrap(&call.callee),
+            Expression::Identifier(_) | Expression::CallExpression(_)
+        ) {
             let inline = self
                 .generator
                 .finished
@@ -1673,6 +1761,25 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 let left = self.render(arguments[0], Want::Pass);
                 let right = self.render(arguments[1], Want::Pass);
                 Some(format!("$h.equals({left}, {right})"))
+            }
+            // A built-in that reads what its first operand names, its
+            // label or the access list of its space (PL §3.16): the
+            // operand is passed as the reference it is, since the
+            // runtime's function takes a cell, and the operands behind it
+            // are values.
+            Some(
+                name @ ("principalOf" | "principalsOf" | "writtenPrincipalOf" | "profileOwnerOf"
+                | "resultOwnerOf" | "linksOf" | "spaceAccess" | "spaceAccessOf"
+                | "spaceMembers" | "spaceDeleted" | "spaceOfLink"),
+            ) if !arguments.is_empty() => {
+                let mut operands = vec![self.render(arguments[0], Want::Pass)];
+                for argument in &arguments[1..] {
+                    operands.push(self.render(argument, Want::Use));
+                }
+                Some(Self::wanted(
+                    want,
+                    format!("{name}({})", operands.join(", ")),
+                ))
             }
             Some("unless") if arguments.len() == 2 => {
                 let test = self.render(arguments[0], Want::Use);

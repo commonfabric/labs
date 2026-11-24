@@ -69,6 +69,7 @@ import {
   withDefaults,
 } from "./store.ts";
 import type { PartsOptions, Sealed } from "./parts.ts";
+import { InputsDigests } from "./inputs-digest.ts";
 import {
   type Address,
   type FoldElements,
@@ -86,6 +87,13 @@ import {
   type Template,
 } from "./plan-write.ts";
 import { freezeModuleData, hardenFunction } from "./frozen.ts";
+import {
+  type Scope,
+  scopedDocument,
+  type ScopeInstancesOptions,
+  scopeOfDocument,
+  scopeOfKey,
+} from "./scope-instances.ts";
 import {
   boundInElement,
   type ElementReads,
@@ -282,6 +290,11 @@ export type Plan = {
     implementation?: { cone?: number; builtin?: string };
     /** The template of the operands. */
     input?: Template;
+    /**
+     * The scope of the state of the operation: `user` for a `wish` whose
+     * target resolves through the home of the acting principal.
+     */
+    scope?: string;
   }[];
   bindings: {
     name?: Name;
@@ -566,7 +579,27 @@ const encodeIndexKey = (
 /** Whether a construct assembles an array of rows. */
 const assemblesRows = (construct: string): boolean =>
   construct === "map" || construct === "filter" || construct === "flatMap" ||
-  construct === "sortBy";
+  construct === "sortBy" || construct === "last" || construct === "first";
+
+/**
+ * How many elements a window holds, from what the function of its count
+ * returned: a whole number that is not negative, and otherwise none.
+ */
+const windowCount = (count: unknown): number =>
+  typeof count === "number" && count > 0 ? Math.floor(count) : 0;
+
+/**
+ * The positions `[start, end)` of the `length` elements of its source that
+ * a window of `count` elements holds.
+ */
+const windowOf = (
+  construct: "last" | "first",
+  length: number,
+  count: number,
+): [number, number] =>
+  construct === "last"
+    ? [Math.max(0, length - count), length]
+    : [0, Math.min(count, length)];
 
 /**
  * The order of two keys of a sort (note 614 of `SPEC-NOTES.md`): numbers
@@ -776,7 +809,7 @@ const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
  * formed again (`#reassemble`).
  */
 type Rows = {
-  construct: "map" | "filter" | "flatMap" | "sortBy";
+  construct: "map" | "filter" | "flatMap" | "sortBy" | "last" | "first";
   /**
    * For a collection over a stored array: the reference that the array
    * was found through, its name, and of the keys of the array the
@@ -825,6 +858,11 @@ type Rows = {
    * the element. `members` holds the elements in the sorted order.
    */
   sortKeys?: Map<string, unknown>;
+  /**
+   * For a window (`last`, `first`): the count its elements were taken by.
+   * `members` holds the elements of the window.
+   */
+  window?: number;
 };
 
 /**
@@ -918,6 +956,18 @@ type Entry = {
   writers: Writer[];
   /** The value of a materializer that has not been evaluated yet. */
   pending?: boolean;
+  /**
+   * Something the evaluation used that the store does not hold is now
+   * another (`Instance.markStale`): the entry is not current, whatever its
+   * reads and its dependencies compare to.
+   */
+  stale?: boolean;
+  /**
+   * The scope key the entry was evaluated for, where the evaluation
+   * touched a scope instance or used an entry of one
+   * (`scope-instances.ts`). An entry with none is one for every key.
+   */
+  scoped?: string;
   /**
    * Where the cone instance failed: `value` is then the error state
    * (PL §5.2).
@@ -1185,6 +1235,23 @@ type Writing = {
     /** The first position a splice of these writes started at. */
     start?: number;
   };
+  /** See `DeclaredWrite`. */
+  declared?: DeclaredWrite;
+  /** The writes are those of a handler, and not of the body of a cone. */
+  handler?: true;
+};
+
+/**
+ * What a handler declares for a write it makes through a handle: the
+ * stored position the handle names, with every link on the way to it
+ * resolved, and the schema of the handle's declared type. A write policy
+ * the handler's own state type declares is in that schema and in no other
+ * the write is made under.
+ */
+export type DeclaredWrite = {
+  doc: string;
+  path: readonly string[];
+  schema: Schema;
 };
 
 /** A position of a document, as text. */
@@ -1241,6 +1308,11 @@ export type Counts = {
   rowsLeftStored: number;
   /** Of those, the assemblies of a collection, which no cone computes. */
   assemblies: number;
+  /**
+   * Of the assemblies, those formed whole, from every element of the
+   * source, and not brought up to date from the changes of the source.
+   */
+  assembliesFormed: number;
   /**
    * Segments of a `flatMap` formed: one for each element of the source
    * where the assembly is formed whole, and one for each element whose
@@ -1495,12 +1567,17 @@ export class Handle {
 
   key(segment: string | number): Handle {
     if (this.#target instanceof StreamRef) return this;
+    const target = this.#target.key(`${segment}`);
+    const below = [...this.#below, `${segment}`];
+    if (this.#host !== undefined && this.#slot !== undefined) {
+      this.#instance.noteNamed(this.#host, this.#slot, below, target);
+    }
     return new Handle(
       this.#instance,
-      this.#target.key(`${segment}`),
+      target,
       this.#host,
       this.#slot,
-      [...this.#below, `${segment}`],
+      below,
       schemaBelow(this.#declared, `${segment}`),
       this.#fixed,
     );
@@ -1592,7 +1669,12 @@ export class Handle {
       : Array.isArray(declared)
       ? copyOfData(declared)
       : [];
-    const recorded = this.#instance.written(this.key("*"), decided);
+    const recorded = this.#instance.written(
+      this.key("*"),
+      decided,
+      true,
+      this,
+    );
     try {
       // A record that is pushed gets a document of its own, as a record
       // in a list that is set does (`Instance.anchored`).
@@ -1888,6 +1970,13 @@ export class Host {
   demandedAt: { clock: number; reads: number } | undefined;
   /** What the evaluation bound each slot it read to, by the slot. */
   readonly bound = new Map<number, Bound>();
+  /**
+   * The slots of `bound` that no read bound, each to the positions a body
+   * named through a handle (`Instance.noteNamed`).
+   */
+  readonly namedOnly = new Set<number>();
+  /** The slots a body named too many positions of for `noteNamed` to bind. */
+  readonly namedMany = new Set<number>();
   /** The branch each selector took, as the value code reported it. */
   readonly selections = new Map<number, number>();
   /** The key each pick chose, as the value code reported it. */
@@ -1914,8 +2003,15 @@ export class Host {
     this.#instance = instance;
   }
 
-  /** The value of a slot, or its reference for an `identity` slot. */
-  slot(index: number, rest: string[] = []): unknown {
+  /**
+   * The value of a slot, or its reference for an `identity` slot, or of
+   * the path `rest` below it. For the slot of the chosen child of a
+   * `pick`, at `*`, the first segment of `rest` is the key the pick chose
+   * and stands in the place of `*`, so that the read is of that child
+   * alone; with no `rest` it yields every child of the container (ES
+   * §2.2).
+   */
+  slot(index: number, rest: readonly unknown[] = []): unknown {
     const instance = this.#instance;
     if (
       this.cone !== undefined &&
@@ -1924,21 +2020,22 @@ export class Host {
       instance.counts.slotsNotListed += 1;
     }
     const slot = instance.plan.slots[index];
-    // The slot of the chosen child of a `pick`, at `*`, yields every
-    // child of the container (ES §2.2).
-    const path = slot.path[slot.path.length - 1] === "*" && rest.length === 0
-      ? slot.path.slice(0, -1)
-      : slot.path;
-    this.demand(slot.root, [...path, ...rest]);
+    const children = slot.path[slot.path.length - 1] === "*";
+    const path = children ? slot.path.slice(0, -1) : slot.path;
+    const below = rest.map((segment) => `${segment}`);
+    this.demand(slot.root, [...path, ...below]);
     const from = this.reads.length;
     const found = this.at(
-      instance.rootOf(slot.root, this, [...path, ...rest]),
-      [...path, ...rest],
+      instance.rootOf(slot.root, this, [...path, ...below]),
+      [...path, ...below],
     );
     // Where nothing is stored, a slot reads as the default of the place
-    // (ES §2.2): the default its schema declares.
-    const schema = path === slot.path
-      ? rest.reduce(schemaBelow, instance.schemaOf(slot.schema))
+    // (ES §2.2): the default its schema declares, which for the slot of
+    // the chosen child is that of the child.
+    const schema = !children
+      ? below.reduce(schemaBelow, instance.schemaOf(slot.schema))
+      : below.length > 0
+      ? below.slice(1).reduce(schemaBelow, instance.schemaOf(slot.schema))
       : undefined;
     if (slot.observes === "identity") {
       // A stream that is an input of the pattern is a reference like any
@@ -2018,6 +2115,29 @@ export class Host {
   }
 
   /**
+   * The operand that `??`, `||` or `&&` selects (PL §3.5), from the value
+   * `test` that the left operand resolves to. Where the left operand is
+   * selected and holds a record or an array, the result is what `left`
+   * gives, which is the operand as the reference it is, and where it
+   * holds a scalar the result is that value. The right operand is
+   * evaluated where it is selected.
+   */
+  operand(
+    operator: "??" | "||" | "&&",
+    test: unknown,
+    left: () => unknown,
+    right: () => unknown,
+  ): unknown {
+    const takesRight = operator === "??"
+      ? test === undefined || test === null
+      : operator === "||"
+      ? !test
+      : Boolean(test);
+    if (takesRight) return right();
+    return typeof test === "object" && test !== null ? left() : test;
+  }
+
+  /**
    * Records the key a pick of the cone chose (PL §3.18), with
    * `chosenBy: "valueCode"`: the key as a text, and `null` for none.
    * Gives the key back.
@@ -2070,10 +2190,48 @@ export class Host {
     };
   }
 
-  /** The value of an entry of `Plan.outputs`. */
-  output(index: number): unknown {
+  /**
+   * The value of an entry of `Plan.outputs`, or what it holds at `path`.
+   * A reader of a path of the value a value function computes depends on
+   * what the value holds there and on nothing else of it (`dependAt`).
+   */
+  output(index: number, path?: readonly unknown[]): unknown {
     const instance = this.#instance;
     const output = instance.plan.outputs[index];
+    // The result holds a reference in the place of an output that was
+    // evaluated for one scope key.
+    if (this.key === RESULT && instance.store.scopes !== undefined) {
+      const placed = instance.scopedOutput(index, this);
+      if (placed !== undefined) return this.#below(placed, path);
+    }
+    // So does the cone of another value: a value of a scope key that a
+    // cone of the space places, or reads through the reference, leaves
+    // the cone of the space (P451). An evaluation that is no cone, as an
+    // assembly or the place of an output in a scope instance, is given the
+    // value.
+    if (
+      this.key !== RESULT && instance.store.scopes !== undefined &&
+      this.context.size === 0 && this.cone !== undefined &&
+      output.cone !== this.cone
+    ) {
+      const placed = instance.scopedValue(index, this);
+      if (placed !== undefined) return this.#below(placed, path);
+    }
+    return this.#output(index, output, path);
+  }
+
+  /** What `value` holds at `path`, and `value` itself for no path. */
+  #below(value: unknown, path: readonly unknown[] | undefined): unknown {
+    return path === undefined ? value : this.at(value, path);
+  }
+
+  /** `output()`, for an output that is given as it was evaluated. */
+  #output(
+    index: number,
+    output: Plan["outputs"][number],
+    path: readonly unknown[] | undefined,
+  ): unknown {
+    const instance = this.#instance;
     if (
       this.cone !== undefined && output.cone !== this.cone &&
       !instance.plan.edges.some((edge) =>
@@ -2093,19 +2251,25 @@ export class Host {
       // then holds the reference, and the buckets that changed are stored
       // by themselves (`Instance.#storeIndex`).
       const handle = new IndexHandle(output.collection, this.context);
-      return this.cone === undefined &&
+      return this.#below(
+        this.cone === undefined &&
           instance.bucketRecordOf(output.collection) === undefined
-        ? this.settled(handle)
-        : handle;
+          ? this.settled(handle)
+          : handle,
+        path,
+      );
     }
     if (output.collection !== undefined) {
       // The result of a construct that assembles rows is held by
       // reference until something observes it.
-      return assemblesRows(
-          instance.plan.collections[output.collection].construct,
-        )
-        ? instance.assembledBy(output.collection, this.context)
-        : this.depend(instance.assembled(output.collection));
+      return this.#below(
+        assemblesRows(
+            instance.plan.collections[output.collection].construct,
+          )
+          ? instance.assembledBy(output.collection, this.context)
+          : this.depend(instance.assembled(output.collection)),
+        path,
+      );
     }
     const value = instance.valueOfOutput.get(index);
     if (value === undefined) {
@@ -2113,7 +2277,7 @@ export class Host {
         entry.output === index
       );
       if (below !== undefined) {
-        return this.at(this.value(below.value), below.path);
+        return this.value(below.value, [...below.path, ...(path ?? [])]);
       }
       throw new Unsupported(
         `an output that no value function computes: output ${index}, ${
@@ -2121,6 +2285,7 @@ export class Host {
         }`,
       );
     }
+    if (path !== undefined && path.length > 0) return this.value(value, path);
     const held = this.value(value);
     if (Array.isArray(held)) {
       instance.returnedWhole.set(held, {
@@ -2131,9 +2296,15 @@ export class Host {
     return held;
   }
 
-  /** The value a value function computes, by the value's number. */
-  value(value: number): unknown {
-    return this.depend(this.#instance.evaluated(value));
+  /**
+   * The value a value function computes, by the value's number, or what
+   * it holds at `path`, on which alone the reader then depends.
+   */
+  value(value: number, path?: readonly unknown[]): unknown {
+    const entry = this.#instance.evaluated(value);
+    return path === undefined || path.length === 0
+      ? this.depend(entry)
+      : this.dependAt(entry, path);
   }
 
   /** The evaluation that the host was made for has ended. */
@@ -2208,6 +2379,17 @@ export class Host {
    */
   depend(entry: Lazy, path?: readonly string[]): unknown {
     return this.dependEntry(entry, path).value;
+  }
+
+  /**
+   * What `entry` holds at `path`, which the evaluation depends on alone:
+   * an evaluation of the entry that leaves what it holds there as it was
+   * evaluates nothing here, as a write of another member of a stored
+   * record evaluates nothing that read one member.
+   */
+  dependAt(entry: Lazy, path: readonly unknown[]): unknown {
+    const segments = path.map((segment) => `${segment}`);
+    return this.at(this.dependEntry(entry, segments).value, segments);
   }
 
   dependEntry(entry: Lazy, path?: readonly string[]): Entry {
@@ -2467,6 +2649,15 @@ export class Host {
         ) filled.add(JSON.stringify(at));
       }
     }
+    // An `identity` entry of `Body.computed` is a handle to the reference
+    // the cone computed there (ES §2.4, "A handle or a reference from a
+    // computed input"). An entry at a path through `*` stands for each
+    // child the path reaches, as each row of the result of a `map` that
+    // holds a reference: `pass` hands each such child as the handle and
+    // reads nothing of what it names.
+    const identities = instance.plan.bodies[body].computed.filter((
+      { observes },
+    ) => observes === "identity");
     let argument = this.pass(computed, {
       entries: [
         ...instance.plan.bodies[body].computed,
@@ -2476,44 +2667,13 @@ export class Host {
         })),
       ],
       filled,
+      handles: identities.filter(({ at }) => at.includes("*")),
     });
-    // An `identity` entry of `Body.computed` is a handle to the reference
-    // the cone computed there (ES §2.4, "A handle or a reference from a
-    // computed input").
-    for (
-      const { at, observes, schema } of instance.plan.bodies[body].computed
-    ) {
-      if (observes !== "identity" || at.includes("*")) continue;
-      // A marker at such a path is handed to the body as the reference
-      // to its stream (ES §2.2, assumed there under question 78).
-      const reference = this.at(computed, at);
-      if (
-        reference instanceof Ref || reference instanceof StreamRef ||
-        reference instanceof StreamMarker
-      ) {
-        argument = instance.placed(
-          argument,
-          at,
-          instance.handleOf(reference, this, undefined, schema),
-        );
-        continue;
-      }
-      // An array that a body returned whole is a handle to its place: the
-      // path of the result where the output is kept, or the document of
-      // the output (FA §6.2, "A handle bound to a value the instance
-      // computed"; ruling Z53).
-      const held = reference instanceof Assembled
-        ? this.settled(reference)
-        : reference;
-      const output = Array.isArray(held)
-        ? instance.placeOfOutput(held)
-        : undefined;
-      if (output !== undefined) {
-        argument = instance.placed(
-          argument,
-          at,
-          instance.handleOf(output, this, undefined, schema),
-        );
+    for (const { at, schema } of identities) {
+      if (at.includes("*")) continue;
+      const handle = this.#handleAt(this.at(computed, at), schema);
+      if (handle !== undefined) {
+        argument = instance.placed(argument, at, handle);
       }
     }
     // The slot part of the argument: each entry of `Body.reads` at its
@@ -2614,6 +2774,32 @@ export class Host {
   }
 
   /**
+   * What a body is handed for what the cone computed at the path of an
+   * `identity` entry of `Body.computed`: a handle to the reference there,
+   * or nothing where it holds none. A marker is handed as the reference
+   * to its stream (ES §2.2, assumed there under question 78). An array
+   * that a body returned whole is a handle to its place: the path of the
+   * result where the output is kept, or the document of the output (FA
+   * §6.2, "A handle bound to a value the instance computed"; ruling Z53).
+   */
+  #handleAt(reference: unknown, schema: string | undefined): unknown {
+    const instance = this.#instance;
+    if (
+      reference instanceof Ref || reference instanceof StreamRef ||
+      reference instanceof StreamMarker
+    ) return instance.handleOf(reference, this, undefined, schema);
+    const held = reference instanceof Assembled
+      ? this.settled(reference)
+      : reference;
+    const output = Array.isArray(held)
+      ? instance.placeOfOutput(held)
+      : undefined;
+    return output === undefined
+      ? undefined
+      : instance.handleOf(output, this, undefined, schema);
+  }
+
+  /**
    * The members of the operand of a spread in the reactive tier, each as
    * what its position holds: the reference to the cell where the position
    * holds a link, and the value where it holds one. So a spread of an
@@ -2676,6 +2862,13 @@ export class Host {
        * is given.
        */
       filled?: ReadonlySet<string>;
+      /**
+       * The `identity` entries of `Body.computed` at a path through `*`:
+       * at each path one of them matches, the value is handed as the
+       * handle `#handleAt` gives, where it gives one, and nothing of it is
+       * read.
+       */
+      handles?: readonly { at: string[]; schema?: string }[];
     },
     path: readonly string[] = [],
   ): unknown {
@@ -2683,6 +2876,14 @@ export class Host {
       narrowed?.filled !== undefined && path.length > 0 &&
       narrowed.filled.has(JSON.stringify(path))
     ) return undefined;
+    const identity = narrowed?.handles?.find(({ at }) =>
+      at.length === path.length &&
+      at.every((segment, index) => segment === "*" || segment === path[index])
+    );
+    if (identity !== undefined) {
+      const handle = this.#handleAt(value, identity.schema);
+      if (handle !== undefined) return handle;
+    }
     if (value instanceof Assembled) {
       return this.pass(this.settled(value), narrowed, path);
     }
@@ -2975,7 +3176,10 @@ export type TransactionHooks = {
    * their inputs in, one for the transaction, which gains entries as
    * records are given. `made` is the splice of every change that is one,
    * whatever its records are of: whoever stores the rows of an array apart
-   * from the array needs it for each.
+   * from the array needs it for each. `declared` is what the handler that
+   * made the write declares for the handle it wrote through
+   * (`DeclaredWrite`): whoever holds a write to the write policies of a
+   * schema holds it to those of that one too.
    */
   change(
     doc: string,
@@ -2986,6 +3190,7 @@ export type TransactionHooks = {
     splice?: { start: number; removed: number; inserted: number },
     inputs?: InputsTable,
     made?: { start: number; removed: number; inserted: number },
+    declared?: DeclaredWrite,
   ): void;
 
   /**
@@ -2995,7 +3200,11 @@ export type TransactionHooks = {
    * in, as `change` has them. The value is not written
    * again; whoever stores labels stores the label of the records for the
    * value the path holds, since what the body read decided that the value
-   * stays (ruling Z67).
+   * stays (ruling Z67). `attempt` is given where the write is one a
+   * handler made through a handle, with what the handler declares for the
+   * handle, as `change` has it: the write was attempted, and whoever holds
+   * a write to a write policy holds the attempt to it. A record that is
+   * given again for its label alone is no attempt.
    */
   unchanged?(
     doc: string,
@@ -3004,6 +3213,7 @@ export type TransactionHooks = {
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
     inputs: InputsTable,
+    attempt?: { declared?: DeclaredWrite },
   ): void;
 
   /**
@@ -3129,6 +3339,9 @@ const CREATED = "created rows";
 /** The name that the writes of a handler body are kept under. */
 const HANDLER = "handler";
 
+/** The name of the memo entry of the record of the result. */
+const RESULT = "result";
+
 /** A transaction in progress. */
 type Open = {
   record: Transaction;
@@ -3253,6 +3466,17 @@ export class Instance {
   #outside = false;
   /** On the root: the entries being evaluated, innermost last. */
   readonly #evaluating: { instance: Instance; key: string }[] = [];
+  /**
+   * On the root: the cone instances whose evaluation wrote a document as a
+   * side-write, by the identifier of the document and then by the name of
+   * the entry. `restore` drops the entries of the writers of a document it
+   * takes from the storage. The map holds an entry for each document that
+   * a cone instance wrote, for as long as the executor runs.
+   */
+  readonly #wroteAside = new Map<
+    string,
+    Map<string, { instance: Instance; key: string }>
+  >();
   /** The run of a function body in progress (ES §2.8, "Identity"). */
   #running: Running | undefined;
   /** The events handled, which name the run of a handler. */
@@ -3266,6 +3490,7 @@ export class Instance {
     elementEvaluations: 0,
     rowsLeftStored: 0,
     assemblies: 0,
+    assembliesFormed: 0,
     slotsNotListed: 0,
     readsWithoutSlot: 0,
     outputsWithoutEdge: 0,
@@ -3616,6 +3841,7 @@ export class Instance {
           : undefined,
         this.#inputsTable,
         change.splice,
+        this.#writing?.declared,
       );
     }
     if (open !== undefined) {
@@ -3814,10 +4040,17 @@ export class Instance {
        * its own, and the result of the `wish` is a reference to it.
        * `outcome` is what the state document holds as the outcome, member
        * by member, for a target that is a document of `documents`: a
-       * link in it is stored as the reference it is.
+       * link in it is stored as the reference it is. An `outcome` with no
+       * member writes nothing: the outcome is then what another writer
+       * stores in the state document.
        */
       wishes?: (
         operands: Record<string, unknown>,
+        /**
+         * `state`: the identifier of the state document of the `wish`,
+         * which the executor gives with every call.
+         */
+        of?: { state: string },
       ) => {
         result?: unknown;
         error?: unknown;
@@ -3828,6 +4061,15 @@ export class Instance {
          */
         reads?: Address[];
       } | undefined;
+      /**
+       * Whether something outside the executor answers the request of an
+       * effect of the reactive tier, by the built-in and the identifier of
+       * the state document of the operation. Where it does, the executor
+       * stages the request and no more: it writes no hash and no pending
+       * mark, sends no request (`outbox`), and reads as the outcome what
+       * another writer stores in the state document.
+       */
+      effects?: (builtin: string, of: { state: string }) => boolean;
       /** What the clock holds when the executor starts. */
       now?: number;
       /**
@@ -3837,8 +4079,12 @@ export class Instance {
        * acting principal or the access list of a space. A name the
        * executor has is not replaced. Each member is frozen in place as
        * module data is, so that no body changes what the next one reads.
+       * A function is called with the instance whose modules import them,
+       * once for each module, and gives the record.
        */
-      builtins?: Record<string, unknown>;
+      builtins?:
+        | Record<string, unknown>
+        | ((instance: Instance) => Record<string, unknown>);
       /**
        * What the value code reads under each name here in place of the
        * realm's global of that name, as `Date` and `crypto`: a caller
@@ -3882,6 +4128,20 @@ export class Instance {
        */
       transactions?: TransactionHooks;
       /**
+       * What an instance stores as its argument document, given the
+       * argument it was made with, its artifact and its name: a host that
+       * stores the defaults an argument type declares returns the argument
+       * with them. Called for the instance the executor was started with
+       * and for each one a body or a handler makes, before the document
+       * exists. Without it the argument is stored as it was given, and a
+       * default is what a read gives where nothing is stored.
+       */
+      argumentStored?: (
+        argument: unknown,
+        artifact: Artifact,
+        instance: string,
+      ) => unknown;
+      /**
        * The collections whose rows are stored as documents of their own
        * (`rowDocumentCollections` of `row-documents.ts`). A bucket of an
        * index that the result keeps over the rows of one of them holds a
@@ -3922,6 +4182,14 @@ export class Instance {
        * once for each identifier.
        */
       load?: (id: string) => { kind: string; value: unknown } | undefined;
+      /**
+       * Says which principal and session an evaluation is for, by the
+       * scope key of each scope. With it, a document of the scope `user`
+       * or `session` is held once for each key, and a memo entry that
+       * touched one is kept for its key alone (`scope-instances.ts`).
+       * Without it every document is the space's.
+       */
+      scopes?: ScopeInstancesOptions;
       /**
        * Whether the instance is one that a store outside the executor
        * holds from a run before: a state cell whose document `load` gives
@@ -3967,6 +4235,7 @@ export class Instance {
         keys: options.keys,
         parts: options.parts,
         load: options.load,
+        scopes: options.scopes,
       });
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
@@ -4026,6 +4295,9 @@ export class Instance {
               schema,
               writes,
               this.#inputsTable,
+              this.#writing.handler
+                ? { declared: this.#writing.declared }
+                : undefined,
             );
           }
         };
@@ -4045,7 +4317,14 @@ export class Instance {
     const creation = this.root.#tx === undefined
       ? this.root.#begin("creation")
       : undefined;
-    this.store.create(this.argument, "argument", this.stored(argument));
+    this.store.create(
+      this.argument,
+      "argument",
+      this.stored(
+        this.root.options.argumentStored?.(argument, artifact, this.id) ??
+          argument,
+      ),
+    );
     this.store.create(this.id, "result", this.#heldResult());
     if (creation !== undefined) this.root.#end(creation, true);
     this.#load();
@@ -4215,6 +4494,12 @@ export class Instance {
     const held = open.writes.get(name) ?? { ...writer, at: [] };
     held.at.push({ doc, path: [...path] });
     open.writes.set(name, held);
+    let writers = this.#wroteAside.get(doc);
+    if (writers === undefined) {
+      writers = new Map();
+      this.#wroteAside.set(doc, writers);
+    }
+    writers.set(name, writer);
   }
 
   /**
@@ -4598,7 +4883,10 @@ export class Instance {
   /** The identifier of the document of a state cell under element keys. */
   stateCellDocument(cell: number, keys: readonly string[] = []): string {
     const record = this.plan.stateCells[cell];
-    return this.#identifier("state", record.within, keys, record.name);
+    return this.#inScope(
+      this.#identifier("state", record.within, keys, record.name),
+      record.scope,
+    );
   }
 
   /**
@@ -4753,11 +5041,22 @@ export class Instance {
    * the store that keeps the documents stores what the schema declares.
    */
   stateCell(cell: number, host: Host): Ref {
+    const { scopes } = this.store;
+    if (scopes === undefined) return this.#stateCellFor(cell, host);
+    // A cell of a scope is given its first value once for each scope key,
+    // and the evaluation that names the cell touched no scope instance by
+    // naming it.
+    return scopes.framed(() => this.#stateCellFor(cell, host)).value;
+  }
+
+  /** `stateCell()`, for the scope key that is evaluated for. */
+  #stateCellFor(cell: number, host: Host): Ref {
     const record = this.plan.stateCells[cell];
     const keys = this.keysOf(record.within, host);
     const id = this.stateCellDocument(cell, keys);
-    if (!this.#cells.has(id)) {
-      this.#cells.set(id, { cell, keys });
+    const instance = this.store.scopes?.resolve(id) ?? id;
+    if (!this.#cells.has(instance)) {
+      this.#cells.set(instance, { cell, keys });
       this.#documents.add(id);
       const schema = this.schemaOf(record.schema);
       this.store.declare(
@@ -4852,7 +5151,7 @@ export class Instance {
     );
     const cone = found < 0 ? undefined : found;
     return (context) =>
-      this.#ensure(
+      this.#ensureReference(
         this.#name("child", child, this.#keysIn(within, context)),
         context,
         cone,
@@ -5038,7 +5337,7 @@ export class Instance {
     const cone = found < 0 ? undefined : found;
     const builtin = record.implementation?.builtin ?? record.kind;
     return (context) =>
-      this.#ensure(
+      this.#ensureReference(
         this.#name("operation", operation, this.#keysIn(within, context)),
         context,
         cone,
@@ -5051,11 +5350,14 @@ export class Instance {
           const keys = within.map((collection) =>
             context.get(collection)?.key ?? "?"
           );
-          const id = this.#identifier(
-            "operation",
-            record.within ?? [],
-            keys,
-            record.name,
+          const id = this.#inScope(
+            this.#identifier(
+              "operation",
+              record.within ?? [],
+              keys,
+              record.name,
+            ),
+            record.scope,
           );
           if (!this.#documents.has(id)) {
             this.#documents.add(id);
@@ -5093,7 +5395,10 @@ export class Instance {
           }
           if (record.kind === "wish") {
             this.#resolveWish(state, host.v(request), host, operation);
-          } else if (!this.root.#operations.has(id)) {
+          } else if (
+            !this.root.#operations.has(id) &&
+            this.root.options.effects?.(builtin, { state: id }) !== true
+          ) {
             this.root.#operations.set(id, { instance: this, builtin });
           }
           return state;
@@ -5135,6 +5440,7 @@ export class Instance {
     }
     const answer = this.root.options.wishes?.(
       isRecord(operands) ? operands : { query: operands },
+      { state: state.doc },
     );
     // The outcome is a write the plan has a record for: the operation, with
     // the slots its operands reach and the positions its resolution read
@@ -5179,7 +5485,10 @@ export class Instance {
         );
         return;
       }
-      const target = identifierOf({ wish: this.id, target: `${query}` });
+      const target = this.#inScope(
+        identifierOf({ wish: this.id, target: `${query}` }),
+        this.plan.operations[operation].scope,
+      );
       if (!store.docs.has(target)) {
         store.create(target, "wish target", this.stored(answer.result));
       }
@@ -5896,6 +6205,8 @@ export class Instance {
           return this.#indexForm(reference, at, owner === undefined);
         }
         const id = JSON.stringify(at);
+        const placed = this.#scopedRows(reference, at, owner === undefined);
+        if (placed !== undefined) return placed;
         seen.add(id);
         const known = inside.get(id);
         if (known !== undefined && known.name === reference.name) {
@@ -6384,6 +6695,17 @@ export class Instance {
     if (root.#givenNow.has(key)) return;
     if (!root.#placing) root.#namedIndex.clear();
     const write = this.#outputRecord(this.id, nearest.output, [...path]);
+    // The record last given for the place had these inputs, and no label
+    // one of them read changed since: the place holds the label the record
+    // would form.
+    if (
+      !root.#relabels.has(key) &&
+      root.#recordDigests.get(key) ===
+        root.#digests.of(root.#inputsTable, write.inputs, write.keys)
+    ) {
+      root.#ownReads.delete(key);
+      return;
+    }
     root.#noteRecord(key, this.id, write);
     hooks.unchanged(
       this.id,
@@ -7433,13 +7755,542 @@ export class Instance {
   }
 
   /**
+   * The name of a document of this instance in the scope the plan declares
+   * for it, where the executor was told which scope key it evaluates for:
+   * the name of its instances for every key (`scopedDocument`).
+   */
+  #inScope(id: string, scope: string | undefined): string {
+    if (this.store.scopes === undefined) return id;
+    return scope === "user" || scope === "session"
+      ? scopedDocument(id, scope)
+      : id;
+  }
+
+  /**
+   * The names of the entries whose value is a reference to documents
+   * their evaluation made, the same for every scope key.
+   */
+  readonly #references = new Set<string>();
+
+  /**
+   * Like `#ensure()`, except that what uses the entry is of no scope key
+   * on its account: its value is a reference to documents its evaluation
+   * made, which is the same for every scope key.
+   */
+  #ensureReference(
+    key: string,
+    context: Context,
+    cone: number | undefined,
+    kind: "element" | "assembly" | "value",
+    compute: (host: Host) => unknown,
+    within: readonly number[] = [],
+  ): Entry {
+    this.#references.add(key);
+    return this.#ensure(key, context, cone, kind, compute, within);
+  }
+
+  /**
+   * What brings each entry of a scope key up to date for the key that is
+   * evaluated for, by the name of the entry (`#pullScoped`).
+   */
+  readonly #scopedPulls = new Map<string, () => void>();
+
+  /**
+   * The kinds of the documents that hold what one evaluation derived, and
+   * that are the space's unless they are named for a scope.
+   */
+  static readonly #DERIVED = new Set([
+    OUTPUT,
+    "operation state",
+    "argument",
+    "held constant",
+    "element record",
+    "wish target",
+  ]);
+
+  /**
+   * The memo entry of a computation for the scope key that is evaluated
+   * for (`#ensureOne`). Without scope keys every entry is one for every
+   * reader.
+   *
+   * An entry whose evaluation touched a scope instance, or used an entry
+   * of a scope key, is of that key. The entry another key was given is
+   * set aside before the evaluation and brought back when its key is
+   * evaluated for again, and is then compared with everything it read
+   * and used. The assembly of a collection is not set aside: its element
+   * table stands beside the entry, so it is formed again. An entry that
+   * was one for every key and is now of one counts as changed, so that
+   * what used it is evaluated again and is of a key as well.
+   */
+  #ensure(
+    key: string,
+    context: Context,
+    cone: number | undefined,
+    kind: "element" | "assembly" | "value",
+    compute: (host: Host) => unknown,
+    within: readonly number[] = [],
+    refresh?: (held: Entry, slot: Slot) => Entry | undefined,
+  ): Entry {
+    const { scopes } = this.store;
+    if (scopes === undefined) {
+      return this.#ensureOne(
+        key,
+        context,
+        cone,
+        kind,
+        compute,
+        within,
+        refresh,
+      );
+    }
+    const reference = this.#references.has(key);
+    if (this.#open.has(key) || this.#checking.has(key)) {
+      // A pull that reaches an evaluation or a check in progress.
+      const entry = this.#ensureOne(key, context, cone, kind, compute, within);
+      if (entry.scoped !== undefined && !reference) {
+        scopes.touch(scopeOfKey(entry.scoped));
+      }
+      return entry;
+    }
+    const name = `${this.id}\n${key}`;
+    this.#forActing(key, name);
+    const before = this.#memo.get(key);
+    const { value: entry, scope } = scopes.framed(() =>
+      this.#ensureOne(key, context, cone, kind, compute, within, refresh)
+    );
+    const known = scopes.narrowed(name);
+    const found = scope ??
+      (entry.scoped === undefined ? known : scopeOfKey(entry.scoped));
+    if (found === undefined) return entry;
+    // The scope of an entry only narrows.
+    scopes.narrow(name, found);
+    const narrow = scopes.narrowed(name)!;
+    const scoped = scopes.keyOf(narrow);
+    if (entry.scoped !== scoped) {
+      if (entry !== before) this.#refuseStoredForEveryKey(entry, name, narrow);
+      entry.scoped = scoped;
+      if (before !== undefined && before.scoped !== scoped) {
+        this.store.clock += 1;
+        entry.changedAt = this.store.clock;
+        this.#markUsers(key);
+      }
+    }
+    if (context.size === 0 || reference) {
+      this.#scopedPulls.set(key, () => {
+        this.#ensure(
+          key,
+          this.freshContext(context),
+          cone,
+          kind,
+          compute,
+          within,
+          refresh,
+        );
+      });
+    }
+    if (!reference) scopes.touch(narrow);
+    return entry;
+  }
+
+  /**
+   * Helper for `#ensure()`, which has the memo hold the entry of `key`
+   * for the scope key that is evaluated for: an entry of another key is
+   * set aside, and the one set aside for this key is brought back.
+   */
+  #forActing(key: string, name: string): void {
+    const scopes = this.store.scopes!;
+    const held = this.#memo.get(key);
+    if (held?.scoped !== undefined && !scopes.acting(held.scoped)) {
+      if (
+        held.members === undefined && held.rows === undefined &&
+        !this.#tables.has(key)
+      ) scopes.setAside(name, held);
+      this.#memo.delete(key);
+      const slot = this.#slots.get(key);
+      if (slot !== undefined) {
+        this.#unregister(slot);
+        slot.marked = false;
+        slot.all = false;
+        slot.suspects.clear();
+        slot.reads.clear();
+      }
+    }
+    if (this.#memo.has(key) || scopes.narrowed(name) === undefined) return;
+    const back = scopes.takeBack<Entry>(name);
+    if (back === undefined) return;
+    this.#memo.set(key, back);
+    const slot = this.#slot(key);
+    if (!this.#register(slot, back)) this.#setAlways(slot);
+    // No change marked the entry while it was set aside: everything it
+    // read and used is compared.
+    back.checkedAt = undefined;
+    slot.marked = true;
+    slot.all = true;
+    slot.serial += 1;
+  }
+
+  /**
+   * Helper for `#ensure()`, which refuses an evaluation that was found to
+   * be of a scope key and wrote what it derived into a document of the
+   * space: the writes are withdrawn and the entry takes an error state. A
+   * write to a cell lands in the scope of the cell and is no such write.
+   */
+  #refuseStoredForEveryKey(entry: Entry, name: string, scope: Scope): void {
+    const open = this.root.#tx;
+    const kinds = new Set<string>();
+    for (const { doc } of open?.writes.get(name)?.at ?? []) {
+      if (scopeOfDocument(doc).scope !== undefined) continue;
+      const kind = this.store.docs.get(doc)?.kind;
+      if (kind !== undefined && Instance.#DERIVED.has(kind)) kinds.add(kind);
+    }
+    if (open === undefined || kinds.size === 0) return;
+    this.root.#withdraw(open, name);
+    const message = `a computation of the scope \`${scope}\` stored what it ` +
+      `derived in a document of the space (${[...kinds].join(", ")})`;
+    entry.value = errorState(message);
+    entry.stored = canonical(entry.value);
+    entry.error = message;
+    this.counts.failures += 1;
+    this.root.failed.push({ cone: name.slice(this.id.length + 1), message });
+  }
+
+  /**
+   * The scope the entry of the value of the output `output` was found to
+   * have, under the element keys `keys`: the scope of the document that
+   * holds what the output returned whole.
+   */
+  #scopeOfOutput(output: number, keys: readonly string[]): Scope | undefined {
+    const value = this.valueOfOutput.get(output);
+    if (value === undefined || this.store.scopes === undefined) {
+      return undefined;
+    }
+    return this.store.scopes.narrowed(
+      `${this.id}\n${this.#name("value", value, keys)}`,
+    );
+  }
+
+  /**
+   * Brings the entries that were found to be of a scope key up to date
+   * for the key that is evaluated for: nothing else demands the entry of
+   * a key where what holds it by reference is current.
+   */
+  #pullScoped(): void {
+    const { scopes } = this.store;
+    if (scopes === undefined) return;
+    for (const [key, pull] of [...this.#scopedPulls]) {
+      if (this.#kept.has(key)) pull();
+      else {
+        this.#scopedPulls.delete(key);
+        scopes.forget(`${this.id}\n${key}`);
+      }
+    }
+  }
+
+  /**
+   * The narrowest scope that each path of the result was stored in a
+   * scope instance of the document of the scoped outputs in
+   * (`#scopedOutputs`), by the text of the path.
+   */
+  readonly #placeScopes = new Map<string, Scope>();
+
+  /**
+   * The reference the result holds in the place of the output `index`,
+   * where the output was evaluated for one scope key, and nothing where
+   * it is one for every key: the value is stored at the path of the
+   * output in the scope instance of the document of the scoped outputs
+   * (`#scopedOutputs`), and the result document holds a link of that
+   * scope to it. `execution-and-storage.md` §4.1 assumes the scope
+   * instance of the result document in that place.
+   */
+  scopedOutput(index: number, host: Host): unknown {
+    const output = this.plan.outputs[index];
+    if (output.path.includes("*")) return undefined;
+    const value = this.valueOfOutput.get(index);
+    const lazy = output.collection !== undefined
+      ? buildsIndex(this.plan.collections[output.collection].construct)
+        ? undefined
+        // The rows an assembly holds as stored were stored for every
+        // scope key: asking for the scope of the assembly evaluates none.
+        : this.assembled(output.collection, true)
+      : value !== undefined && this.#values.has(value)
+      ? this.evaluated(value)
+      : undefined;
+    if (lazy === undefined) return undefined;
+    const scopes = this.store.scopes!;
+    if (!this.#placeScopes.has(JSON.stringify(output.path))) {
+      // The result is of no scope key on account of an output it holds
+      // by reference.
+      const probed = scopes.framed(() => lazy(host.context)).value;
+      if (probed.scoped === undefined) return undefined;
+    }
+    // The dependency is on the reference, which is the same for every
+    // scope key: the result is not evaluated again because the entry of
+    // another key holds it.
+    return host.depend(
+      this.#scopedPlace(output.path, (inner) => inner.output(index)),
+      [],
+    );
+  }
+
+  /**
+   * The reference to the place of the value of the output `index` in the
+   * scope instance of the document of the scoped values
+   * (`#scopedValues`), where the cone `host` evaluates is another one and
+   * the value was evaluated for one scope key, and nothing where it is
+   * one for every key (P451). The cone then depends on the reference,
+   * which is the same for every scope key: it is of no scope key on its
+   * account, and a read of what the reference leads to is a read of the
+   * scope instance, which makes the reader one of that key.
+   */
+  scopedValue(index: number, host: Host): unknown {
+    const output = this.plan.outputs[index];
+    if (output.path.includes("*") || output.collection !== undefined) {
+      return undefined;
+    }
+    const value = this.valueOfOutput.get(index);
+    if (value === undefined || !this.#values.has(value)) return undefined;
+    const scopes = this.store.scopes!;
+    const place = [`${index}`];
+    if (!this.#placeScopes.has(JSON.stringify(["values", ...place]))) {
+      const probed = scopes.framed(() => this.evaluated(value)(host.context))
+        .value;
+      if (probed.scoped === undefined) return undefined;
+    }
+    return host.depend(
+      this.#scopedPlace(place, (inner) => inner.value(value), true),
+      [],
+    );
+  }
+
+  /**
+   * The stored form of a reference to the rows of the assembled
+   * collection `reference` that stands at the path `at` of the result,
+   * where the assembly is of a scope key, and nothing where it is one for
+   * every key. The rows are stored whole in the scope instance of the
+   * document of the scoped outputs. Below a row of another collection
+   * they have no path
+   * of the result, and the form is an error state.
+   */
+  #scopedRows(
+    reference: Assembled,
+    at: string[],
+    atRoot: boolean,
+  ): unknown {
+    const { scopes } = this.store;
+    if (scopes === undefined) return undefined;
+    if (!atRoot || !this.#placeScopes.has(JSON.stringify(at))) {
+      // A piece that was started with rows left as stored learns where
+      // the rows of a collection stand when the unit is placed, and its
+      // assembly is first evaluated then, with the rows it can leave. Such
+      // rows were stored for every scope key, so an assembly that has no
+      // entry yet is asked nothing here. The rows an assembly holds as
+      // stored are left so in every other case too.
+      const held = this.#memo.get(reference.name);
+      const assembly = held === undefined &&
+          this.options.units?.stale !== undefined &&
+          this.#listed?.has(reference.collection) === true
+        ? undefined
+        : scopes.framed(() =>
+          this.assembled(reference.collection, true)(
+            this.freshContext(reference.context),
+          )
+        ).value;
+      if (assembly?.scoped === undefined) return undefined;
+    }
+    if (!atRoot) {
+      return errorState(
+        "a collection of a scope narrower than the space, in a row of " +
+          "another collection",
+      );
+    }
+    return this.stored(
+      this.#scopedPlace(at, () => reference)(new Map()).value,
+    );
+  }
+
+  /**
+   * The entry that stores what `valueOf` gives at the path `path` of the
+   * scope instance of the document of the scoped outputs, for the scope
+   * key evaluated for: its value is the reference to that place, which is
+   * the same for
+   * every key. The value is stored with each reference to an assembled
+   * collection in it settled, member by member where it differs from
+   * what the place holds.
+   */
+  #scopedPlace(
+    path: readonly string[],
+    valueOf: (host: Host) => unknown,
+    values = false,
+  ): Lazy {
+    const text = JSON.stringify(values ? ["values", ...path] : path);
+    const key = `scoped ${text}`;
+    return (context) =>
+      this.#ensureReference(key, context, undefined, "value", (inner) => {
+        const scopes = this.store.scopes!;
+        const value = this.stored(inner.whole(valueOf(inner)));
+        const before = this.#placeScopes.get(text);
+        const touched = scopes.touched ?? "user";
+        const scope = before === "session" ? before : touched;
+        if (before !== scope) {
+          this.#placeScopes.set(text, scope);
+          // The place moved to the instances of a narrower scope: each
+          // key stores its value there.
+          scopes.staleAside(`${this.id}\n${key}`);
+        }
+        const doc = scopedDocument(
+          values ? this.#scopedValues() : this.#scopedOutputs(),
+          scope,
+        );
+        this.#putScoped(doc, path, value);
+        return new Ref(doc, [...path]);
+      });
+  }
+
+  /**
+   * On the root: the instance whose outputs of a scope each document of
+   * `#scopedOutputs()` holds, by the name of the document without its
+   * scope.
+   */
+  readonly #scopedOutputsOf = new Map<string, Instance>();
+
+  /**
+   * The name, without a scope, of the document whose scope instances hold
+   * the outputs of this instance that were evaluated for one scope key,
+   * each at the path it has in the result. It is a document of its own
+   * and not the result document: the label of an instance of a scope is
+   * read with the instance of the space of the same document, which every
+   * transaction that writes an output of the space writes.
+   */
+  #scopedOutputs(): string {
+    const id = identifierOf({ parent: this.id, type: "scoped outputs" });
+    this.root.#scopedOutputsOf.set(id, this);
+    return id;
+  }
+
+  /**
+   * On the root: the instance whose values of a scope each document of
+   * `#scopedValues()` holds, by the name of the document without its
+   * scope.
+   */
+  readonly #scopedValuesOf = new Map<string, Instance>();
+
+  /**
+   * The name, without a scope, of the document whose scope instances hold
+   * the values of this instance that a cone of another value placed and
+   * that were evaluated for one scope key, each at the number of its
+   * output (`scopedValue`, P451).
+   */
+  #scopedValues(): string {
+    const id = identifierOf({ parent: this.id, type: "scoped values" });
+    this.root.#scopedValuesOf.set(id, this);
+    return id;
+  }
+
+  /**
+   * The records of a write to a scope instance of the document of the
+   * scoped values: the value of an output at the number of the output,
+   * under the record of that output, and each interim output of the same
+   * cone below it, under its own.
+   */
+  #valueWrites(doc: string, path: readonly string[]): PlanWrite[] {
+    const index = Number(path[0]);
+    const output = this.plan.outputs[index];
+    if (output === undefined) return [];
+    const found: { output: number; at: string[] }[] = [];
+    this.plan.outputs.forEach((other, number) => {
+      if (
+        other.cone !== output.cone || other.kept || other.path.includes("*")
+      ) {
+        return;
+      }
+      const at = [path[0], ...other.path];
+      const covers = at.length <= path.length
+        ? at.every((segment, position) => segment === path[position])
+        : path.every((segment, position) => segment === at[position]);
+      if (!covers) return;
+      if (at.length > path.length && this.store.peek(doc, at) === undefined) {
+        return;
+      }
+      found.push({
+        output: number,
+        at: at.length < path.length ? [...path] : at,
+      });
+    });
+    return found.map(({ output, at }) => {
+      const write = this.#outputRecord(doc, output, at);
+      this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
+      return write;
+    });
+  }
+
+  /**
+   * Stores `value` at `path` of the scope instance `doc` of the document
+   * of the scoped outputs: a member of a record with the same members,
+   * and a position of an array of the same length, is compared by itself.
+   */
+  #putScoped(doc: string, path: readonly string[], value: unknown): void {
+    const { store } = this;
+    if (!store.docs.has(doc)) store.create(doc, "scope instance", {});
+    for (let depth = 1; depth < path.length; depth++) {
+      const above = path.slice(0, depth);
+      if (!isRecord(store.peek(doc, above))) store.put(doc, above, {});
+    }
+    const put = (at: readonly string[], now: unknown, held: unknown) => {
+      if (sameStored(held, now)) return;
+      if (
+        Array.isArray(now) && Array.isArray(held) &&
+        now.length === held.length && now.length > 0
+      ) {
+        now.forEach((member, index) =>
+          put([...at, `${index}`], member, held[index])
+        );
+        return;
+      }
+      // An array that gained or lost members: the one run of positions
+      // that differs is spliced, and the members before and behind it are
+      // not written again, as a write of today's runtime diffs an array.
+      if (Array.isArray(now) && Array.isArray(held) && held.length > 0) {
+        let head = 0;
+        while (
+          head < now.length && head < held.length &&
+          sameStored(now[head], held[head])
+        ) head += 1;
+        let tail = 0;
+        while (
+          tail < now.length - head && tail < held.length - head &&
+          sameStored(now[now.length - 1 - tail], held[held.length - 1 - tail])
+        ) tail += 1;
+        store.splice(
+          new Ref(doc, [...at]),
+          head,
+          held.length - head - tail,
+          now.slice(head, now.length - tail),
+        );
+        return;
+      }
+      if (isRecord(now) && isRecord(held) && !isLink(now) && !isLink(held)) {
+        const names = Object.keys(now);
+        if (
+          names.length > 0 && names.length === Object.keys(held).length &&
+          names.every((name) => Object.hasOwn(held, name))
+        ) {
+          for (const name of names) put([...at, name], now[name], held[name]);
+          return;
+        }
+      }
+      store.put(doc, at, now);
+    };
+    put(path, value, store.peek(doc, path));
+  }
+
+  /**
    * The memo entry of a computation, evaluated where it is not current: a
    * position it read was written since, an entry it used changed since,
    * or an index it read is another one now (ES §2.6). `kind` says what
    * is evaluated: a cone instance of an element body, the assembly of a
    * collection, or another value.
    */
-  #ensure(
+  #ensureOne(
     key: string,
     context: Context,
     cone: number | undefined,
@@ -7539,7 +8390,10 @@ export class Instance {
     }
     this.counts.evaluations += 1;
     if (kind === "element") this.counts.elementEvaluations += 1;
-    if (kind === "assembly") this.counts.assemblies += 1;
+    if (kind === "assembly") {
+      this.counts.assemblies += 1;
+      this.counts.assembliesFormed += 1;
+    }
     const entryName = cone === undefined
       ? "result"
       : this.plan.cones[cone].entry;
@@ -7832,6 +8686,7 @@ export class Instance {
   }
 
   #current(entry: Entry, context: Context): boolean {
+    if (entry.stale) return false;
     for (const [collection, index] of entry.indexes) {
       if (context.get(collection)?.index !== index) return false;
     }
@@ -8083,7 +8938,7 @@ export class Instance {
           });
           // What a later change of the array or of one row is applied to.
           const rows = (
-            construct: "map" | "filter" | "flatMap" | "sortBy",
+            construct: Rows["construct"],
             members: Element[],
             flags?: boolean[],
             segmentDependencies = 0,
@@ -8241,6 +9096,27 @@ export class Instance {
                 }
               }
               return keyed(sorted.map(given));
+            }
+            case "last":
+            case "first": {
+              // A window (note 921 of `SPEC-NOTES.md`): the last or the
+              // first elements of the source, by the count the function
+              // returned, each passed through with its key.
+              const count = windowCount(host.v(results[0]));
+              const [start, end] = windowOf(
+                record.construct,
+                elements.length,
+                count,
+              );
+              const held = elements.slice(start, end);
+              host.members = numbered(held);
+              // A later change of the source moves the window
+              // (`#reassemble`), where every element gave the one count.
+              if (results.every((result) => windowCount(result) === count)) {
+                rows(record.construct, host.members);
+                if (host.rows !== undefined) host.rows.window = count;
+              }
+              return keyed(held.map(given));
             }
             case "flatMap": {
               // An element of the result has the key of its source
@@ -8966,6 +9842,50 @@ export class Instance {
         value = sorted;
         delta = { ops: spliced, rows: [] };
       }
+    } else if (rows.construct === "last" || rows.construct === "first") {
+      // A window: the elements at the positions of the window now, against
+      // those it held, as one splice. The work is the count of the window,
+      // and no element outside it is looked at. Another count, and an
+      // element of the window that is no reference, form the assembly
+      // whole.
+      const count = rows.window;
+      if (count === undefined || !Array.isArray(held.value)) return undefined;
+      for (const key of changed) {
+        const element = byKey.get(key);
+        if (
+          element !== undefined &&
+          windowCount(results[element.index]) !== count
+        ) return undefined;
+      }
+      const [start, end] = windowOf(rows.construct, elements.length, count);
+      const now = elements.slice(start, end);
+      const [were, length] = [members.length, now.length];
+      let head = 0;
+      while (
+        head < were && head < length && members[head].key === now[head].key
+      ) head += 1;
+      let tail = 0;
+      while (
+        tail < were - head && tail < length - head &&
+        members[were - 1 - tail].key === now[length - 1 - tail].key
+      ) tail += 1;
+      differs = head !== were || head !== length;
+      if (differs) {
+        if (now.some(({ source }) => !(source instanceof Ref))) {
+          return undefined;
+        }
+        rowsNow = now.map((element, index) => ({ ...element, index }));
+        rows.members = rowsNow;
+        value = now.map(({ source }) => source);
+        delta = {
+          ops: [{
+            start: head,
+            removed: members.slice(head, were - tail).map(({ key }) => key),
+            inserted: now.slice(head, length - tail).map(({ key }) => key),
+          }],
+          rows: [],
+        };
+      }
     } else if (rows.construct === "flatMap") {
       const { segments } = rows;
       if (changed.size > 0 || segmentOps.length > 0) {
@@ -9346,7 +10266,10 @@ export class Instance {
     const keys = within.map((collection) =>
       context.get(collection)?.key ?? "?"
     );
-    const id = this.outputDocument(output, keys);
+    const id = this.#inScope(
+      this.outputDocument(output, keys),
+      this.#scopeOfOutput(output, keys),
+    );
     this.#documents.add(id);
     const store = (array: readonly unknown[]) => {
       const stored = this.stored(array);
@@ -9560,6 +10483,7 @@ export class Instance {
         throw new RangeError("a derivation transaction that does not end");
       }
       const before = this.store.clock;
+      this.#pullScoped();
       // A collection index of the pattern body is brought up to date
       // first: that marks what looked up a bucket that changed, which
       // depends on no other part of the index.
@@ -9955,6 +10879,17 @@ export class Instance {
   /** On the root: the transaction hooks are ending a transaction. */
   #ending = false;
 
+  /** On the root: what names the content of the inputs of a record. */
+  readonly #digests = new InputsDigests();
+
+  /**
+   * On the root: the number `#digests` gave the inputs of the record last
+   * given under each key (`#noteRecord`). A record of a place that a
+   * comparison left as it was is not given again while its inputs have
+   * that number (`#unchangedOutput`).
+   */
+  readonly #recordDigests = new Map<string, number>();
+
   /** The key of the record of an output of this instance at a path. */
   #recordKey(output: number, at: readonly string[]): string {
     return JSON.stringify([this.id, output, at]);
@@ -9968,6 +10903,10 @@ export class Instance {
   #noteRecord(key: string, instance: string, write: PlanWrite): void {
     this.#givenNow.add(key);
     this.#relabels.delete(key);
+    this.#recordDigests.set(
+      key,
+      this.#digests.of(this.#inputsTable, write.inputs, write.keys),
+    );
     for (const { doc, path } of this.#recordReads.get(key) ?? []) {
       let node = this.#recordReaders.get(doc);
       for (const segment of path) node = node?.children.get(segment);
@@ -10405,6 +11344,40 @@ export class Instance {
     return this.#running?.cause;
   }
 
+  /**
+   * The memo entry whose evaluation is under way, with its instance, and
+   * nothing while a handler body runs or nothing is evaluated: for a
+   * built-in that an adapter answers from outside the store, which keeps
+   * who used an answer.
+   */
+  evaluationInProgress(): { instance: Instance; key: string } | undefined {
+    const { root } = this;
+    const top = root.#evaluating[root.#evaluating.length - 1];
+    return top === undefined || top.key === HANDLER ? undefined : top;
+  }
+
+  /**
+   * Marks the memo entry `key` of this instance as a change of something
+   * it read marks it: something it used that the store does not hold is
+   * now another, as the answer of a built-in an adapter gave
+   * (`evaluationInProgress()`). The entry is evaluated when it is next
+   * demanded, and what used it is marked with it.
+   */
+  markStale(key: string, scoped?: string | ((key: string) => boolean)): void {
+    const entry = this.#memo.get(key);
+    const of = typeof scoped === "string"
+      ? (key: string) => key === scoped
+      : scoped;
+    // The entry of another scope key than those named is set aside.
+    this.store.scopes?.staleAside(`${this.id}\n${key}`, of);
+    if (of !== undefined && entry?.scoped !== undefined && !of(entry.scoped)) {
+      return;
+    }
+    if (entry !== undefined) entry.stale = true;
+    const slot = this.#slots.get(key);
+    if (slot !== undefined) this.#mark(slot);
+  }
+
   during<T>(cause: FabricValue, run: () => T, keyed?: KeyedRun): T {
     const outer = this.#running;
     this.#running = {
@@ -10562,6 +11535,84 @@ export class Instance {
       return;
     }
     host.bound.set(index, { observes: slot.observes, at });
+  }
+
+  /**
+   * For `noteNamed()`: the `identity` slot of the plan for the member that
+   * a handle names below the cell of its own slot, by that slot and the
+   * path below with each position of a member written as `*`; -1 where
+   * the plan has none.
+   */
+  readonly #namedSlots = new Map<string, number>();
+
+  /**
+   * The most positions that `noteNamed()` binds one slot to in one
+   * evaluation. A body that names more, as one that walks a whole array
+   * does, leaves the slot to the position that names every member
+   * (`#elementsBound`), which one address covers.
+   */
+  static readonly #NAMED_MOST = 8;
+
+  /**
+   * Records that a body named, through the handle of `slot`, the member at
+   * the path `below` of the handle's cell, which is at `named`: the plan's
+   * slot for the reference at a member of that cell (its path ends in `*`
+   * where the handle's ends) is bound to the position named. A body that
+   * takes the cell of a member and does not read it, as
+   * `list.key(index).resolveAsCell()` does, makes no read that binds the
+   * slot. Without this the slot is bound to the position that names every
+   * member, and the label of what the body returned follows the labels of
+   * all of them.
+   */
+  noteNamed(
+    host: Host,
+    slot: number,
+    below: readonly string[],
+    named: Ref,
+  ): void {
+    if (this.root.options.transactions === undefined) return;
+    const isMember = (segment: string) =>
+      /^(0|[1-9][0-9]*)$/.test(segment) || isKeySegment(segment);
+    const text = `${slot}\n${
+      below.map((segment) => isMember(segment) ? "*" : JSON.stringify(segment))
+        .join("\n")
+    }`;
+    let found = this.#namedSlots.get(text);
+    if (found === undefined) {
+      const of = this.plan.slots[slot];
+      const path = [...of.path, ...below];
+      found = this.plan.slots.findIndex((candidate, index) =>
+        index !== slot && candidate.observes === "identity" &&
+        candidate.path.includes("*") && sameRoot(candidate.root, of.root) &&
+        candidate.path.length === path.length &&
+        candidate.path.every((segment, at) =>
+          segment === "*" ? isMember(path[at]) : segment === path[at]
+        )
+      );
+      this.#namedSlots.set(text, found);
+    }
+    if (found < 0 || host.namedMany.has(found)) return;
+    const held = host.bound.get(found);
+    if (held === undefined) {
+      host.bound.set(found, { observes: "identity", at: [named] });
+      host.namedOnly.add(found);
+      return;
+    }
+    if (!("at" in held) || !host.namedOnly.has(found)) return;
+    if (
+      held.at.some((one) =>
+        one instanceof Ref && one.doc === named.doc &&
+        one.path.length === named.path.length &&
+        one.path.every((segment, at) => segment === named.path[at])
+      )
+    ) return;
+    if (held.at.length >= Instance.#NAMED_MOST) {
+      host.bound.delete(found);
+      host.namedOnly.delete(found);
+      host.namedMany.add(found);
+      return;
+    }
+    held.at.push(named);
   }
 
   /**
@@ -13157,6 +14208,17 @@ export class Instance {
     if (owner !== undefined && owner.id === doc) {
       return owner.#outputWrites(doc, path, splice);
     }
+    // A scope instance of the document of the scoped outputs of an
+    // instance holds the paths of its outputs of that scope, under the
+    // records of those outputs.
+    const scoped = this.store.scopes === undefined
+      ? undefined
+      : this.#scopedOutputsOf.get(scopeOfDocument(doc).base);
+    if (scoped !== undefined) return scoped.#outputWrites(doc, path, splice);
+    const valued = this.store.scopes === undefined
+      ? undefined
+      : this.#scopedValuesOf.get(scopeOfDocument(doc).base);
+    if (valued !== undefined) return valued.#valueWrites(doc, path);
     const writing = this.#writing;
     if (writing === undefined) return [];
     const keys = writing.instance.contextKeys(writing.host.context);
@@ -13386,6 +14448,7 @@ export class Instance {
         undefined,
         writes,
         root.#inputsTable,
+        writing.handler ? { declared: writing.declared } : undefined,
       );
     }
   }
@@ -14062,6 +15125,20 @@ export class Instance {
   }
 
   /**
+   * What the handler being run declares for a write through `through`
+   * (`DeclaredWrite`), as the member of a `Writing`, or nothing where the
+   * handle has no declared type or names no stored position.
+   */
+  #declaredWrite(through: Handle): { declared?: DeclaredWrite } {
+    const { target, declared } = partsOf(through);
+    if (!(target instanceof Ref) || typeof declared !== "object") return {};
+    const located = this.store.locate(target, true);
+    if (located.missing) return {};
+    const { doc, path } = located.ref;
+    return { declared: { doc, path, schema: declared } };
+  }
+
+  /**
    * Counts a write of the handler being run against its record, and
    * makes the write edge that covers it, of the handler or of the body of
    * a cone being run, the record of the writes until the returned
@@ -14072,6 +15149,11 @@ export class Instance {
     decided?: Observed[],
     /** Whether a write is made, which is counted. */
     counted = true,
+    /**
+     * The handle whose declared type the write is made under, where that
+     * is another than `handle`: the list, for a write of its members.
+     */
+    through: Handle = handle,
   ): () => void {
     const invoking = this.#invoking.at(-1);
     const index = this.#handling ?? invoking?.body;
@@ -14116,6 +15198,9 @@ export class Instance {
           ? [{ record: { body: index, envelope }, template: undefined }]
           : [],
         members: { decided: decided ?? [] },
+        ...(this.#handling === undefined
+          ? {}
+          : { handler: true as const, ...this.#declaredWrite(through) }),
       },
     );
   }
@@ -14168,7 +15253,12 @@ export class Instance {
     }
   }
 
-  /** The elements a stream's keys name, from the element tables. */
+  /**
+   * The elements a stream's keys name, outermost first: each from the
+   * element table that its collection has for the elements found
+   * around it, so a key that two tables of an inner collection hold
+   * names the element of the enclosing element of the stream.
+   */
   #contextOf(stream: StreamRef): Context {
     const context = new Map<number, Element>();
     let step = 0;
@@ -14178,11 +15268,14 @@ export class Instance {
       if (element === undefined) continue;
       const key = stream.keys[step];
       step += 1;
-      for (const table of this.#tables.values()) {
-        if (table.collection !== element) continue;
-        const found = table.byKey.get(key);
-        if (found !== undefined) context.set(element, found);
-      }
+      const found = this.#tables.get(
+        this.#name(
+          "assembly",
+          element,
+          this.#keysIn(this.#outerOf(element), context),
+        ),
+      )?.byKey.get(key);
+      if (found !== undefined) context.set(element, found);
     }
     return context;
   }
@@ -14575,6 +15668,16 @@ export class Instance {
   }
 
   /**
+   * On the root: a commit was refused, so the storage holds the label of no
+   * record given in its transaction. The record of each place that a
+   * comparison leaves as it was is given at that comparison, whatever
+   * inputs the record last given for it had (`#unchangedOutput`).
+   */
+  recordsRefused(): void {
+    this.root.#recordDigests.clear();
+  }
+
+  /**
    * On the root: takes what the storage holds for a document in place of
    * what the store holds, after a commit that wrote the document was
    * refused, and marks what read the document. `value` is what the storage
@@ -14588,10 +15691,61 @@ export class Instance {
    * derivation stores each path that differs and every row. The work
    * follows the size of the result, which a refused commit is taken to
    * allow.
+   *
+   * The memo entry of each cone instance that wrote the document as a
+   * side-write is dropped, as `#abort` drops it for a transaction that
+   * the executor undoes: the entry is current against what the cone read,
+   * and the document no longer holds what the cone wrote, so a later
+   * evaluation performs the write (ES §1.6). The cone instance stays
+   * known as a writer of the document: an evaluation that writes what the
+   * document already holds changes nothing and is not seen as a write.
    */
   restore(doc: string, value: unknown): void {
     const { root, store } = this;
+    for (
+      const { instance, key } of root.#wroteAside.get(doc)?.values() ?? []
+    ) {
+      // The write that was taken back was made for the scope key that is
+      // evaluated for now. Where the memo holds the entry of another key,
+      // that entry stays, and the entry set aside for this key is the one
+      // that is no longer current.
+      const { scopes } = store;
+      const held = instance.#memo.get(key);
+      scopes?.staleAside(
+        `${instance.id}\n${key}`,
+        (scoped) => scopes.acting(scoped),
+      );
+      if (
+        scopes === undefined || held?.scoped === undefined ||
+        scopes.acting(held.scoped)
+      ) instance.#memo.delete(key);
+      instance.#markUsers(key);
+      instance.#nowDue();
+    }
+    root.recordsRefused();
     const owner = doc === root.id ? root : root.#instances.get(doc);
+    // What stored an output in a scope instance stores it again.
+    const { base, scope } = scopeOfDocument(doc);
+    const scoped = scope === undefined
+      ? undefined
+      : root.#scopedOutputsOf.get(base);
+    if (scoped !== undefined && store.scopes !== undefined) {
+      for (const text of scoped.#placeScopes.keys()) {
+        for (const each of ["user", "session"] as const) {
+          scoped.markStale(`scoped ${text}`, store.scopes.keyOf(each));
+        }
+      }
+    }
+    const valued = scope === undefined
+      ? undefined
+      : root.#scopedValuesOf.get(base);
+    if (valued !== undefined && store.scopes !== undefined) {
+      for (const text of valued.#placeScopes.keys()) {
+        for (const each of ["user", "session"] as const) {
+          valued.markStale(`scoped ${text}`, store.scopes.keyOf(each));
+        }
+      }
+    }
     if (owner === undefined) {
       if (value === undefined) {
         // A place that the refused transaction first wrote, as a state
@@ -15005,11 +16159,13 @@ const commonfabric = (instance: Instance): unknown => {
   // class given here holds no property a body can set and a record given
   // here keeps its members. The names are read from a frozen copy, and
   // the import has no member to set, since `known` takes none.
+  const handed = instance.root.options.builtins ?? {};
   const given: Record<string, unknown> = Object.freeze(
     Object.fromEntries(
-      Object.entries(instance.root.options.builtins ?? {}).map((
-        [name, member],
-      ) => [name, freezeModuleData(member)]),
+      Object.entries(typeof handed === "function" ? handed(instance) : handed)
+        .map((
+          [name, member],
+        ) => [name, freezeModuleData(member)]),
     ),
   );
   return new Proxy(known, {

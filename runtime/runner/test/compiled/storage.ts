@@ -1,6 +1,10 @@
 import type { Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
+import type { Cell } from "../../src/cell.ts";
+import { isPrimitiveCellLink } from "../../src/link-types.ts";
+import { parseLink } from "../../src/link-utils.ts";
+import type { Runtime } from "../../src/runtime.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -70,4 +74,74 @@ export const shareStorage = (): SharedStorage => {
       EmulatedStorageManager.connectTo(server, { as: signer }) as TestStorage,
     close: () => server.close(),
   };
+};
+
+/**
+ * What the storage holds at `path` of the entity of `cell`, with the link
+ * to a list document followed (`CompiledPieceOptions.lists`): where the
+ * path holds a link, what the document it names holds, and for a list in
+ * chunks the members of the chunks in order. A path that holds no link is
+ * returned as the storage has it, so the same read serves both layouts.
+ * No link of a row or of a bucket is followed.
+ */
+export const storedList = (
+  runtime: Runtime,
+  cell: Cell<unknown>,
+  path: string[],
+): unknown => {
+  const tx = runtime.edit();
+  try {
+    const base = cell.getAsNormalizedFullLink();
+    const at = (link: unknown): unknown => {
+      const { id, path } = parseLink(link as never);
+      return tx.readValueOrThrow({ ...base, id: id!, path: [...(path ?? [])] });
+    };
+    const held = tx.readValueOrThrow({ ...base, path });
+    if (!isPrimitiveCellLink(held)) return held;
+    const list = at(held);
+    if (
+      !Array.isArray(list) || list.length === 0 ||
+      !list.every((member) => isPrimitiveCellLink(member))
+    ) return list;
+    // A chunk is an array, and a row is a record or a view node.
+    const members = list.map(at);
+    return members.every((member) => Array.isArray(member))
+      ? members.flat()
+      : list;
+  } finally {
+    tx.abort();
+  }
+};
+
+/**
+ * The rows of a list as a client of the runtime reads them, `read`: a list
+ * of more rows than one list document holds is read as an array of its
+ * chunks, so the members of each member that is an array stand in its
+ * place, one level deep (note 925 of `base/pattern-compiler/SPEC-NOTES.md`).
+ * A row is a record or a view node, never an array.
+ */
+export const rowsRead = <T>(read: readonly unknown[] | undefined): T[] =>
+  (read ?? []).flatMap((member) =>
+    Array.isArray(member) ? member : [member]
+  ) as T[];
+
+/**
+ * The cell of the row at `at` of the list that `list` reads, through the
+ * chunk that holds it where the list is read as an array of chunks
+ * (`rowsRead`).
+ */
+export const rowCell = <T>(list: Cell<unknown>, at: number): Cell<T> => {
+  const read = list.get() as unknown[] | undefined;
+  // deno-lint-ignore no-explicit-any
+  const cell = list as Cell<any>;
+  if (!Array.isArray(read) || !read.every((member) => Array.isArray(member))) {
+    return cell.key(at);
+  }
+  let offset = at;
+  for (const [index, chunk] of read.entries()) {
+    const { length } = chunk as unknown[];
+    if (offset < length) return cell.key(index).key(offset);
+    offset -= length;
+  }
+  return cell.key(at);
 };

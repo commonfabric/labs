@@ -159,13 +159,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * A value in the form two runs are compared in: a member that holds
  * nothing is left out, and the children of a view node are one flat list.
  * A child that is an array is a list the renderer shows in place, whether
- * the node holds its members or the array.
+ * the node holds its members or the array. `now` is what the clock held
+ * when the two runs were made.
  */
-export const normalize = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(normalize);
+export const normalize = (value: unknown, now = Date.now()): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((member) => normalize(member, now));
+  }
   // The two runs read the clock at two times: a number within a day of
-  // now, and a time written out in a string, are compared as `<time>`.
-  if (typeof value === "number" && Math.abs(value - Date.now()) < 86_400_000) {
+  // `now`, and a time written out in a string, are compared as `<time>`.
+  if (typeof value === "number" && Math.abs(value - now) < 86_400_000) {
     return "<time>";
   }
   if (typeof value === "string") {
@@ -181,7 +184,7 @@ export const normalize = (value: unknown): unknown => {
   if (isErrorState(value)) return undefined;
   const members: Record<string, unknown> = {};
   for (const [name, member] of Object.entries(value)) {
-    const kept = normalize(member);
+    const kept = normalize(member, now);
     if (kept !== undefined) members[name] = kept;
   }
   // The stream of a binding reads as an empty record in today's runtime.
@@ -238,7 +241,12 @@ export const outOfFileForm = (value: unknown): unknown => {
 const show = (value: unknown): string =>
   (JSON.stringify(value) ?? "undefined").slice(0, 120);
 
-/** The first place two normalized values differ at, or `undefined`. */
+/**
+ * The first place two normalized values differ at, or `undefined`. Two
+ * arrays whose positions are equal differ at `length` where one has more
+ * positions than the other, which is the case where the further positions
+ * hold nothing.
+ */
 export const firstDifference = (
   a: unknown,
   b: unknown,
@@ -249,7 +257,7 @@ export const firstDifference = (
       const found = firstDifference(a[index], b[index], [...path, `${index}`]);
       if (found !== undefined) return found;
     }
-    return undefined;
+    return firstDifference(a.length, b.length, [...path, "length"]);
   }
   if (isRecord(a) && isRecord(b)) {
     for (const name of new Set([...Object.keys(a), ...Object.keys(b)])) {
@@ -573,6 +581,9 @@ export class ExecutorRun implements StreamRecord {
         { category: "the executor was not started", detail: "" };
       return comparison;
     }
+    // A run with stubs was made when the clock of the stubs held `now`,
+    // which is earlier than now for a run that a results file holds.
+    const now = this.#stubs?.now ?? Date.now();
     const compare = (
       point: string,
       theirs: Snapshot | undefined,
@@ -580,8 +591,8 @@ export class ExecutorRun implements StreamRecord {
     ) => {
       if (theirs === undefined) return;
       const pairs: [string, unknown, unknown][] = [];
-      const a = normalize(theirs.result);
-      const b = normalize(mine.result);
+      const a = normalize(theirs.result, now);
+      const b = normalize(mine.result, now);
       if (isRecord(a) && isRecord(b)) {
         for (const name of new Set([...Object.keys(a), ...Object.keys(b)])) {
           pairs.push([`result/${name}`, a[name], b[name]]);
@@ -592,8 +603,8 @@ export class ExecutorRun implements StreamRecord {
       for (const [name, value] of Object.entries(theirs.state)) {
         pairs.push([
           `state/${name}`,
-          normalize(value),
-          normalize(mine.state[name]),
+          normalize(value, now),
+          normalize(mine.state[name], now),
         ]);
       }
       for (const [value, left, right] of pairs) {

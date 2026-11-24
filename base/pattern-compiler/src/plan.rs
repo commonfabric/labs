@@ -586,6 +586,13 @@ struct Emitter<'r, 'm, 'a> {
     /// Each call of a pattern compiled in, in source order: the `within`
     /// that the call is written under, as text, and the name of the call.
     site_steps: Vec<(String, String)>,
+    /// The scope of the modifier `asScope(scope)` of each call that is
+    /// being compiled in and has one, outermost first.
+    site_scopes: Vec<&'static str>,
+    /// Whether the expression being evaluated is one that was planned as a
+    /// value of its own because it reads a place of a scope (P451): an
+    /// expression inside it is evaluated in its cone.
+    hoisting: bool,
     /// What the value-code emitter reads of this walk (`crate::emit`).
     facts: crate::emit::Facts,
 }
@@ -2849,12 +2856,125 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
     }
 
+    /// The narrowest scope narrower than the space that evaluating a
+    /// place reads, as far as the plan knows it: a state cell declared of
+    /// a scope, an operation of a scope (a `wish` that resolves through
+    /// the home of the acting principal), and a value whose cone reads
+    /// one. A slot that observes `identity` passes a reference on and
+    /// reads nothing. `None` is the space, or a scope the plan does not
+    /// know, as of a document a link leads to.
+    fn place_scope(&self, place: &Place, seen: &mut HashSet<usize>) -> Option<&'static str> {
+        match place {
+            Place::Slot(root, _) | Place::Read(root, _, _) => self.root_scope(root),
+            Place::Accumulator(operation, _) => self.root_scope(&Root::Operation(*operation)),
+            Place::Value(value, _) => self.value_scope(*value, seen),
+            Place::Record(fields) => fields
+                .values()
+                .map(|member| self.place_scope(member, seen))
+                .fold(None, narrower_scope),
+            Place::Stream(_) | Place::Const | Place::Unknown => None,
+        }
+    }
+
+    fn root_scope(&self, root: &Root) -> Option<&'static str> {
+        let scope = match root {
+            Root::State(cell) => self.state_cells.get(*cell)?["scope"].as_str(),
+            Root::Operation(operation) => self.operations.get(*operation)?["scope"].as_str(),
+            _ => None,
+        };
+        match scope {
+            Some("session") => Some("session"),
+            Some("user") => Some("user"),
+            _ => None,
+        }
+    }
+
+    fn value_scope(&self, value: usize, seen: &mut HashSet<usize>) -> Option<&'static str> {
+        let cone = self.values.get(value)?.cone;
+        if !seen.insert(cone) {
+            return None;
+        }
+        let cone = &self.cones[cone];
+        let of_slots = cone
+            .slots
+            .iter()
+            .filter(|slot| self.slots[**slot].2 != "identity")
+            .map(|slot| self.root_scope(&self.slots[*slot].0))
+            .fold(None, narrower_scope);
+        cone.uses
+            .iter()
+            .map(|used| self.value_scope(*used, seen))
+            .fold(of_slots, narrower_scope)
+    }
+
+    /// Whether an expression written at a position of a constructed value
+    /// is planned as a value of its own, in a cone of its own (P451): an
+    /// operator expression, written outside every element body, in the
+    /// cone of a value that is being built, that reads a name whose place
+    /// is of a scope narrower than the space. The cone around it then
+    /// places the value without reading it, and stays of the space, as
+    /// today's runtime makes such an expression a node of its own whose
+    /// result cell alone is of the scope.
+    fn hoisted_scope(&self, expression: &Expression<'a>) -> bool {
+        if self.hoisting || self.cone.is_none() || !self.within.is_empty() {
+            return false;
+        }
+        if !matches!(
+            unwrap(expression),
+            Expression::ConditionalExpression(_)
+                | Expression::LogicalExpression(_)
+                | Expression::BinaryExpression(_)
+                | Expression::UnaryExpression(_)
+                | Expression::TemplateLiteral(_)
+        ) {
+            return false;
+        }
+        let mut names = NamesRead::default();
+        oxc_ast_visit::Visit::visit_expression(&mut names, expression);
+        let mut seen = HashSet::new();
+        names.0.iter().any(|name| {
+            self.env
+                .get(name)
+                .is_some_and(|place| self.place_scope(place, &mut seen).is_some())
+        })
+    }
+
+    /// Evaluates an expression written at a position of a constructed
+    /// value: in a cone of its own where `hoisted_scope` says so.
+    fn eval_placed(&mut self, expression: &Expression<'a>, hint: &str) -> Place {
+        if !self.hoisted_scope(expression) {
+            return self.eval(expression, hint);
+        }
+        let cone = self.cone.take();
+        let hoisting = std::mem::replace(&mut self.hoisting, true);
+        let place = self.eval(expression, hint);
+        self.hoisting = hoisting;
+        self.cone = cone;
+        place
+    }
+
     fn within_json(&self) -> Value {
         Value::Array(self.within.clone())
     }
 
     /// A state cell (`Plan.stateCells`), from a cell constructor.
     fn state_cell(&mut self, scope: &str, hint: &str) -> Place {
+        // At a site, a state cell has the narrowest of its own scope and
+        // the scope of each `asScope` on the chain of calls it is
+        // compiled in through (PL §8, question 161).
+        let rank = |scope: &str| match scope {
+            "session" => 2,
+            "user" => 1,
+            _ => 0,
+        };
+        let scope = self
+            .site_scopes
+            .iter()
+            .copied()
+            .fold(scope, |narrowest, at| match rank(at) > rank(narrowest) {
+                true => at,
+                false => narrowest,
+            });
         self.state_cells.push(json!({
             "name": written_at(hint),
             "scope": scope,
@@ -3297,6 +3417,18 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let name = base_name(hint, &callee).to_string();
                 self.child_instance(home, start, &name, &arguments, at)
             }
+            Expression::CallExpression(inner) if self.as_scope(inner).is_some() => {
+                let (home, start, callee, scope) = self.as_scope(inner).expect("checked above");
+                let name = base_name(hint, &callee).to_string();
+                // The call is compiled in as one with no modifier is, and
+                // the state cells the callee declares take the scope.
+                self.site_scopes.push(scope);
+                self.ui_chain.push(None);
+                let result = self.inline_pattern(home, start, &name, &arguments, at);
+                self.ui_chain.pop();
+                self.site_scopes.pop();
+                result
+            }
             Expression::CallExpression(inner) if self.resolver.is_lift_call(self.module, inner) => {
                 match inner.arguments.first().and_then(FunctionLike::of_argument) {
                     Some(function) => {
@@ -3350,6 +3482,48 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 _ => return None,
             }
+        }
+    }
+
+    /// The pattern that the callee of a call names through the factory
+    /// modifier `asScope(scope)` alone, with the scope: where the pattern
+    /// is written, its name, and the scope the modifier names (PL §8,
+    /// question 161). `None` where the callee is another form, the scope
+    /// is no constant among `space`, `user` and `session`, or the modified
+    /// value is not a pattern the compiler can see.
+    fn as_scope(
+        &mut self,
+        modifier: &CallExpression<'a>,
+    ) -> Option<(usize, u32, String, &'static str)> {
+        let Expression::StaticMemberExpression(member) = unwrap(&modifier.callee) else {
+            return None;
+        };
+        if member.property.name.as_str() != "asScope" || modifier.arguments.len() != 1 {
+            return None;
+        }
+        let scope = match modifier.arguments[0]
+            .as_expression()
+            .map(|scope| unwrap(scope))
+        {
+            Some(Expression::StringLiteral(literal)) => match literal.value.as_str() {
+                "space" => "space",
+                "user" => "user",
+                "session" => "session",
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let Expression::Identifier(identifier) = unwrap(&member.object) else {
+            return None;
+        };
+        if self.env.contains_key(identifier.name.as_str()) {
+            return None;
+        }
+        match self.def_function(identifier) {
+            Some((home, start, DefKind::Pattern)) => {
+                Some((home, start, identifier.name.to_string(), scope))
+            }
+            _ => None,
         }
     }
 
@@ -3451,6 +3625,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                         Place::Unknown
                     }
                 }
+            }
+            // A window (note 921 of `SPEC-NOTES.md`): a collection of the
+            // last or the first elements of its receiver, by a count.
+            "last" | "first" if arguments.len() == 1 => {
+                self.window(receiver, name, arguments[0], hint, at)
             }
             // `index.lookup(k)`: the bucket of `k`, whose label is the
             // template of `k` joined with the membership of a bucket,
@@ -3833,6 +4012,66 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some("groupBy" | "keyBy")
         )
         .then_some(collection)
+    }
+
+    /// A window of a collection, `xs.last(n)` or `xs.first(n)`: a
+    /// collection whose elements are the last or the first `n` elements of
+    /// its source, each passed through with its key. The cone of its body
+    /// is the count, observed as a value. Which elements stand in the
+    /// window follows the membership of the source, order included, and
+    /// the count, so the membership has the template that a `filter`
+    /// whose predicate is the count has.
+    fn window(
+        &mut self,
+        receiver: &Place,
+        via: &str,
+        count: &Expression<'a>,
+        hint: &str,
+        at: u32,
+    ) -> Place {
+        let name = base_name(hint, via);
+        let (source, iterated) = self.source_of(receiver, via, false, name, at);
+        let collection = self.collections.len();
+        self.collections.push(json!({
+            "name": name,
+            "within": self.within_json(),
+            "construct": via,
+            "source": source,
+        }));
+        self.iterated.push(iterated.clone());
+        self.collection_starts.push(at);
+        let saved_env = self.env.clone();
+        let saved_cone = self.cone.take();
+        let saved_operands = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        self.within.push(json!({ "element": collection }));
+        let (cone, _) = self.computing(name, at);
+        let (_, body) = self.one("value", |emitter| emitter.eval(count, name));
+        // The element as the source has it, passed through.
+        let slot = self.slot(&Root::Element(collection), &[], "identity");
+        self.cones[cone].slots.insert(slot);
+        let element = json!({ "op": "slot", "slot": slot });
+        let membership = match (&iterated, body) {
+            (Some(_), Some(body)) => Some(fold_node(collection, body, None)),
+            _ => None,
+        };
+        if let Some(membership) = &membership {
+            self.collections[collection]["membership"] = membership.clone();
+        }
+        self.within.pop();
+        self.cone = saved_cone;
+        self.env = saved_env;
+        self.operands = saved_operands.0;
+        self.opaque = saved_operands.1;
+        let value = self.value(name, cone);
+        self.values[value].collection = Some(collection);
+        self.values[value].template = membership;
+        self.values[value].element = Some(Some(element));
+        let place = Place::Value(value, Vec::new());
+        self.pass(&place);
+        place
     }
 
     /// An element construct: a collection, and the cone of its body.
@@ -4881,7 +5120,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                         // A call of a pattern, and a variable that holds
                         // the result of one, render as the tag does (PL
                         // §1.1).
-                        let place = rendered_at_child(self.eval(written, "child"));
+                        let place = rendered_at_child(self.eval_placed(written, "child"));
                         self.pass(&place);
                         fields.insert(position.to_string(), place);
                         position += 1;
@@ -4999,7 +5238,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                                         self.bind_inline(function, BodyKind::InlineHandler, &name)
                                     }
                                     None => {
-                                        let place = self.eval(expression, &format!("@{name}"));
+                                        let place =
+                                            self.eval_placed(expression, &format!("@{name}"));
                                         self.pass(&place);
                                         // "An element binds a handler
                                         // where an `on*` attribute of a
@@ -5927,6 +6167,23 @@ impl<'a> Emitter<'_, '_, 'a> {
         let saved_within = std::mem::take(&mut self.within);
         let saved_cone = self.cone.take();
         self.body_record(kind, name, &record, &inputs, false, start, false);
+        // `Body.code` (PL §1.5), for a handler declared at a `const` of
+        // module scope that a writer policy of the program names. A
+        // handler no policy names has none, as today's transformer gives a
+        // binding the identity a claim is checked by only where a claim
+        // names it.
+        if body_kind == BodyKind::Handler {
+            let declared = self
+                .body_at(home, start)
+                .map(|body| &self.bodies[home][body])
+                .filter(|body| body.parent.is_none())
+                .and_then(|body| body.name.clone())
+                .filter(|name| self.resolver.is_named_writer(home, name));
+            if let Some(declared) = declared {
+                self.plan_bodies[index]["code"] =
+                    crate::writer::body_code(&self.resolver.module_identity(home), &declared);
+            }
+        }
         self.facts.handlers.insert(
             index,
             crate::emit::HandlerFact {
@@ -6110,7 +6367,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     if below
                         && matches!(
                             self.collections[collection]["construct"].as_str(),
-                            Some("filter" | "sortBy")
+                            Some("filter" | "sortBy" | "last" | "first")
                         )
                     {
                         return match self.source_origin(collection) {
@@ -6149,7 +6406,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         if let Some(inner) = source["collection"].as_u64() {
             if matches!(
                 self.collections[inner as usize]["construct"].as_str(),
-                Some("filter" | "sortBy")
+                Some("filter" | "sortBy" | "last" | "first")
             ) {
                 return match self.source_origin(inner as usize) {
                     Origin::Stored | Origin::Reference => Origin::Reference,
@@ -7337,7 +7594,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         for (index, collection) in collections.iter().enumerate() {
             if !matches!(
                 collection["construct"].as_str(),
-                Some("map" | "filter" | "flatMap" | "sortBy")
+                Some("map" | "filter" | "flatMap" | "sortBy" | "last" | "first")
             ) {
                 continue;
             }
@@ -7777,6 +8034,29 @@ impl<'a> Emitter<'_, '_, 'a> {
 
 /// The bodies the `derive` nodes of a template are by, those of the
 /// templates that its reference nodes name included.
+/// The narrower of two scopes, where `None` is the space.
+fn narrower_scope(a: Option<&'static str>, b: Option<&'static str>) -> Option<&'static str> {
+    match (a, b) {
+        (Some("session"), _) | (_, Some("session")) => Some("session"),
+        (Some(scope), _) | (_, Some(scope)) => Some(scope),
+        (None, None) => None,
+    }
+}
+
+/// The names an expression reads, outside the functions written in it.
+#[derive(Default)]
+struct NamesRead(Vec<String>);
+
+impl<'a> oxc_ast_visit::Visit<'a> for NamesRead {
+    fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
+        self.0.push(identifier.name.to_string());
+    }
+
+    fn visit_function(&mut self, _: &Function<'a>, _: oxc_syntax::scope::ScopeFlags) {}
+
+    fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
+}
+
 fn derived_by(template: &Value, by: &mut Vec<usize>) {
     derived_by_once(template, by, &mut HashSet::new());
 }
@@ -8658,6 +8938,8 @@ pub fn emit_module<'a>(
             ui_bound: Vec::new(),
             pending_entries: None,
             site_steps: Vec::new(),
+            site_scopes: Vec::new(),
+            hoisting: false,
             facts: crate::emit::Facts::new(module, *start),
         };
         // The type the pattern declares for its result: the second type

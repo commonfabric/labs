@@ -33,6 +33,17 @@
  * first and of the second event after it: the first starts the executor of
  * a compiled piece.
  *
+ * The lists of links of the result are documents of their own, as a
+ * serving runtime stores them by default (`CompiledPieceOptions.lists`), and
+ * a list of more than `LIST_WHOLE` rows is read by a client as an array of
+ * its chunks. A client of such a list then watches the whole list and reads
+ * the row in its chunk, which is a read of every chunk. `SCALE_WATCH=chunk`
+ * has a client watch the row of a rename through the chunk that holds it.
+ * With `SCALE_LISTS=in-place` the links are in the result document, and
+ * `SCALE_LIST_WHOLE` gives the most rows one list document holds
+ * (`CompiledPieceOptions.listWhole`); with either a client watches the one
+ * row. A client of today's piece always watches the one row.
+ *
  * With `--profile=<file>`, the sampling profile of the process over the
  * appends is written to the file, in the format of the V8 inspector.
  *
@@ -94,25 +105,80 @@ const memoryNow = (): Memory => {
   };
 };
 
+/** Whether the links of the rows are in the result document. */
+const IN_PLACE = Deno.env.get("SCALE_LISTS") === "in-place";
+
+/**
+ * The most rows whose links one list document holds
+ * (`CompiledPieceOptions.listWhole`), where `SCALE_LIST_WHOLE` gives one.
+ */
+const LIST_WHOLE = Deno.env.get("SCALE_LIST_WHOLE") === undefined
+  ? undefined
+  : Number(Deno.env.get("SCALE_LIST_WHOLE"));
+
+/**
+ * How a client finds a row: `row`, the one path of the row; `chunk`, the
+ * path of the row through the chunk that holds it, found from the list as
+ * the client reads it when the watch begins; `list`, the whole list, with
+ * the row found among the members of its chunks.
+ */
+type Watch = "row" | "chunk" | "list";
+
+/** How a client of the compiled arm finds a row (`SCALE_WATCH`). */
+const WATCH: Watch = (Deno.env.get("SCALE_WATCH") as Watch | undefined) ??
+  (IN_PLACE || LIST_WHOLE !== undefined ? "row" : "list");
+
 /** The inputs one transaction of the setup holds at most. */
 const ITEMS_PER_TRANSACTION = 1_000;
 
+/** How many times a sink on a whole list was called back. */
+const listReads = { calls: 0 };
+
 /**
  * Resolves with the time at which `runtime` reads `label` at the row `at`
- * of the result: the callback of a sink on that one path.
+ * of the result: the callback of a sink on the path `watch` names. A list
+ * in chunks is read by a client as an array of its chunks.
  */
 const visible = (
   runtime: Runtime,
   result: Cell<List>,
   at: number,
   label: string,
+  watch: Watch,
 ): Promise<number> => {
-  const cell = runtime.getCellFromLink<List>(result.getAsNormalizedFullLink())
-    .key("rows").key(at).key("label");
+  const rows = runtime.getCellFromLink<List>(result.getAsNormalizedFullLink())
+    .key("rows") as unknown as Cell<unknown>;
+  let path: (string | number)[] = [at];
+  if (watch === "chunk") {
+    const read = rows.get() as unknown[] | undefined;
+    if (Array.isArray(read) && read.every((one) => Array.isArray(one))) {
+      let offset = at;
+      let chunk = 0;
+      while (
+        chunk < read.length - 1 && offset >= (read[chunk] as unknown[]).length
+      ) {
+        offset -= (read[chunk] as unknown[]).length;
+        chunk += 1;
+      }
+      path = [chunk, offset];
+    }
+  }
+  // deno-lint-ignore no-explicit-any
+  let cell: Cell<any> = rows;
+  if (watch !== "list") {
+    for (const segment of [...path, "label"]) cell = cell.key(segment);
+  }
+  const labelOf = (value: unknown): unknown =>
+    watch !== "list"
+      ? value
+      : ((value ?? []) as unknown[]).flatMap((member) =>
+        Array.isArray(member) ? member : [member]
+      ).map((row) => (row as { label?: string } | undefined)?.label)[at];
   return new Promise((resolve) => {
     let done = false;
-    const cancel: () => void = cell.sink((value) => {
-      if (done || value !== label) return;
+    const cancel: () => void = cell.sink((value: unknown) => {
+      if (watch === "list") listReads.calls += 1;
+      if (done || labelOf(value) !== label) return;
       done = true;
       resolve(performance.now());
       // The sink calls back before it returns the cancel the first time.
@@ -136,7 +202,13 @@ const measure = async (
   const resumed: ResumedPiece[] = [];
   const serving: CompiledServingMemoryServer =
     await listenCompiledServingMemoryServer({
-      pieces: { resumed: (_result, piece) => resumed.push(piece) },
+      pieces: {
+        resumed: (_result, piece) => resumed.push(piece),
+        piece: {
+          ...(IN_PLACE ? { lists: "in-place" as const } : {}),
+          ...(LIST_WHOLE === undefined ? {} : { listWhole: LIST_WHOLE }),
+        },
+      },
     });
   const client = () =>
     new Runtime({
@@ -209,13 +281,26 @@ const measure = async (
     const { error } = await tx.commit().settled;
     if (error !== undefined) throw error;
     progress("the setup is committed");
+    // Today's piece keeps the rows in its result, and a client watches the
+    // one row. A client of a list in chunks watches a row through its chunk
+    // only where it already holds the list and the row stays where it is,
+    // as for a rename.
+    const watchOf = (stays: boolean): Watch =>
+      arm === "today" ? "row" : WATCH === "chunk" && !stays ? "list" : WATCH;
     const loaded = await visible(
       reader,
       result,
       length - 1,
       `t${length - 1}!`,
+      watchOf(false),
     );
-    await visible(sender, result, length - 1, `t${length - 1}!`);
+    await visible(
+      sender,
+      result,
+      length - 1,
+      `t${length - 1}!`,
+      watchOf(false),
+    );
     const load = round(loaded - began);
     progress("both clients read the last row");
     await serving.host.whenQuiescent();
@@ -243,8 +328,9 @@ const measure = async (
       at: number,
       label: string,
     ) => {
-      const onSender = visible(sender, result, at, label);
-      const onReader = visible(reader, result, at, label);
+      const stays = name === "rename";
+      const onSender = visible(sender, result, at, label, watchOf(stays));
+      const onReader = visible(reader, result, at, label, watchOf(stays));
       const sent = performance.now();
       stream(name).send(event as never);
       const [first, second] = await Promise.all([onSender, onReader]);
@@ -297,7 +383,13 @@ const measure = async (
     await serving.restart();
     const late = client();
     const last = length + events - 1;
-    const read = await visible(late, result, last, `added ${events - 1}!`);
+    const read = await visible(
+      late,
+      result,
+      last,
+      `added ${events - 1}!`,
+      watchOf(false),
+    );
     await serving.host.whenQuiescent();
     const quiescent = performance.now();
     const afterRead = serving.pieces()[0];
@@ -349,6 +441,7 @@ const measure = async (
       add: summary(adds),
       memory,
       ...(counts === undefined ? {} : { piece: counts }),
+      ...(listReads.calls === 0 ? {} : { listReads: listReads.calls }),
       resume: {
         ...resume,
         firstEvent: {

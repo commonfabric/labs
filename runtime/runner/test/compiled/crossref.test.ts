@@ -15,7 +15,7 @@ import {
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { openStorage, type TestStorage } from "./storage.ts";
+import { openStorage, storedList, type TestStorage } from "./storage.ts";
 
 /** The default pattern of `compare/fixtures/<name>.tsx`. */
 const artifact = async (name: string): Promise<Artifact> => {
@@ -230,11 +230,11 @@ describe("the stored labels of the inverse of a relation of references: a groupi
     }]);
     const tx = runtime.edit();
     try {
-      // The bucket is a document of its own, which the result links to.
-      const bucket = tx.readValueOrThrow({
-        ...result.getAsNormalizedFullLink(),
-        path: ["byName", "buckets", "s:2"],
-      });
+      // The bucket is a document of its own, which the document of the
+      // bucket links of the index links to.
+      const bucket = (storedList(runtime, result, ["byName", "buckets"]) as {
+        [key: string]: unknown;
+      })["s:2"];
       expect(isPrimitiveCellLink(bucket)).toBe(true);
       const [stored] = tx.readValueOrThrow({
         space,

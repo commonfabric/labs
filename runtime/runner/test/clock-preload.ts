@@ -205,11 +205,21 @@ installFakeClock({
     // under the same flush deadline and the same round trips over real I/O
     // as the two classes above. It waits on the values a client reads.
     "compiled-serving",
+    // The same, for the event a client sends to a compiled piece.
+    "compiled-serving-actor",
+    // The same, for a compiled piece that two clients demand.
+    "scoped-serving",
     // The same serving memory server, taken over by a second serving loop.
     "compiled-serving-takeover",
     "compiled-serving-takeover-handlers",
     "compiled-serving-takeover-view",
     "compiled-serving-takeover-derived",
+    // The same, for the events of two principals in turn.
+    "compiled-serving-principals",
+    // The same, for an instance a handler made, which two sessions demand.
+    "made-session",
+    // The same, for a rendered tree that two principals read.
+    "scoped-view",
   ],
 });
 

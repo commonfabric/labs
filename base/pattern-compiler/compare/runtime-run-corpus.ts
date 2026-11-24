@@ -44,6 +44,7 @@ import {
 import { generateEvent, generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 import { argumentOf, categoryOf, ExecutorRun, normalize } from "./values.ts";
+import { hasWish, homeStubs, memoryHome, seedHome } from "./wish-home.ts";
 
 type EmittedModule = Omit<CorpusModule, "patterns"> & {
   patterns: Artifact[];
@@ -111,10 +112,15 @@ const started = async (
   });
   let piece: CompiledPiece | undefined;
   let fellBack: string | undefined;
+  // The home a `wish` resolves in, for the runtime's own `wish` on both
+  // paths.
+  await seedHome(runtime, space);
   if (compiler !== undefined) {
     runCompiledPatterns(runtime, {
       compile: (given) => compiler.compile(given),
-      piece: { now },
+      // The runtime of the run has no serving loop, which is what names
+      // the principal a run acts for.
+      piece: { now, actsFor: space },
       started: (made) => piece = made,
       fellBack: (_program, reason) => fellBack = reason,
     });
@@ -215,9 +221,13 @@ const runOne = async (
     if (on.refused !== undefined) {
       return { ...base, compiled: true, startRefused: on.refused };
     }
+    // The executor in memory answers a `wish` from the table over the same
+    // home, and answers no effect.
+    const stubs = hasWish(plan) ? homeStubs(await memoryHome()) : undefined;
     const alone = new ExecutorRun(artifact, argument, artifacts, {
       completion: () => undefined,
       now,
+      ...(stubs === undefined ? {} : { home: stubs }),
     } as never);
     alone.start(undefined);
     const events = eventOrder(plan, "outside first").map((binding) => ({
@@ -291,6 +301,11 @@ const run = async (file: string, part: string | undefined) => {
   ) => Artifact | undefined;
   const done = new Set((await read(file)).map(({ module }) => module));
   const compiler = new PatternCompiler();
+  // A fetch effect of a compiled piece is answered by the runtime's fetch
+  // built-in, and the addresses of the corpus are generated: no request
+  // leaves the run.
+  globalThis.fetch = () =>
+    Promise.reject(new Error("The corpus run makes no request."));
   // What the runtime logs while a module runs is not the harness's output.
   const { warn, error, log } = console;
   for (const module of modules) {

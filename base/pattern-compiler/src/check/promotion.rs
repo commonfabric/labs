@@ -532,6 +532,9 @@ impl<'a> Checker<'_, 'a> {
                         "`.{name}(...)`, an aggregate or a collection-index method"
                     ));
                 }
+                if api::is_window_method(name) {
+                    return self::expression(format!("`.{name}(...)`, a window of a collection"));
+                }
                 if api::is_handle_collection_method(name) {
                     return self.pure_collection(call, name, shape);
                 }

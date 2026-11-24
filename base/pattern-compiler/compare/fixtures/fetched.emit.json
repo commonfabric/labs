@@ -1,0 +1,338 @@
+[
+  {
+    "module": "compare/fixtures/fetched.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/fetched.tsx",
+              "source": "const { \"computed\": computed, \"fetchJson\": fetchJson, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:206c2ce0e2bc60de37005e95ff88e7bd2fcf962439644ee4119907028c2270e7\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ url: $h.slot(0) })]));\n$rt.value(1, ($h) => ($h.operand(\"??\", $h.select(0, $h.v($h.slot(3)), true), () => $h.slot(3), () => (\"none\"))));\n$rt.value(4, ($h) => (($h.select(1, $h.v($h.slot(4))) ? (\"pending\") : ($h.select(2, $h.v($h.slot(5))) ? (\"failed\") : (\"settled\")))));\nreturn $rt.thunk(($h) => (({ title: $h.output(0), status: $h.output(1) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [
+            {
+              "cone": null,
+              "path": [],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            }
+          ],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 1
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 2
+            },
+            {
+              "cone": 2
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 1
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 11,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/fetched.tsx",
+                "start": 340
+              },
+              "bodies": [],
+              "entry": "fetched",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 0
+                    },
+                    "path": [
+                      "url"
+                    ]
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/fetched.tsx",
+                "start": 382
+              },
+              "bodies": [],
+              "entry": "title",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                1,
+                2,
+                3
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/fetched.tsx",
+                "start": 448
+              },
+              "bodies": [],
+              "entry": "status",
+              "picks": [],
+              "selectors": [
+                1,
+                2
+              ],
+              "slots": [
+                4,
+                5
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [
+            {
+              "implementation": {
+                "builtin": "fetchJson"
+              },
+              "input": {
+                "op": "slot",
+                "slot": 0
+              },
+              "kind": "effect",
+              "name": "fetched",
+              "within": []
+            }
+          ],
+          "outputs": [
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "title"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "slot",
+                    "slot": 3
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "condition": {
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 1
+                    },
+                    {
+                      "op": "slot",
+                      "slot": 2
+                    }
+                  ],
+                  "op": "derive"
+                },
+                "op": "select",
+                "selector": 0
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "status"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "branches": [
+                      {
+                        "op": "const"
+                      },
+                      {
+                        "op": "const"
+                      }
+                    ],
+                    "condition": {
+                      "op": "slot",
+                      "slot": 5
+                    },
+                    "op": "select",
+                    "selector": 2
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 4
+                },
+                "op": "select",
+                "selector": 1
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:206c2ce0e2bc60de37005e95ff88e7bd2fcf962439644ee4119907028c2270e7"
+          ],
+          "picks": [],
+          "selectors": [
+            {
+              "arity": 2
+            },
+            {
+              "arity": 2
+            },
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "url"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "shape",
+              "path": [
+                "result"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "shape",
+              "path": [
+                "result",
+                "title"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "result",
+                "title"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "pending"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "error"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

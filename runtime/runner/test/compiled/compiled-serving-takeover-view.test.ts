@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { Cell } from "../../src/cell.ts";
 import { setUpCompiledPiece } from "../../src/compiled/setup.ts";
+import { rowCell, rowsRead } from "./storage.ts";
 import { programOf, servingTakeover } from "./takeover-harness.ts";
 
 type Item = { id: string; title: string; done: boolean };
@@ -36,7 +37,9 @@ describe("the first event after another serving loop took over a compiled piece 
       cell,
       (value) =>
         JSON.stringify(
-            value?.$UI?.children?.[1]?.map((row) => row?.children?.[0]),
+            rowsRead<Node>(value?.$UI?.children?.[1]).map((row) =>
+              row?.children?.[0]
+            ),
           ) === JSON.stringify(expected) &&
         (events === undefined || value?.events === events),
       `a client reads ${expected.length} rows`,
@@ -90,9 +93,10 @@ describe("the first event after another serving loop took over a compiled piece 
 
   /** The cell of the stream that the row at `at` holds as `onClick`. */
   const clickOf = (cell: Cell<View>, at: number) =>
-    cell.key("$UI").key("children").key(1).key(at).key("props").key(
-      "onClick",
-    ) as unknown as Cell<unknown>;
+    rowCell<Node>(
+      cell.key("$UI").key("children").key(1) as unknown as Cell<unknown>,
+      at,
+    ).key("props").key("onClick") as unknown as Cell<unknown>;
 
   it("evaluates the body of the row of the item an event gave another title, and of no other row, at 100 rows", async () => {
     const { sender, cell, reader, read } = await takenOver(100);

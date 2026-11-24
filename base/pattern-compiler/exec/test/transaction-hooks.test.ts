@@ -912,27 +912,51 @@ describe("the table of inputs of a transaction", () => {
 });
 
 describe("an element at no stored position", () => {
-  it("binds the slot of an element of an array a computation returned to the one position that computation read", async () => {
-    // `items.get() || []` over an array of plain values in place: the
-    // elements the `filter` sees are values in memory. The computation read
-    // the stored array whole, whose label covers every element of it.
-    const recorder = new Recorder();
-    const instance = new Instance(
-      await artifactOf("filter-of-computed"),
-      { items: [{ done: true, text: "a" }, { done: false, text: "b" }] },
-      { transactions: recorder },
-    );
-    const groups = recorder.changed.flatMap(({ writes }) => writes ?? [])
+  /** The slots of each element that a write of the `filter` names. */
+  const elementSlots = (recorder: Recorder) =>
+    recorder.changed.flatMap(({ writes }) => writes ?? [])
       .flatMap((write) => {
         const elements = write.outputs?.[0]?.elements?.[0];
         return elements !== undefined && "groups" in elements
           ? elements.groups
           : [];
       });
+
+  it("binds the slot of an element of an array a computation returned to the one position that computation read", async () => {
+    // `items?.get() || [...]` where `items` holds nothing: the `filter`
+    // runs over the array written at the right, whose elements are values
+    // in memory. The computation read `items` for the test of `||`.
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("filter-of-fallback"),
+      {},
+      { transactions: recorder },
+    );
+    const groups = elementSlots(recorder);
     expect(groups.length).toBeGreaterThan(0);
     for (const group of groups) {
       expect(group.slots[2]).toEqual({
         chain: [{ doc: instance.argument, path: ["items"] }],
+        observes: "value",
+      });
+    }
+  });
+
+  it("binds the slot of an element to its stored position where `||` selects a left operand that is an array of plain values in place", async () => {
+    // `items.get() || []` where `items` holds an array: the result of
+    // `||` is the reference to `items` (PL §3.5), so the `filter` runs
+    // over the stored array and each element is at its position.
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("filter-of-computed"),
+      { items: [{ done: true, text: "a" }, { done: false, text: "b" }] },
+      { transactions: recorder },
+    );
+    const bound = elementSlots(recorder).map((group) => group.slots[2]);
+    expect(bound.length).toBeGreaterThan(0);
+    for (const position of ["0", "1"]) {
+      expect(bound).toContainEqual({
+        chain: [{ doc: instance.argument, path: ["items", position, "done"] }],
         observes: "value",
       });
     }
@@ -1882,5 +1906,139 @@ describe("the records of the row documents a `lift` writes", () => {
     instance.dispatch();
 
     expect(rows(mark)).toEqual([]);
+  });
+});
+
+// `fixtures/named-position.tsx`: the row of a `map` over an array of
+// references holds the cell of its item, which its body names as
+// `items.key(index)` and does not read. The plan has a slot for the
+// reference at `items/*`, and no read binds it.
+describe("a slot of the reference at a position that a body named through a handle and did not read", () => {
+  /** An instance over `count` items, each a document of its own. */
+  const over = async (count: number) => {
+    const recorder = new Recorder((doc, path, observes) =>
+      `${doc}/${path.join("/")} ${observes}`
+    );
+    const documents = Array.from({ length: count }, (_, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { title: `t${index}`, n: index },
+    }));
+    const instance = new Instance(
+      await artifactOf("named-position"),
+      { items: documents.map(({ id }) => ({ $link: { doc: id, path: [] } })) },
+      { transactions: recorder, documents },
+    );
+    /** The paths each record of `rows/<row>/item` binds a chain to. */
+    const named = (row: number) =>
+      [
+        ...recorder.changed.flatMap(({ writes }) => writes ?? []),
+        ...recorder.left.flatMap(({ writes }) => writes),
+      ].filter(({ target }) => target.path.join("/") === `rows/${row}/item`)
+        .flatMap(({ slots }) => Object.values(slots)).flatMap((bound) =>
+          "chain" in bound
+            ? [bound.chain[bound.chain.length - 1].path.join("/")]
+            : []
+        );
+    return { instance, recorder, named };
+  };
+
+  it("binds the slot to the position the body named, and to no position that names every member", async () => {
+    const { named } = await over(3);
+
+    for (const row of [0, 1, 2]) {
+      expect(named(row)).toContain(`items/${row}`);
+      expect(named(row)).not.toContain("items/*");
+    }
+  });
+
+  it("gives the record of one row again when the label at the position of its member changed, and of no other row, among 10 members and among 1,000", async () => {
+    for (const count of [10, 1_000]) {
+      const { instance, recorder } = await over(count);
+      const given = recorder.left.length;
+
+      // The store says that a read of the second position consumes
+      // another label, and that a read of no other position does.
+      recorder.labelsChanged?.(
+        [{
+          doc: instance.argument,
+          paths: [["items", "1"]],
+          unchanged: (path) => path.join("/") !== "items/1",
+        }],
+        true,
+      );
+      instance.dispatch();
+
+      expect(
+        recorder.left.slice(given).flatMap(({ writes }) => writes).filter((
+          { target },
+        ) => target.path[0] === "rows").map(({ target }) =>
+          target.path.join("/")
+        ),
+      ).toEqual(["rows/1/item"]);
+    }
+  });
+});
+
+// `fixtures/unchanged-place.tsx`: a change of `count` gives `parity`
+// another value, and the result is compared with its form whole, `chosen`
+// with it. The record of a place that holds what it held forms the label
+// of the place again, so it is given where the inputs of the place are
+// other ones than those the record last given for it had, and not
+// otherwise.
+describe("the record of a place of the result that a comparison left as it was", () => {
+  const started = async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("unchanged-place"),
+      { count: 1, useLeft: true, left: 5, right: 7 },
+      { transactions: recorder },
+    );
+    /** The targets of the records given for places left as they were. */
+    const leftBy = (event: { count?: number; useLeft?: boolean }) => {
+      const given = recorder.left.length;
+      instance.send(bindingOf(instance, "set"), event);
+      return recorder.left.slice(given).filter(({ cause }) =>
+        cause === "derivation"
+      ).flatMap(({ writes }) => writes).map(({ target }) =>
+        target.path.join("/")
+      );
+    };
+    return { instance, recorder, leftBy };
+  };
+
+  it("is not given again where the place has the inputs it had", async () => {
+    const { instance, leftBy } = await started();
+
+    const left = leftBy({ count: 2 });
+
+    expect(instance.result()).toMatchObject({ parity: 0, chosen: true });
+    expect(left).toEqual([]);
+  });
+
+  it("is not given again at any of three changes in a row", async () => {
+    const { leftBy } = await started();
+
+    const left = [2, 3, 4].flatMap((count) => leftBy({ count }));
+
+    expect(left).toEqual([]);
+  });
+
+  it("is given again where an evaluation bound a slot to another position", async () => {
+    const { instance, leftBy } = await started();
+
+    const left = leftBy({ count: 2, useLeft: false });
+
+    expect(instance.result()).toMatchObject({ parity: 0, chosen: true });
+    expect(left).toEqual(["chosen"]);
+  });
+
+  it("is given again where a label the record read changed", async () => {
+    const { instance, recorder, leftBy } = await started();
+
+    recorder.labelsChanged?.([{ doc: instance.argument, paths: [["left"]] }]);
+    const left = leftBy({ count: 2 });
+
+    expect(left).toEqual(["chosen"]);
   });
 });

@@ -69,8 +69,20 @@ fn a_write_to_an_annotated_path_has_the_constraints_of_its_annotations() {
     let analysis = analysis();
     let plan = &analysis.modules[0].plans[0].plan;
     let body = constraints_of(plan, "save", &["body"]);
+    // The record of the policy holds, beside the path of the module, the
+    // identity of the module, which `Body.code` of the handler holds too.
+    let identity = plan["bodies"]
+        .as_array()
+        .expect("bodies")
+        .iter()
+        .find(|body| body["name"] == json!("save"))
+        .expect("the body of `save`")["code"]["module"]
+        .clone();
+    assert!(identity
+        .as_str()
+        .is_some_and(|identity| !identity.is_empty()));
     assert!(
-        body.contains(&json!({ "kind": "writer", "anyOf": [{ "body": { "module": "case.tsx", "binding": "save" } }] })),
+        body.contains(&json!({ "kind": "writer", "anyOf": [{ "body": { "module": "case.tsx", "binding": "save", "identity": identity } }] })),
         "{body:?}"
     );
     assert!(body.contains(&json!({ "kind": "writerFit" })), "{body:?}");

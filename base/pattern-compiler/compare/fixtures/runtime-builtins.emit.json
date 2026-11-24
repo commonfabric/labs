@@ -1,0 +1,656 @@
+[
+  {
+    "module": "compare/fixtures/runtime-builtins.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/runtime-builtins.tsx",
+              "source": "const { \"computed\": computed, \"currentPrincipal\": currentPrincipal, \"eventKey\": eventKey, \"handler\": handler, \"pattern\": pattern, \"spaceAccess\": spaceAccess, \"spaceMembers\": spaceMembers, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst record = $rt.data(handler((event, { notes, last }) => {\n  last.set({\n    by: currentPrincipal() ?? \"nobody\",\n    key: eventKey(),\n    level: spaceAccess(notes) ?? \"unknown\",\n    text: event.text,\n  });\n}));\n\nconst $default = $rt.data((pattern(\"sha256:023f86b0326e3d314c8699e3444fba3b9fbb8d7d8b901e4e722bcc223b93a555\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(2, ($h) => ($h.operand(\"??\", $h.select(0, $h.v(spaceAccess($h.slot(0))), true), () => spaceAccess($h.slot(0)), () => (\"unknown\"))));\n$rt.value(6, ($h) => ($h.at(((Object).keys($h.v($h.operand(\"??\", $h.select(1, $h.v($h.at(spaceMembers($h.slot(0)), [\"principals\"])), true), () => $h.at(spaceMembers($h.slot(0)), [\"principals\"]), () => ({  }))))), [\"length\"])));\nreturn $rt.thunk(($h) => (({ last: $h.slot(6), level: $h.output(0), members: $h.output(1), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { notes, last }) => {\n  last.set({\n    by: currentPrincipal() ?? \"nobody\",\n    key: eventKey(),\n    level: spaceAccess(notes) ?? \"unknown\",\n    text: event.text,\n  });\n})($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1
+            },
+            {
+              "cone": 1
+            },
+            {
+              "cone": 1
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            }
+          ],
+          "valuesWithoutOutput": [
+            3,
+            5
+          ]
+        },
+        "line": 45,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/5",
+              "handler": {
+                "body": 0
+              },
+              "name": "record",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "last"
+                  ],
+                  "place": {
+                    "slot": 6
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 6
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "notes"
+                  ],
+                  "place": {
+                    "slot": 7
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "record",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "eventKey"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "principal"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 3
+                },
+                {
+                  "at": [
+                    "binding",
+                    "last"
+                  ],
+                  "handle": true,
+                  "slot": 4
+                },
+                {
+                  "at": [
+                    "binding",
+                    "notes"
+                  ],
+                  "handle": true,
+                  "slot": 5
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 4
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 5
+                      },
+                      {
+                        "op": "dynamic",
+                        "reads": 1
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/runtime-builtins.tsx",
+                "start": 1081
+              },
+              "bodies": [],
+              "entry": "level",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/runtime-builtins.tsx",
+                "start": 1148
+              },
+              "bodies": [],
+              "entry": "members",
+              "picks": [],
+              "selectors": [
+                1
+              ],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/runtime-builtins.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [
+            {
+              "why": {
+                "kind": "space",
+                "of": 0
+              }
+            },
+            {
+              "why": {
+                "kind": "space",
+                "of": 5
+              }
+            }
+          ],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "level"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "shared",
+                    "template": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "condition": {
+                  "op": "shared",
+                  "template": 0
+                },
+                "op": "select",
+                "selector": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "members"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "branches": [
+                      {
+                        "op": "shared",
+                        "template": 1
+                      },
+                      {
+                        "op": "const"
+                      }
+                    ],
+                    "condition": {
+                      "op": "shared",
+                      "template": 1
+                    },
+                    "op": "select",
+                    "selector": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "last"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:023f86b0326e3d314c8699e3444fba3b9fbb8d7d8b901e4e722bcc223b93a555"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [
+            {
+              "arity": 2
+            },
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "notes"
+              ],
+              "resolved": true,
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "eventKey"
+              ],
+              "root": {
+                "kind": "cause"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "principal"
+              ],
+              "root": {
+                "kind": "cause"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "last"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "notes"
+              ],
+              "resolved": true,
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "notes"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "last",
+              "schema": "unhashed:schema/6",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                },
+                {
+                  "op": "dynamic",
+                  "reads": 0
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                },
+                {
+                  "op": "dynamic",
+                  "reads": 0
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "notes": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "notes"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "last": {
+                  "properties": {
+                    "by": {
+                      "type": "string"
+                    },
+                    "key": {
+                      "type": "string"
+                    },
+                    "level": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "by",
+                    "key",
+                    "level",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "level": {
+                  "type": "string"
+                },
+                "members": {
+                  "type": "number"
+                },
+                "record": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "last",
+                "level",
+                "members",
+                "record"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "by": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "level": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "by",
+                "key",
+                "level",
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "default": {
+                "by": "",
+                "key": "",
+                "level": "",
+                "text": ""
+              },
+              "properties": {
+                "by": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "level": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "by",
+                "key",
+                "level",
+                "text"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

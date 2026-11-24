@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/wish-home.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"wish\": wish } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:cb1b312d4de1a87689506d2d7380701588eca08b989e7c25c820ca44c53892e8\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ query: (\"#profile\") })]));\n$rt.request(1, ($h) => ([({ query: (\"#profileName\") })]));\n$rt.request(2, ($h) => ([({ query: (\"#profileBio\") })]));\n$rt.request(3, ($h) => ([({ query: (\"#mentionable\") })]));\n$rt.request(4, ($h) => ([({ query: (\"#pieceRegistry\") })]));\n$rt.request(5, ($h) => ([({\n    query: (\"#nothingTagged\"),\n    scope: [(\".\"), (\"~\")],\n  })]));\n$rt.request(6, ($h) => ([({\n    query: (\"#nothingTagged\"),\n    headless: (true),\n  })]));\n$rt.value(2, ($h) => ((`hello ${$h.v(($h.select(0, $h.v($h.slot(2)), true) ?? (\"nobody\")))}`)));\n$rt.value(4, ($h) => ((`${$h.v($h.slot(3))}: ${$h.v($h.slot(4))}`)));\n$rt.value(6, ($h) => ($h.at(($h.select(1, $h.v($h.slot(7)), true) ?? []), [\"length\"])));\n$rt.value(8, ($h) => ($h.at(($h.select(2, $h.v($h.slot(9)), true) ?? []), [\"length\"])));\nreturn $rt.thunk(($h) => (({ note: $h.slot(11), greeting: $h.output(0), about: $h.output(1), count: $h.output(2), matches: $h.output(3), profile: $h.slot(13), problem: $h.slot(12), mentionable: $h.slot(6), registry: $h.slot(15), missing: $h.slot(10), quiet: $h.slot(14) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"wish\": wish } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:cb1b312d4de1a87689506d2d7380701588eca08b989e7c25c820ca44c53892e8\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ query: (\"#profile\") })]));\n$rt.request(1, ($h) => ([({ query: (\"#profileName\") })]));\n$rt.request(2, ($h) => ([({ query: (\"#profileBio\") })]));\n$rt.request(3, ($h) => ([({ query: (\"#mentionable\") })]));\n$rt.request(4, ($h) => ([({ query: (\"#pieceRegistry\") })]));\n$rt.request(5, ($h) => ([({\n    query: (\"#nothingTagged\"),\n    scope: [(\".\"), (\"~\")],\n  })]));\n$rt.request(6, ($h) => ([({\n    query: (\"#nothingTagged\"),\n    headless: (true),\n  })]));\n$rt.value(2, ($h) => ((`hello ${$h.v($h.operand(\"??\", $h.select(0, $h.v($h.slot(2)), true), () => $h.slot(2), () => (\"nobody\")))}`)));\n$rt.value(4, ($h) => ((`${$h.v($h.slot(3))}: ${$h.v($h.slot(4))}`)));\n$rt.value(6, ($h) => ($h.at($h.operand(\"??\", $h.select(1, $h.v($h.slot(7)), true), () => $h.slot(6), () => []), [\"length\"])));\n$rt.value(8, ($h) => ($h.at($h.operand(\"??\", $h.select(2, $h.v($h.slot(9)), true), () => $h.slot(9), () => []), [\"length\"])));\nreturn $rt.thunk(($h) => (({ note: $h.slot(11), greeting: $h.output(0), about: $h.output(1), count: $h.output(2), matches: $h.output(3), profile: $h.slot(13), problem: $h.slot(12), mentionable: $h.slot(6), registry: $h.slot(15), missing: $h.slot(10), quiet: $h.slot(14) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -114,7 +114,10 @@
               "output": 3
             }
           ],
-          "valuesWithoutOutput": []
+          "valuesWithoutOutput": [
+            5,
+            7
+          ]
         },
         "line": 9,
         "name": "default",

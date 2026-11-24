@@ -5132,6 +5132,58 @@ export const Sorted = pattern<
     assert_eq!(plan["collections"][1]["source"]["collection"], json!(0));
 }
 
+/// A window (note 921 of `SPEC-NOTES.md`): `last` and `first` are
+/// collections over their receiver whose membership is a `fold` of the
+/// template of the count over every element, whose elements are the source
+/// elements passed through, and a `map` over a window is a collection over
+/// it. The count is the function of the collection.
+#[test]
+fn a_window_is_a_collection_with_the_fold_of_its_count_and_a_map_over_it_is_a_collection_over_it() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Item { title: string; rank: number }
+export const Windowed = pattern<
+  { items: Writable<Item[]>; shown: number },
+  { titles: string[]; oldest: Item[] }
+>(({ items, shown }) => {
+  const latest = items.last(3);
+  return { titles: latest.map((item) => item.title), oldest: items.first(shown) };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Windowed");
+    let last = &plan["collections"][0];
+    assert_eq!(last["construct"], json!("last"));
+    assert_eq!(
+        last["source"]["slot"]
+            .as_u64()
+            .map(|slot| &plan["slots"][slot as usize]["path"]),
+        Some(&json!(["items"]))
+    );
+    assert_eq!(last["membership"]["op"], json!("fold"), "{last}");
+    assert_eq!(last["membership"]["body"]["op"], json!("const"));
+    assert_eq!(plan["collections"][1]["construct"], json!("map"));
+    assert_eq!(plan["collections"][1]["source"]["collection"], json!(0));
+    let first = &plan["collections"][2];
+    assert_eq!(first["construct"], json!("first"));
+    let count = first["membership"]["body"]["slot"]
+        .as_u64()
+        .expect("the slot of the count") as usize;
+    assert_eq!(plan["slots"][count]["path"], json!(["shown"]));
+    assert_eq!(plan["slots"][count]["observes"], json!("value"));
+    // An element of a window is the element of the source, by reference.
+    let element = plan["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|output| output["path"] == json!(["oldest", "*"]))
+        .expect("the entry of an element of the window");
+    let slot = element["template"]["slot"].as_u64().expect("a slot") as usize;
+    assert_eq!(plan["slots"][slot]["root"]["kind"], json!("element"));
+    assert_eq!(plan["slots"][slot]["observes"], json!("identity"));
+}
+
 /// A key that is a cell is observed as the reference it is, in the key
 /// function of an index and in a `lookup` (PL §3.17): the bucket is that
 /// of the position the reference names, and nothing of what the cell
@@ -5291,4 +5343,118 @@ export const Table = pattern<
         .collect();
     assert!(paths.contains(&&json!(["0"])), "{paths:?}");
     assert!(paths.contains(&&json!(["1", "title"])), "{paths:?}");
+}
+
+/// `asScope(scope)` on a call that is compiled into the surrounding
+/// instance (PL §8, question 161, assumed): the scope of the modifier is
+/// the scope of each state cell the callee declares with a broader one, and
+/// a cell the callee declares with a narrower scope keeps its own. The same
+/// for a call in the body of a `map` over an array of plain values in
+/// place, which the plan does not tell apart from one over an array of
+/// references, and for a call outside every element body. A call with no
+/// modifier leaves the scopes as the callee declares them.
+#[test]
+fn as_scope_on_a_call_compiled_in_sets_the_scope_of_the_state_of_the_callee() {
+    let analysis = program(
+        r#"import { Writable, pattern } from "commonfabric";
+interface Item { title: string }
+const Row = pattern<{ item: Item }>(({ item }) => {
+  const open = Writable.of(false);
+  const draft = Writable.perSession.of("");
+  return { title: item.title, open, draft };
+});
+export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
+  return {
+    rows: items.map((item) => Row.asScope("user")({ item })),
+    one: Row.asScope("user")({ item: first }),
+    plain: Row({ item: first }),
+  };
+});
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan");
+    assert_eq!(found.unsupported, Vec::<(String, u32)>::new());
+    let cells: Vec<(String, String, bool)> = found.plan["stateCells"]
+        .as_array()
+        .expect("state cells")
+        .iter()
+        .map(|cell| {
+            (
+                cell["name"].to_string(),
+                cell["scope"].as_str().expect("a scope").to_string(),
+                cell["within"]
+                    .as_array()
+                    .expect("within")
+                    .iter()
+                    .any(|step| step.get("element").is_some()),
+            )
+        })
+        .collect();
+    let scopes = |name: &str, in_element: bool| -> Vec<String> {
+        cells
+            .iter()
+            .filter(|(cell, _, element)| cell.contains(name) && *element == in_element)
+            .map(|(_, scope, _)| scope.clone())
+            .collect()
+    };
+    assert_eq!(scopes("open", true), ["user"]);
+    assert_eq!(scopes("draft", true), ["session"]);
+    assert_eq!(scopes("open", false), ["user", "space"]);
+    assert_eq!(scopes("draft", false), ["session", "session"]);
+}
+
+/// P451: an operator expression written at a position of a rendered tree
+/// outside every element body, that reads a value of a scope narrower
+/// than the space, is a value of its own in a cone of its own, and the
+/// cone of the tree uses it without listing a slot of the scope: here the
+/// condition of a branch and an attribute that read a value computed from
+/// state of the scope `user`, beside a `map` over an array of references.
+/// The same expressions in the body of the `map` stay in the cone of the
+/// element, and an expression that reads nothing of a scope stays in the
+/// cone of the tree.
+#[test]
+fn an_expression_of_a_view_that_reads_a_value_of_a_scope_is_a_value_of_its_own() {
+    let analysis = program(
+        r#"import { Writable, computed, pattern, UI } from "commonfabric";
+interface Item { title: string }
+export const P = pattern<{ items: Writable<Item[]>; count: number }>(({ items, count }) => {
+  const nickname = new Writable.perUser<string>("");
+  const named = computed(() => nickname.get().length > 0);
+  return {
+    [UI]: (
+      <div>
+        {named ? <b>{nickname}</b> : <i>nobody</i>}
+        <button disabled={!named}>{count > 1 ? "many" : "one"}</button>
+        {items.map((item) => <b>{named ? item.title : "?"}</b>)}
+      </div>
+    ),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let cones = plan["cones"].as_array().expect("cones");
+    let entries: Vec<&str> = cones
+        .iter()
+        .map(|cone| cone["entry"].as_str().expect("an entry"))
+        .collect();
+    assert_eq!(entries, ["named", "child", "disabled", "map", "$UI"]);
+    let tree = cones
+        .iter()
+        .find(|cone| cone["entry"] == "$UI")
+        .expect("the tree");
+    let slots = plan["slots"].as_array().expect("slots");
+    let states: Vec<&Value> = tree["slots"]
+        .as_array()
+        .expect("the slots of the tree")
+        .iter()
+        .map(|slot| &slots[slot.as_u64().expect("a slot") as usize])
+        .filter(|slot| slot["root"]["kind"] == "state")
+        .collect();
+    assert_eq!(states, Vec::<&Value>::new());
 }

@@ -126,11 +126,14 @@ export const memoryHome = async (): Promise<Home> =>
 /**
  * Writes the home into the storage of `runtime`, whose user's home space
  * is `space`, and returns its documents under the identifiers the storage
- * holds them at.
+ * holds them at. With `confidential` false, the profile is written under
+ * no schema, so its label holds the claim of whose it is and no
+ * confidentiality.
  */
 export const seedHome = async (
   runtime: Runtime,
   space: MemorySpace,
+  { confidential = true }: { confidential?: boolean } = {},
 ): Promise<Home> => {
   const committed = async (tx: ReturnType<Runtime["edit"]>) => {
     const { error } = await tx.commit().settled;
@@ -141,7 +144,7 @@ export const seedHome = async (
   const profile = runtime.getCell(
     inProfile,
     "profile",
-    profileSchema(space),
+    confidential ? profileSchema(space) : undefined,
     written,
   );
   profile.set(structuredClone(PROFILE) as never);

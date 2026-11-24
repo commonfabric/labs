@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { type Artifact, Instance } from "../executor.ts";
-import { argumentOf, type Ref } from "../store.ts";
+import { argumentOf, Ref } from "../store.ts";
 
 const ARGUMENT = argumentOf("result");
 
@@ -97,5 +97,68 @@ describe("what a function body is handed", () => {
     instance.writeArgument(["board", "rows", "a", "title"], "edited");
 
     expect(instance.result()).toEqual({ title: "edited" });
+  });
+});
+
+describe("a body handed the reference that each row of a `map` holds", () => {
+  /** The pattern of `compare/fixtures/element-reference.tsx`. */
+  const elementReference = async (): Promise<Artifact> => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/element-reference.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    return patterns.find(({ name }) => name === "default")!;
+  };
+
+  const items = [0, 1, 2].map((index) => ({
+    id: `item-${index}`,
+    kind: "item",
+    value: { title: `t${index}`, n: index },
+  }));
+
+  it("is handed a handle at each row of a `map` over an array of references, which resolves to the element's cell", async () => {
+    const instance = new Instance(
+      await elementReference(),
+      { items: items.map(({ id }) => ({ $link: { doc: id, path: [] } })) },
+      { documents: items },
+    );
+
+    expect(instance.result()).toEqual({
+      keys: items.map(({ id }) => instance.equalsKey(new Ref(id, []))),
+      big: 1,
+    });
+  });
+
+  it("evaluates nothing when a member of an element is written that neither the rows nor the body read", async () => {
+    const instance = new Instance(
+      await elementReference(),
+      { items: items.map(({ id }) => ({ $link: { doc: id, path: [] } })) },
+      { documents: items },
+    );
+    const before = instance.result();
+    const evaluations = instance.counts.evaluations;
+
+    instance.store.write(new Ref("item-1", ["title"]), "edited");
+    instance.settle();
+
+    expect(instance.counts.evaluations).toBe(evaluations);
+    expect(instance.result()).toEqual(before);
+  });
+
+  it("is handed a handle at each row of a `map` over an array of plain values in place, which resolves to the element's position", async () => {
+    const instance = new Instance(await elementReference(), {
+      items: items.map(({ value }) => value),
+    });
+
+    expect(instance.result()).toEqual({
+      keys: items.map((_, index) =>
+        instance.equalsKey(new Ref(ARGUMENT, ["items", `${index}`]))
+      ),
+      big: 1,
+    });
   });
 });

@@ -114,13 +114,23 @@ fn a_write_policy_names_each_writer_and_the_ui_contract_of_a_trusted_action() {
         .iter()
         .filter(|constraint| constraint["kind"] == "writer")
         .collect();
+    // The record of a policy holds, beside the path of the module, the
+    // identity of the module, which `Body.code` of each handler of the
+    // module holds too.
+    let identity = plan["bodies"]
+        .as_array()
+        .expect("bodies")
+        .iter()
+        .find_map(|body| body["code"]["module"].as_str())
+        .expect("a body with `Body.code`");
+    assert!(!identity.is_empty());
     assert_eq!(
         writers,
         [&json!({
             "kind": "writer",
             "anyOf": [
                 {
-                    "body": { "module": "case.tsx", "binding": "send" },
+                    "body": { "module": "case.tsx", "binding": "send", "identity": identity },
                     "uiContract": {
                         "helper": "UiAction",
                         "action": "send",
@@ -128,7 +138,7 @@ fn a_write_policy_names_each_writer_and_the_ui_contract_of_a_trusted_action() {
                         "requiredEventIntegrity": ["surface"],
                     },
                 },
-                { "body": { "module": "case.tsx", "binding": "edit" } },
+                { "body": { "module": "case.tsx", "binding": "edit", "identity": identity } },
             ],
         })]
     );

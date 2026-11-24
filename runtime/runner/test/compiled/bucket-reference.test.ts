@@ -16,6 +16,7 @@ import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { storedList } from "./storage.ts";
 
 /** The default pattern of `compare/fixtures/<name>.tsx`. */
 const artifact = async (name: string): Promise<Artifact> => {
@@ -175,10 +176,7 @@ describe("the rows of a `map` over an array of references that each hold the buc
   ): unknown => {
     const tx = runtime.edit();
     try {
-      const row = tx.readValueOrThrow({
-        ...result.getAsNormalizedFullLink(),
-        path: ["rows", `${index}`],
-      });
+      const row = (storedList(runtime, result, ["rows"]) as unknown[])[index];
       return tx.readValueOrThrow({
         space,
         id: parseLink(row as never).id!,

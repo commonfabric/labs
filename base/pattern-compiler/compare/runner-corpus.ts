@@ -9,7 +9,7 @@
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`:
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume | --serving] [--references] [--evaluate=function] [--detail]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume] [--serving] [--references] [--evaluate=function] [--wishes=table] [--detail]`
  * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report <results.jsonl>`
  *
  * With `--resume`, a second runtime on the same memory server takes the
@@ -60,13 +60,20 @@
  * (`compartmentEvaluator`), and with `--evaluate=function` in the realm of
  * the harness, as the executor in memory evaluates it.
  *
- * A `wish` is answered from the seeded home of `wish-home.ts`, which
- * stands in for the runtime's own resolution: the piece is handed the
- * table as the option `wishes`. A module whose `wish` the home does not
- * simulate is left out, and so is one with a `wish` under `--resume` or
- * `--serving`, where nothing hands the table to the piece that takes over.
- * A module that requests an effect is left out: nothing answers a request
- * of a compiled piece on the runner path.
+ * A `wish` of the piece is answered by the runtime's own `wish`, against
+ * the home that `seedHome()` of `wish-home.ts` writes into the storage of
+ * the run. The executor in memory is answered from the table of
+ * `wish-home.ts`, which simulates the same home; where the table has no
+ * answer for a `wish` of the module, the piece is run and its values are
+ * not compared. With `--wishes=table` the piece is handed the table as the
+ * option `wishes`, as the rounds before round thirteen ran it, and a module
+ * whose `wish` the table does not simulate is left out. A module with a
+ * `wish` is left out under `--serving`, where no client of the harness
+ * seeds the home, and under `--resume` with the table. The built-ins the
+ * runtime answers (`runtimeBuiltins`) are the runtime's own, for the one
+ * user of the run, in a space with no access list. A module that requests
+ * an effect is left out: the runtime's fetch built-ins would answer four
+ * of the effects, with requests to the addresses the generated inputs hold.
  */
 import { Identity } from "@commonfabric/identity";
 
@@ -115,6 +122,10 @@ type Outcome = {
   pattern?: string;
   /** Why the module was not run. */
   skipped?: string;
+  /** Whether the plan of the pattern has a `wish`. */
+  wish?: boolean;
+  /** Why the values were not compared, where they were not. */
+  notCompared?: string;
   /** Whether the piece started and its first commit was taken. */
   started?: boolean;
   /** Why it did not start: the class, and the first line of the reason. */
@@ -229,6 +240,7 @@ export const runOne = async (
   resume: boolean,
   serving = false,
   evaluate: ModuleEvaluator | undefined = undefined,
+  wishTable = false,
   references = false,
 ): Promise<Outcome> => {
   const chosen = await mainPattern(module);
@@ -236,7 +248,12 @@ export const runOne = async (
     return { module: module.module, skipped: "exports no pattern" };
   }
   const artifact = chosen.pattern;
-  const base = { module: module.module, pattern: artifact.name };
+  const wishes = hasWish(artifact.plan);
+  const base = {
+    module: module.module,
+    pattern: artifact.name,
+    ...(wishes ? { wish: true } : {}),
+  };
   if ((artifact.code?.unsupported ?? []).length > 0) {
     return {
       ...base,
@@ -253,11 +270,11 @@ export const runOne = async (
     event: generateEvent(plan, schemas, binding),
   }));
   const now = Date.now();
-  // A `wish` is answered from the seeded home of `wish-home.ts`, on both
-  // sides: the executor in memory from documents it is given, and the
-  // piece from the same documents written into its storage.
-  const wishes = hasWish(artifact.plan);
-  if (wishes && (serving || resume)) {
+  // A `wish` is answered against the seeded home of `wish-home.ts` on
+  // both sides: the executor in memory from a table over documents it is
+  // given, and the piece by the runtime's `wish` over the same documents
+  // written into its storage, or from the table with `--wishes=table`.
+  if (wishes && (serving || (resume && wishTable))) {
     return { ...base, skipped: "needs `wish`" };
   }
   const takeover = serving && resume;
@@ -270,13 +287,13 @@ export const runOne = async (
     ...(stubs === undefined ? {} : { home: stubs }),
   } as never);
   alone.start(undefined);
-  if (stubs !== undefined && stubs.unsimulated.length > 0) {
-    return {
-      ...base,
-      skipped: `needs \`wish\`: ${
-        stubs.unsimulated.map((query) => `\`${query}\``).join(", ")
-      } is not simulated`,
-    };
+  const unsimulated = stubs === undefined || stubs.unsimulated.length === 0
+    ? undefined
+    : `${
+      stubs.unsimulated.map((query) => `\`${query}\``).join(", ")
+    } is not simulated`;
+  if (unsimulated !== undefined && wishTable) {
+    return { ...base, skipped: `needs \`wish\`: ${unsimulated}` };
   }
   events.forEach(({ binding, event }, index) => {
     const [held] = alone.held(binding);
@@ -318,9 +335,19 @@ export const runOne = async (
   let resumed: Outcome["resume"];
   try {
     const result = runtime.getCell<unknown>(space, "corpus on the runner");
-    const seeded = wishes
-      ? homeStubs(await seedHome(runtime, space))
+    const home = wishes ? await seedHome(runtime, space) : undefined;
+    const seeded = home !== undefined && wishTable
+      ? homeStubs(home)
       : undefined;
+    // The runtime of the run has no serving loop, which is what names the
+    // principal a run acts for: the runtime's `wish` and its built-ins
+    // read it.
+    // The harness is host code and vouches for the artifacts the crate
+    // emitted (`CompiledPieceOptions.attested`).
+    const actsFor = {
+      attested: true,
+      ...(wishTable ? {} : { actsFor: space }),
+    };
     const tx = runtime.edit();
     try {
       piece = startCompiledPiece(
@@ -334,6 +361,7 @@ export const runOne = async (
           now,
           ...(evaluate === undefined ? {} : { evaluate }),
           ...(seeded === undefined ? {} : { wishes: seeded.wishes }),
+          ...actsFor,
         },
       );
     } catch (error) {
@@ -385,7 +413,12 @@ export const runOne = async (
             runtime,
             artifact,
             runtime.getCellFromLink(result.getAsNormalizedFullLink()),
-            { artifacts, now, ...(evaluate === undefined ? {} : { evaluate }) },
+            {
+              artifacts,
+              now,
+              ...(evaluate === undefined ? {} : { evaluate }),
+              ...actsFor,
+            },
           );
           piece = await fromBasis.wake();
           await runtime.scheduler.idleWithPendingCommits();
@@ -435,6 +468,16 @@ export const runOne = async (
         after.eventsRefused === before.eventsRefused
       ) handled += 1;
       else failures.push("the handler did not commit");
+    }
+    if (unsimulated !== undefined) {
+      return {
+        ...base,
+        started: true,
+        events: { sent: events.length, handled, failures },
+        refusals: [...piece.refusals].map((reason) => reason.slice(0, 200)),
+        notCompared: unsimulated,
+        ...(resumed === undefined ? {} : { resume: resumed }),
+      };
     }
     const here = normalize(piece.instance.result());
     const there = normalize(alone.result());
@@ -585,9 +628,15 @@ const runServed = async (
         woken = loaded.promise;
         await serving.restart();
       }
-      const stream = piece.instance.streams().find((held) =>
-        held.binding === binding && held.instance === undefined &&
-        held.elements !== undefined
+      // The result is read as the client reads it: a stream that stands in
+      // an output of a scope is in the instance of the client's identity.
+      const stream = piece.transactions.actingFor(
+        client.scopeKeyIdentity,
+        () =>
+          piece.instance.streams().find((held) =>
+            held.binding === binding && held.instance === undefined &&
+            held.elements !== undefined
+          ),
       );
       const entity = stream === undefined
         ? undefined
@@ -657,7 +706,12 @@ const runServed = async (
       else failures.push("the handler did not commit");
     }
     cancel();
-    const here = normalize(piece.instance.result());
+    const here = normalize(
+      piece.transactions.actingFor(
+        client.scopeKeyIdentity,
+        () => piece.instance.result(),
+      ),
+    );
     const there = normalize(alone.result());
     const difference = firstDifference(here, there);
     return {
@@ -738,6 +792,7 @@ const run = async (
   resume: boolean,
   serving: boolean,
   evaluate: ModuleEvaluator | undefined,
+  wishTable: boolean,
   references: boolean,
 ) => {
   const modules = await corpusModules() as EmittedModule[];
@@ -754,6 +809,7 @@ const run = async (
         resume,
         serving,
         evaluate,
+        wishTable,
         references,
       );
     } catch (error) {
@@ -805,6 +861,26 @@ const report = async (file: string) => {
       started.filter(({ equal }) => equal).length
     }`,
   );
+  const wishing = outcomes.filter(({ wish }) => wish);
+  if (wishing.length > 0) {
+    const ranWishing = wishing.filter(({ skipped }) => skipped === undefined);
+    const startedWishing = ranWishing.filter(({ started }) => started);
+    console.log(`with a \`wish\`: ${wishing.length}`);
+    console.log(`  run: ${ranWishing.length}`);
+    console.log(`  started: ${startedWishing.length}`);
+    console.log(
+      `  every event handled: ${
+        startedWishing.filter(({ events }) =>
+          events !== undefined && events.handled === events.sent
+        ).length
+      }`,
+    );
+    console.log(
+      `  compared with the executor in memory: ${
+        startedWishing.filter(({ equal }) => equal !== undefined).length
+      }, equal: ${startedWishing.filter(({ equal }) => equal).length}`,
+    );
+  }
   const resumes = outcomes.flatMap(({ resume }) => resume ?? []);
   if (resumes.length > 0) {
     const taken = resumes.filter(({ failure }) => failure === undefined);
@@ -870,6 +946,7 @@ if (import.meta.main) {
       resume,
       Deno.args.includes("--serving"),
       evaluate,
+      Deno.args.includes("--wishes=table"),
       Deno.args.includes("--references"),
     );
   } else if (command === "report" && file !== undefined) await report(file);

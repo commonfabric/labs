@@ -1687,6 +1687,19 @@ export const FabriChatRoomCore = pattern<
     messageFacts(messages, threadTitles(threadInfo))
   );
   const places = facts.places;
+  // The main conversation's messages, in the order recorded: those that
+  // reply to nothing, or whose reply is shown there. A `filter` of the
+  // stored messages, so a send derives whether the message sent is among
+  // them and reads no other message, and the rows of the main list are a
+  // `map` over its result.
+  const mainMessages = messages.filter((record) =>
+    record.replyTo === undefined || record.replyTo.shownIn !== "thread"
+  );
+  // The newest of them, as a window that a send moves by one.
+  const latestMain = mainMessages.last(FABRICHAT_POLICY.maxWindowCount);
+  const hasOlderMain = computed(() =>
+    mainMessages.length > FABRICHAT_POLICY.maxWindowCount
+  );
   // The space's participants as its root lists them, for a room that isn't
   // that root. A root room's `#default` is the room itself, so it reads only
   // its own; a space whose root isn't there yet lists none.
@@ -1923,7 +1936,7 @@ export const FabriChatRoomCore = pattern<
   const threadDisplay = computed(
     (): ChatDisplay => (hasThread ? "flex" : "none"),
   );
-  const isEmpty = computed(() => facts.main.length === 0);
+  const isEmpty = computed(() => mainMessages.length === 0);
   // Per session, so hidden by a prop rather than a branch (see
   // `FabriChatMessageRow`).
   const threadShownIn = computed((): ShownIn =>
@@ -2098,7 +2111,7 @@ export const FabriChatRoomCore = pattern<
       count: facts.list.count,
       oldestAt: facts.list.oldestAt,
       newestAt: facts.list.newestAt,
-      latest: facts.list.latest,
+      latest: { messages: latestMain, hasOlder: hasOlderMain },
       threads: facts.list.threads,
       legacyReplies: facts.list.legacyReplies,
       windows,
@@ -2200,7 +2213,7 @@ export const FabriChatRoomCore = pattern<
           gap="3"
           style={{ minHeight: "160px" }}
         >
-          {facts.main.map((message) => (
+          {mainMessages.map((message) => (
             <FabriChatMessageRow
               message={message}
               inThread={false}

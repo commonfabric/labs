@@ -18,7 +18,9 @@
  * `deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts again <results.jsonl> <new.jsonl>`
  *
  * runs the executor alone on the crate's current output and compares it
- * with the values the earlier run read.
+ * with the values the earlier run read. A line of a run whose executor had
+ * stubs holds whether they had the table of `stubs.ts` and what their
+ * clock held, and `again` runs it with the same stubs and that clock.
  *
  * `run` runs a module that needs `wish` in the seeded home of
  * `wish-home.ts`, and leaves out one whose executor resolves a `wish` the
@@ -82,7 +84,28 @@ export type ModuleValues = {
     events: { binding: number; event: unknown }[];
     outcomes: Pick<EventOutcome, "outcome" | "elements">[];
     values: Values;
+    /**
+     * The stubs of the executor of the run, where it had any: whether
+     * they had the table of `stubs.ts` in place of the network, and what
+     * their clock held.
+     */
+    stubs?: { stubbed: boolean; now: number };
   };
+};
+
+/**
+ * The stubs of a run whose clock held `now`: for a plan with a `wish` the
+ * seeded home, and with `stubbed` the table of `stubs.ts`. Nothing for a
+ * run without the table of a plan with no `wish`.
+ */
+const stubsAt = async (
+  plan: { operations?: { kind?: string }[] },
+  stubbed: boolean,
+  now: number,
+): Promise<Stubs | undefined> => {
+  const home = await wishStubs(plan);
+  if (stubbed) return { ...home, completion: stubCompletion, now };
+  return home === undefined ? undefined : { ...home, now };
 };
 
 /**
@@ -179,12 +202,8 @@ const runOne = async (
   const argument = argumentOf({ argument: {}, inputs });
   // The executor runs beside today's run, which finds each stream by
   // where the executor stored it (ruling Z43).
-  const executor = new ExecutorRun(
-    artifact,
-    argument,
-    artifacts,
-    stubbed ? await stubsNow(plan) : await wishStubs(plan),
-  );
+  const stubs = stubbed ? await stubsNow(plan) : await wishStubs(plan);
+  const executor = new ExecutorRun(artifact, argument, artifacts, stubs);
   const restoreFetch = stubbed ? stubFetch() : undefined;
   let result: Awaited<ReturnType<typeof runModule>>;
   try {
@@ -233,7 +252,41 @@ const runOne = async (
       events,
       outcomes,
       values: inFileForm(values) as Values,
+      ...(stubs === undefined ? {} : { stubs: { stubbed, now: stubs.now } }),
     },
+  };
+};
+
+/**
+ * The line of an earlier run with the comparison of `artifact`, run on
+ * the executor now, with the values that the earlier run read from
+ * today's runtime. A line of a run with stubs is run with the same stubs
+ * and with the clock that the line holds, so a request that the table of
+ * `stubs.ts` answered in the earlier run is answered here, and a time
+ * that the executor reads is near the times that the earlier run read. A
+ * line that holds no stubs is run with the seeded home and the clock at
+ * now where its plan has a `wish`.
+ */
+export const replayed = async (
+  earlier: ModuleValues & { runtime: NonNullable<ModuleValues["runtime"]> },
+  artifact: Artifact,
+  artifacts?: (id: string) => Artifact | undefined,
+): Promise<ModuleValues> => {
+  const { argument, events, outcomes, stubs } = earlier.runtime;
+  const values = outOfFileForm(earlier.runtime.values) as Values;
+  return {
+    ...earlier,
+    comparison: compareValues(
+      artifact,
+      argument,
+      events,
+      outcomes,
+      values,
+      artifacts,
+      stubs === undefined
+        ? await wishStubs(artifact.plan)
+        : await stubsAt(artifact.plan, stubs.stubbed, stubs.now),
+    ),
   };
 };
 
@@ -256,20 +309,13 @@ const again = async (file: string, to: string) => {
       lines.push(JSON.stringify(earlier));
       continue;
     }
-    const { argument, events, outcomes } = earlier.runtime;
-    const values = outOfFileForm(earlier.runtime.values) as Values;
-    lines.push(JSON.stringify({
-      ...earlier,
-      comparison: compareValues(
+    lines.push(JSON.stringify(
+      await replayed(
+        { ...earlier, runtime: earlier.runtime },
         artifact,
-        argument,
-        events,
-        outcomes,
-        values,
         artifacts,
-        await wishStubs(artifact.plan),
       ),
-    }));
+    ));
   }
   await Deno.writeTextFile(to, lines.map((line) => `${line}\n`).join(""));
 };

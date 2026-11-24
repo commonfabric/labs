@@ -52,7 +52,7 @@ was last checked against the code.
 | [`cfcWriteFloor`](#cfcwritefloor)                                           | `RuntimeOptions.cfcWriteFloor`                                                                                                                  | `enforce`                                                                            | Bernhard Seefeld (#4479)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcTriggerReadGating`](#cfctriggerreadgating)                             | `RuntimeOptions.cfcTriggerReadGating`                                                                                                           | `true`                                                                               | Bernhard Seefeld (#4488)                              | move toward `true`                                                                                                                                                                                                                | implemented, on by default                                                      |
 | [`cfcDecomposedEnvelopes`](#cfcdecomposedenvelopes)                         | `RuntimeOptions.cfcDecomposedEnvelopes`                                                                                                         | `false`                                                                              | Robin McCollum (CT-2062)                              | move toward `true` once every deployed reader resolves the references a stored root carries                                                                                                                                      | implemented, off by default                                                     |
-| [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `false`                                                                              | Bernhard Seefeld                                      | move toward `true` once every deployed reader interprets version-2 envelopes                                                                                                                                                     | implemented, off by default                                                     |
+| [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `false`                                                                              | Bernhard Seefeld                                      | move toward `true` once every deployed reader interprets version-2 envelopes                                                                                                                                                     | implemented, off by default; version 2 for every commit of a compiled piece |
 | [`cfcPolicyEvaluation`](#cfcpolicyevaluation)                               | `RuntimeOptions.cfcPolicyEvaluation`                                                                                                            | `enforce`                                                                            | Bernhard Seefeld (#4566)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcDeclaredMonotonicity`](#cfcdeclaredmonotonicity)                       | `RuntimeOptions.cfcDeclaredMonotonicity`                                                                                                        | `observe`                                                                            | Bernhard Seefeld (#4647)                              | `observe` first, then `enforce` (must soak before the §8.12.7 route 2b event ships)                                                                                                                                               | implemented, on by default at `observe`                                         |
 | [`cfcPrefixProvenanceStats`](#cfcprefixprovenancestats)                     | `RuntimeOptions.cfcPrefixProvenanceStats` (per-deployment; not env-wired)                                                                       | `false`                                                                              | Bernhard Seefeld (#4623)                              | stays a measurement opt-in; fold in or remove after Stage 0                                                                                                                                                                       | implemented, off by default, measurement only                                   |
@@ -1225,7 +1225,13 @@ holds the measurements and the conditions for revisiting.
   `startCompiledPiece()` of `runtime/runner/src/compiled/piece.ts` starts a
   piece from a plan and its value code, with one event handler of the
   scheduler for each stream of the piece and one effect for its derivation,
-  and throws with the option off. The value code of such a piece is
+  and throws with the option off. Such a piece stores the rows of a `map`
+  over references and the buckets of an index it keeps in documents of their
+  own, and the links to them in list documents that its result document
+  links to, an array of more rows than its option `listWhole` in chunks of
+  at most 64 links, or with its option `lists` at `in-place` in its result
+  document. A reader through the runtime reads a list in chunks as an array
+  of chunks, each an array of rows. The value code of such a piece is
   evaluated in an SES compartment
   (`runtime/runner/src/compiled/value-code.ts`), and
   `runtime/runner/src/compiled/compile.deno.ts` compiles a pattern source
@@ -1238,10 +1244,28 @@ holds the measurements and the conditions for revisiting.
   `runtime/runner/src/compiled/serving.ts` installed one. The loader
   compiles the source of a pattern that a client wrote, evaluates the value
   code its own compile gave in a compartment, and reads no artifact from
-  storage. Nothing installs it but `listenCompiledServingMemoryServer()`, a
-  helper for tests whose serving runtimes read their space from the store
-  unless its policy says otherwise, and `runCompiledPatterns()`. The option
-  also gates the
+  storage. `listenCompiledServingMemoryServer()`, a helper for tests whose
+  serving runtimes read their space from the store unless its policy says
+  otherwise, installs it, and so does `runCompiledPatterns()`. A toolshed
+  installs it too: with the option on, `startServerExecutionHost()` of
+  `runtime/toolshed/lib/server-execution.ts` gives each serving runtime of
+  the main-thread serving loop the loader with one `PatternCompiler` for
+  the process (`runtime/toolshed/lib/compiled-patterns.ts`), which runs the
+  binary that `PATTERN_COMPILER_BINARY` names in a child process and keeps
+  what it emitted under `PATTERN_COMPILER_CACHE_DIR` where that is set. A
+  toolshed with the option on and no file at that path does not start. A
+  serving loop that runs in Workers, the default over a file store, gives
+  its runtimes no compiler and says so at startup. With the option off the
+  toolshed imports none of the executor's modules and creates its serving
+  runtimes as before. A runtime with the option on also answers a `wish`
+  of a compiled piece with its own `wish`, the built-ins a compiled piece
+  imports with its own functions, and the fetch effects of the reactive
+  tier with its own fetch built-ins (`compiled/wish.ts`,
+  `compiled/builtins.ts`). A compiled piece holds a document of the scope
+  `user` or `session` once for each principal or session, addressed by its
+  entity and that scope, and under a serving loop its derivation runs once
+  for each principal that demands the piece (`compiled/scopes.ts`). The
+  option also gates the
   start of a pattern from its source: where
   `runCompiledPatterns()` of `runtime/runner/src/compiled/run.ts` gave the
   runtime a pattern compiler (`Runtime.compiledPatternRunner`),
@@ -1576,6 +1600,26 @@ the per-epic implementation notes).
   in version 2 on its next persist even when its labels are unchanged,
   which is how a store migrates without a data migration; with it off, a
   stored version 2 is left as it is.
+- **Compiled pieces.** Every transaction a compiled piece commits stores
+  version 2 whatever the option says, under `compiledPatterns`: the
+  adapter of the compiled path (`RuntimeTransactions` in
+  `runtime/runner/src/compiled/transactions.ts`) sets the transaction's
+  spelling dial (`setCfcContentAddressedLabels`) on each transaction it is
+  handed or opens. In such an envelope a label whose canonical JSON is
+  longer than `CFC_LABEL_INLINE_LIMIT` (128 bytes as UTF-8,
+  `runtime/runner/src/cfc/label-documents.ts`) is stored once, as a
+  content-addressed label document of the space, and each entry that
+  carries it holds a reference; a label of at most 128 bytes stays inline.
+  A piece that writes many documents whose labels are one join, such as
+  the parts of its lists of readers over many distinctly labelled items,
+  then commits that join once instead of once per path. Today's path keeps
+  the option's value. A runtime from before version 2 cannot read such
+  documents (`UnknownCfcMetadataVersionError`), which the owner accepted
+  for compiled pieces (ruling Z95). Every reader of this build reads them:
+  the runtime that runs the piece (`test/compiled/row-documents.test.ts`),
+  a client and a second piece on the same storage
+  (`test/compiled/content-addressed-labels.test.ts`), and clients of a
+  serving loop over a socket (`test/compiled/scoped-view.test.ts`).
 - **Current default and planned end state.** `false` by default. The target
   is `true`; version-1 envelopes remain readable indefinitely.
 - **Status on 2026-09-15.** Implemented, off by default. The flip is gated

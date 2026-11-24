@@ -104,6 +104,78 @@ export const P = pattern<{ secret: string }>(({ secret }) => {
 }
 
 #[test]
+fn a_member_read_of_a_value_of_another_cone_is_one_read_of_the_path_with_the_key() {
+    let (plan, code) = emitted(
+        r#"import { computed, pattern } from "commonfabric";
+interface Item { key: string; title: string }
+export const P = pattern<{ items: Item[] }>(({ items }) => {
+  const facts = computed(() => {
+    const places: Record<string, { replies: number }> = {};
+    for (const item of items) places[item.key] = { replies: 1 };
+    return { count: items.length, places };
+  });
+  return {
+    count: facts.count,
+    rows: items.map((item) => ({ replies: facts.places[item.key]?.replies ?? 0 })),
+  };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let output = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .position(|output| output["collection"].is_null())
+        .expect("the output of `facts`");
+    // A static path, and a static path with a key that a pick chooses:
+    // the reader depends on what `facts` holds there alone.
+    assert!(
+        text.contains(&format!("$h.output({output}, [\"count\"])")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("$h.output({output}, [\"places\", $h.pick(0, ")),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&format!("$h.at($h.output({output}), ")),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_member_read_of_a_stored_record_by_a_key_reads_the_chosen_child_alone() {
+    let (plan, code) = emitted(
+        r#"import { pattern } from "commonfabric";
+interface Item { key: string; title: string }
+export const P = pattern<{ items: Item[]; places: Record<string, { replies: number }> }>(
+  ({ items, places }) => ({
+    rows: items.map((item) => ({ replies: places[item.key]?.replies ?? 0 })),
+  }),
+);
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let children = plan["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .position(|slot| slot["path"] == json!(["places", "*"]) && slot["observes"] == "shape")
+        .expect("the slot of the chosen child");
+    assert!(
+        text.contains(&format!("$h.slot({children}, [$h.pick(0, ")),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&format!("$h.at($h.slot({children})")),
+        "{text}"
+    );
+}
+
+#[test]
 fn types_are_removed_and_the_function_of_a_pattern_is_left_out() {
     let (plan, code) = emitted(
         r#"import { handler, pattern, Writable } from "commonfabric";
@@ -979,7 +1051,7 @@ fn outputs_without_a_function(code: &Value) -> Vec<u64> {
     let mut missing: Vec<u64> = text
         .split("$h.output(")
         .skip(1)
-        .filter_map(|rest| rest.split(')').next()?.parse().ok())
+        .filter_map(|rest| rest.split([')', ',']).next()?.parse().ok())
         .filter(|output| !computed.contains(output))
         .collect();
     missing.sort_unstable();
@@ -1038,6 +1110,52 @@ export const P = pattern<{
         hoisted.iter().all(|line| !line.contains("(mine,")),
         "{hoisted:?}"
     );
+}
+
+/// PL §3.5: the result of `??`, `||` and `&&` is the selected operand
+/// itself. The left operand is read by value for the test, whose
+/// selection `$h.select` reports, and each operand is handed to
+/// `$h.operand` as the reference it is, in a function that runs where the
+/// operand is selected.
+#[test]
+fn a_logical_operator_passes_both_operands_on_by_reference() {
+    let (plan, code) = emitted(
+        r#"import { pattern } from "commonfabric";
+interface Profile { name: string }
+export const P = pattern<{ primary?: Profile; backup: Profile; enabled: boolean }>(
+  ({ primary, backup, enabled }) => {
+    return {
+      coalesced: primary ?? backup,
+      either: primary || backup,
+      both: enabled && backup,
+    };
+  },
+);
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // The cone of each output lists `primary` as an `identity` slot
+    // alone, so the test reads its value through that slot.
+    let primary = slot(&plan, "argument", &["primary"], "identity");
+    let backup = slot(&plan, "argument", &["backup"], "identity");
+    let enabled = slot(&plan, "argument", &["enabled"], "value");
+    for (operator, test) in [
+        (
+            "??",
+            format!("$h.select(0, $h.v($h.slot({primary})), true)"),
+        ),
+        ("||", format!("$h.select(1, $h.v($h.slot({primary})))")),
+    ] {
+        let call = format!(
+            "$h.operand(\"{operator}\", {test}, () => $h.slot({primary}), () => $h.slot({backup}))"
+        );
+        assert!(text.contains(&call), "{text}");
+    }
+    let call = format!(
+        "$h.operand(\"&&\", $h.select(2, $h.v($h.slot({enabled}))), () => $h.slot({enabled}), () => $h.slot({backup}))"
+    );
+    assert!(text.contains(&call), "{text}");
 }
 
 #[test]
@@ -1310,4 +1428,31 @@ export const Bound = pattern<
     assert_eq!(code["values"][0]["output"], json!(0));
     assert_eq!(code["values"][0]["function"], json!(true), "{code}");
     assert!(source(&code).contains("$rt.value(0, "), "{}", source(&code));
+}
+
+/// A built-in that reads what its operand names, its label or the access
+/// list of its space, is given the operand as the reference it is: the
+/// runtime's function takes a cell, and a copy of the value names nothing.
+/// The operands behind the first are values.
+#[test]
+fn a_context_read_is_given_its_first_operand_as_a_reference() {
+    let (_, code) = emitted(
+        r#"import { type Cell, computed, pattern, principalOf, spaceAccess } from "commonfabric";
+export const Asked = pattern<
+  { notes: Cell<string[]> },
+  { level: string; author: string }
+>(({ notes }) => ({
+  level: computed(() => spaceAccess(notes) ?? "unknown"),
+  author: computed(() => principalOf(notes, "authored-by") ?? ""),
+}));
+"#,
+        "Asked",
+    );
+    let text = source(&code);
+    assert!(text.contains("spaceAccess($h.slot("), "{text}");
+    assert!(
+        text.contains("principalOf($h.slot(") && text.contains("\"authored-by\""),
+        "{text}"
+    );
+    assert!(!text.contains("spaceAccess($h.v("), "{text}");
 }

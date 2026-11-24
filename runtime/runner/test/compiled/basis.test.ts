@@ -24,7 +24,7 @@ import {
 import { compartmentEvaluator } from "../../src/compiled/value-code.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { URI } from "../../src/sigil-types.ts";
-import { type SharedStorage, shareStorage } from "./storage.ts";
+import { type SharedStorage, shareStorage, storedList } from "./storage.ts";
 
 /** The artifact of the pattern `default` of a fixture of the crate. */
 const artifactOf = async (name: string): Promise<Artifact> => {
@@ -147,15 +147,8 @@ describe("resumeCompiledPieceFromBasis()", () => {
 
   /** The entities of the documents of the rows, as `runtime` holds them. */
   const rowEntities = (runtime: Runtime, result: Cell<unknown>): URI[] => {
-    const tx = runtime.edit();
-    try {
-      const stored = tx.readValueOrThrow(result.getAsNormalizedFullLink()) as {
-        rows: unknown[];
-      };
-      return stored.rows.map((link) => parseLink(link as never).id as URI);
-    } finally {
-      tx.abort();
-    }
+    const rows = storedList(runtime, result, ["rows"]) as unknown[];
+    return rows.map((link) => parseLink(link as never).id as URI);
   };
 
   /**

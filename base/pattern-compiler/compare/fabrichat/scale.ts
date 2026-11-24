@@ -7,9 +7,16 @@
  *
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`. `<arm>` is `executor`, the executor with its
- * documents in memory, or `runner`, a compiled piece started with
+ * documents in memory, `runner`, a compiled piece started with
  * `startCompiledPiece` in a runtime on emulated storage, with the
- * experimental option `compiledPatterns` on. `<pattern>` is `room`
+ * experimental option `compiledPatterns` on, or `serving`, the room set up
+ * by a client (`setUpCompiledPiece`) and run by the serving loop of a
+ * memory server on this thread (`listenCompiledServingMemoryServer`), with
+ * two clients over a socket: one sends, and both read the number of
+ * messages back. The steps of `serving` are `start`, `seed` and `send`,
+ * with the time until the sender and until the reader read the count; the
+ * serving runtime is given the artifacts this process emitted, and the
+ * source the client writes is a placeholder. `<pattern>` is `room`
  * (`FabriChatRoom`), `manager` (`FabriChatManager`) or `home` (`Home`).
  * Each run prints one line of JSON per step.
  *
@@ -21,7 +28,10 @@
  *   The time is of all of them.
  * - `send`: three more events, each timed until the piece is up to date,
  *   with the counters of the executor for that event alone (evaluations,
- *   evaluations of element bodies, assemblies).
+ *   evaluations of element bodies, assemblies), and on the arm `runner`
+ *   the documents its commits changed, each counted once for a commit,
+ *   and their size as JSON after the commit (`changedDocuments`,
+ *   `changedBytes`).
  * - `read`: the messages of the result are read, and the step says how
  *   many the room holds, the text of the last, and for how many the
  *   result holds the reader's rights, with those of the last.
@@ -34,16 +44,29 @@
  * `room` and the event of `home` are sampled and the profile is written
  * to that path followed by the size.
  *
+ * With `SCALE_LISTS=in-place`, the arms `runner` and `serving` store the
+ * links to the row documents of the room in the result document, and
+ * otherwise in documents of their own (`CompiledPieceOptions.lists`).
+ *
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
+ * With them kept, a send of the room is sent as a gesture on the send
+ * surface. The scheduler delivers a gesture as input of a renderer, one
+ * for each second after ten in a row
+ * (`runtime/runner/src/scheduler/wake-shaping.ts`); the harness queues it
+ * as an event that is not held back, so the time of a send is that of the
+ * piece and of the commit.
  *
- * What stands in for the runtime (notes 727 and 728 of
- * `../../SPEC-NOTES.md`): a `wish` is answered from the seeded home of
- * `../wish-home.ts`, and the built-ins that read the acting principal, the
- * owner of a profile, the access list of a space and the key of an event
- * are answered by `BUILTINS` with one fixed user who owns every space. So
- * the run says what the executor evaluates and how long it takes, and
- * nothing of labels or of access.
+ * On the arm `runner`, a `wish` is answered by the runtime's own `wish`
+ * against the home `seedHome()` of `../wish-home.ts` writes, and the
+ * built-ins that read the acting principal, the owner of a profile, the
+ * access list of a space and the key of an event by the runtime's own
+ * functions (`runtimeBuiltins`), for the one user of the run, who owns the
+ * space. The arm `executor`, and the arm `runner` with `SCALE_STAND_INS`
+ * set to `table`, use what stood in for the runtime before round thirteen
+ * (notes 727 and 728 of `../../SPEC-NOTES.md`): a `wish` is answered from
+ * the table of `../wish-home.ts`, and the built-ins by `builtinsOf` with
+ * one fixed user who owns every space.
  */
 import { Identity } from "@commonfabric/identity";
 import { isWellFormedDID, parseDID } from "@commonfabric/identity/did";
@@ -53,19 +76,29 @@ import {
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
 
+import type { Cell } from "../../../../runtime/runner/src/cell.ts";
 import {
   type CompiledPiece,
   startCompiledPiece,
 } from "../../../../runtime/runner/src/compiled/piece.ts";
+import { ACLManager } from "../../../../runtime/runner/src/acl-manager.ts";
+import {
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "../../../../runtime/runner/src/cfc/ui-contract.ts";
+import { listenCompiledServingMemoryServer } from "../../../../runtime/runner/src/compiled/serving-memory-server.deno.ts";
+import { compiledPiecesOf } from "../../../../runtime/runner/src/compiled/serving.ts";
+import { setUpCompiledPiece } from "../../../../runtime/runner/src/compiled/setup.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { joinSpaceMembers } from "../../../../runtime/runner/src/space-members.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
+  StorageManager,
 } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
 import { startCpuProfile } from "../cpu-profile.ts";
-import { homeStubs, memoryHome, PROFILE } from "../wish-home.ts";
+import { homeStubs, memoryHome, PROFILE, seedHome } from "../wish-home.ts";
 
 const REPOSITORY = new URL("../../../../", import.meta.url);
 
@@ -194,7 +227,11 @@ type Started = {
   /** The counts of `SCALE_TRACE` since the last call. */
   trace?: () => Record<string, number>;
   /** Sends an event to the stream of a binding and waits for the piece. */
-  send: (binding: number, event: unknown) => Promise<boolean>;
+  send: (
+    binding: number,
+    event: unknown,
+    trusted?: { surface: string; action: string },
+  ) => Promise<boolean>;
   stop: () => Promise<void>;
 };
 
@@ -232,8 +269,42 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
     experimental: { compiledPatterns: true },
     servingPosture: true,
   });
-  // The profile is a document of the room's own space: a compiled piece
-  // reads no document of another space yet (note 728).
+  const standIns = Deno.env.get("SCALE_STAND_INS") === "table";
+  if (!standIns) {
+    // The home as today's `wish` resolves it, with the profile in a space
+    // of its own, and an access list that names the user as the owner.
+    // The profile declares no confidentiality: with the user atom that
+    // `seedHome()` declares by default, the derivation that reads the
+    // profile is refused where it writes the marker of a stream (note 745
+    // of `../../SPEC-NOTES.md`).
+    await seedHome(runtime, space, {
+      confidential: Deno.env.get("SCALE_PROFILE") === "confidential",
+    });
+    await new ACLManager(runtime, space).set(space, "OWNER");
+    await runtime.scheduler.idleWithPendingCommits();
+  }
+  // With the stand-ins, the profile is a document of the room's own space
+  // and has no claim of whose it is.
+  // What the commits of the runtime changed: the documents, each counted
+  // once for a commit, and the size of each as JSON after the commit.
+  const changedByCommits = { documents: 0, bytes: 0 };
+  runtime.storageManager.subscribe({
+    // deno-lint-ignore no-explicit-any
+    next(notification: any) {
+      if (notification.type !== "commit") return undefined;
+      const seen = new Set<string>();
+      for (const { address, after } of notification.changes) {
+        if (seen.has(address.id)) continue;
+        seen.add(address.id);
+        changedByCommits.documents += 1;
+        changedByCommits.bytes += after === undefined ? 0 : JSON.stringify(
+          after,
+          (_, member) => typeof member === "bigint" ? `${member}n` : member,
+        ).length;
+      }
+      return undefined;
+    },
+  });
   const seeded = runtime.edit();
   const profile = runtime.getCell(space, "profile", undefined, seeded);
   profile.set(structuredClone(PROFILE) as never);
@@ -245,8 +316,10 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       pieceRegistry: [],
     } as never,
   );
-  const seeding = await seeded.commit().settled;
-  if (seeding.error !== undefined) throw seeding.error;
+  if (standIns) {
+    const seeding = await seeded.commit().settled;
+    if (seeding.error !== undefined) throw seeding.error;
+  } else seeded.abort();
   const home = homeStubs({
     profile: {
       id: profile.getAsNormalizedFullLink().id,
@@ -265,13 +338,23 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
   let piece: CompiledPiece;
   try {
     piece = startCompiledPiece(runtime, tx, artifact, {}, result.withTx(tx), {
+      // The harness is host code and vouches for the artifacts the crate
+      // emitted: their handlers then have the identity a claim names.
+      attested: true,
       artifacts: (id) =>
         artifacts.find(({ plan }) =>
           (plan as { patterns?: string[] }).patterns?.[0] === id
         ),
       now: Date.now(),
-      wishes: home.wishes,
-      builtins: builtinsOf(space, space),
+      ...(standIns
+        ? { wishes: home.wishes, builtins: builtinsOf(space, space) }
+        // The runtime of the run has no serving loop, which is what names
+        // the principal a run acts for. `SELF` is no built-in the runtime
+        // answers: it is the stand-in of the executor's harness.
+        : { actsFor: space, builtins: { SELF: "$SELF" } }),
+      ...(Deno.env.get("SCALE_LISTS") === "in-place"
+        ? { lists: "in-place" as const }
+        : {}),
     });
   } catch (error) {
     tx.abort();
@@ -325,7 +408,11 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       traced = new Map();
       return counts;
     },
-    send: async (binding: number, event: unknown) => {
+    send: async (
+      binding: number,
+      event: unknown,
+      trusted?: { surface: string; action: string },
+    ) => {
       const stream = piece.instance.streams().find((held) =>
         held.binding === binding && held.instance === undefined
       );
@@ -337,17 +424,46 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         });
       if (entity === undefined) return false;
       const before = piece.counts;
+      const refusedBefore = piece.refusals.length;
+      const encoded = piece.transactions.encode(event);
+      // With the write policies kept, a send is a gesture on the send
+      // surface: the event carries the provenance a renderer attests for
+      // a click there and the renderer's mark, as the event of a test step
+      // with `trustedUi` does (`runtime/cli/lib/trusted-action-event.ts`).
+      const sent = trusted === undefined || typeof encoded !== "object" ||
+          encoded === null
+        ? encoded
+        : {
+          type: "click",
+          ...encoded,
+          provenance: reviewedActionProvenance("dom", trusted),
+        };
+      if (sent !== encoded) markRendererTrustedEvent(sent);
+      // A gesture is queued as an event the scheduler does not hold back:
+      // it delivers the eleventh gesture in a row and each one behind it
+      // once a second (`scheduler/wake-shaping.ts`), and the time of a send
+      // would be that of the wait. The last argument is the one the
+      // scheduler's own requeue of an event passes, which is not shaped.
       runtime.scheduler.queueEvent(
         { space, id: entity, path: [], scope: "space" },
-        piece.transactions.encode(event),
+        sent,
+        true,
+        undefined,
+        sent !== encoded,
       );
       await runtime.scheduler.idleWithPendingCommits();
       const after = piece.counts;
-      if (after.eventsRefused > before.eventsRefused) {
+      if (
+        after.eventsRefused > before.eventsRefused ||
+        piece.refusals.length > refusedBefore
+      ) {
         console.error([...piece.refusals].at(-1)?.slice(0, 400));
       }
+      // An event is committed where its handler ran and the storage
+      // refused no commit of the piece behind it.
       return after.events > before.events &&
-        after.eventsRefused === before.eventsRefused;
+        after.eventsRefused === before.eventsRefused &&
+        piece.refusals.length === refusedBefore;
     },
     adapter: () => {
       const { reads, writes, recordsGiven, committed, byCause } =
@@ -364,6 +480,8 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         ),
         derivations: piece.counts.derivations,
         ownMs: piece.counts.ownMs,
+        changedDocuments: changedByCommits.documents,
+        changedBytes: changedByCommits.bytes,
       };
     },
     stop: async () => {
@@ -396,16 +514,200 @@ const counted = (instance: Instance, before: Instance["counts"]) => ({
   assemblies: instance.counts.assemblies - before.assemblies,
 });
 
+/**
+ * The gesture a send of the room is made with where the write policies are
+ * kept: `CHAT_SEND_SURFACE` and `CHAT_SEND_ACTION` of
+ * `./fabrichat/schemas.tsx`.
+ */
+const SEND_GESTURE = Deno.env.get("SCALE_POLICIES") === "keep"
+  ? { surface: "ChatSendSurface", action: "ChatSend" }
+  : undefined;
+
+/**
+ * Runs the room under the serving loop for one size: a client sets the
+ * piece up, the serving runtime of a memory server on this thread starts
+ * and runs it, and a second client reads. Each send is timed from the send
+ * until each client reads the count of messages it makes.
+ */
+const underServingLoop = async (
+  artifact: Artifact,
+  artifacts: Artifact[],
+  size: number,
+): Promise<void> => {
+  const base = { arm: "serving", pattern: artifact.name, size };
+  const signer = await Identity.fromPassphrase("pattern-compiler fabrichat");
+  const space = signer.did();
+  // The table that answers each `wish` names the seeded documents, which
+  // exist once the sender wrote them.
+  let home: ReturnType<typeof homeStubs> | undefined;
+  const failures: string[] = [];
+  const serving = await listenCompiledServingMemoryServer({
+    // The artifacts are the ones this process emitted, with the write
+    // policies taken out as on the other arms.
+    compile: () =>
+      Promise.resolve({
+        main: artifact,
+        artifacts: (id) =>
+          artifacts.find(({ plan }) =>
+            (plan as { patterns?: string[] }).patterns?.[0] === id
+          ),
+      }),
+    pieces: {
+      piece: {
+        now: Date.now(),
+        wishes: (operands) => home?.wishes(operands),
+        builtins: builtinsOf(space, space),
+        ...(Deno.env.get("SCALE_LISTS") === "in-place"
+          ? { lists: "in-place" as const }
+          : {}),
+      },
+      failed: (_result, error) => failures.push(`${error}`),
+    },
+  });
+  const client = () =>
+    new Runtime({
+      apiUrl: serving.url,
+      storageManager: StorageManager.open({
+        as: signer,
+        memoryHost: serving.url,
+      }),
+      experimental: { serverExecution: true },
+    });
+  const sender = client();
+  const reader = client();
+  const cancels: (() => void)[] = [];
+  try {
+    const seeded = sender.edit();
+    const profile = sender.getCell(space, "profile", undefined, seeded);
+    profile.set(structuredClone(PROFILE) as never);
+    const root = sender.getCell(space, space, undefined, seeded);
+    root.key("defaultPattern").set(
+      {
+        profiles: [profile],
+        backlinksIndex: { mentionable: [] },
+        pieceRegistry: [],
+      } as never,
+    );
+    const seeding = await seeded.commit().settled;
+    if (seeding.error !== undefined) throw seeding.error;
+    home = homeStubs({
+      profile: {
+        id: profile.getAsNormalizedFullLink().id,
+        kind: "profile",
+        value: structuredClone(PROFILE),
+        space,
+      },
+      root: {
+        id: root.getAsNormalizedFullLink().id,
+        kind: "space root",
+        value: {},
+      },
+    });
+    const result = sender.getCell<unknown>(space, "fabrichat under serving");
+    const link = result.getAsNormalizedFullLink();
+    /** Resolves with the time at which `runtime` reads `count` messages. */
+    const reads = (runtime: Runtime, count: number): Promise<number> => {
+      const { promise, resolve } = Promise.withResolvers<number>();
+      const cell = runtime.getCellFromLink(link).key("messages" as never)
+        .key("count" as never) as unknown as Cell<number>;
+      cancels.push(cell.sink((value) => {
+        if (value === count) resolve(performance.now());
+      }));
+      return promise;
+    };
+    let began = performance.now();
+    const started = Promise.all([reads(sender, 0), reads(reader, 0)]);
+    const tx = sender.edit();
+    setUpCompiledPiece(
+      sender,
+      tx,
+      // The serving runtime is given the artifacts, and reads no source.
+      { main: "/room.tsx", files: [{ name: "/room.tsx", contents: "" }] },
+      {},
+      result.withTx(tx),
+    );
+    const { error } = await tx.commit().settled;
+    if (error !== undefined) throw error;
+    const [startedAtSender, startedAtReader] = await started;
+    print({
+      ...base,
+      step: "start",
+      sender: startedAtSender - began,
+      reader: startedAtReader - began,
+      failures,
+    });
+    // The sender holds the marker of the stream, by which a send to the
+    // member of the result is the append of an event.
+    const sendMessage = sender.getCellFromLink(link).key(
+      "sendMessage" as never,
+    ) as unknown as Cell<unknown>;
+    await sendMessage.sync();
+    await sendMessage.resolveAsCell().sync();
+    cancels.push(sendMessage.sink(() => {}));
+    const [piece] = serving.runtimes().flatMap((runtime) =>
+      compiledPiecesOf(runtime)
+    );
+    began = performance.now();
+    for (let index = 0; index < size; index++) {
+      const done = reads(sender, index + 1);
+      sendMessage.send({ body: `message ${index}` } as never);
+      await done;
+    }
+    print({ ...base, step: "seed", ms: performance.now() - began, failures });
+    for (let index = 0; index < 3; index++) {
+      const before = piece === undefined
+        ? undefined
+        : { ...piece.transactions.counts, ownMs: piece.counts.ownMs };
+      const atSender = reads(sender, size + index + 1);
+      const atReader = reads(reader, size + index + 1);
+      began = performance.now();
+      sendMessage.send({ body: `timed ${index}` } as never);
+      const [sent, read] = await Promise.all([atSender, atReader]);
+      const after = piece?.transactions.counts;
+      print({
+        ...base,
+        step: "send",
+        sender: sent - began,
+        reader: read - began,
+        ...(piece === undefined || before === undefined || after === undefined
+          ? {}
+          : {
+            reads: after.reads - before.reads,
+            writes: after.writes - before.writes,
+            recordsGiven: after.recordsGiven - before.recordsGiven,
+            ownMs: piece.counts.ownMs - before.ownMs,
+          }),
+        refusals: piece?.refusals.length ?? 0,
+        failures,
+      });
+    }
+  } finally {
+    for (const cancel of cancels) cancel();
+    await sender.dispose();
+    await reader.dispose();
+    await serving.close();
+  }
+};
+
 const [arm, which, sizes] = Deno.args;
 const name = PATTERNS[which];
-if (!["executor", "runner"].includes(arm) || name === undefined) {
+if (
+  !["executor", "runner", "serving"].includes(arm) || name === undefined ||
+  (arm === "serving" && which !== "room")
+) {
   console.error(
-    "usage: scale.ts <executor | runner> <room | manager | home> [sizes]",
+    "usage: scale.ts <executor | runner | serving> <room | manager | home> [sizes]",
   );
   Deno.exit(2);
 }
 const artifacts = await emitted();
 const artifact = artifacts.find((pattern) => pattern.name === name)!;
+if (arm === "serving") {
+  for (const size of (sizes ?? "10,100,1000").split(",").map(Number)) {
+    await underServingLoop(artifact, artifacts, size);
+  }
+  Deno.exit(0);
+}
 const start = arm === "executor" ? inMemory : onRunner;
 
 for (
@@ -474,7 +776,9 @@ for (
     began = performance.now();
     let refused = 0;
     for (let index = 0; index < size; index++) {
-      if (!await send(binding, { body: `message ${index}` })) refused += 1;
+      if (!await send(binding, { body: `message ${index}` }, SEND_GESTURE)) {
+        refused += 1;
+      }
     }
     print({ ...base, step: "seed", ms: performance.now() - began, refused });
     const stopProfile = await profiled(size);
@@ -483,7 +787,11 @@ for (
       const adapter = started.adapter?.();
       started.trace?.();
       began = performance.now();
-      const committed = await send(binding, { body: `timed ${index}` });
+      const committed = await send(
+        binding,
+        { body: `timed ${index}` },
+        SEND_GESTURE,
+      );
       if (Deno.env.get("SCALE_TRACE") !== undefined && index === 2) {
         print({ ...base, step: "trace", ...started.trace?.() });
       }

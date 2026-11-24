@@ -33,10 +33,12 @@ import { type CompiledPiece, startCompiledPiece } from "./piece.ts";
 import {
   adoptCompiledPiece,
   type CompilePatternProgram,
+  forgetCompiledPiece,
   serveCompiledPieces,
   type ServeCompiledPiecesOptions,
 } from "./serving.ts";
 import { type PatternProgram, setUpCompiledPiece } from "./setup.ts";
+import { answersEffect } from "./wish.ts";
 
 const logger = getLogger("compiled-run");
 
@@ -68,10 +70,14 @@ const isMissingCompiler = (error: unknown): boolean =>
 /**
  * Why a compiled program cannot run as a compiled piece in a runtime that
  * `Runtime.run` starts it in, where it cannot: a plan of the program
- * requests `wish` or an effect, and nothing answers a request of a
- * compiled piece outside the executor's own harness. Every pattern of the
- * program is looked at where the compiler gives them, since a function
- * body of the pattern may instantiate any of them.
+ * requests an effect that no built-in of the runtime answers for a
+ * compiled piece (`answersEffect`). A `wish`, and the effects
+ * `fetchJson`, `fetchJsonUnchecked`, `fetchText` and `fetchBinary` of the
+ * reactive tier, are answered by the runtime's own (`compiled/wish.ts`).
+ * An effect a handler requests is not in the operations of a plan, and is
+ * not looked for here: it stays unanswered. Every pattern of the program
+ * is looked at where the compiler gives them, since a function body of the
+ * pattern may instantiate any of them.
  */
 const unansweredRequestOf = (
   compiled: Awaited<ReturnType<CompilePatternProgram>> & {
@@ -83,15 +89,18 @@ const unansweredRequestOf = (
     ...(compiled.modules ?? []).flatMap(({ patterns }) => patterns),
   ];
   for (const { plan, name } of patterns) {
-    const operations =
-      (plan as { operations?: { kind?: string }[] }).operations ?? [];
-    const kind = operations.find(({ kind }) =>
-      kind === "wish" || kind === "effect"
-    )?.kind;
-    if (kind !== undefined) {
-      return `The plan of the pattern \`${name ?? "default"}\` requests ${
-        kind === "wish" ? "`wish`" : "an effect"
-      }, which a compiled piece does not answer in this runtime.`;
+    const operations = (plan as {
+      operations?: { kind?: string; implementation?: { builtin?: string } }[];
+    }).operations ?? [];
+    const unanswered = operations.find(({ kind, implementation }) =>
+      kind === "effect" && !answersEffect(implementation?.builtin ?? "")
+    );
+    if (unanswered !== undefined) {
+      return `The plan of the pattern \`${
+        name ?? "default"
+      }\` requests the effect \`${
+        unanswered.implementation?.builtin ?? "unnamed"
+      }\`, which a compiled piece does not answer in this runtime.`;
     }
   }
   return undefined;
@@ -171,6 +180,9 @@ export const runCompiledPatterns = (
           resultCell.withTx(within),
           {
             ...options.piece,
+            // The artifacts are what the compiler of the runtime gave
+            // for the program.
+            attested: true,
             artifacts: (identity) =>
               known.compiled.artifacts(identity) ??
                 options.piece?.artifacts?.(identity),
@@ -183,6 +195,16 @@ export const runCompiledPatterns = (
       started.set(id, piece);
       adoptCompiledPiece(runtime, id, piece);
       options.started?.(piece);
+      // A piece whose start did not commit does not exist: the storage
+      // holds no document of it, and its handlers and its derivation would
+      // write documents under none of the policies the start records.
+      const begun = piece;
+      within.addCommitCallback((_tx, { error }) => {
+        if (error === undefined || started.get(id) !== begun) return;
+        started.delete(id);
+        forgetCompiledPiece(runtime, id, begun);
+        begun.stop();
+      });
       if (own !== undefined) {
         runtime.prepareTxForCommit(own);
         own.commit();

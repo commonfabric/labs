@@ -16,7 +16,7 @@ import {
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { openStorage, type TestStorage } from "./storage.ts";
+import { openStorage, storedList, type TestStorage } from "./storage.ts";
 
 /** The pattern `which` of `compare/fixtures/kept-index.tsx`. */
 const artifact = async (which: string): Promise<Artifact> => {
@@ -178,15 +178,13 @@ describe("a collection index that a compiled piece keeps, and a second piece tha
     }
   };
 
-  /** What the entity of the result holds at `path`, no link followed. */
-  const storedAt = (result: Cell<Kept>, path: string[]): unknown => {
-    const tx = runtime.edit();
-    try {
-      return tx.readValueOrThrow({ ...result.getAsNormalizedFullLink(), path });
-    } finally {
-      tx.abort();
-    }
-  };
+  /**
+   * What the entity of the result holds at `path`, and where that is the
+   * link to the document of the bucket links of an index, what that
+   * document holds. No link to a bucket is followed.
+   */
+  const storedAt = (result: Cell<Kept>, path: string[]): unknown =>
+    storedList(runtime, result, path);
 
   /** The entity a stored link names. */
   const entityOf = (link: unknown): string => parseLink(link as never).id!;

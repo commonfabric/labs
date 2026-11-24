@@ -19,7 +19,7 @@ import {
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { openStorage, type TestStorage } from "./storage.ts";
+import { openStorage, storedList, type TestStorage } from "./storage.ts";
 
 /** The pattern `name` of `compare/fixtures/unit-resume.tsx`. */
 const artifactOf = async (name: string): Promise<Artifact> => {
@@ -186,12 +186,15 @@ describe("resumeCompiledPieceByUnits()", () => {
 
   /** The stored labels of the document of the row at `at`, as JSON text. */
   const rowLabels = (result: Cell<Result>, at: number): string => {
+    // The links to the rows, through their list document where they are
+    // in one.
+    const rows = storedList(
+      runtime,
+      result as unknown as Cell<unknown>,
+      ["rows"],
+    ) as unknown[];
     const tx = runtime.edit();
     try {
-      const rows = tx.readValueOrThrow({
-        ...result.getAsNormalizedFullLink(),
-        path: ["rows"],
-      }) as unknown[];
       expect(isPrimitiveCellLink(rows[at])).toBe(true);
       const id = parseLink(rows[at] as never).id!;
       return JSON.stringify(

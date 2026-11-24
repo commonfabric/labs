@@ -14,6 +14,7 @@ import type { PatternProgram } from "../../src/compiled/serving.ts";
 import { setUpCompiledPiece } from "../../src/compiled/setup.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { rowsRead } from "./storage.ts";
 
 const artifactOf = async (name: string): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
@@ -121,7 +122,7 @@ describe("the first event after another serving loop took a compiled piece over"
       runtime,
       cell,
       (value) =>
-        JSON.stringify(value?.rows?.map((row) => row?.label)) ===
+        JSON.stringify(rowsRead<Row>(value?.rows).map((row) => row?.label)) ===
           JSON.stringify(expected),
       { stuckLabel: `a client reads ${expected.length} rows` },
     );

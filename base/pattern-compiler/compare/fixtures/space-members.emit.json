@@ -1,0 +1,202 @@
+[
+  {
+    "module": "compare/fixtures/space-members.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/space-members.tsx",
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"spaceMembers\": spaceMembers, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:c0e01687f6539a7e285f9c19262f31a78f04d45ef8c4915fe0b05686c92d3863\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(3, ($h) => ($h.at(((Object).keys($h.v($h.operand(\"??\", $h.select(0, $h.v($h.at(spaceMembers($h.slot(0)), [\"principals\"])), true), () => $h.at(spaceMembers($h.slot(0)), [\"principals\"]), () => ({  }))))), [\"length\"])));\nreturn $rt.thunk(($h) => (({ members: $h.output(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": [
+            0,
+            2
+          ]
+        },
+        "line": 8,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/space-members.tsx",
+                "start": 441
+              },
+              "bodies": [],
+              "entry": "members",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [
+            {
+              "why": {
+                "kind": "space",
+                "of": 0
+              }
+            }
+          ],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "members"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "branches": [
+                      {
+                        "op": "shared",
+                        "template": 0
+                      },
+                      {
+                        "op": "const"
+                      }
+                    ],
+                    "condition": {
+                      "op": "shared",
+                      "template": 0
+                    },
+                    "op": "select",
+                    "selector": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:c0e01687f6539a7e285f9c19262f31a78f04d45ef8c4915fe0b05686c92d3863"
+          ],
+          "picks": [],
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "notes"
+              ],
+              "resolved": true,
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "expression": true
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                },
+                {
+                  "op": "dynamic",
+                  "reads": 0
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "notes": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "notes"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

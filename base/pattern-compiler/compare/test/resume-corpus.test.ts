@@ -37,10 +37,13 @@ describe("a module of the corpus that a second runtime resumes from its basis", 
     expect(outcome.equal).toBe(true);
   });
 
-  it("is current and has no commit refused, for a piece with outputs in documents of their own and a stream in each row of a list stored in place", async () => {
+  it("starts the executor and has no commit refused, for a piece with state of the scope `session`, outputs in documents of their own and a stream in each row of a list stored in place", async () => {
     const outcome = await resumed("/showcase/wordsearch/play.tsx");
 
-    expect(outcome.resume?.current).toBe(true);
+    // The piece declares state of the scope `session`, which has an
+    // instance for each session: its basis names that document, which has
+    // no number, so the resume starts the executor.
+    expect(outcome.resume?.current).toBe(false);
     expect(outcome.events?.handled).toBe(outcome.events?.sent);
     expect(outcome.refusals).toEqual([]);
     expect(outcome.equal).toBe(true);

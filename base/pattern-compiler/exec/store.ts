@@ -24,6 +24,10 @@ import {
 
 import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/text/utf8";
 import { PartedDocuments, type PartsOptions } from "./parts.ts";
+import {
+  ScopeInstances,
+  type ScopeInstancesOptions,
+} from "./scope-instances.ts";
 
 /** The members of a JSON schema the executor reads. */
 export type Schema = boolean | {
@@ -970,23 +974,34 @@ class Documents extends Map<string, { kind: string; value: unknown }> {
     | undefined;
   /** Gives a value as the store holds one (`Store.#keep`). */
   readonly #keep: (value: unknown) => unknown;
+  /**
+   * The scope keys the store is read and written for: a document named
+   * for a scope is held once for each key, under the name of its instance
+   * (`ScopeInstances.resolve`).
+   */
+  readonly #scopes: ScopeInstances | undefined;
 
   constructor(
     keep: (value: unknown) => unknown,
     load?: (id: string) => { kind: string; value: unknown } | undefined,
+    scopes?: ScopeInstances,
   ) {
     super();
     this.#keep = keep;
     this.#load = load;
+    this.#scopes = scopes;
   }
 
   override get(id: string): { kind: string; value: unknown } | undefined {
-    const held = super.get(id);
+    const instance = this.#scopes?.resolve(id) ?? id;
+    const held = super.get(instance);
     if (held !== undefined || this.#load === undefined) return held;
-    if (this.#absent.has(id)) return undefined;
+    if (this.#absent.has(instance)) return undefined;
+    // The store outside is asked by the name for every key: it reads the
+    // instance of the key that is evaluated for.
     const loaded = this.#load(id);
     if (loaded === undefined) {
-      this.#absent.add(id);
+      this.#absent.add(instance);
       return undefined;
     }
     this.set(id, loaded);
@@ -994,18 +1009,24 @@ class Documents extends Map<string, { kind: string; value: unknown }> {
   }
 
   override has(id: string): boolean {
-    return super.has(id) || this.get(id) !== undefined;
+    return super.has(this.#scopes?.resolve(id) ?? id) ||
+      this.get(id) !== undefined;
   }
 
   override set(id: string, document: { kind: string; value: unknown }): this {
-    this.#absent.delete(id);
+    const instance = this.#scopes?.resolve(id) ?? id;
+    this.#absent.delete(instance);
     document.value = this.#keep(document.value);
-    return super.set(id, document);
+    return super.set(instance, document);
+  }
+
+  override delete(id: string): boolean {
+    return super.delete(this.#scopes?.resolve(id) ?? id);
   }
 
   /** Asks `load` again for an identifier it gave no document for. */
   forget(id: string): void {
-    this.#absent.delete(id);
+    this.#absent.delete(this.#scopes?.resolve(id) ?? id);
   }
 }
 
@@ -1045,9 +1066,22 @@ export class Store {
        * that a store outside holds. It is asked once for each identifier.
        */
       load?: (id: string) => { kind: string; value: unknown } | undefined;
+      /**
+       * Says which scope key the store is read and written for, where
+       * documents of the scope `user` or `session` are held once for each
+       * key (`scope-instances.ts`).
+       */
+      scopes?: ScopeInstancesOptions;
     } = {},
   ) {
-    this.docs = new Documents((value) => this.#keep(value), options.load);
+    this.scopes = options.scopes === undefined
+      ? undefined
+      : new ScopeInstances(options.scopes);
+    this.docs = new Documents(
+      (value) => this.#keep(value),
+      options.load,
+      this.scopes,
+    );
     this.#secret = options.secret ?? crypto.randomUUID();
     this.#space = options.space;
     this.#kept = (options.keys ?? "kept") === "kept";
@@ -1056,6 +1090,12 @@ export class Store {
       ...options.parts,
     });
   }
+
+  /**
+   * The scope keys the store is read and written for, where it was given
+   * who says them.
+   */
+  readonly scopes: ScopeInstances | undefined;
 
   /**
    * The documents that each document of `docs` is stored in, by the
@@ -3674,10 +3714,12 @@ export class Store {
 
   /** Notes a change at a path in `#changes`. */
   #noteChange(doc: string, path: readonly string[]): void {
-    let node = this.#changes.get(doc);
+    // A change of a scope instance is one of that instance alone.
+    const instance = this.scopes?.resolve(doc) ?? doc;
+    let node = this.#changes.get(instance);
     if (node === undefined) {
       node = { at: 0, below: 0 };
-      this.#changes.set(doc, node);
+      this.#changes.set(instance, node);
     }
     node.below = this.clock;
     for (const segment of path) {
@@ -3705,7 +3747,9 @@ export class Store {
     }
     for (const position of positions) {
       if (position.keyed !== undefined) continue;
-      let node = this.#changes.get(position.doc);
+      let node = this.#changes.get(
+        this.scopes?.resolve(position.doc) ?? position.doc,
+      );
       let depth = 0;
       // A change at a path above the position, and then one at or below it.
       while (node !== undefined) {

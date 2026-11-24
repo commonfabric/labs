@@ -18,7 +18,7 @@ import {
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { openStorage, type TestStorage } from "./storage.ts";
+import { openStorage, storedList, type TestStorage } from "./storage.ts";
 
 /**
  * The artifact of a pattern of a fixture of `base/pattern-compiler`, by
@@ -176,18 +176,12 @@ describe("the rows of a `map` over an array declared as references", () => {
     };
   };
 
-  /** What the entity of the result holds at `rows`, as the storage has it. */
-  const storedRows = (result: Cell<Record<string, unknown>>): unknown[] => {
-    const tx = runtime.edit();
-    try {
-      return tx.readValueOrThrow({
-        ...result.getAsNormalizedFullLink(),
-        path: ["rows"],
-      }) as unknown[];
-    } finally {
-      tx.abort();
-    }
-  };
+  /**
+   * The links to the row documents that the storage holds for `rows` of
+   * the result, in the list document the result links to.
+   */
+  const storedRows = (result: Cell<Record<string, unknown>>): unknown[] =>
+    storedList(runtime, result, ["rows"]) as unknown[];
 
   /** The rows as the runtime's own read gives them, every link followed. */
   const rowsOf = (result: Cell<Record<string, unknown>>): unknown => {
@@ -579,10 +573,11 @@ describe("the rows of a `map` over an array declared as references", () => {
     const after = async (
       count: number,
       change: (cells: Cell<Record<string, unknown>>[]) => unknown[],
+      options: CompiledPieceOptions = {},
     ) => {
       const { piece, result, items, cells } = await started(
         "Cells",
-        {},
+        options,
         undefined,
         titles(count),
         `${count} `,
@@ -608,7 +603,7 @@ describe("the rows of a `map` over an array declared as references", () => {
       };
     };
 
-    it("writes one link, the number of members and one row document for a member added at the end", async () => {
+    it("writes the list document, the number of members and one row document for a member added at the end", async () => {
       const { result, links, stayedWritten } = await after(
         5,
         (cells) => cells,
@@ -617,26 +612,37 @@ describe("the rows of a `map` over an array declared as references", () => {
       expect(rowsOf(result)).toEqual(
         titles(5).map((title) => ({ label: `${title}!`, done: false })),
       );
-      expect(links).toBe(1);
+      // The list of five links is one document, written with the link added.
+      expect(links).toBe(5);
       expect(stayedWritten).toEqual([]);
       expect(storedRows(result).length).toBe(5);
     });
 
-    it("writes one link and gives as many records for a member added at the end of 4 members as of 40", async () => {
+    it("writes the links of one chunk at most, and gives as many records, for a member added at the end of 4 members as of 200", async () => {
       const few = await after(5, (cells) => cells);
-      const many = await after(41, (cells) => cells);
+      const many = await after(201, (cells) => cells);
 
+      expect(many.links).toBeLessThanOrEqual(64);
+      expect(many.records).toBe(few.records);
+    });
+
+    it("writes one link, and gives as many records, for a member added at the end of 4 members as of 200 where the links are in the result document", async () => {
+      const inPlace: CompiledPieceOptions = { lists: "in-place" };
+      const few = await after(5, (cells) => cells, inPlace);
+      const many = await after(201, (cells) => cells, inPlace);
+
+      expect(few.links).toBe(1);
       expect(many.links).toBe(1);
       expect(many.records).toBe(few.records);
     });
 
-    it("writes no row document that stayed, and gives as many records, for a member added before 4 members as before 40", async () => {
+    it("writes no row document that stayed, and gives as many records, for a member added before 4 members as before 200", async () => {
       const prepended = (cells: Cell<Record<string, unknown>>[]) => [
         cells.at(-1)!,
         ...cells.slice(0, -1),
       ];
       const few = await after(5, prepended);
-      const many = await after(41, prepended);
+      const many = await after(201, prepended);
 
       expect(rowsOf(few.result)).toEqual(
         ["t4", "t0", "t1", "t2", "t3"].map((title) => ({
@@ -649,11 +655,11 @@ describe("the rows of a `map` over an array declared as references", () => {
       expect(many.records).toBe(few.records);
     });
 
-    it("gives as many records for the first member removed of 4 members as of 40", async () => {
+    it("gives as many records for the first member removed of 4 members as of 200", async () => {
       const removed = (cells: Cell<Record<string, unknown>>[]) =>
         cells.slice(1, -1);
       const few = await after(5, removed);
-      const many = await after(41, removed);
+      const many = await after(201, removed);
 
       expect(rowsOf(few.result)).toEqual(
         ["t1", "t2", "t3"].map((title) => ({
@@ -674,17 +680,7 @@ describe("the rows of a `map` over an array declared as references", () => {
     const storedAt = (
       result: Cell<Record<string, unknown>>,
       path: string[],
-    ): unknown => {
-      const tx = runtime.edit();
-      try {
-        return tx.readValueOrThrow({
-          ...result.getAsNormalizedFullLink(),
-          path,
-        });
-      } finally {
-        tx.abort();
-      }
-    };
+    ): unknown => storedList(runtime, result, path);
 
     it("stores a row that is a view node among the children of a view node in a document of its own", async () => {
       const { piece, result } = await started("Viewed", {}, "handle-reads");
@@ -934,17 +930,10 @@ describe("the rows of a `map` over an array declared as references", () => {
 
     it("moves the links and keeps the documents of the rows when a rank changes the order", async () => {
       const { piece, result, cells } = await ordered();
-      const linksOf = () => {
-        const tx = runtime.edit();
-        try {
-          return (tx.readValueOrThrow({
-            ...result.getAsNormalizedFullLink(),
-            path: ["sorted"],
-          }) as unknown[]).map((row) => parseLink(row as never).id);
-        } finally {
-          tx.abort();
-        }
-      };
+      const linksOf = () =>
+        (storedList(runtime, result, ["sorted"]) as unknown[]).map((row) =>
+          parseLink(row as never).id
+        );
       const links = linksOf();
 
       await commit((tx) => cells[2].withTx(tx).key("rank").set(0));

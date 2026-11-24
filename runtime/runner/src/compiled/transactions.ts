@@ -73,6 +73,7 @@ import {
   type CfcAddress,
   type CfcMetadata,
   type IFCLabel,
+  type ImplementationIdentity,
   type ObservedPosition as RuntimeObserved,
   type PlanElements,
   type PlanWrite as RuntimePlanWrite,
@@ -82,7 +83,27 @@ import {
 } from "../cfc/types.ts";
 import { readMaybeLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
+import { ignoreReadForScheduling } from "../scheduler.ts";
+import { markReadAsAttemptedWrite } from "../storage/reactivity-log.ts";
+import { handlerIdentityOf } from "./handler-identity.ts";
+import { appendedBehind, appendedBySplice } from "./appended.ts";
+import { recordNewDocumentProtectedDefaults } from "../cfc/default-initialization.ts";
+import { declaredBy, DeclaredPolicies } from "./declared-policy.ts";
+import { isStateCellSeed, recordStateCellSeed } from "./initialization.ts";
+import {
+  declaresMemberPolicy,
+  type ResultPolicy,
+  writePoliciesOf,
+} from "./result-policy.ts";
 import type { URI } from "../sigil-types.ts";
+import { documentIn, placeOfDocument } from "./names.ts";
+import {
+  ByDocumentInstance,
+  cellScopeOf,
+  DocumentInstances,
+  instanceNameOf,
+  scopeKeyOf,
+} from "./scopes.ts";
 import type {
   IExtendedStorageTransaction,
   IReadActivity,
@@ -91,6 +112,7 @@ import type {
 } from "../storage/interface.ts";
 import type {
   Artifact,
+  DeclaredWrite,
   LabelChange,
   Transaction,
   TransactionHooks,
@@ -115,6 +137,17 @@ import {
   type Store,
   type StreamPosition,
 } from "../../../../base/pattern-compiler/exec/store.ts";
+import {
+  type Scope,
+  scopedDocument,
+  scopeOfDocument,
+} from "../../../../base/pattern-compiler/exec/scope-instances.ts";
+import {
+  type CellScope,
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 
 /** What the runtime's transactions were given, counted. */
 export type RuntimeCounts = {
@@ -160,6 +193,13 @@ export type RuntimeCounts = {
    * each array a transaction spliced so that positions shifted.
    */
   rowArraysWritten: number;
+  /**
+   * The documents written whole that hold links of a list stored as
+   * documents of its own: a chunk of an array of row documents, the list of
+   * its chunks (`LinkList`) and the links of a record of bucket documents,
+   * each counted once for each write.
+   */
+  listDocumentsWritten: number;
   /**
    * The labels the runtime's table of labels was asked to name: one for
    * each distinct label that a position asked for consumes.
@@ -222,6 +262,11 @@ export type ChangeByOther = {
    * the array lost there, and the members it holds there now.
    */
   splice?: { start: number; removed: number; members: unknown[] };
+  /**
+   * For a change of an instance of a document of the scope `user` or
+   * `session`: the scope key of the instance.
+   */
+  scoped?: string;
 };
 
 /**
@@ -251,7 +296,72 @@ type RowArray = {
   ids: Map<string, string>;
   /** The link to the document of each row, by its key. */
   links: Map<string, FabricValue>;
+  /**
+   * How the links are stored, where the lists of links of the result are
+   * documents of their own; nothing where the array holds them in place.
+   */
+  list?: LinkList;
 };
+
+/**
+ * How the storage holds the links of an array of row documents apart from
+ * the result document, which holds a link to `doc` at the path of the
+ * array.
+ *
+ * An array of at most `LIST_WHOLE` rows is one document, `doc`, that holds
+ * the links to the rows in order: a reader that follows the link in the
+ * result document reads the array the result would hold in place. A longer
+ * array is stored in chunks: `doc` holds, in order, a link to the document
+ * of each chunk, and a chunk holds at most `LIST_CHUNK` links to rows. A
+ * reader that wants the rows in order reads the members of each member of
+ * `doc` that is an array in the place of that member.
+ */
+type LinkList = {
+  doc: string;
+  /** Whether the storage holds, in the result document, the link to `doc`. */
+  linked: boolean;
+  /** The chunks in order, or nothing where `doc` holds the links to rows. */
+  chunks: ListChunk[] | undefined;
+  /** The chunks whose document does not hold the links of its rows. */
+  dirty: Set<ListChunk>;
+  /** The documents of chunks the list holds no more, not yet removed. */
+  dropped: string[];
+  /** Whether `doc` does not hold what the list holds now. */
+  top: boolean;
+  /** The identifiers of the documents of the chunks. */
+  ids: Set<string>;
+  /** The number the identifier of the next chunk is tried with first. */
+  next: number;
+  /**
+   * Whether the layout the storage holds from a run before was looked for,
+   * for a resumed instance.
+   */
+  adopted: boolean;
+};
+
+/** A chunk of a `LinkList`: its document and how many links it holds. */
+type ListChunk = { doc: string; length: number };
+
+/** The most links to rows that one chunk of a `LinkList` holds. */
+const LIST_CHUNK = 64;
+
+/**
+ * The most links to rows that a `LinkList` holds in the list document
+ * itself, unless the option `listWhole` gives another number. A reader
+ * through the runtime reads a list of at most this many rows as the array
+ * of the rows; a longer one it reads as an array of chunks. Measured on
+ * the Topics board under the serving loop (note 925 of
+ * `base/pattern-compiler/SPEC-NOTES.md`), a topic created takes as long
+ * with 128 links in one document as in chunks, and longer with 256.
+ */
+const LIST_WHOLE = 128;
+
+/**
+ * The links a chunk is given where a list is laid out anew or a chunk is
+ * split by a member that enters in its middle: fewer than `LIST_CHUNK`, so
+ * that the next members to enter a chunk do not split it.
+ */
+const LIST_FILL = 48;
 
 /**
  * The record of the buckets of an index that the result of the instance the
@@ -263,6 +373,14 @@ type BucketRecord = {
   doc: string;
   path: string[];
   keys: Set<string>;
+  /**
+   * Where the lists of links of the result are documents of their own: the
+   * document that holds the link to each bucket by its encoded key, which
+   * the result holds a link to at the path of the record, and whether the
+   * storage holds that link. A reader that follows the link reads the
+   * record the result would hold in place.
+   */
+  list?: { doc: string; linked: boolean };
 };
 
 /**
@@ -336,7 +454,15 @@ export type SourceObserver = {
  * wrote it was refused, as the executor holds a value: `undefined` where
  * the storage holds nothing.
  */
-export type Restored = { doc: string; value: unknown };
+export type Restored = {
+  doc: string;
+  value: unknown;
+  /**
+   * The identity whose instance of the document `value` is, where the
+   * transaction that wrote it carried one (`RuntimeTransactions.actingFor`).
+   */
+  acting?: ScopeKeyIdentity;
+};
 
 /** Keeps the documents of one executor in one space of a runtime. */
 export class RuntimeTransactions implements TransactionHooks {
@@ -347,7 +473,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * The documents whose creation by the executor is the value the storage
    * holds, which the adapter gave it (`heldArgument`).
    */
-  readonly #heldWhole = new Set<string>();
+  readonly #heldWhole = new DocumentInstances((doc) => this.#instanceOf(doc));
   /** The `result` link the documents the executor makes are given. */
   #resultLink: unknown;
   /**
@@ -355,6 +481,12 @@ export class RuntimeTransactions implements TransactionHooks {
    * holds no document of.
    */
   readonly absent = new Set<string>();
+  /**
+   * The documents outside the executor that `load()` was asked for and the
+   * replica held none of, by name: the storage may hold one that the
+   * replica has not been brought.
+   */
+  readonly wanted = new Set<string>();
   /**
    * Whether the first derivation of a resumed instance is in progress. A
    * change of it that writes what the storage holds is then no write, and
@@ -402,6 +534,10 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #patternOf = new Map<string, string>();
   /** The identity each artifact was registered under. */
   readonly #registered = new Map<Artifact, string>();
+  /** The artifact the adapter was given, of the instance it was started with. */
+  readonly #artifact: Artifact | undefined;
+  /** The artifact of each instance the executor made of another artifact. */
+  readonly #artifactOf = new Map<string, Artifact>();
   /**
    * The number of changes of what decides whether a binding takes a staged
    * label, in the transaction in progress: its writes, and its reads of a
@@ -440,12 +576,13 @@ export class RuntimeTransactions implements TransactionHooks {
     labelEntriesChanged: 0,
     rowLinks: 0,
     rowArraysWritten: 0,
+    listDocumentsWritten: 0,
     labelsResolved: 0,
   };
   /** Whether `RuntimeCounts.recordBytes` is counted. */
   readonly #countRecordBytes: boolean;
   /** The identifier of each document the storage holds. */
-  readonly #documents = new Set<string>();
+  readonly #documents = new DocumentInstances((doc) => this.#instanceOf(doc));
   /** The document of the executor that each entity holds. */
   readonly #byEntity = new Map<string, string>();
   /** The space of each document that is in another space than `#space`. */
@@ -456,6 +593,18 @@ export class RuntimeTransactions implements TransactionHooks {
    * given; write records are recorded only then.
    */
   readonly #compiledPattern: string | undefined;
+  /**
+   * The write policies the result type of the compiled pattern declares, or
+   * `undefined` where it declares none.
+   */
+  readonly #resultPolicy: ResultPolicy | undefined;
+  /** The transaction `#resultPolicy` was last recorded for. */
+  #resultPolicyIn: IExtendedStorageTransaction | undefined;
+  /**
+   * The write policies declared for the argument documents, and for the
+   * result documents of the instances a body or a handler made.
+   */
+  readonly #declared = new DeclaredPolicies();
   /** The paths the transaction in progress wrote, by document. */
   readonly #written = new Map<string, (readonly string[])[]>();
   /** The stored labels of each document `labelOf` read, per transaction. */
@@ -464,15 +613,19 @@ export class RuntimeTransactions implements TransactionHooks {
    * The label entries of each document `labelOf` read, each as text by the
    * text of its path, which a change of the document is compared against.
    */
-  readonly #entries = new Map<string, Map<string, string>>();
+  readonly #entries = new ByDocumentInstance<Map<string, string>>((doc) =>
+    this.#instanceOf(doc)
+  );
   /**
    * The stored labels of each document of `#entries` as they were when
    * the entries were taken, which a change is compared against by the
    * label a read consumes (`LabelChange.unchanged`).
    */
-  readonly #entriesOf = new Map<string, CfcMetadata | undefined>();
+  readonly #entriesOf = new ByDocumentInstance<CfcMetadata | undefined>((
+    doc,
+  ) => this.#instanceOf(doc));
   /** The documents of `#entries` that a commit changed since. */
-  readonly #touched = new Set<string>();
+  readonly #touched = new DocumentInstances((doc) => this.#instanceOf(doc));
   /** What the executor registered to hear of changed labels. */
   #labelsChanged:
     | ((
@@ -558,6 +711,20 @@ export class RuntimeTransactions implements TransactionHooks {
     string,
     { record: BucketRecord; key: string }
   >();
+  /**
+   * Whether the lists of links of the result are stored as documents of
+   * their own (`LinkList`, `BucketRecord.list`).
+   */
+  readonly #lists: boolean;
+  /** The most links to rows that a list document holds itself. */
+  readonly #listWhole: number;
+  /**
+   * The array of row documents whose links each document of a `LinkList`
+   * holds: the list document itself and the document of each chunk.
+   */
+  readonly #listDocuments = new Map<string, RowArray>();
+  /** The record of bucket documents whose links each such document holds. */
+  readonly #bucketLists = new Map<string, BucketRecord>();
   /** The stream each entity that holds a stream marker is of. */
   readonly #streams = new Map<string, StreamOfExecutor>();
   /** The stream entities the transaction in progress wrote first. */
@@ -566,6 +733,7 @@ export class RuntimeTransactions implements TransactionHooks {
     | ((entity: URI, stream: StreamOfExecutor) => void)
     | undefined;
   readonly #onChanges: ((changes: ChangeByOther[]) => void) | undefined;
+  readonly #onArrived: ((doc: string) => void) | undefined;
   readonly #onLabels: (() => void) | undefined;
   readonly #unheld:
     | { reads(entity: string): boolean; changed(entities: string[]): void }
@@ -576,7 +744,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * held when the instance was resumed and that this runtime has not
    * written.
    */
-  readonly #heldBefore = new Set<string>();
+  readonly #heldBefore = new DocumentInstances((doc) => this.#instanceOf(doc));
   readonly #sources: SourceObserver | undefined;
   /**
    * The documents the transaction in progress wrote in a transaction of
@@ -614,6 +782,13 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       countRecordBytes?: boolean;
       /**
+       * Whether `artifact`, and each artifact the executor instantiates,
+       * is one the runtime's compiler gave for a source, or one host code
+       * vouches for (`CompiledPieceOptions.attested`). The handlers of any
+       * other artifact have no identity a writer claim is checked by.
+       */
+      attested?: boolean;
+      /**
        * The collections of the plan of `artifact` whose rows are stored as
        * documents of their own, each named by the array and the key of the
        * row, with a link to it at the row's position
@@ -633,6 +808,23 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       bucketDocuments?: ReadonlySet<number>;
       /**
+       * Whether the links to the row documents of each array of
+       * `rowDocuments`, and the links to the bucket documents of each index
+       * of `bucketDocuments`, are stored in documents of their own, a long
+       * array in chunks, with a link in the result document at the path of
+       * the array or of the record. A change of one link of an array then
+       * writes a document whose size does not follow the number of rows,
+       * and a change of one link of a record writes one path of the
+       * document of the record.
+       */
+      listDocuments?: boolean;
+      /**
+       * The most rows of an array whose links the list document holds
+       * itself, where the lists are documents of their own. A longer array
+       * is stored in chunks. The default is `LIST_WHOLE`.
+       */
+      listWhole?: number;
+      /**
        * Called when a value first stored holds a stream of the executor.
        * The stream is then stored as a link to an entity that holds the
        * runtime's stream marker, which a `Cell.send` resolves to; without
@@ -644,6 +836,11 @@ export class RuntimeTransactions implements TransactionHooks {
        * documents the executor holds, when the replica applied it.
        */
       changes?: (changes: ChangeByOther[]) => void;
+      /**
+       * Called when the replica took a commit or a load of a document that
+       * `load()` was asked for and gave nothing of (`wanted`).
+       */
+      arrived?: (doc: string) => void;
       /**
        * Called when a commit of another writer changed a document whose
        * stored labels the executor has read. The executor is told of the
@@ -694,6 +891,8 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#space = space;
     this.#owner = options.owner;
     this.#rowCollections = options.rowDocuments ?? new Set();
+    this.#lists = options.listDocuments === true;
+    this.#listWhole = options.listWhole ?? LIST_WHOLE;
     if (options.owner !== undefined && options.bucketDocuments !== undefined) {
       for (const output of options.artifact?.plan.outputs ?? []) {
         if (
@@ -701,16 +900,26 @@ export class RuntimeTransactions implements TransactionHooks {
           options.bucketDocuments.has(output.collection) &&
           !output.path.includes("*")
         ) {
-          this.#bucketRecords.push({
+          const record: BucketRecord = {
             doc: options.owner,
             path: [...output.path, "buckets"],
             keys: new Set(),
-          });
+          };
+          if (this.#lists) {
+            const doc = identifierOf({
+              bucketList: [record.doc, ...record.path],
+            });
+            record.list = { doc, linked: false };
+            this.#bucketLists.set(doc, record);
+            this.entityOf(doc);
+          }
+          this.#bucketRecords.push(record);
         }
       }
     }
     this.#onStream = options.stream;
     this.#onChanges = options.changes;
+    this.#onArrived = options.arrived;
     this.#onLabels = options.labels;
     this.#unheld = options.unheld;
     this.#onApplied = options.applied;
@@ -723,6 +932,17 @@ export class RuntimeTransactions implements TransactionHooks {
         !runtime.experimental.compiledPatterns || !runtime.servingPosture
       ? undefined
       : this.#register(options.artifact);
+    this.#artifact = options.artifact;
+    this.#attested = options.attested === true;
+    if (options.artifact !== undefined && options.owner !== undefined) {
+      this.#declared.declare(options.owner, options.artifact, false);
+    }
+    this.#resultPolicy = writePoliciesOf(
+      options.artifact?.schemas.find(({ id }) =>
+        id === (options.artifact?.plan as { resultSchema?: unknown })
+          .resultSchema
+      )?.schema,
+    );
     if (
       this.#compiledPattern !== undefined || this.#onChanges !== undefined ||
       this.#sources !== undefined
@@ -759,19 +979,39 @@ export class RuntimeTransactions implements TransactionHooks {
             ? new Set<string>()
             : undefined;
           for (const { address, before, after } of notification.changes) {
-            const doc = this.#byEntity.get(address.id);
+            // Two spaces can hold documents of one entity: a document of
+            // another space is held under a name that names the space.
+            const named = this.#byEntity.get(
+              this.#keyOf(notification.space, address.id),
+            );
+            // A change of an instance of a scope is of one scope key: the
+            // one the change names, and the runtime's own where it names
+            // none.
+            const changed = address.scope === undefined ||
+                address.scope === "space"
+              ? undefined
+              : address.scopeKey ??
+                resolveScopeKey(address.scope, this.#runtime.scopeKeyIdentity);
+            const doc = named === undefined || changed === undefined
+              ? named
+              : `${named}~${changed}`;
             if (doc === undefined || !this.#documents.has(doc)) {
               // A row can have read the entity where the basis of the
               // piece names it.
               if (
-                unheld !== undefined && address.scope === "space" &&
+                unheld !== undefined && changed === undefined &&
                 (doc === undefined || !this.#rowDocuments.has(doc)) &&
                 this.#unheld?.reads(address.id) === true
               ) unheld.add(address.id);
             }
-            if (doc === undefined) continue;
-            // Two spaces can hold documents of one entity.
-            if (this.#spaceOf(doc) !== notification.space) continue;
+            if (named === undefined || doc === undefined) continue;
+            if (this.#spaceOf(named) !== notification.space) continue;
+            // A document the executor asked for and the replica held none
+            // of now has one: the piece reads it again.
+            if (this.wanted.has(doc) && !this.#documents.has(doc)) {
+              this.#onArrived?.(doc);
+              continue;
+            }
             this.#sources?.changed(
               doc,
               false,
@@ -789,7 +1029,6 @@ export class RuntimeTransactions implements TransactionHooks {
             const row = this.#rowDocuments.get(doc);
             if (
               own || this.#onChanges === undefined ||
-              address.scope !== "space" ||
               (!this.#documents.has(doc) && row === undefined) ||
               (address.path.length > 0 && address.path[0] !== "value")
             ) continue;
@@ -823,7 +1062,14 @@ export class RuntimeTransactions implements TransactionHooks {
             const stored = row === undefined
               ? { doc, path: at }
               : this.#addressOfStored(doc, at);
-            const place = { doc: stored.doc, path: [...stored.path] };
+            // The executor names the instances of a scope by one name.
+            const place = {
+              doc: changed === undefined
+                ? stored.doc
+                : scopedDocument(named, address.scope as Scope),
+              path: [...stored.path],
+              ...(changed === undefined ? {} : { scoped: changed }),
+            };
             if (row !== undefined && !row.array.keys.includes(row.key)) {
               continue;
             }
@@ -845,7 +1091,15 @@ export class RuntimeTransactions implements TransactionHooks {
             }
             this.#sources?.changed(doc, true);
             if (!Array.isArray(now) || !Array.isArray(then)) {
-              byOther.push({ ...place, value: this.#decode(now) });
+              byOther.push({
+                ...place,
+                value: this.#decode(
+                  now,
+                  undefined,
+                  notification.space,
+                  address.scope ?? "space",
+                ),
+              });
               continue;
             }
             const splice = spliceBetween(then, now);
@@ -854,7 +1108,14 @@ export class RuntimeTransactions implements TransactionHooks {
               splice: {
                 start: splice.start,
                 removed: splice.removed,
-                members: splice.members.map((member) => this.#decode(member)),
+                members: splice.members.map((member) =>
+                  this.#decode(
+                    member,
+                    undefined,
+                    notification.space,
+                    address.scope ?? "space",
+                  )
+                ),
               },
             });
           }
@@ -901,13 +1162,50 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#stopReading = runtime.storageManager.addDocumentReader?.((
       address,
     ) => {
-      const doc = this.#byEntity.get(address.id);
+      const doc = this.#byEntity.get(
+        this.#keyOf(address.space, address.id),
+      );
       if (doc !== undefined) return address.space === this.#spaceOf(doc);
       // A row left as stored was derived from documents the executor has
       // not named: the replica keeps those, and reports a write to one.
       return this.#keptArrays.size > 0 && address.space === this.#space &&
         this.#unheld?.reads(address.id) === true;
     });
+  }
+
+  /**
+   * The transaction that brings the piece into being for the principal it
+   * acts for (`attributeFirstValuesIn`).
+   */
+  #attributedIn: IExtendedStorageTransaction | undefined;
+
+  /**
+   * Has the first value of each state cell that `tx` writes attributed to
+   * the principal `tx` acts for: `tx` is the transaction that brings the
+   * piece into being on their behalf, which the caller marked for the
+   * result document (`markCfcAttributedInitialization`).
+   */
+  attributeFirstValuesIn(tx: IExtendedStorageTransaction): void {
+    this.#attributedIn = tx;
+  }
+
+  /** See the option `attested` of the constructor. */
+  readonly #attested: boolean;
+
+  /**
+   * The fields of each argument document that hold the default of the
+   * argument type, because the argument left them out (`filledDefaults`).
+   */
+  readonly #filledDefaults = new Map<string, readonly string[]>();
+
+  /**
+   * Notes that the argument document `doc`, which the executor is about to
+   * make, holds the default of its type at each field of `names`
+   * (`argumentWithDefaults`): the write that makes the document records
+   * each protected one among them as a seed.
+   */
+  filledDefaults(doc: string, names: readonly string[]): void {
+    this.#filledDefaults.set(doc, names);
   }
 
   /** Registers a compiled pattern with the runtime, once. */
@@ -966,8 +1264,41 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** @inheritDoc */
   instantiated(instance: string, artifact: Artifact): void {
+    this.#artifactOf.set(instance, artifact);
+    this.#declared.declare(instance, artifact, true);
     if (this.#compiledPattern === undefined) return;
     this.#patternOf.set(instance, this.#register(artifact));
+  }
+
+  /**
+   * The identity a transaction that runs the handler of `stream` is stamped
+   * with (`handlerIdentityOf`), or `undefined` where the adapter was given
+   * no artifact, the artifact is not attested, or the experimental option
+   * `compiledPatterns` is off.
+   */
+  handlerOf(stream: StreamOfExecutor): ImplementationIdentity | undefined {
+    const artifact =
+      (stream.instance === undefined
+        ? undefined
+        : this.#artifactOf.get(stream.instance)) ?? this.#artifact;
+    // `Body.code` of an artifact nothing vouches for is a statement of
+    // whoever wrote the artifact about a handler, which nothing checked
+    // against a source: its handlers are writers with no identity.
+    if (
+      artifact === undefined || !this.#attested ||
+      !this.#runtime.experimental.compiledPatterns
+    ) return undefined;
+    // A runtime that stores no labels from templates registers the pattern
+    // here: a writer claim is checked in every runtime that commits.
+    const pattern = this.#register(artifact);
+    return handlerIdentityOf(
+      this.#runtime.compiledPlans.plan(
+        pattern,
+        runtimeWritePolicyAuthorization,
+      ),
+      pattern,
+      stream.binding,
+    );
   }
 
   /** The space the documents of the executor are in. */
@@ -1019,14 +1350,50 @@ export class RuntimeTransactions implements TransactionHooks {
    * executor's.
    */
   external(doc: string, space?: MemorySpace): void {
-    this.entityOf(doc);
+    const entity = this.entityOf(doc);
     this.#documents.add(doc);
-    if (space !== undefined) this.#spaces.set(doc, space);
+    if (space !== undefined && space !== this.#space) {
+      this.#spaces.set(doc, space);
+      // The caller named the document by its entity alone: a link into
+      // that space leads to it under the name the caller gave.
+      this.#byEntity.set(documentIn(entity, space), doc);
+    }
   }
 
   /** The space a document of the executor is in. */
   #spaceOf(doc: string): MemorySpace {
-    return this.#spaces.get(doc) ?? this.#space;
+    const of = doc.indexOf("~") < 0 ? doc : scopeOfDocument(doc).base;
+    return placeOfDocument(of).space as MemorySpace | undefined ??
+      this.#spaces.get(of) ?? this.#space;
+  }
+
+  /**
+   * What `#byEntity` holds the document of `space` at `entity` under: the
+   * entity for the space of the piece, and the entity with the space for
+   * another (`documentIn`).
+   */
+  #keyOf(space: MemorySpace, entity: string): string {
+    return space === this.#space || entity.startsWith("data:")
+      ? entity
+      : documentIn(entity, space);
+  }
+
+  /**
+   * The document of the executor that the entity of a link holds in the
+   * space the link names: for a link into another space than the piece's,
+   * the name that names the space.
+   */
+  documentAt(link: { space?: MemorySpace; id: string }): string {
+    if (
+      link.space === undefined || link.space === this.#space ||
+      link.id.startsWith("data:")
+    ) return this.documentOf(link.id);
+    const doc = documentIn(link.id, link.space);
+    // A document a caller handed under another name (`external`).
+    const known = this.#byEntity.get(doc);
+    if (known !== undefined) return known;
+    this.entityOf(doc);
+    return doc;
   }
 
   /** Stops keeping the documents of the executor loaded. */
@@ -1056,7 +1423,7 @@ export class RuntimeTransactions implements TransactionHooks {
   #reportLabels(stored = false): void {
     if (this.#touched.size === 0) return;
     const changes: LabelChange[] = [];
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     try {
       for (const doc of this.#touched) {
         this.#metadata.delete(doc);
@@ -1110,6 +1477,16 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     return changes.map((change) => {
       const { doc, paths, alone, unchanged } = change;
+      // The document of the links of a record of buckets holds the link
+      // to each bucket, which the executor holds at the bucket's member of
+      // the record.
+      const record = this.#bucketLists.get(doc);
+      if (record !== undefined) {
+        return {
+          doc: record.doc,
+          paths: paths.map((path) => [...record.path, ...path]),
+        };
+      }
       if (!this.#rowDocuments.has(doc) && !this.#bucketDocuments.has(doc)) {
         return change;
       }
@@ -1139,7 +1516,7 @@ export class RuntimeTransactions implements TransactionHooks {
     return readStoredCfcMetadata(tx, {
       space: this.#spaceOf(doc),
       id: this.entityOf(doc),
-      scope: "space",
+      scope: cellScopeOf(doc),
     });
   }
 
@@ -1161,7 +1538,7 @@ export class RuntimeTransactions implements TransactionHooks {
       // transaction it hands. The creation makes those reads too, so that
       // what it stores has the label it would have in that transaction
       // where no record gives it one.
-      const creation = this.#runtime.edit();
+      const creation = this.#edit();
       for (const read of this.#load.before) {
         creation.read({
           space: read.space,
@@ -1179,7 +1556,7 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     this.#reportLabels();
     this.#cause = cause;
-    this.#tx = this.#runtime.edit();
+    this.#tx = this.#edit();
     this.#own.set(this.#tx.tx, undefined);
     this.#resetTransaction();
   }
@@ -1208,6 +1585,22 @@ export class RuntimeTransactions implements TransactionHooks {
    * aborted. The executor is told of the labels the commit stored when the
    * replica applies it.
    */
+  /**
+   * A transaction of the runtime's for what the adapter reads or commits
+   * itself. Every transaction a compiled piece commits stores its labels
+   * as version-2 envelopes, each label of more than the inline limit as a
+   * reference to a content-addressed label document of the space
+   * (`docs/specs/content-addressed-cfc-labels.md`), whatever the runtime's
+   * `cfcContentAddressedLabels` says for its other transactions (P452,
+   * ruling Z95). The option only chooses how a label is spelled: either
+   * version reads back as the same labels.
+   */
+  #edit(): IExtendedStorageTransaction {
+    const tx = this.#runtime.edit();
+    tx.setCfcContentAddressedLabels(true);
+    return tx;
+  }
+
   within<T>(
     tx: IExtendedStorageTransaction,
     run: () => T,
@@ -1236,6 +1629,9 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#tx !== undefined || this.#given !== undefined) {
       throw new Error("A transaction was handed while another was open.");
     }
+    // What the piece commits through the handed transaction stores its
+    // labels as references to content-addressed label documents.
+    tx.setCfcContentAddressedLabels(true);
     this.#reportLabels();
     const given: Given = { tx, failed: undefined };
     this.#given = given;
@@ -1473,15 +1869,29 @@ export class RuntimeTransactions implements TransactionHooks {
    * of row documents are those of the links the storage holds there.
    */
   #restored(handed: Handed): Restored[] {
+    // What the transaction wrote of a document of a scope, it wrote of the
+    // instance of the identity it carried.
+    const acting = handed.tx?.tx.scopeKeyIdentity;
+    return this.actingFor(acting, () => this.#restoredFor(handed, acting));
+  }
+
+  /** `#restored()`, with the documents standing for the instances of `acting`. */
+  #restoredFor(
+    handed: Handed,
+    acting: ScopeKeyIdentity | undefined,
+  ): Restored[] {
     const restored: Restored[] = [];
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
+    if (acting !== undefined) tx.tx.scopeKeyIdentity = acting;
     try {
       for (const doc of handed.created) this.#streams.delete(doc);
       for (const doc of handed.written) {
         const stored = tx.readValueOrThrow(this.#address(doc, []));
         if (stored === undefined) this.#documents.delete(doc);
         for (const array of this.#rowArrays.get(doc) ?? []) {
-          const links = valueAt(stored, array.path);
+          const links = array.list === undefined
+            ? valueAt(stored, array.path)
+            : this.#storedRowLinks(tx, array, valueAt(stored, array.path));
           array.keys = (Array.isArray(links) ? links : []).flatMap((link) => {
             const row = isPrimitiveCellLink(link)
               ? this.#rowDocuments.get(
@@ -1491,9 +1901,23 @@ export class RuntimeTransactions implements TransactionHooks {
             return row?.array === array ? [row.key] : [];
           });
           array.positions = undefined;
+          // The executor takes the result document with the rows of each
+          // collection left out, and its next derivation gives every row
+          // as one that enters (`Instance.restore`). The list is laid out
+          // anew by that change: it holds no row until then, and the
+          // documents of the chunks the storage holds are removed with it.
+          if (array.list !== undefined) {
+            const { list } = array;
+            for (const chunk of list.chunks ?? []) this.#dropChunk(list, chunk);
+            list.chunks = undefined;
+            list.top = true;
+            array.keys = [];
+          }
         }
         for (const record of this.#bucketRecordsOf(doc)) {
-          const links = valueAt(stored, record.path);
+          const links = record.list === undefined
+            ? valueAt(stored, record.path)
+            : this.#storedBucketLinks(tx, record, valueAt(stored, record.path));
           record.keys = new Set(
             isWalkableObjectNotArray(links) ? Object.keys(links) : [],
           );
@@ -1501,7 +1925,13 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#metadata.delete(doc);
         restored.push({
           doc,
-          value: stored === undefined ? undefined : this.#decode(stored, tx),
+          value: stored === undefined ? undefined : this.#decode(
+            stored,
+            tx,
+            this.#spaceOf(doc),
+            cellScopeOf(doc),
+          ),
+          ...(acting === undefined ? {} : { acting }),
         });
       }
     } finally {
@@ -1558,6 +1988,13 @@ export class RuntimeTransactions implements TransactionHooks {
     // reads every row.
     for (const array of this.#rowArrays.get(doc) ?? []) {
       if (!isPrefix(path, array.path)) continue;
+      // The links are read too where documents of their own hold them.
+      if (array.list?.linked === true) {
+        tx.readValueOrThrow(this.#address(array.list.doc, []));
+        for (const chunk of array.list.chunks ?? []) {
+          tx.readValueOrThrow(this.#address(chunk.doc, []));
+        }
+      }
       for (const key of array.keys) {
         tx.readValueOrThrow(this.#address(this.#rowDocument(array, key), []));
       }
@@ -1565,7 +2002,11 @@ export class RuntimeTransactions implements TransactionHooks {
     for (const record of this.#bucketRecordsOf(doc)) {
       if (isPrefix(path, record.path)) {
         // A read at or above a record of bucket documents reads every
-        // bucket.
+        // bucket, and the links to them where documents of their own hold
+        // those.
+        if (record.list?.linked === true) {
+          tx.readValueOrThrow(this.#address(record.list.doc, []));
+        }
         for (const key of record.keys) {
           tx.readValueOrThrow(
             this.#address(this.#bucketDocument(record, key), []),
@@ -1573,7 +2014,13 @@ export class RuntimeTransactions implements TransactionHooks {
         }
       } else if (isPrefix(record.path, path)) {
         // A read below a bucket crosses the link to its document, which
-        // the result document holds at the bucket's member of the record.
+        // the result document holds at the bucket's member of the record,
+        // or, where the links are in a document of their own, the link the
+        // result document holds to that document and the link it holds to
+        // the bucket.
+        if (record.list !== undefined) {
+          readMaybeLink(tx, this.#ownAddress(record.doc, record.path));
+        }
         readMaybeLink(tx, this.#linkOfBucket(record, path));
       }
     }
@@ -1651,6 +2098,15 @@ export class RuntimeTransactions implements TransactionHooks {
                 path.slice(0, record.path.length + 1),
                 "value",
               ),
+              // The link to the bucket, where a document of the links
+              // holds it.
+              ...(record.list === undefined ? [] : [
+                this.#labelAt(
+                  this.#metadataOf(record.list.doc),
+                  [path[record.path.length]],
+                  "value",
+                ),
+              ]),
               this.#labelAt(
                 this.#metadataOf(
                   this.#bucketDocument(record, path[record.path.length]),
@@ -1705,7 +2161,9 @@ export class RuntimeTransactions implements TransactionHooks {
    * document. A `lift` over a whole list asks for the positions it read of
    * every member each time it runs.
    */
-  readonly #labelIds = new Map<string, Map<string, string>>();
+  readonly #labelIds = new ByDocumentInstance<Map<string, string>>((doc) =>
+    this.#instanceOf(doc)
+  );
 
   /**
    * The identifier `labelOf` found for a read of the value at or above an
@@ -1722,7 +2180,7 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #metadataOf(doc: string): CfcMetadata | undefined {
     if (!this.#metadata.has(doc)) {
-      const tx = this.#tx ?? this.#runtime.edit();
+      const tx = this.#tx ?? this.#edit();
       try {
         const metadata = this.#storedLabels(tx, doc);
         this.#metadata.set(doc, metadata);
@@ -1832,10 +2290,12 @@ export class RuntimeTransactions implements TransactionHooks {
     splice?: { start: number; removed: number; inserted: number },
     inputs?: InputsTable,
     made?: { start: number; removed: number; inserted: number },
+    declared?: DeclaredWrite,
   ): void {
     const tx = this.#open();
     this.#store = store;
     if (path.length === 0 && this.#heldWhole.delete(doc)) return;
+    this.#listsWritten = [];
     this.#counts.writes += 1;
     this.#stagedState += 1;
     // What a derivation writes is derived. What a handler, the creation
@@ -1894,6 +2354,9 @@ export class RuntimeTransactions implements TransactionHooks {
     // Whether the change was written as the positions of a splice, which
     // are then the paths written, and the path of the change is not.
     let spliced = false;
+    // Whether the change is the first write of a document the storage does
+    // not hold.
+    const creates = document !== undefined && !this.#documents.has(doc);
     if (document === undefined) {
       if (!this.#documents.delete(doc)) return;
       tx.writeValueOrThrow(this.#address(doc, []), undefined, {
@@ -1913,17 +2376,48 @@ export class RuntimeTransactions implements TransactionHooks {
       if (
         !(this.#resume && doc === this.#owner && document.value === undefined)
       ) {
-        tx.writeValueOrThrow(
-          this.#address(doc, []),
-          this.#encodeWithRows(
-            tx,
-            store,
-            rows,
-            [],
-            document.value,
-            buckets,
-          ),
+        const whole = this.#encodeWithRows(
+          tx,
+          store,
+          rows,
+          [],
+          document.value,
+          buckets,
         );
+        tx.writeValueOrThrow(this.#address(doc, []), whole);
+        // A protected field of an argument document that the argument left
+        // out, and that holds the default of its type, is a seed, and one
+        // the maker supplies is the maker's write
+        // (`recordNewDocumentProtectedDefaults`).
+        const filled = this.#filledDefaults.get(doc);
+        const declaredFor = this.#declared.of(doc);
+        if (
+          filled !== undefined && declaredFor !== undefined &&
+          isWalkableObjectNotArray(whole)
+        ) {
+          recordNewDocumentProtectedDefaults(
+            tx,
+            this.#address(doc, []),
+            declaredFor.policy.schema,
+            whole,
+            Object.fromEntries(
+              Object.entries(whole).filter(([name]) => !filled.includes(name)),
+            ),
+            whole,
+          );
+        }
+        if (isStateCellSeed(document, path, schema, writes)) {
+          const seeded = this.#address(doc, []);
+          recordStateCellSeed(tx, seeded, whole);
+          // The state cell is a document of the piece the transaction
+          // brings into being for the principal it acts for.
+          if (this.#attributedIn === tx) {
+            tx.markCfcAttributedInitialization(
+              runtimeWritePolicyAuthorization,
+              { space: seeded.space, id: seeded.id, scope: seeded.scope },
+            );
+          }
+        }
       }
       this.#enroll(tx, doc);
       this.#linkToResult(tx, doc);
@@ -1945,7 +2439,19 @@ export class RuntimeTransactions implements TransactionHooks {
           record?.membersAppended === true && inputs !== undefined;
         spliced = splice !== undefined || appended;
         this.#spliceRows(tx, store, array, held, cut, written, spliced);
-        if (appended) {
+        if (array.list !== undefined) {
+          // The links of the array are in documents of their own, and the
+          // transaction writes those and not the path of the array, which
+          // holds the link to the list. The record of the array is that of
+          // a write that left the path as it was, so the path keeps the
+          // label of the membership as the record gives it now, and it is
+          // the record of each document of the list that was written.
+          if (record !== undefined && inputs !== undefined) {
+            this.#record([record], true, inputs);
+            this.#record(this.#recordsOfLists(() => record), false, inputs);
+            writes = writes?.filter((write) => write !== record);
+          }
+        } else if (appended) {
           this.#recordAppended(array, record, cut, inputs);
           writes = writes?.filter((write) => write !== record);
         }
@@ -1992,7 +2498,16 @@ export class RuntimeTransactions implements TransactionHooks {
         const link = this.#writeBucket(tx, bucket, key, held);
         if (!bucket.keys.has(key)) {
           bucket.keys.add(key);
-          tx.writeValueOrThrow(this.#linkOfBucket(bucket, path), link);
+          if (bucket.list?.linked === false) {
+            // The record was not written whole before its first bucket.
+            this.#writeBucketLinks(tx, bucket, { [key]: link });
+            tx.writeValueOrThrow(
+              this.#ownAddress(bucket.doc, bucket.path),
+              this.#linkTo(bucket.list.doc),
+            );
+          } else {
+            tx.writeValueOrThrow(this.#linkOfBucket(bucket, path), link);
+          }
         }
       }
       // The document of a bucket is written under no record of the plan,
@@ -2001,10 +2516,9 @@ export class RuntimeTransactions implements TransactionHooks {
       // result document, so that join holds the entry of the index. A read
       // of a bucket stored in place consumes that entry, which stands above
       // it, and a read that follows the link to the document does not.
-      tx.readValueOrThrow({
-        ...this.#linkOfBucket(bucket, path),
-        path: [...bucket.path.slice(0, -1), "kind"],
-      });
+      tx.readValueOrThrow(
+        this.#ownAddress(bucket.doc, [...bucket.path.slice(0, -1), "kind"]),
+      );
       writes = writes?.filter((write) => write !== record);
     } else {
       const parent = path.length === 0
@@ -2012,6 +2526,43 @@ export class RuntimeTransactions implements TransactionHooks {
         : store.peek(doc, path.slice(0, -1));
       const absent = path.length > 0 && isWalkableObjectNotArray(parent) &&
         !Object.hasOwn(parent, path[path.length - 1]);
+      // A handler that puts an array in the place of the array the storage
+      // holds, with members added behind those it held, wrote the added
+      // positions: the storage is given those and the number of members, as
+      // for a splice, so that a claim the schema declares for a member is
+      // decided for the members the handler added and for no other. It is
+      // done where the schema of the write, or the type the handler declares
+      // for the handle, declares a policy for a member. Where the executor
+      // spliced the stored array, as it does for a push, its splice says
+      // which members were added, and no member is compared.
+      if (
+        splice === undefined && this.#cause === "event" &&
+        (declaresMemberPolicy(schema) ||
+          declaresMemberPolicy(declared?.schema))
+      ) {
+        const now = store.peek(doc, path);
+        splice = appendedBySplice(made, Array.isArray(now) ? now.length : -1);
+      }
+      if (
+        splice === undefined && made === undefined &&
+        this.#cause === "event" &&
+        (declaresMemberPolicy(schema) ||
+          declaresMemberPolicy(declared?.schema))
+      ) {
+        const stored = tx.readValueOrThrow(at(path), {
+          meta: ignoreReadForScheduling,
+        });
+        splice = appendedBehind(
+          stored,
+          store.peek(doc, path),
+          (member) => this.#encode(member),
+        );
+        // Where the storage holds no array yet, the empty one is written
+        // first, and the members behind it.
+        if (splice !== undefined && stored === undefined) {
+          tx.writeValueOrThrow(at(path), []);
+        }
+      }
       const held = splice === undefined ? undefined : store.peek(doc, path);
       if (splice !== undefined && Array.isArray(held)) {
         // A splice of a stored array writes the number of members and the
@@ -2058,7 +2609,17 @@ export class RuntimeTransactions implements TransactionHooks {
           });
         }
       }
-      if (ofBuckets.length > 0) writes = [...given, ...ofBuckets];
+      // The documents of lists that the change wrote whole have the
+      // record of the path the list stands at, or of the nearest path
+      // above it that has one.
+      const ofLists = this.#recordsOfLists((at) =>
+        given.findLast(({ target }) =>
+          target.doc === doc && isPrefix(target.path, at)
+        )
+      );
+      if (ofBuckets.length > 0 || ofLists.length > 0) {
+        writes = [...given, ...ofBuckets, ...ofLists];
+      }
     }
     if (
       this.#resuming && attempts !== undefined &&
@@ -2086,7 +2647,38 @@ export class RuntimeTransactions implements TransactionHooks {
     // labels, and otherwise the schema the document's stored labels name.
     // A schema of a plan is a JSON schema with the members the executor
     // reads typed (`Schema` of `exec/store.ts`).
+    // A handler's write of the value the storage holds logs no write: the
+    // executor can hold a place as absent that the storage holds with its
+    // default. The write was attempted all the same, and is marked as the
+    // attempt it is (`unchanged`).
+    if (
+      this.#cause === "event" && document !== undefined &&
+      attempts !== undefined &&
+      tx.getWriteAttemptLog?.().length === attempts
+    ) {
+      tx.readValueOrThrow(at(path), {
+        meta: { ...ignoreReadForScheduling, ...markReadAsAttemptedWrite },
+      });
+    }
     this.#recordSchema(tx, doc, path, schema, store);
+    // A handler's write also answers to the write policies its own state
+    // type declares for the handle, as a write through a cell of today's
+    // path answers to the schema of the cell: the policy is recorded at the
+    // position the handle names.
+    const own = declared === undefined || declared.schema === schema
+      ? undefined
+      : declaredBy(declared.schema);
+    if (own !== undefined) {
+      this.#recordSchema(
+        tx,
+        declared!.doc,
+        declared!.path,
+        own.schema as Schema,
+        store,
+      );
+    }
+    if (doc === this.#owner) this.#recordResultPolicy(tx, path, store);
+    else this.#recordDeclaredPolicy(tx, doc, path, store, creates);
     if (this.#compiledPattern === undefined) return;
     // A write of the value the storage holds is no write of the
     // transaction: its records are given as those of a write that left the
@@ -2138,18 +2730,462 @@ export class RuntimeTransactions implements TransactionHooks {
         if (!this.#rowCollections.has(collection)) continue;
         const [of, path] = JSON.parse(text) as [string, string[]];
         if (of !== doc || arrays.some((one) => one.text === text)) continue;
-        arrays.push({
+        const array: RowArray = {
           doc,
           path,
           text,
           keys: [],
           ids: new Map(),
           links: new Map(),
-        });
+        };
+        if (this.#lists) {
+          array.list = {
+            doc: identifierOf({ list: [doc, ...path] }),
+            linked: false,
+            chunks: undefined,
+            dirty: new Set(),
+            dropped: [],
+            top: true,
+            ids: new Set(),
+            next: 0,
+            adopted: false,
+          };
+          this.#listDocuments.set(array.list.doc, array);
+          // The entity is known as that of the list from here on, also to
+          // a resumed instance that reads a link to it.
+          this.entityOf(array.list.doc);
+        }
+        arrays.push(array);
         this.#rowArraysNamed += 1;
       }
     }
     return arrays;
+  }
+
+  /**
+   * The address of a path of a document of the executor in the document
+   * itself, where `#address` gives that of a row or of a bucket for a path
+   * below one.
+   */
+  #ownAddress(doc: string, path: readonly string[]): NormalizedFullLink {
+    return {
+      space: this.#spaceOf(doc),
+      id: this.entityOf(doc),
+      path: [...path],
+      scope: "space",
+    };
+  }
+
+  /** The link to a document of the executor, whole. */
+  #linkTo(doc: string): FabricValue {
+    return createSigilLinkFromParsedLink({
+      id: this.entityOf(doc),
+      space: this.#spaceOf(doc),
+      path: [],
+    });
+  }
+
+  /**
+   * Writes a document that holds links of a list stored apart from the
+   * result document, whole. `at` is the path of the result document that
+   * the list stands at (`#listsWritten`).
+   */
+  #writeListDocument(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    value: FabricValue,
+    at: readonly string[],
+  ): void {
+    const address = this.#address(doc, []);
+    const attempts = tx.getWriteAttemptLog?.().length;
+    tx.writeValueOrThrow(address, value);
+    this.#enroll(tx, doc);
+    // The write policy of the write, as `change` records it for a path.
+    recordRelevantSchemaWritePolicyInput(tx, address, undefined);
+    this.#counts.listDocumentsWritten += 1;
+    // A write of what the document holds is no write of the transaction,
+    // and has no record.
+    if (
+      attempts === undefined ||
+      tx.getWriteAttemptLog?.().slice(attempts).some((attempt) =>
+        attempt.id === address.id
+      )
+    ) this.#listsWritten.push({ doc, at });
+  }
+
+  /**
+   * The documents of lists that the change being written wrote whole, each
+   * with the path of the result document that the array of rows or the
+   * record of buckets it belongs to stands at. `change` gives each the
+   * record of that path, so that the document stores the label of the
+   * membership and not the join of what the transaction read.
+   */
+  #listsWritten: { doc: string; at: readonly string[] }[] = [];
+
+  /**
+   * The records of the documents of `#listsWritten`: for each, `of` with
+   * the root of the document as its target, as the record of a write that
+   * names no change of members.
+   */
+  #recordsOfLists(
+    of: (at: readonly string[]) => PlanWrite | undefined,
+  ): PlanWrite[] {
+    const records: PlanWrite[] = [];
+    for (const { doc, at } of this.#listsWritten.splice(0)) {
+      const record = of(at);
+      if (record === undefined) continue;
+      const {
+        enumeration: _enumeration,
+        removes: _removes,
+        moves: _moves,
+        start: _start,
+        relabel: _relabel,
+        membersChanged: _changed,
+        membersAppended: _appended,
+        ...plain
+      } = record;
+      records.push({ ...plain, target: { doc, path: [] } });
+    }
+    return records;
+  }
+
+  /** A chunk of `length` links of a list, in a document not yet in use. */
+  #newChunk(array: RowArray, length: number): ListChunk {
+    const list = array.list!;
+    let doc: string;
+    do {
+      doc = identifierOf({
+        list: [array.doc, ...array.path],
+        chunk: list.next++,
+      });
+    } while (list.ids.has(doc));
+    list.ids.add(doc);
+    this.#listDocuments.set(doc, array);
+    const chunk = { doc, length };
+    list.dirty.add(chunk);
+    return chunk;
+  }
+
+  /** Takes a chunk out of the layout of a list; its document is removed. */
+  #dropChunk(list: LinkList, chunk: ListChunk): void {
+    list.dropped.push(chunk.doc);
+    list.ids.delete(chunk.doc);
+    list.dirty.delete(chunk);
+    list.top = true;
+  }
+
+  /**
+   * Lays the links of an array of `length` rows out anew: in the list
+   * document itself for at most `#listWhole` rows, and otherwise in chunks
+   * of `LIST_FILL`.
+   */
+  #layOutList(array: RowArray, length: number): void {
+    const list = array.list!;
+    for (const chunk of list.chunks ?? []) this.#dropChunk(list, chunk);
+    list.top = true;
+    if (length <= this.#listWhole) {
+      list.chunks = undefined;
+      return;
+    }
+    list.chunks = [];
+    for (let at = 0; at < length; at += LIST_FILL) {
+      list.chunks.push(this.#newChunk(array, Math.min(LIST_FILL, length - at)));
+    }
+  }
+
+  /**
+   * Applies a splice of the rows of an array to the layout of its list:
+   * `removed` rows leave at `start`, and `inserted` enter there.
+   *
+   * The rows that leave are taken from the chunks that hold them, and a
+   * chunk that holds none any more leaves the list. The rows that enter go
+   * into the chunk that holds the position, or into the last where they
+   * are appended. A chunk that then holds more than `LIST_CHUNK` links is
+   * split: one that grew at the end of the list keeps `LIST_CHUNK` links
+   * and the rest go into chunks behind it, and any other is split into
+   * chunks of equal length of at most `LIST_FILL`. A chunk that is left
+   * with fewer than a quarter of `LIST_CHUNK` joins the chunk beside it
+   * where the two hold at most `LIST_FILL` together. So one row that
+   * enters, leaves or moves writes at most three chunks, and the list of
+   * the chunks only where a chunk came to exist or ceased to. A list that
+   * shrinks to half of `#listWhole` rows is stored in the list document
+   * again.
+   */
+  #spliceList(
+    array: RowArray,
+    start: number,
+    removed: number,
+    inserted: number,
+  ): void {
+    const list = array.list!;
+    if (list.chunks === undefined) {
+      list.top = true;
+      if (array.keys.length > this.#listWhole) {
+        this.#layOutList(array, array.keys.length);
+      }
+      return;
+    }
+    const chunks = list.chunks;
+    const touched = new Set<ListChunk>();
+    let offset = 0;
+    for (const chunk of chunks) {
+      const next = offset + chunk.length;
+      const from = Math.max(start, offset);
+      const to = Math.min(start + removed, next);
+      if (to > from) {
+        chunk.length -= to - from;
+        touched.add(chunk);
+      }
+      offset = next;
+    }
+    if (inserted > 0) {
+      // The first chunk that ends at or behind the position.
+      let at = 0;
+      offset = 0;
+      while (at < chunks.length - 1 && start > offset + chunks[at].length) {
+        offset += chunks[at].length;
+        at += 1;
+      }
+      const chunk = chunks[at];
+      const appended = at === chunks.length - 1 &&
+        start === offset + chunk.length;
+      chunk.length += inserted;
+      touched.add(chunk);
+      if (chunk.length > LIST_CHUNK) {
+        const total = chunk.length;
+        const lengths: number[] = [];
+        if (appended) {
+          for (let left = total; left > 0; left -= LIST_CHUNK) {
+            lengths.push(Math.min(LIST_CHUNK, left));
+          }
+        } else {
+          const pieces = Math.ceil(total / LIST_FILL);
+          for (let piece = 0; piece < pieces; piece++) {
+            lengths.push(
+              Math.floor(total / pieces) + (piece < total % pieces ? 1 : 0),
+            );
+          }
+        }
+        chunk.length = lengths[0];
+        spliceIn(
+          chunks,
+          at + 1,
+          0,
+          lengths.slice(1).map((length) => this.#newChunk(array, length)),
+        );
+        list.top = true;
+      }
+    }
+    for (const chunk of touched) {
+      const at = chunks.indexOf(chunk);
+      if (at < 0) continue;
+      if (chunk.length === 0) {
+        chunks.splice(at, 1);
+        this.#dropChunk(list, chunk);
+        continue;
+      }
+      list.dirty.add(chunk);
+      if (chunk.length >= LIST_CHUNK / 4) continue;
+      const beside = chunks[at + 1] ?? chunks[at - 1];
+      if (
+        beside === undefined || beside.length === 0 ||
+        beside.length + chunk.length > LIST_FILL
+      ) continue;
+      // The earlier of the two keeps the links of both.
+      const [kept, gone] = chunks[at + 1] === beside
+        ? [chunk, beside]
+        : [beside, chunk];
+      kept.length += gone.length;
+      list.dirty.add(kept);
+      chunks.splice(chunks.indexOf(gone), 1);
+      this.#dropChunk(list, gone);
+    }
+    if (array.keys.length <= this.#listWhole / 2) {
+      for (const chunk of chunks) this.#dropChunk(list, chunk);
+      list.chunks = undefined;
+    }
+  }
+
+  /**
+   * Writes the documents of the list of an array of row documents that do
+   * not hold what the list holds now, and returns the link to the list.
+   */
+  #flushList(tx: IExtendedStorageTransaction, array: RowArray): FabricValue {
+    const list = array.list!;
+    for (const doc of list.dropped.splice(0)) {
+      if (list.ids.has(doc)) continue;
+      tx.writeValueOrThrow(this.#address(doc, []), undefined, { delete: true });
+    }
+    let offset = 0;
+    for (const chunk of list.chunks ?? []) {
+      if (list.dirty.has(chunk)) {
+        this.#counts.rowLinks += chunk.length;
+        this.#writeListDocument(
+          tx,
+          chunk.doc,
+          array.keys.slice(offset, offset + chunk.length).map((key) =>
+            this.#linkOfRow(array, key)
+          ),
+          array.path,
+        );
+      }
+      offset += chunk.length;
+    }
+    list.dirty.clear();
+    if (list.top) {
+      list.top = false;
+      if (list.chunks === undefined) this.#counts.rowLinks += array.keys.length;
+      this.#writeListDocument(
+        tx,
+        list.doc,
+        list.chunks === undefined
+          ? array.keys.map((key) => this.#linkOfRow(array, key))
+          : list.chunks.map((chunk) => this.#linkTo(chunk.doc)),
+        array.path,
+      );
+    }
+    return this.#linkTo(list.doc);
+  }
+
+  /**
+   * The links to the rows of an array, in order, as the storage holds them
+   * in the documents of its list, where `held` is what the result document
+   * holds at the path of the array. The layout of the list is set to the
+   * one the storage holds.
+   */
+  #storedRowLinks(
+    tx: IExtendedStorageTransaction,
+    array: RowArray,
+    held: unknown,
+  ): unknown[] {
+    const list = array.list!;
+    for (const doc of list.ids) this.#listDocuments.delete(doc);
+    list.ids.clear();
+    list.dirty.clear();
+    list.dropped = [];
+    list.chunks = undefined;
+    list.linked = isPrimitiveCellLink(held) &&
+      parseLink(held).id === this.entityOf(list.doc);
+    list.top = !list.linked;
+    if (!list.linked) return [];
+    const members = tx.readValueOrThrow(this.#address(list.doc, []));
+    if (!Array.isArray(members)) {
+      list.top = true;
+      return [];
+    }
+    const links: unknown[] = [];
+    const chunks: ListChunk[] = [];
+    for (const member of members) {
+      // The document of a chunk is named as the adapter names one it
+      // makes: by the identifier its entity holds after `of:`.
+      const entity = isPrimitiveCellLink(member)
+        ? parseLink(member).id
+        : undefined;
+      const doc = entity?.startsWith("of:")
+        ? entity.slice("of:".length)
+        : entity;
+      const below = doc === undefined
+        ? undefined
+        : tx.readValueOrThrow(this.#address(doc, []));
+      // A row is a record or a view node, so a member that leads to an
+      // array is a chunk.
+      if (doc === undefined || !Array.isArray(below)) {
+        links.push(member);
+        continue;
+      }
+      chunks.push({ doc, length: below.length });
+      list.ids.add(doc);
+      this.#listDocuments.set(doc, array);
+      for (const link of below) links.push(link);
+    }
+    if (chunks.length > 0) list.chunks = chunks;
+    return links;
+  }
+
+  /**
+   * Brings the layout of the list of an array to the keys the array holds
+   * now, `array.keys`, where it held `was` before: the one run of keys
+   * that differs is applied as a splice, so the chunks outside it stay as
+   * they are.
+   */
+  #relayList(array: RowArray, was: readonly string[]): void {
+    const list = array.list!;
+    const now = array.keys;
+    // A resumed instance writes the array whole first. The layout the
+    // storage holds is kept where it holds as many links as the array has
+    // rows, and each document is then written with what it holds, which is
+    // no write.
+    if (this.#resume && !list.adopted) {
+      list.adopted = true;
+      const read = this.#edit();
+      let stored: number;
+      try {
+        stored = this.#storedRowLinks(
+          read,
+          array,
+          read.readValueOrThrow(this.#ownAddress(array.doc, array.path)),
+        ).length;
+      } finally {
+        read.abort();
+      }
+      list.top = true;
+      if (stored === now.length && list.linked) {
+        for (const chunk of list.chunks ?? []) list.dirty.add(chunk);
+        return;
+      }
+      this.#layOutList(array, now.length);
+      return;
+    }
+    list.adopted = true;
+    if (!list.linked) {
+      this.#layOutList(array, now.length);
+      return;
+    }
+    const shorter = Math.min(was.length, now.length);
+    let start = 0;
+    while (start < shorter && was[start] === now[start]) start += 1;
+    let end = 0;
+    while (
+      end < shorter - start &&
+      was[was.length - 1 - end] === now[now.length - 1 - end]
+    ) end += 1;
+    const removed = was.length - end - start;
+    const inserted = now.length - end - start;
+    if (removed === 0 && inserted === 0) return;
+    this.#spliceList(array, start, removed, inserted);
+  }
+
+  /**
+   * Writes the links to the buckets of a record, each by its encoded key,
+   * into the document of the links, whole, and returns the link to it.
+   */
+  #writeBucketLinks(
+    tx: IExtendedStorageTransaction,
+    record: BucketRecord,
+    links: Record<string, FabricValue>,
+  ): FabricValue {
+    const list = record.list!;
+    this.#writeListDocument(tx, list.doc, links, record.path);
+    list.linked = true;
+    return this.#linkTo(list.doc);
+  }
+
+  /**
+   * The links to the buckets of a record, each by its encoded key, as the
+   * storage holds them in the document of the links, where `held` is what
+   * the result document holds at the path of the record.
+   */
+  #storedBucketLinks(
+    tx: IExtendedStorageTransaction,
+    record: BucketRecord,
+    held: unknown,
+  ): Record<string, unknown> {
+    const list = record.list!;
+    list.linked = isPrimitiveCellLink(held) &&
+      parseLink(held).id === this.entityOf(list.doc);
+    if (!list.linked) return {};
+    const links = tx.readValueOrThrow(this.#address(list.doc, []));
+    return isWalkableObjectNotArray(links) ? links : {};
   }
 
   /** The identifier of the document of the row of `key` of an array. */
@@ -2237,6 +3273,14 @@ export class RuntimeTransactions implements TransactionHooks {
     record: BucketRecord,
     path: readonly string[],
   ): NormalizedFullLink {
+    // Where the links are in a document of their own, that document holds
+    // the link, at the key.
+    if (record.list !== undefined) {
+      return {
+        ...this.#address(record.list.doc, []),
+        path: [path[record.path.length]],
+      };
+    }
     return {
       space: this.#spaceOf(record.doc),
       id: this.entityOf(record.doc),
@@ -2356,7 +3400,7 @@ export class RuntimeTransactions implements TransactionHooks {
       ? undefined
       : this.#rowsApart?.records.get(id);
     if (load !== undefined && apart !== undefined) {
-      tx = load.tx ??= this.#runtime.edit();
+      tx = load.tx ??= this.#edit();
     }
     const attempts = tx.getWriteAttemptLog?.().length;
     tx.writeValueOrThrow(address, this.#encode(value));
@@ -2427,12 +3471,15 @@ export class RuntimeTransactions implements TransactionHooks {
           { delete: true },
         );
       }
-      return Object.fromEntries(
+      const links = Object.fromEntries(
         Object.entries(members).map(([key, bucket]) => {
           record.keys.add(key);
           return [key, this.#writeBucket(tx, record, key, bucket)];
         }),
       );
+      return record.list === undefined
+        ? links
+        : this.#writeBucketLinks(tx, record, links);
     }
     const array = rows.find((one) => samePath(one.path, path));
     if (array !== undefined) {
@@ -2440,6 +3487,17 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#dropRows(tx, array, array.keys);
         array.keys = [];
         array.positions = undefined;
+        if (array.list?.linked === true) {
+          // The path holds the value in place again, and the documents of
+          // the list are removed.
+          const { list } = array;
+          for (const chunk of list.chunks ?? []) this.#dropChunk(list, chunk);
+          list.chunks = undefined;
+          list.dropped.push(list.doc);
+          this.#flushListDropped(tx, list);
+          list.linked = false;
+          list.top = true;
+        }
         return this.#encode(value);
       }
       const keys = [...(store.rowKeys.get(array.text)?.() ?? [])];
@@ -2447,12 +3505,20 @@ export class RuntimeTransactions implements TransactionHooks {
         throw new Error("The executor named no key for a row of an array.");
       }
       const now = new Set(keys);
+      const was = array.keys;
       this.#dropRows(tx, array, array.keys.filter((key) => !now.has(key)));
       array.keys = keys;
       array.positions = undefined;
-      return value.map((row, index) =>
+      const links = value.map((row, index) =>
         this.#writeRow(tx, array, keys[index], row)
       );
+      if (array.list === undefined) return links;
+      // The links go into the documents of the list, and the path holds
+      // the link to it.
+      this.#relayList(array, was);
+      const link = this.#flushList(tx, array);
+      array.list.linked = true;
+      return link;
     }
     const on = rows.filter((one) =>
       one.path.length > path.length && isPrefix(path, one.path)
@@ -2482,6 +3548,14 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#encodeWithRows(tx, store, on, [...path, name], member, inside),
       ]),
     );
+  }
+
+  /** Removes the documents a list holds no more, without writing any. */
+  #flushListDropped(tx: IExtendedStorageTransaction, list: LinkList): void {
+    for (const doc of list.dropped.splice(0)) {
+      tx.writeValueOrThrow(this.#address(doc, []), undefined, { delete: true });
+    }
+    list.dirty.clear();
   }
 
   /** Removes the documents of the rows of `keys`. */
@@ -2544,6 +3618,31 @@ export class RuntimeTransactions implements TransactionHooks {
       path: [...path, ...below],
       scope: "space",
     });
+    // Where the links are in documents of their own, the rows that
+    // entered are written, and then the chunks the splice touches, under a
+    // read of the link to the list. The path of the array is written only
+    // where it does not hold that link yet. The paths the executor counts
+    // as written are those of an array that holds its links in place.
+    if (array.list !== undefined) {
+      for (let offset = 0; offset < splice.inserted; offset++) {
+        linkAt(splice.start + offset);
+      }
+      this.#spliceList(array, splice.start, splice.removed, splice.inserted);
+      tx.readValueOrThrow(here([]));
+      const link = this.#flushList(tx, array);
+      if (!array.list.linked) {
+        tx.writeValueOrThrow(here([]), link);
+        array.list.linked = true;
+      }
+      if (!positions) return;
+      const shifted = splice.removed !== splice.inserted;
+      if (shifted) written.push([...path, "length"]);
+      const last = shifted ? held.length : splice.start + splice.inserted;
+      for (let index = splice.start; index < last; index++) {
+        written.push([...path, `${index}`]);
+      }
+      return;
+    }
     // A change of the members that is not given as one of positions writes
     // the array, as the links it holds when the transaction ends
     // (`#writeSplicedArrays`), and the rows that entered now. A row that
@@ -2663,6 +3762,99 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /**
+   * Records, for a write at `path` of the result document, the write
+   * policies the result type declares (`writePoliciesOf`), once for each
+   * transaction, so that the write answers to them. Where the write leaves
+   * a reference at a path that declares a writer claim, and is no write of
+   * a handler, the reference is recorded as a binding the runtime staged
+   * there (CFC specification §8.15.4, `08-15-write-authority.md`: "The
+   * reference that exposes the new cell is protected in its own right"):
+   * the claim then holds for every change of the reference that the
+   * piece's own derivation does not make, and the value the reference names
+   * is written under the policy of its own document.
+   */
+  #recordResultPolicy(
+    tx: IExtendedStorageTransaction,
+    path: readonly string[],
+    store: Store,
+  ): void {
+    const policy = this.#resultPolicy;
+    const owner = this.#owner;
+    if (policy === undefined || owner === undefined) return;
+    if (this.#resultPolicyIn !== tx) {
+      this.#resultPolicyIn = tx;
+      recordRelevantSchemaWritePolicyInput(
+        tx,
+        this.#address(owner, []),
+        policy.schema,
+      );
+    }
+    if (this.#cause === "event") return;
+    for (const claimed of policy.claimed) {
+      if (!isPrefix(path, claimed) && !isPrefix(claimed, path)) continue;
+      const held = store.peek(owner, claimed);
+      if (!isLink(held)) continue;
+      const at = this.#address(owner, claimed);
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "binding",
+        target: { space: at.space, id: at.id, scope: at.scope, path: at.path },
+        value: this.#encode(held),
+      }, runtimeWritePolicyAuthorization);
+    }
+  }
+
+  /**
+   * Records, for the write that makes an argument document or the result
+   * document of an instance a body or a handler made, the write policies
+   * the type of its pattern declares (`DeclaredPolicies`), so that the
+   * write answers to them and the stored envelope names them. A reference at a path that
+   * declares a writer claim is recorded as a binding the runtime staged
+   * there where the write is the one that makes an argument document, in
+   * which the maker hands the instance its cells, or a derivation's write
+   * of a result document (CFC specification §8.15.4,
+   * `08-15-write-authority.md`: "The reference that exposes the new cell is
+   * protected in its own right"). A plain value at such a path is the
+   * write of whoever wrote it, and answers to the claim.
+   */
+  #recordDeclaredPolicy(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    path: readonly string[],
+    store: Store,
+    creates: boolean,
+  ): void {
+    const declared = this.#declared.of(doc);
+    if (declared === undefined) return;
+    const { policy, of } = declared;
+    // The schema is recorded by the transaction that makes the document.
+    // A later write answers to the envelope that transaction stored, as a
+    // later write of today's path does, and the schema is not recorded
+    // again: the stored envelope is held to its shape, and a schema that
+    // requires a field would be read as a change of it.
+    if (creates) {
+      recordRelevantSchemaWritePolicyInput(
+        tx,
+        this.#address(doc, []),
+        policy.schema,
+      );
+    }
+    if (of === "argument" ? !creates : this.#cause === "event") return;
+    for (const claimed of policy.claimed) {
+      if (!isPrefix(path, claimed) && !isPrefix(claimed, path)) continue;
+      const held = store.peek(doc, claimed);
+      if (!isLink(held)) continue;
+      const at = this.#address(doc, claimed);
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "binding",
+        target: { space: at.space, id: at.id, scope: at.scope, path: at.path },
+        value: this.#encode(held),
+      }, runtimeWritePolicyAuthorization);
+    }
+  }
+
+  /**
    * Keeps the label entries a document stores before the transaction in
    * progress stores, for a write that left a value of the document as it
    * was, the label of that write.
@@ -2674,15 +3866,32 @@ export class RuntimeTransactions implements TransactionHooks {
     const kept = this.#touched.has(doc) ? undefined : this.#entries.get(doc);
     if (kept !== undefined) {
       this.#unchanged.set(doc, kept);
+      if (this.#entriesOf.has(doc)) {
+        this.#labelsOfEntries.set(kept, this.#entriesOf.get(doc));
+      }
       return;
     }
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     try {
-      this.#unchanged.set(doc, entriesOf(this.#storedLabels(tx, doc)));
+      const stored = this.#storedLabels(tx, doc);
+      const entries = entriesOf(stored);
+      this.#labelsOfEntries.set(entries, stored);
+      this.#unchanged.set(doc, entries);
     } finally {
       tx.abort();
     }
   }
+
+  /**
+   * The stored labels that each map of label entries kept for
+   * `#reportUnchanged` was made of, so that a change of the entries can be
+   * told from a change of the label a read consumes
+   * (`LabelChange.unchanged`).
+   */
+  readonly #labelsOfEntries = new WeakMap<
+    Map<string, string>,
+    CfcMetadata | undefined
+  >();
 
   /**
    * Tells the executor of the label entries that the transaction that just
@@ -2692,14 +3901,42 @@ export class RuntimeTransactions implements TransactionHooks {
   #reportUnchanged(unchanged = this.#unchanged, stored = false): void {
     if (unchanged.size === 0) return;
     const changes: LabelChange[] = [];
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     try {
       for (const [doc, before] of unchanged) {
-        const after = entriesOf(this.#storedLabels(tx, doc));
+        const now = this.#storedLabels(tx, doc);
+        const after = entriesOf(now);
         const { paths, alone } = changedLabelPaths(before, after);
         if (paths.length === 0) continue;
         this.#counts.labelEntriesChanged += paths.length;
-        changes.push({ doc, paths, ...(alone.length > 0 ? { alone } : {}) });
+        // Where the labels the document stored before are known, a record
+        // that read a path is given again only where a read of the path
+        // consumes another label than before, as for a change that
+        // `#reportLabels` tells of: an entry stored for an appended member
+        // changes the entries below the array, and no label that a read of
+        // the reference at the array consumes.
+        const known = this.#labelsOfEntries.has(before);
+        const was = this.#labelsOfEntries.get(before);
+        const answered = new Map<string, boolean>();
+        changes.push({
+          doc,
+          paths,
+          ...(alone.length > 0 ? { alone } : {}),
+          ...(known
+            ? {
+              unchanged: (path: readonly string[], observes: string) => {
+                const asked = `${observes}\n${JSON.stringify(path)}`;
+                let answer = answered.get(asked);
+                if (answer === undefined) {
+                  answer = this.#labelIn(was, path, observes) ===
+                    this.#labelIn(now, path, observes);
+                  answered.set(asked, answer);
+                }
+                return answer;
+              },
+            }
+            : {}),
+        });
       }
     } finally {
       tx.abort();
@@ -2718,9 +3955,34 @@ export class RuntimeTransactions implements TransactionHooks {
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
     inputs: InputsTable,
+    attempt?: { declared?: DeclaredWrite },
   ): void {
     if (this.#compiledPattern === undefined) return;
     const tx = this.#open();
+    // A handler's write of the value a position holds is an attempt to
+    // write it, which a write policy of the position is held to as it is
+    // for a write that changes the value: the read is marked as today's
+    // write of an equal value marks its read (`diffAndUpdate`), and the
+    // policies the handler's own state type declares are recorded as for
+    // a change.
+    if (this.#cause === "event" && attempt !== undefined) {
+      const { declared } = attempt;
+      tx.readValueOrThrow(this.#address(doc, path), {
+        meta: { ...ignoreReadForScheduling, ...markReadAsAttemptedWrite },
+      });
+      const own = declared === undefined || declared.schema === schema
+        ? undefined
+        : declaredBy(declared.schema);
+      if (own !== undefined) {
+        this.#recordSchema(
+          tx,
+          declared!.doc,
+          declared!.path,
+          own.schema as Schema,
+          store,
+        );
+      }
+    }
     // The write policy of each path a record names, as `change` records it
     // for a write: the label is stored under the policy a write of the
     // path is held to.
@@ -2789,7 +4051,7 @@ export class RuntimeTransactions implements TransactionHooks {
           ? {
             space: this.#spaceOf(write.target.doc),
             id: this.entityOf(write.target.doc),
-            scope: "space",
+            scope: cellScopeOf(write.target.doc),
             path: write.target.path,
           }
           : this.#cfcAddress(write.target),
@@ -2895,8 +4157,7 @@ export class RuntimeTransactions implements TransactionHooks {
         seen.add(key);
       }
       listed.push(this.#cfcAddress(address));
-      const link = this.#crossedBucketLink(address);
-      if (link !== undefined) listed.push(link);
+      for (const link of this.#crossedBucketLink(address)) listed.push(link);
     }
     return listed.length === addresses.length ? { listed } : {
       listed,
@@ -3067,10 +4328,8 @@ export class RuntimeTransactions implements TransactionHooks {
     // crossed the link to it, which the result document holds below the
     // entry of the index: that position is observed with the chain.
     const crossed = [binding.chain, ...(binding.below ?? [])].flatMap(
-      (chain) => {
-        const link = this.#crossedBucketLink(chain[chain.length - 1]);
-        return link === undefined ? [] : [[link]];
-      },
+      (chain) =>
+        this.#crossedBucketLink(chain[chain.length - 1]).map((link) => [link]),
     );
     const below = [
       ...(binding.below ?? []).map((chain) =>
@@ -3115,14 +4374,23 @@ export class RuntimeTransactions implements TransactionHooks {
    * holds the link to a bucket document, for an address at or below the
    * bucket; nothing for any other address.
    */
-  #crossedBucketLink(address: Address | undefined): CfcAddress | undefined {
-    if (address === undefined) return undefined;
+  #crossedBucketLink(address: Address | undefined): CfcAddress[] {
+    if (address === undefined) return [];
     const record = this.#bucketRecordsOf(address.doc).find((one) =>
       address.path.length > one.path.length && isPrefix(one.path, address.path)
     );
-    if (record === undefined) return undefined;
+    if (record === undefined) return [];
     const { space, id, path } = this.#linkOfBucket(record, address.path);
-    return { space, id, scope: "space", path: [...path] };
+    const link: CfcAddress = { space, id, scope: "space", path: [...path] };
+    // Where a document of the links holds the link, the read crossed the
+    // link the result document holds at the path of the record first, below
+    // the entry of the index.
+    if (record.list === undefined) return [link];
+    const above = this.#ownAddress(record.doc, record.path);
+    return [
+      { space: above.space, id: above.id, scope: "space", path: above.path },
+      link,
+    ];
   }
 
   /** The runtime's address of a position of a document of the executor. */
@@ -3131,7 +4399,7 @@ export class RuntimeTransactions implements TransactionHooks {
     return {
       space: this.#spaceOf(doc),
       id: this.entityOf(doc),
-      scope: "space",
+      scope: cellScopeOf(doc),
       path,
     };
   }
@@ -3243,7 +4511,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * links written back as the executor's.
    */
   stored(): Map<string, unknown> {
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     try {
       return new Map(
         [...this.#documents].map((
@@ -3265,8 +4533,18 @@ export class RuntimeTransactions implements TransactionHooks {
    * entity named here loaded until `close()`.
    */
   entityOf(doc: string): URI {
-    const entity: URI = doc.startsWith("of:") ? doc as URI : `of:${doc}`;
-    this.#byEntity.set(entity, doc);
+    // The instances of every scope of a document are of one entity.
+    const of = doc.indexOf("~") < 0 ? doc : scopeOfDocument(doc).base;
+    const { named, space } = placeOfDocument(of);
+    const entity: URI = named.startsWith("of:") || named.startsWith("data:")
+      ? named as URI
+      : `of:${named}`;
+    this.#byEntity.set(
+      space === undefined ? entity : documentIn(entity, space),
+      of,
+    );
+    // The subscription takes the commits of each space named here.
+    if (space !== undefined) this.#spaces.set(of, space as MemorySpace);
     return entity;
   }
 
@@ -3330,7 +4608,7 @@ export class RuntimeTransactions implements TransactionHooks {
   #heldDocumentOf(entity: string): string {
     let doc = entity;
     if (this.#owner !== undefined && entity.startsWith("of:")) {
-      const read = this.#runtime.edit();
+      const read = this.#edit();
       try {
         const link = getMetaLink(
           this.#runtime.getCellFromLink(
@@ -3356,6 +4634,23 @@ export class RuntimeTransactions implements TransactionHooks {
     return doc;
   }
 
+  /**
+   * Whether the executor holds a document of this name: one it made, or
+   * one `load()` gave it.
+   */
+  holds(doc: string): boolean {
+    return this.#documents.has(doc);
+  }
+
+  /**
+   * The runtime's address of a position of a document of the executor: the
+   * entity and the space of the document, and the path as the storage
+   * holds it.
+   */
+  linkOf(doc: string, path: readonly string[]): NormalizedFullLink {
+    return this.#address(doc, path);
+  }
+
   /** Helper for the hooks, which gives the transaction in progress. */
   #open(): IExtendedStorageTransaction {
     if (this.#tx === undefined) {
@@ -3367,12 +4662,138 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The address of a path of a document of the executor. */
   #address(doc: string, path: readonly string[]): NormalizedFullLink {
     const place = this.#placeOf(doc, path);
+    const { scope, key } = scopeOfDocument(place.doc);
     return {
       space: this.#spaceOf(place.doc),
       id: this.entityOf(place.doc),
       path: place.path,
-      scope: "space",
+      // The transaction resolves the instance of a scope from the identity
+      // it carries. A name of the instance of another key than that
+      // identity's names the instance.
+      scope: scope ?? "space",
+      ...(scope !== undefined && key !== undefined &&
+          key !== this.scopeKey(scope)
+        ? { scopeKey: key as ScopeKey }
+        : {}),
     };
+  }
+
+  /**
+   * The scope keys that stand in the place of those of the identity of
+   * the transaction in progress (`actingAs`).
+   */
+  #actingKeys: Partial<Record<Scope, string>> | undefined;
+
+  /**
+   * The identity whose instances a document of a scope stands for now:
+   * that of the transaction in progress, which a serving loop stamped with
+   * the principal and the session of the run, and the runtime's own
+   * where the transaction carries none or none is open.
+   */
+  #actingIdentity(): ScopeKeyIdentity {
+    return this.#actingFor ??
+      (this.#tx ?? this.#given?.tx)?.tx.scopeKeyIdentity ??
+      this.#runtime.scopeKeyIdentity;
+  }
+
+  /** The identity that stands in the place of the transaction's (`actingFor`). */
+  #actingFor: ScopeKeyIdentity | undefined;
+
+  /**
+   * Runs `run` with the documents of a scope standing for the instances
+   * of `identity`, where it is one: for what a transaction that carried it
+   * wrote, taken up after the transaction ended.
+   */
+  actingFor<T>(identity: ScopeKeyIdentity | undefined, run: () => T): T {
+    if (identity === undefined) return run();
+    const outer = this.#actingFor;
+    this.#actingFor = identity;
+    try {
+      return run();
+    } finally {
+      this.#actingFor = outer;
+    }
+  }
+
+  /** Whether the piece has named a document of a scope narrower than the space. */
+  get scoped(): boolean {
+    return this.#scopes;
+  }
+
+  /** The narrowest scope the piece has named a document of. */
+  get narrowestScope(): CellScope {
+    return this.#narrowest;
+  }
+
+  #narrowest: CellScope = "space";
+
+  /**
+   * The scope key that a document of `scope` stands for now, as the
+   * storage forms it from the identity of the transaction in progress.
+   */
+  scopeKey(scope: Scope): string {
+    return this.#actingKeys?.[scope] ??
+      scopeKeyOf(scope, this.#actingIdentity());
+  }
+
+  /**
+   * Runs `run` with the documents of the scope of `key` standing for the
+   * instance of `key`: for a change that reached the adapter outside a
+   * transaction, as one another writer committed to one instance.
+   */
+  actingAs<T>(key: string, run: () => T): T {
+    const outer = this.#actingKeys;
+    this.#actingKeys = {
+      ...outer,
+      [key.startsWith("session:") ? "session" : "user"]: key,
+    };
+    try {
+      return run();
+    } finally {
+      this.#actingKeys = outer;
+    }
+  }
+
+  /**
+   * Whether the piece has named a document of the scope `user` or
+   * `session`. From then on a link it stores says the scope of its target
+   * (`#encodeOnce`).
+   */
+  #scopes = false;
+
+  /** The name of the instance that `doc` stands for now. */
+  #instanceOf(doc: string): string {
+    if (doc.indexOf("~") < 0) return doc;
+    const { scope } = scopeOfDocument(doc);
+    if (!this.#scopes && scope !== undefined) {
+      this.#scopes = true;
+      // What was encoded before holds links that say no scope.
+      this.#encoded = new WeakMap();
+    }
+    if (scope === "session" || this.#narrowest === "space") {
+      this.#narrowest = scope ?? this.#narrowest;
+    }
+    return instanceNameOf(doc, (scope) => this.scopeKey(scope));
+  }
+
+  /**
+   * What the replica holds at `address`, read through a transaction of
+   * its own, which no commit depends on. For an address of a scope the
+   * transaction carries the identity of the transaction in progress, so
+   * it reads the instance that one reads.
+   */
+  #readStored(address: NormalizedFullLink): FabricValue | undefined {
+    const read = this.#edit();
+    try {
+      const acting = this.#actingFor ??
+        (this.#tx ?? this.#given?.tx)?.tx.scopeKeyIdentity;
+      if (address.scope !== "space" && acting !== undefined) {
+        read.tx.scopeKeyIdentity = acting;
+      }
+      return read.readValueOrThrow(address);
+    } finally {
+      read.abort();
+    }
   }
 
   /**
@@ -3419,7 +4840,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * the value is frozen once and is the same object at each write, which
    * the runtime compares and hashes by.
    */
-  readonly #encoded = new WeakMap<
+  #encoded = new WeakMap<
     object,
     { rowArrays: number; value: FabricValue }
   >();
@@ -3447,11 +4868,21 @@ export class RuntimeTransactions implements TransactionHooks {
       // the row has.
       const { doc, path } = this.#rowByKey(value.$link.doc, value.$link.path) ??
         value.$link;
+      const { scope } = scopeOfDocument(doc);
       return createSigilLinkFromParsedLink(
         {
           id: this.entityOf(doc),
           space: this.#spaceOf(doc),
           path,
+          // A link holds the name of the scope of its target and no
+          // principal. In a piece that has documents of a scope, a link
+          // to a document of the space says so: a link with no scope
+          // inherits the scope of the document it is stored in.
+          ...(scope !== undefined
+            ? { scope }
+            : this.#scopes
+            ? { scope: "space" as const }
+            : {}),
           // A schema of a plan is a JSON schema with the members the
           // executor reads typed (`Schema` of `exec/store.ts`).
           ...(schema === undefined ? {} : { schema: schema as JSONSchema }),
@@ -3543,7 +4974,7 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** Whether the replica holds the runtime's stream marker in `entity`. */
   #holdsMarker(entity: URI): boolean {
-    const read = this.#runtime.edit();
+    const read = this.#edit();
     try {
       const held = read.readValueOrThrow({
         space: this.#space,
@@ -3600,17 +5031,13 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#streams.has(id)) return undefined;
     // The executor makes the result document of a resumed instance empty.
     if (this.#resume && id === this.#owner) return undefined;
-    if (!id.startsWith("of:")) {
+    // An entity named `data:` holds the value its name encodes.
+    if (!id.startsWith("of:") && !id.startsWith("data:")) {
       return this.#resume ? this.#held(id) : undefined;
     }
     const address = this.#address(id, []);
-    const read = this.#runtime.edit();
-    let value: FabricValue | undefined;
-    try {
-      value = read.readValueOrThrow(address);
-    } finally {
-      read.abort();
-    }
+    const scope = cellScopeOf(id);
+    let value = this.#readStored(address);
     // A document that the transaction in progress wrote, as one handed with
     // the inputs staged in it, is read through that transaction.
     if (value === undefined && this.#tx !== undefined) {
@@ -3618,9 +5045,21 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     // The result document is derived, and no source of the piece.
     if (id !== this.#owner) this.#sources?.read(id);
-    if (value === undefined) return undefined;
+    if (value === undefined) {
+      // The replica holds no such document. The storage may: the piece
+      // asks it (`CompiledPiece`), and reads again when it answered. The
+      // result document is the piece's to make.
+      if (id !== this.#owner) this.wanted.add(id);
+      return undefined;
+    }
+    this.wanted.delete(id);
     this.#documents.add(id);
-    return { kind: "external", value: this.#decode(value) };
+    // A link of the document that names no space leads into its own, and
+    // one that names no scope to an instance of its own scope.
+    return {
+      kind: "external",
+      value: this.#decode(value, undefined, this.#spaceOf(id), scope),
+    };
   }
 
   /**
@@ -3630,20 +5069,17 @@ export class RuntimeTransactions implements TransactionHooks {
    * written and not of the document whole.
    */
   #held(id: string): { kind: string; value: unknown } | undefined {
-    const read = this.#runtime.edit();
-    let value: FabricValue | undefined;
-    try {
-      value = read.readValueOrThrow(this.#address(id, []));
-    } finally {
-      read.abort();
-    }
+    const value = this.#readStored(this.#address(id, []));
     if (value === undefined) {
       this.absent.add(id);
       return undefined;
     }
     this.#documents.add(id);
     this.#heldBefore.add(id);
-    return { kind: "held", value: this.#decode(value) };
+    return {
+      kind: "held",
+      value: this.#decode(value, undefined, this.#space, cellScopeOf(id)),
+    };
   }
 
   /**
@@ -3725,7 +5161,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * holds where it holds one.
    */
   heldOwn(doc: string): FabricValue | undefined {
-    const read = this.#runtime.edit();
+    const read = this.#edit();
     let value: FabricValue | undefined;
     try {
       value = read.readValueOrThrow(this.#address(doc, []));
@@ -3749,6 +5185,50 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #keptEnrolled = new Set<string>();
 
   /**
+   * The links to the rows of the array at `path` of the result document, in
+   * order, where the storage holds them in the documents of a list
+   * (`LinkList`) and `held`, what the result document holds at `path`, is
+   * the link to the list document of the path; `held` itself otherwise. The
+   * list document holds either the links to the rows or the links to its
+   * chunks, each an array of links to rows, and its first member says
+   * which: a row is a record or a view node.
+   */
+  #linksThroughList(
+    tx: IExtendedStorageTransaction,
+    path: readonly string[],
+    held: unknown,
+  ): unknown {
+    if (
+      !this.#lists || this.#owner === undefined || !isPrimitiveCellLink(held)
+    ) return held;
+    const doc = identifierOf({ list: [this.#owner, ...path] });
+    if (parseLink(held).id !== this.entityOf(doc)) return held;
+    const members = tx.readValueOrThrow(this.#address(doc, []));
+    if (!Array.isArray(members)) return held;
+    const chunkOf = (member: unknown): string | undefined => {
+      const entity = isPrimitiveCellLink(member)
+        ? parseLink(member).id
+        : undefined;
+      return entity?.startsWith("of:") ? entity.slice("of:".length) : entity;
+    };
+    const first = members.length === 0 ? undefined : chunkOf(members[0]);
+    if (
+      first === undefined ||
+      !Array.isArray(tx.readValueOrThrow(this.#address(first, [])))
+    ) return members;
+    const links: unknown[] = [];
+    for (const member of members) {
+      const chunk = chunkOf(member);
+      const below = chunk === undefined
+        ? undefined
+        : tx.readValueOrThrow(this.#address(chunk, []));
+      if (!Array.isArray(below)) continue;
+      for (const link of below) links.push(link);
+    }
+    return links;
+  }
+
+  /**
    * What the replica holds of the result document of the instance, for an
    * executor that leaves rows as stored: the value as the executor holds
    * one, with no member at each path of `rows`, and for each of those
@@ -3770,13 +5250,22 @@ export class RuntimeTransactions implements TransactionHooks {
     found?: StoredArray[];
   } | undefined {
     if (this.#owner === undefined) return undefined;
-    const read = this.#runtime.edit();
-    let stored: FabricValue | undefined;
+    const read = this.#edit();
     try {
-      stored = read.readValueOrThrow(this.#address(this.#owner, []));
+      return this.#heldResultIn(read, rows, arrays);
     } finally {
       read.abort();
     }
+  }
+
+  /** Helper for `heldResult`, which reads through `read`. */
+  #heldResultIn(
+    read: IExtendedStorageTransaction,
+    rows: readonly (readonly string[])[],
+    arrays: boolean,
+  ): ReturnType<RuntimeTransactions["heldResult"]> {
+    const owner = this.#owner!;
+    const stored = read.readValueOrThrow(this.#address(owner, []));
     if (!isWalkableObjectNotArray(stored)) return undefined;
     // The entity each position of an array links to, where every position
     // links to a whole document of the space of the instance.
@@ -3794,7 +5283,9 @@ export class RuntimeTransactions implements TransactionHooks {
       }
       return ids;
     };
-    const entities = rows.map((path) => entitiesOf(valueAt(stored, path)));
+    const entities = rows.map((path) =>
+      entitiesOf(this.#linksThroughList(read, path, valueAt(stored, path)))
+    );
     const found: StoredArray[] = [];
     // The value without the members at the paths of `rows` and, with
     // `arrays`, without the arrays of links to whole documents: none of
@@ -3808,8 +5299,25 @@ export class RuntimeTransactions implements TransactionHooks {
           return this.#decode(value);
         }
       }
+      // The links of an array whose list is a document of its own.
+      const through = arrays ? this.#linksThroughList(read, at, value) : value;
+      if (through !== value) {
+        const ids = entitiesOf(through);
+        if (ids !== undefined && ids.length > 0) {
+          found.push({ path: at, entities: ids });
+          return undefined;
+        }
+      }
       if (Array.isArray(value)) {
-        const ids = value.length === 0 ? undefined : entitiesOf(value);
+        // An array that holds the link to the list document of one of its
+        // members holds that list, and no rows.
+        const ids = value.length === 0 ||
+            value.some((member, index) =>
+              this.#linksThroughList(read, [...at, `${index}`], member) !==
+                member
+            )
+          ? undefined
+          : entitiesOf(value);
         if (ids !== undefined) {
           found.push({ path: at, entities: ids });
           return undefined;
@@ -3831,9 +5339,9 @@ export class RuntimeTransactions implements TransactionHooks {
       }
       return members;
     };
-    this.#documents.add(this.#owner);
-    this.#heldBefore.add(this.#owner);
-    this.#heldWhole.add(this.#owner);
+    this.#documents.add(owner);
+    this.#heldBefore.add(owner);
+    this.#heldWhole.add(owner);
     const value = without(stored, []);
     return { value, rows: entities, ...(arrays ? { found } : {}) };
   }
@@ -3869,6 +5377,65 @@ export class RuntimeTransactions implements TransactionHooks {
     array.keys = [...keys];
     array.positions = undefined;
     this.#keptArrays.add(array);
+    if (this.#lists) this.#adoptList(array);
+  }
+
+  /**
+   * Gives an array whose rows the executor holds as stored (`rowsHeld`) the
+   * layout of its list as the storage holds it, so that a later change of
+   * the rows writes the chunks it changes and the list document only where
+   * the layout changed (`#relayList`), as for a list this runtime wrote.
+   */
+  #adoptList(array: RowArray): void {
+    array.list ??= {
+      doc: identifierOf({ list: [array.doc, ...array.path] }),
+      linked: false,
+      chunks: undefined,
+      dirty: new Set(),
+      dropped: [],
+      top: true,
+      ids: new Set(),
+      next: 0,
+      adopted: false,
+    };
+    const { list } = array;
+    this.#listDocuments.set(list.doc, array);
+    this.entityOf(list.doc);
+    list.adopted = true;
+    list.dirty.clear();
+    list.chunks = undefined;
+    const read = this.#edit();
+    try {
+      const held = read.readValueOrThrow(
+        this.#ownAddress(array.doc, array.path),
+      );
+      list.linked = isPrimitiveCellLink(held) &&
+        parseLink(held).id === this.entityOf(list.doc);
+      list.top = !list.linked;
+      if (!list.linked) return;
+      const members = read.readValueOrThrow(this.#address(list.doc, []));
+      // The list document holds the links to the rows, or to its chunks;
+      // the first member says which (`#linksThroughList`).
+      const through = this.#linksThroughList(read, array.path, held);
+      if (!Array.isArray(members) || through === members) return;
+      const chunks: ListChunk[] = [];
+      for (const member of members) {
+        const entity = isPrimitiveCellLink(member)
+          ? parseLink(member).id
+          : undefined;
+        const doc = entity?.startsWith("of:")
+          ? entity.slice("of:".length)
+          : entity;
+        if (doc === undefined) continue;
+        const below = read.readValueOrThrow(this.#address(doc, []));
+        chunks.push({ doc, length: Array.isArray(below) ? below.length : 0 });
+        list.ids.add(doc);
+        this.#listDocuments.set(doc, array);
+      }
+      list.chunks = chunks;
+    } finally {
+      read.abort();
+    }
   }
 
   /**
@@ -3902,6 +5469,9 @@ export class RuntimeTransactions implements TransactionHooks {
    * document of another space than the instance's.
    */
   confirmedSeqOf(doc: string): number | undefined {
+    // The replica's view of an instance of a scope is of one principal:
+    // a document of a scope has no number here, as one of another space.
+    if (cellScopeOf(doc) !== "space") return undefined;
     if (this.#spaceOf(doc) !== this.#space) return undefined;
     return this.#runtime.storageManager.open(this.#space).replica
       .confirmedDocumentSeq(this.entityOf(doc));
@@ -3934,19 +5504,36 @@ export class RuntimeTransactions implements TransactionHooks {
    * `rows`, a link to the document of a row is written back as the row,
    * read through that transaction.
    */
-  #decode(value: unknown, rows?: IExtendedStorageTransaction): unknown {
+  #decode(
+    value: unknown,
+    rows?: IExtendedStorageTransaction,
+    /**
+     * The space of the document the value is of: a link in it that names
+     * no space leads into that space.
+     */
+    within: MemorySpace = this.#space,
+    /**
+     * The scope of the document the value is of: a link in it that names
+     * no scope leads to an instance of that scope.
+     */
+    scope: CellScope = "space",
+  ): unknown {
     if (isPrimitiveCellLink(value)) {
       const link = parseLink(value);
       const stream = this.#streams.get(link.id ?? "");
       if (stream !== undefined) return { $stream: stream };
-      const row = this.documentOf(link.id ?? "");
-      // A link that names another space than the piece's leads to a
-      // document of that space: the executor names a document by its
-      // entity alone, and the adapter keeps the space it is read in.
-      if (
-        link.space !== undefined && link.space !== this.#space &&
-        !this.#spaces.has(row) && !this.#documents.has(row)
-      ) this.#spaces.set(row, link.space);
+      const to = link.scope === undefined || link.scope === "inherit"
+        ? scope
+        : link.scope;
+      // A link into another space than the piece's leads to a document of
+      // that space, which the executor holds under a name that names the
+      // space (`documentAt`), and a link of the scope `user` or `session`
+      // to the document the executor names for that scope.
+      const at = this.documentAt({
+        space: link.space ?? within,
+        id: link.id ?? "",
+      });
+      const row = to === "space" ? at : scopedDocument(at, to);
       if (
         rows !== undefined &&
         (this.#rowDocuments.has(row) || this.#bucketDocuments.has(row))
@@ -3954,11 +5541,41 @@ export class RuntimeTransactions implements TransactionHooks {
         return this.#decode(
           rows.readValueOrThrow(this.#address(row, [])),
           rows,
+          within,
+          scope,
         );
+      }
+      // A link to the list of an array of row documents is written back as
+      // the rows in order, and a link to the document of the links of a
+      // record of bucket documents as the buckets by their keys.
+      if (rows !== undefined && link.path.length === 0) {
+        const array = this.#listDocuments.get(row);
+        if (array?.list?.doc === row) {
+          const members = rows.readValueOrThrow(this.#address(row, []));
+          return (Array.isArray(members) ? members : []).flatMap((member) => {
+            const held = isPrimitiveCellLink(member)
+              ? rows.readValueOrThrow(
+                this.#address(
+                  this.documentOf(parseLink(member).id ?? ""),
+                  [],
+                ),
+              )
+              : undefined;
+            return Array.isArray(held)
+              ? held.map((one) => this.#decode(one, rows))
+              : [this.#decode(member, rows)];
+          });
+        }
+        if (this.#bucketLists.has(row)) {
+          return this.#decode(
+            rows.readValueOrThrow(this.#address(row, [])),
+            rows,
+          );
+        }
       }
       return {
         $link: {
-          doc: this.documentOf(link.id ?? ""),
+          doc: row,
           path: [...link.path],
           ...(link.schema === undefined
             ? {}
@@ -3967,13 +5584,13 @@ export class RuntimeTransactions implements TransactionHooks {
       };
     }
     if (Array.isArray(value)) {
-      return value.map((member) => this.#decode(member, rows));
+      return value.map((member) => this.#decode(member, rows, within, scope));
     }
     if (isWalkableObjectNotArray(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [
           name,
-          this.#decode(member, rows),
+          this.#decode(member, rows, within, scope),
         ]),
       );
     }

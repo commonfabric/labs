@@ -900,15 +900,21 @@ export interface ConeHost {
    * asks for it. A slot of class `identity` yields a reference, and a slot
    * of class `shape` or `enumeration` yields only what that class observes
    * (section 2.4). A slot of root `index` yields the position the element
-   * has in the order its collection iterates (section 2.5).
+   * has in the order its collection iterates (section 2.5). `below` is a
+   * path below the slot's path; for the child slot of a `pick`, at `*`,
+   * its first segment is the key the function chose, in the place of `*`
+   * (below).
    */
-  slot(slot: Index): unknown;
+  slot(slot: Index, below?: readonly unknown[]): unknown;
   /**
    * The value of an output another cone computes, by index into
-   * `Plan.outputs`. Legal only for an output an incoming `ConeEdge` names.
-   * The runtime evaluates the producing cone first when it is stale.
+   * `Plan.outputs`, or with `path` what the output holds at that path.
+   * Legal only for an output an incoming `ConeEdge` names. The runtime
+   * evaluates the producing cone first when it is stale. A cone instance
+   * that read a path is stale only when what the output holds there
+   * changed (below).
    */
-  output(output: Index): unknown;
+  output(output: Index, path?: readonly unknown[]): unknown;
   /**
    * Runs a sandboxed body of `Cone.bodies`. `computed` is the body's
    * argument with the values this evaluation computed at their places and
@@ -953,16 +959,25 @@ export interface ConeResult {
 }
 ```
 
-`slot` takes a slot index and no key. The child slots of a `pick` over a
-container slot are bound to the path a dynamic key chose
-(`plan-and-label-templates.md` §3.18), and the function computes that key
-and has to read the child before it returns. How the function reads the
-chosen child is open: it is question 46 of that document, and question
-75 here. *Assumed,* as that document assumes: `host.slot` of such a slot
-returns every child of the container, at the path and class of the child
-slot, keyed by the child's key, and the function reads the one at its
-key. The label is instantiated at the chosen child alone, and the cone
-instance is stale when the chosen child changed (section 3.3).
+The child slots of a `pick` over a container slot are bound to the path a
+dynamic key chose (`plan-and-label-templates.md` §3.18), and the function
+computes that key and has to read the child before it returns. How the
+function reads the chosen child is question 46 of that document, and
+question 75 here. *Provisional (decision P453 of the prototype):* the
+function passes the key it chose to `host.slot` as the first segment of
+`below`, and the runtime reads that child alone, at the path and class of
+the child slot. `host.slot` of the child slot with no `below` returns
+every child of the container, keyed by the child's key. The label is
+instantiated at the chosen child alone, and the cone instance is stale
+when the chosen child changed (section 3.3), and not when another child
+is added, removed or written.
+
+A member read of an output, by a static path or by a key the function
+computes, is one call of `host.output` with the whole path, under the
+same decision. The cone instance then depends on what the output holds at
+that path: an evaluation of the producing cone that leaves what it holds
+there as it was leaves the reader current, as a write of another member of
+a stored record does.
 
 **Value code places a stream.** A value a cone computes can hold the
 stream of a handler, as a rendered tree does at an event attribute. By
@@ -7923,17 +7938,18 @@ label is concerned:
     join over positions (section 2.5).
 
 75. **How value code reads the child a dynamic key chose** (section
-    2.2). Open, as its question 46. `ConeHost.slot` takes a slot index
-    and no key, and its §3.18 binds the child slots of a `pick` over a
-    container slot to the chosen path. *Assumed:* the function is handed
-    every child of the container at the paths and classes of the child
-    slots and reads the one at its key, which loads every child. The
-    alternative gives `ConeHost` a function that takes the choice point
-    and the key and binds the child slots before it returns. This
-    document owns the host interface, and the interface of section 2.2
-    stays as it is until the question is decided. The prototype's
-    executor yields every child, and the three corpus modules it ran
-    that have such a read computed the values of today's runtime.
+    2.2). Open, as its question 46; the prototype takes a provisional
+    decision, P453. Its §3.18 binds the child slots of a `pick` over a
+    container slot to the chosen path. Handing the function every child
+    of the container loads every child, and makes every cone instance
+    that chose one child stale when any child is added, removed or
+    written, so a `map` whose rows each read one member of a record by
+    the row's key evaluates every row when one member changes. Under
+    P453 the function passes the key to `ConeHost.slot`, which reads the
+    chosen child alone, and a member read of an output passes the path
+    to `ConeHost.output`. The binding of the child slots to the chosen
+    path happens at that call, which is the alternative this question
+    named.
 
 <!-- The list restarts so that the numbers stay as cited. -->
 

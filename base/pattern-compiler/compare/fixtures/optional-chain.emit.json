@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/optional-chain.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:b4cc0932c204fd7095b32e09f8d655b19f0d739f79e6de4198559ca9822dea70\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.select(0, $h.v($h.slot(2)), true) ?? [])));\nreturn $rt.thunk(($h) => (({ picks: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:b4cc0932c204fd7095b32e09f8d655b19f0d739f79e6de4198559ca9822dea70\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => ($h.operand(\"??\", $h.select(0, $h.v($h.slot(2)), true), () => $h.slot(2), () => [])));\nreturn $rt.thunk(($h) => (({ picks: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],

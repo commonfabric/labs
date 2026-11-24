@@ -99,6 +99,9 @@ pub struct Resolver<'m, 'a> {
     /// The identity of each module (`module_identity`), formed for every
     /// module at the first request.
     module_identities: std::cell::OnceCell<Vec<String>>,
+    /// The bindings that a writer policy of some module names, each as the
+    /// module that declares it and its name (`note_named_writer`).
+    named_writers: std::cell::RefCell<std::collections::BTreeSet<(usize, String)>>,
 }
 
 /// The span of a body and its kind.
@@ -132,6 +135,7 @@ impl<'m, 'a> Resolver<'m, 'a> {
             types: Types::default(),
             bodies: std::cell::RefCell::new(vec![Vec::new(); files.len()]),
             module_identities: std::cell::OnceCell::new(),
+            named_writers: std::cell::RefCell::default(),
         }
     }
 
@@ -296,6 +300,28 @@ impl<'m, 'a> Resolver<'m, 'a> {
     /// The parsed module at index `module`, if it parsed.
     pub fn parsed(&self, module: usize) -> Option<&'m Parsed<'a>> {
         self.parsed[module].as_ref()
+    }
+
+    /// The module of the program at `path`.
+    /// Notes that a writer policy names the binding `binding` that the
+    /// module `module` declares.
+    pub(crate) fn note_named_writer(&self, module: usize, binding: &str) {
+        self.named_writers
+            .borrow_mut()
+            .insert((module, binding.to_string()));
+    }
+
+    /// Whether a writer policy of some module of the program names the
+    /// binding `binding` of the module `module`, among the types the check
+    /// of the written types of every module resolved.
+    pub(crate) fn is_named_writer(&self, module: usize, binding: &str) -> bool {
+        self.named_writers
+            .borrow()
+            .contains(&(module, binding.to_string()))
+    }
+
+    pub(crate) fn module_at(&self, path: &str) -> Option<usize> {
+        self.paths.get(path).copied()
     }
 
     /// The module a relative specifier written in module `from` names, if

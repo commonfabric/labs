@@ -1,0 +1,753 @@
+[
+  {
+    "module": "compare/fixtures/scoped.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            },
+            "1": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/scoped.tsx",
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"wish\": wish, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst rename = $rt.data(handler(\n  (event, { nickname }) => {\n    nickname.set(event.name);\n  },\n));\nconst post = $rt.data(handler(\n  (event, { notes }) => {\n    notes.push(event.text);\n  },\n));\n\nconst $default = $rt.data((pattern(\"sha256:9f36c180fdad2c7e1e3a27ddae0718d32939a28a644f9342d210bc0516c5dd14\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ query: (\"#profile\") })]));\n$rt.value(0, ($h) => ($h.v($h.slot(0)).length));\n$rt.value(2, ($h) => ((`${$h.v($h.slot(1))} reads ${$h.v($h.slot(0)).length}`)));\n$rt.value(5, ($h) => ((`hello ${$h.v($h.operand(\"??\", $h.select(0, $h.v($h.slot(4)), true), () => $h.slot(4), () => (\"nobody\")))}`)));\nreturn $rt.thunk(($h) => (({ nickname: $h.slot(7), count: $h.output(0), summary: $h.output(1), greeting: $h.output(2), rename: $h.stream(0), post: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { nickname }) => {\n    nickname.set(event.name);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { notes }) => {\n    notes.push(event.text);\n  })($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [
+            {
+              "cone": null,
+              "path": [],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            }
+          ],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 1,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 2
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 1
+            },
+            {
+              "cone": 3
+            },
+            {
+              "cone": 3
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 2
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 37,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/5",
+              "handler": {
+                "body": 0
+              },
+              "name": "rename",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "nickname"
+                  ],
+                  "place": {
+                    "slot": 7
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 1
+              },
+              "name": "post",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "notes"
+                  ],
+                  "place": {
+                    "slot": 10
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "rename",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "name"
+                  ],
+                  "slot": 5
+                },
+                {
+                  "at": [
+                    "binding",
+                    "nickname"
+                  ],
+                  "handle": true,
+                  "slot": 6
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 6
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 5
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 6
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "post",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 8
+                },
+                {
+                  "at": [
+                    "binding",
+                    "notes"
+                  ],
+                  "handle": true,
+                  "slot": 9
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 9
+                  },
+                  "template": {
+                    "by": {
+                      "body": 1
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 8
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 9
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [
+            {
+              "callee": {
+                "compiled": null
+              },
+              "name": {
+                "operation": "profile",
+                "sidecar": "profileCreate"
+              },
+              "sidecar": "profileCreate",
+              "within": []
+            },
+            {
+              "callee": {
+                "compiled": null
+              },
+              "name": {
+                "operation": "profile",
+                "sidecar": "profilePicker"
+              },
+              "sidecar": "profilePicker",
+              "within": []
+            }
+          ],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/scoped.tsx",
+                "start": 1018
+              },
+              "bodies": [],
+              "entry": "profile",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 0
+                    },
+                    "path": [
+                      "query"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scoped.tsx",
+                "start": 1081
+              },
+              "bodies": [],
+              "entry": "count",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scoped.tsx",
+                "start": 1135
+              },
+              "bodies": [],
+              "entry": "summary",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scoped.tsx",
+                "start": 1226
+              },
+              "bodies": [],
+              "entry": "greeting",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                2,
+                3,
+                4
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scoped.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [
+            {
+              "why": {
+                "kind": "search",
+                "operation": 0
+              }
+            }
+          ],
+          "edges": [],
+          "operations": [
+            {
+              "implementation": {
+                "builtin": "wish"
+              },
+              "input": {
+                "op": "const"
+              },
+              "kind": "wish",
+              "name": "profile",
+              "scope": "user",
+              "within": []
+            }
+          ],
+          "outputs": [
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "summary"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "greeting"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "branches": [
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      },
+                      {
+                        "op": "const"
+                      }
+                    ],
+                    "condition": {
+                      "by": {
+                        "expression": true
+                      },
+                      "inputs": [
+                        {
+                          "op": "slot",
+                          "slot": 2
+                        },
+                        {
+                          "op": "slot",
+                          "slot": 3
+                        }
+                      ],
+                      "op": "derive"
+                    },
+                    "op": "select",
+                    "selector": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "nickname"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 7
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:9f36c180fdad2c7e1e3a27ddae0718d32939a28a644f9342d210bc0516c5dd14"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "notes"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "shape",
+              "path": [
+                "result"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "shape",
+              "path": [
+                "result",
+                "name"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "result",
+                "name"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 0
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "nickname"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "notes"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "notes"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "nickname",
+              "schema": "unhashed:schema/7",
+              "scope": "user",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "notes": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "notes"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "greeting": {
+                  "type": "string"
+                },
+                "nickname": {
+                  "type": "string"
+                },
+                "post": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "rename": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "nickname",
+                "count",
+                "summary",
+                "greeting",
+                "rename",
+                "post"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "default": "nobody",
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

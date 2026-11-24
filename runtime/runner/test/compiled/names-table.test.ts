@@ -14,7 +14,7 @@ import {
 } from "../../src/compiled/piece.ts";
 import { isPrimitiveCellLink } from "../../src/link-types.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { openStorage, type TestStorage } from "./storage.ts";
+import { openStorage, storedList, type TestStorage } from "./storage.ts";
 
 /** The default pattern of `compare/fixtures/<name>.tsx`. */
 const artifact = async (name: string): Promise<Artifact> => {
@@ -180,17 +180,9 @@ describe("a `map` over the entries of a record of references, whose rows are doc
   it("stores each row in a document of its own, with a link at the row's position", async () => {
     const { result } = await named();
 
-    const tx = runtime.edit();
-    try {
-      const rows = tx.readValueOrThrow({
-        ...result.getAsNormalizedFullLink(),
-        path: ["rows"],
-      }) as unknown[];
-      expect(rows.length).toBe(3);
-      expect(rows.every((row) => isPrimitiveCellLink(row))).toBe(true);
-    } finally {
-      tx.abort();
-    }
+    const rows = storedList(runtime, result, ["rows"]) as unknown[];
+    expect(rows.length).toBe(3);
+    expect(rows.every((row) => isPrimitiveCellLink(row))).toBe(true);
   });
 
   it("stores the clause of the record and of no member for the number of rows and for the name of a row", async () => {

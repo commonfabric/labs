@@ -523,6 +523,69 @@ describe("an instance", () => {
   });
 });
 
+// PL §3.5 on `fixtures/selected-operand.tsx`: the result of `??`, `||`
+// and `&&` is the selected operand itself.
+describe("the operand that a logical operator selects", () => {
+  const stored = (instance: Instance) =>
+    instance.store.docs.get("result")?.value as Record<string, unknown>;
+  const linkTo = (name: string) => ({ $link: { doc: ARGUMENT, path: [name] } });
+
+  it("is stored as the link to the left operand where that is a record", async () => {
+    const instance = new Instance(await artifactOf("selected-operand"), {
+      primary: { name: "p" },
+      backup: { name: "b" },
+      enabled: true,
+    });
+
+    expect(stored(instance).coalesced).toMatchObject(linkTo("primary"));
+    expect(stored(instance).either).toMatchObject(linkTo("primary"));
+    // The default that the schema of the link declares reaches a reader.
+    expect(instance.result()).toMatchObject({
+      coalesced: { name: "p", nick: "anon" },
+      either: { name: "p", nick: "anon" },
+    });
+  });
+
+  it("is stored as the link to the right operand where the left one is not selected", async () => {
+    const instance = new Instance(await artifactOf("selected-operand"), {
+      backup: { name: "b" },
+      enabled: true,
+    });
+
+    expect(stored(instance).coalesced).toMatchObject(linkTo("backup"));
+    expect(stored(instance).either).toMatchObject(linkTo("backup"));
+    expect(stored(instance).both).toMatchObject(linkTo("backup"));
+    // The plan lists an operand of a scalar type as a `value` slot, so
+    // the right operand of `text` is stored as its value.
+    expect(stored(instance).text).toBe("none");
+  });
+
+  it("is stored as the value of the left operand where that is a scalar", async () => {
+    const instance = new Instance(await artifactOf("selected-operand"), {
+      backup: { name: "b" },
+      label: "l",
+      enabled: false,
+    });
+
+    expect(stored(instance).text).toBe("l");
+    expect(stored(instance).both).toBe(false);
+  });
+
+  it("selects the right operand once the left one holds nothing", async () => {
+    const instance = new Instance(await artifactOf("selected-operand"), {
+      primary: { name: "p" },
+      backup: { name: "b" },
+      enabled: true,
+    });
+    instance.result();
+
+    instance.writeArgument(["primary"], undefined);
+
+    expect(stored(instance).coalesced).toMatchObject(linkTo("backup"));
+    expect(instance.result()).toMatchObject({ either: { name: "b" } });
+  });
+});
+
 describe("an event", () => {
   it("runs the handler's body and evaluates again what read a written cell", async () => {
     const instance = new Instance(await artifactOf("handler"), {
@@ -6233,6 +6296,34 @@ describe("an element of a plain array generated from scratch inside an element b
       },
     });
     expect((instance.result() as Result).pickedStars).toBe(3);
+  });
+
+  it("is the element of its own group for an event sent through the stored link to the stream, where a later group holds an element of the same key", async () => {
+    const instance = new Instance(await artifactOf("generated-inner"), {
+      groups: [{ name: "g", titles: ["ab"] }, { name: "h", titles: ["ab"] }],
+      bonus: 0,
+    });
+    instance.result();
+    const stream = new Handle(
+      instance,
+      new Ref("result", ["groups", "0", "rows", "0", "pick"]),
+      undefined,
+      undefined,
+      [],
+    );
+
+    stream.send({});
+    const [outcome] = instance.dispatch();
+
+    expect(outcome.committed).toBe(true);
+    expect(picked(instance)).toEqual({
+      $link: {
+        doc: instance.outputDocument(0, [
+          whole(instance, { name: "g", titles: ["ab"] }),
+        ]),
+        path: [keySegment(byFields(instance, { title: "ab" }))],
+      },
+    });
   });
 
   it("reads the current value through a link to it that is stored elsewhere, before anything else demands the output", async () => {
