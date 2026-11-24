@@ -674,6 +674,10 @@ export class Session {
     readonly mode: DiffCountMode;
     readonly counts: DiffCounts;
   };
+  #commentOnlyCache?: {
+    readonly doc: Document;
+    readonly files: readonly boolean[];
+  };
 
   constructor(
     doc: Document,
@@ -2915,15 +2919,24 @@ export class Session {
 
   /** Toggle the files whose changes touch only comments. */
   #toggleCommentOnlyFiles(): void {
-    let commentOnly: readonly boolean[] | undefined;
     this.#toggleFileCategory(
-      (file) =>
-        (commentOnly ??= commentOnlyFiles(
-          this.#sourceDoc.text,
-          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
-        ))[file.index],
+      (file) => this.#commentOnlyFiles()[file.index],
       "comment-only",
     );
+  }
+
+  /** Which files of the current source document change only comments. */
+  #commentOnlyFiles(): readonly boolean[] {
+    if (this.#commentOnlyCache?.doc !== this.#sourceDoc) {
+      this.#commentOnlyCache = {
+        doc: this.#sourceDoc,
+        files: commentOnlyFiles(
+          this.#sourceDoc.text,
+          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
+        ),
+      };
+    }
+    return this.#commentOnlyCache.files;
   }
 
   //

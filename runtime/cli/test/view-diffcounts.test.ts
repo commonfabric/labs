@@ -79,8 +79,8 @@ async function commentOnly(...files: Side[]): Promise<boolean[]> {
     [...diff, ""].join("\n"),
     files.map(({ path, before, after }) => ({
       languages: sideLanguages(path),
-      oldLines: contextLines(path, [...before, ""]),
-      newLines: contextLines(path, [...after, ""]),
+      oldLines: () => contextLines(path, [...before, ""]),
+      newLines: () => contextLines(path, [...after, ""]),
     })),
   );
 }
@@ -290,18 +290,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * hidden note",
-        " * old note",
-        " */",
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * hidden note",
-        " * new note",
-        " */",
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * hidden note",
+          " * old note",
+          " */",
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * hidden note",
+          " * new note",
+          " */",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
@@ -323,18 +325,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * old note",
-        " */",
-        "run_old();",
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * new note",
-        " */",
-        "run_new();",
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * old note",
+          " */",
+          "run_old();",
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * new note",
+          " */",
+          "run_new();",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -357,20 +361,22 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: contextLines("main.rs", [
-        "/*",
-        " * old note",
-        " */",
-        "run_old();",
-        '// say "hello */',
-      ]),
-      newLines: contextLines("main.rs", [
-        "/*",
-        " * new note",
-        " */",
-        "run_new();",
-        '// say "hello */',
-      ]),
+      oldLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * old note",
+          " */",
+          "run_old();",
+          '// say "hello */',
+        ]),
+      newLines: () =>
+        contextLines("main.rs", [
+          "/*",
+          " * new note",
+          " */",
+          "run_new();",
+          '// say "hello */',
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -388,18 +394,20 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("readme.md"),
-      oldLines: contextLines("readme.md", [
-        "```html",
-        "<!-- literal example",
-        "```",
-        "old prose",
-      ]),
-      newLines: contextLines("readme.md", [
-        "```html",
-        "<!-- literal example",
-        "```",
-        "new prose",
-      ]),
+      oldLines: () =>
+        contextLines("readme.md", [
+          "```html",
+          "<!-- literal example",
+          "```",
+          "old prose",
+        ]),
+      newLines: () =>
+        contextLines("readme.md", [
+          "```html",
+          "<!-- literal example",
+          "```",
+          "new prose",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -417,14 +425,16 @@ describe("diffcounts", () => {
     ].join("\n");
     const counts = countsFor(diff, [{
       languages: sideLanguages("readme.md"),
-      oldLines: contextLines("readme.md", [
-        "    <!-- literal example",
-        "old prose",
-      ]),
-      newLines: contextLines("readme.md", [
-        "    <!-- literal example",
-        "new prose",
-      ]),
+      oldLines: () =>
+        contextLines("readme.md", [
+          "    <!-- literal example",
+          "old prose",
+        ]),
+      newLines: () =>
+        contextLines("readme.md", [
+          "    <!-- literal example",
+          "new prose",
+        ]),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -987,8 +997,8 @@ describe("diffcounts", () => {
       contextLines("main.rs", ['let s = "', "text", line, '";']);
     const counts = countsFor(diff, [{
       languages: sideLanguages("main.rs"),
-      oldLines: side("// a"),
-      newLines: side("// b"),
+      oldLines: () => side("// a"),
+      newLines: () => side("// b"),
     }]);
 
     expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
@@ -1396,8 +1406,8 @@ describe("diffcounts", () => {
         ].join("\n");
       const sides = {
         languages: sideLanguages("a.ts"),
-        oldLines: contextLines("a.ts", ["// a", ""]),
-        newLines: contextLines("a.ts", ["// b", ""]),
+        oldLines: () => contextLines("a.ts", ["// a", ""]),
+        newLines: () => contextLines("a.ts", ["// b", ""]),
       };
 
       expect(commentOnlyFiles("not a diff", [sides])).toEqual([]);
@@ -1411,7 +1421,7 @@ describe("diffcounts", () => {
       // Highlighting whose spans leave part of a line out.
       expect(commentOnlyFiles(plain(index), [{
         ...sides,
-        oldLines: [{ text: "// a", spans: [] }, { text: "", spans: [] }],
+        oldLines: () => [{ text: "// a", spans: [] }, { text: "", spans: [] }],
       }])).toEqual([false]);
     });
 
@@ -1436,8 +1446,8 @@ describe("diffcounts", () => {
 
       expect(commentOnlyFiles(diff, [{
         languages: sideLanguages("w.py"),
-        oldLines: contextLines("w.py", before),
-        newLines: contextLines("w.py", rebuilt),
+        oldLines: () => contextLines("w.py", before),
+        newLines: () => contextLines("w.py", rebuilt),
       }])).toEqual([false]);
     });
 
@@ -1456,8 +1466,9 @@ describe("diffcounts", () => {
         ].join("\n");
       const context = (before: string, after: string) => [{
         languages: sideLanguages("a.ts"),
-        oldLines: contextLines("a.ts", [before.replace("\uFEFF", ""), ""]),
-        newLines: contextLines("a.ts", [after.replace("\uFEFF", ""), ""]),
+        oldLines: () =>
+          contextLines("a.ts", [before.replace("\uFEFF", ""), ""]),
+        newLines: () => contextLines("a.ts", [after.replace("\uFEFF", ""), ""]),
       }];
       const both = ["\uFEFFrun(); // a", "\uFEFFrun(); // b"] as const;
       const removed = ["\uFEFFrun(); // a", "run(); // a"] as const;
