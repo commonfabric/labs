@@ -7,6 +7,7 @@ import {
   hashStringOf,
 } from "@commonfabric/data-model";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { isPrefixPath } from "@commonfabric/memory/v2/path";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -148,6 +149,7 @@ import {
   type NormalizedFullLink,
   NormalizedLink,
   parseLink,
+  toMemorySpaceAddress,
 } from "./link-utils.ts";
 import {
   ModuleDelegationRegistry,
@@ -234,11 +236,15 @@ import type {
   URI,
 } from "./storage/interface.ts";
 import {
+  isInternalVerifierRead,
+  isLinkResolutionProbe,
+  isReadIgnoredForScheduling,
   markRendererInputTx,
   markUiInputBlindWriteTx,
   setBlindStructuralTarget,
   unmarkUiInputBlindWriteTx,
 } from "./storage/reactivity-log.ts";
+import { recordUnavailableRead } from "./storage/read-availability.ts";
 import { isRetryableCommitRejection } from "./storage/rejection.ts";
 import { observeStorageResets } from "./storage/subscription.ts";
 import { getDirectTransactionReadActivities } from "./storage/transaction-inspection.ts";
@@ -300,6 +306,11 @@ type LinkedDocLoad = {
     { token: ExternalDependencyActionToken; identity?: ScopeKeyIdentity }
   >;
   release?: () => void;
+};
+
+type HeldPublication = {
+  address: IMemorySpaceAddress;
+  waiters: LinkedDocLoad["waiters"];
 };
 
 function missingDocLoadKey(
@@ -2442,6 +2453,15 @@ export class Runtime {
               if (waiter.token.action === action) entry.waiters.delete(waiter);
             }
           }
+          for (const entries of this.#heldPublications.values()) {
+            for (const entry of entries) {
+              for (const waiter of entry.waiters) {
+                if (waiter.token.action === action) {
+                  entry.waiters.delete(waiter);
+                }
+              }
+            }
+          }
         },
       );
 
@@ -2973,6 +2993,7 @@ export class Runtime {
       this.#storageConnectionStates.clear();
       for (const entry of this.#linkedDocLoads.values()) entry.release?.();
       this.#linkedDocLoads.clear();
+      this.#heldPublications.clear();
 
       // Pop the default frame
       if (this.#defaultFrame) {
@@ -3497,6 +3518,81 @@ export class Runtime {
    * distinct docs, and a kick for one scope must not suppress another's.
    */
   readonly #linkedDocLoads = new Map<string, LinkedDocLoad>();
+  readonly #heldPublications = new Map<
+    ReturnType<typeof entityKey>,
+    Set<HeldPublication>
+  >();
+
+  /** Holds a producer's unpublished output locally until it publishes or stops. */
+  holdPublication(
+    link: NormalizedFullLink,
+    identity?: ScopeKeyIdentity,
+  ): Cancel {
+    const key = entityKey(link, identity ?? this.scopeKeyIdentity);
+    let entries = this.#heldPublications.get(key);
+    if (!entries) this.#heldPublications.set(key, entries = new Set());
+    const entry: HeldPublication = {
+      address: toMemorySpaceAddress(link),
+      waiters: new Set(),
+    };
+    entries.add(entry);
+    return () => {
+      if (!entries.delete(entry)) return;
+      if (entries.size === 0) this.#heldPublications.delete(key);
+      this.#wakeLinkedDocReaders({ status: "settled", waiters: entry.waiters });
+    };
+  }
+
+  /**
+   * A schema refusal waits on a local producer only when it actually read
+   * beneath that producer's still-absent publication. A lazy refusal names
+   * its precise path; an eager traversal records its reads on the transaction.
+   */
+  waitsForUnpublishedRead(
+    tx: IExtendedStorageTransaction,
+    link?: NormalizedFullLink,
+  ): boolean {
+    if (this.#heldPublications.size === 0) return false;
+    const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
+      tx.tx.scopeKeyIdentity;
+    const reads = link
+      ? [toMemorySpaceAddress(link)]
+      : [...(getDirectTransactionReadActivities(tx.tx) ?? [])];
+    for (const read of reads) {
+      if (
+        read.path[0] !== "value" ||
+        ("meta" in read &&
+          (isInternalVerifierRead(read.meta) ||
+            isReadIgnoredForScheduling(read.meta) ||
+            isLinkResolutionProbe(read.meta)))
+      ) continue;
+      const entries = this.#heldPublications.get(
+        entityKey(read, identity ?? this.scopeKeyIdentity),
+      );
+      for (const entry of entries ?? []) {
+        if (!isPrefixPath(entry.address.path, read.path)) continue;
+        const present = tx.read(entry.address, { nonRecursive: true });
+        if (
+          present.error
+            ? present.error.name !== "NotFoundError"
+            : present.ok?.value !== undefined
+        ) continue;
+        const token = this.scheduler.getExecutingActionToken(identity);
+        if (token) {
+          for (const waiter of entry.waiters) {
+            if (
+              waiter.token.action === token.action &&
+              waiter.token.identityKey === token.identityKey
+            ) entry.waiters.delete(waiter);
+          }
+          entry.waiters.add({ token, identity });
+        }
+        recordUnavailableRead(tx, read);
+        return true;
+      }
+    }
+    return false;
+  }
   #linkedDocReaderCancel: (() => void) | undefined;
   readonly #storageConnectionStates = new Map<
     MemorySpace,
@@ -3548,7 +3644,9 @@ export class Runtime {
     return this.#storageConnectionStates.get(space);
   }
 
-  #wakeLinkedDocReaders(entry: LinkedDocLoad): void {
+  #wakeLinkedDocReaders(
+    entry: Pick<LinkedDocLoad, "status" | "waiters">,
+  ): void {
     for (const waiter of entry.waiters) {
       if (
         !this.scheduler.scheduleExternalDependencySettlement(
@@ -3570,6 +3668,16 @@ export class Runtime {
     const entities = new Set(
       reads.map((read) => entityKey(read, effectiveIdentity)),
     );
+    for (const read of reads) {
+      const entries = this.#heldPublications.get(
+        entityKey(read, effectiveIdentity),
+      );
+      for (const entry of entries ?? []) {
+        if (isPrefixPath(entry.address.path, read.path)) {
+          entry.waiters.add({ token, identity });
+        }
+      }
+    }
     for (const entry of this.#linkedDocLoads.values()) {
       if (entry.status !== "settled" && entities.has(entry.entity)) {
         entry.waiters.add({ token, identity });

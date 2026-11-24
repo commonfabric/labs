@@ -22,6 +22,7 @@ import {
 import { favoriteListSchema } from "@commonfabric/home-schemas";
 import { type DID, isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { extractHashtags } from "../hashtags.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
@@ -54,6 +55,7 @@ import {
 } from "../link-utils.ts";
 import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
 import { systemPatternSource } from "../pattern-source-scheme.ts";
+import { supersededOutputsOwed } from "../scheduler/superseded-output.ts";
 import {
   homeHasDefaultProfileSlot,
   orderProfileCandidates,
@@ -2442,9 +2444,20 @@ export function wish(
   cause: Cell<any>[],
   parentCell: Cell<any>,
   runtime: Runtime,
+  _outputBinding?: NormalizedFullLink,
+  _awaitSync?: boolean,
+  publicationBinding?: NormalizedFullLink,
 ): RawBuiltinResult {
   let cancelled = false;
   const readiness = createDocumentReadiness(runtime, addCancel);
+  const heldPublications = new Map<
+    string,
+    { release: () => void; attempt?: object }
+  >();
+  addCancel(() => {
+    for (const hold of heldPublications.values()) hold.release();
+    heldPublications.clear();
+  });
   // Per-instance cached #now cell — prevents non-idempotent re-runs from
   // Date.now() producing a different value each time the sync action fires.
   let nowCell: Cell<unknown> | undefined;
@@ -3408,6 +3421,13 @@ export function wish(
     const actionStartedAt = performance.now();
     let actionQueryKey: string | undefined;
     let usedSharedHashtagResolver = false;
+    const identity = tx.tx.scopeKeyIdentity;
+    const instance = publicationBinding &&
+      resolveScopeKey(
+        publicationBinding.scope,
+        identity ?? runtime.scopeKeyIdentity,
+      );
+    let waiting = false;
 
     try {
       tx.resetNarrowestReadScope();
@@ -3753,7 +3773,23 @@ export function wish(
               }
             }
           } catch (e) {
-            if (e instanceof DocumentPending) return;
+            if (e instanceof DocumentPending) {
+              if (publicationBinding && instance !== undefined) {
+                waiting = true;
+                let hold = heldPublications.get(instance);
+                if (!hold) {
+                  hold = {
+                    release: runtime.holdPublication(
+                      publicationBinding,
+                      identity,
+                    ),
+                  };
+                  heldPublications.set(instance, hold);
+                }
+                hold.attempt = undefined;
+              }
+              return;
+            }
             if (e instanceof NoHomeRootError) {
               measureWishPhase(
                 "send-no-home-root",
@@ -3866,6 +3902,41 @@ export function wish(
         return;
       }
     } finally {
+      if (!waiting && instance !== undefined) {
+        const hold = heldPublications.get(instance);
+        if (hold) {
+          hold.attempt = tx;
+          const release = () => {
+            if (
+              hold.attempt !== tx || heldPublications.get(instance) !== hold
+            ) return;
+            heldPublications.delete(instance);
+            hold.release();
+          };
+          tx.addCommitCallback((committed, outcome) => {
+            // Keep the absence held through a retry or a withdrawn serving
+            // wave. A terminal outcome or a landed publication ends the wait.
+            if (outcome.error) {
+              if (isSurfacableWishCommitFailure(outcome.error)) release();
+              return;
+            }
+            const settlement = waveSettlementOf(committed) ??
+              waveSettlementOf(tx);
+            if (settlement) {
+              void settlement.then(async (verdict) => {
+                const dropped = verdict.error?.supersededOutputs ??
+                  verdict.ok?.supersededOutputs;
+                if (
+                  verdict.error?.waveWithdrawalCause === "wave-abandoned" ||
+                  verdict.error?.readDependencyWithdrawn ||
+                  (dropped && await supersededOutputsOwed(runtime, dropped))
+                ) return;
+                release();
+              });
+            } else release();
+          });
+        }
+      }
       if (!usedSharedHashtagResolver) {
         releaseCurrentSharedHashtagResolver();
       }

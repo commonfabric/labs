@@ -1,11 +1,15 @@
+/// <reference path="../clock.d.ts" />
+
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { hasError } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 
 import { wish } from "../../src/builtins/wish.ts";
 import type { Cell } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
+import { RetryImmediately } from "../../src/scheduler/retry-immediately.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 
 const signer = await Identity.fromPassphrase("wish now interval replacement");
@@ -33,6 +37,76 @@ describe("wish-now-interval-replacement", () => {
     for (const cancel of cancels.splice(0)) cancel();
     await runtime.dispose({ closeStorage: false });
     await storage.close();
+  });
+
+  it("releases a cold publication when its clock load returns an error", async () => {
+    const owner = runtime.getCell(space, "denied owner");
+    const input = runtime.getCell(space, "denied input");
+    const output = runtime.getCell<unknown>(space, "denied output");
+    const binding = output.getAsNormalizedFullLink();
+    const seed = runtime.edit();
+    owner.withTx(seed).set({});
+    input.withTx(seed).set({ query: "#now/2" });
+    runtime.prepareTxForCommit(seed);
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    const clockId = runtime.getCell(space, {
+      wish: { now: true, interval: 2000 },
+    }).getAsNormalizedFullLink().id;
+    const sync = storage.syncCell.bind(storage);
+    using _sync = stub(
+      storage,
+      "syncCell",
+      (cell, options) =>
+        cell.getAsNormalizedFullLink().id === clockId
+          ? Promise.reject(new Error("clock load denied"))
+          : sync(cell, options),
+    );
+    const builtin = wish(
+      input as Cell<[unknown, unknown]>,
+      (tx, result) => output.withTx(tx).set(result),
+      (cancel) => cancels.push(cancel),
+      [owner],
+      owner,
+      runtime,
+      undefined,
+      undefined,
+      binding,
+    );
+    const start = runtime.edit();
+    builtin.action(start);
+    runtime.prepareTxForCommit(start);
+    expect((await start.commit().settled).error).toBeUndefined();
+    expect(output.get()).toBeUndefined();
+    expect(runtime.waitsForUnpublishedRead(runtime.readTx(), binding)).toBe(
+      true,
+    );
+    await runtime.idle();
+
+    const retry = runtime.edit();
+    builtin.action(retry);
+    retry.abort(new RetryImmediately("refresh the run's input basis"));
+    expect(output.get()).toBeUndefined();
+    expect(runtime.waitsForUnpublishedRead(runtime.readTx(), binding)).toBe(
+      true,
+    );
+
+    const finish = runtime.edit();
+    builtin.action(finish);
+    runtime.prepareTxForCommit(finish);
+    expect((await finish.commit().settled).error).toBeUndefined();
+    const value = output.asSchema<{ result: unknown }>(undefined).key("result")
+      .get();
+    expect(hasError(value)).toBe(true);
+    if (hasError(value)) {
+      expect(value.errorKind).toBe("general");
+      expect(value.rawMessage).toContain("Could not load document");
+    }
+
+    const probe = runtime.edit();
+    output.withTx(probe).set(undefined);
+    expect(runtime.waitsForUnpublishedRead(probe, binding)).toBe(false);
+    probe.abort();
   });
 
   it("stops the previous interval when the replacement clock cell fails to load", async () => {

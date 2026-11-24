@@ -657,6 +657,13 @@ its ordinary result. A confirmed schema violation yields an error of kind
 This distinguishes a replica's readiness from a marker actually present in
 the input data.
 
+A wish waiting for a required document can have no published result yet. The
+runtime holds that output locally: a required read that actually fails there
+keeps its own output unwritten until the wish publishes or stops. A previously
+published value stays readable, and another path or scope instance is not held.
+For example, a second session waits for the stored interval clock instead of
+publishing a premature tick or a schema mismatch.
+
 Idempotency diagnostics compare runs over the same input basis. A linked read
 whose coverage is missing records its exact scoped address. If the replay can
 read that address and neither run wrote an overlapping path, the readiness

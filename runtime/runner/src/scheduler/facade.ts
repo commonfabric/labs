@@ -4666,7 +4666,7 @@ export class Scheduler {
       const token = this.getExecutingActionToken(identity);
       if (token !== undefined) {
         this.runtime.attachLinkedDocLoadWaiter(
-          dependencies.reads,
+          [...dependencies.reads, ...dependencies.shallowReads],
           token,
           identity,
         );

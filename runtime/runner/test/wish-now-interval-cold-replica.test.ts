@@ -68,7 +68,7 @@ describe("wish-now-interval-cold-replica", () => {
     await server?.close();
   });
 
-  it("publishes no tick from a second session until the stored clock cell has loaded, and then commits without a conflict", async () => {
+  async function verifyColdPublication(lazyMaterialization: boolean) {
     // Two managers with their own replicas, loopback-connected to one
     // in-process server: the second session reads the first session's clock
     // cell cold, as a fresh runtime does. Its load is held, so the second
@@ -80,6 +80,7 @@ describe("wish-now-interval-cold-replica", () => {
     const rt2 = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: managerB,
+      experimental: { lazyMaterialization },
     });
     const held: Array<() => void> = [];
     const cancels: Array<() => void> = [];
@@ -117,6 +118,17 @@ describe("wish-now-interval-cold-replica", () => {
       const clockId = rt2.getCell(space, {
         wish: { now: true, interval: 300_000 },
       }).getAsNormalizedFullLink().id;
+      const engine = await server.engineForSpace(space);
+      const values = engine.database.prepare(
+        "SELECT data FROM revision WHERE id = :id ORDER BY seq, op_index",
+      );
+      const storedValues = (id: string) =>
+        (values.all({ id }) as Array<{ data: string }>).map((row) => row.data)
+          .filter((data) =>
+            data.includes('"value"') || data.includes('"/value"')
+          );
+      const firstClock = storedValues(clockId);
+      expect(firstClock.length).toBeGreaterThan(0);
       const sync = managerB.syncCell.bind(managerB);
       let holding = true;
       /** Resolves once the second session asks for the clock cell. */
@@ -153,7 +165,7 @@ describe("wish-now-interval-cold-replica", () => {
       const tickPublished = new Promise<void>((resolve) => {
         cancels.push(
           r2.key("tick").sink((value) => {
-            if (typeof value === "number") resolve();
+            if (value !== undefined) resolve();
           }),
         );
       });
@@ -161,16 +173,23 @@ describe("wish-now-interval-cold-replica", () => {
       await rt2.scheduler.idle();
       // The wish is waiting on the held load and has published nothing.
       expect(held.length).toBeGreaterThanOrEqual(1);
-      expect(r2.key("tick").get() ?? null).toBeNull();
+      const tickId =
+        r2.key("tick").resolveAsCell().getAsNormalizedFullLink().id;
+      expect(r2.key("tick").get()).toBeUndefined();
+      expect(storedValues(tickId)).toEqual([]);
+      expect(storedValues(clockId)).toEqual(firstClock);
       expect(commitConflictCount() - conflictsBefore).toBe(0);
 
       holding = false;
       releaseHeld();
+      await tickPublished;
       await rt2.idle();
       await rt2.storageManager.synced();
       await rt2.idle();
       await r2.key("tick").pull();
+      await rt2.storageManager.synced();
       expect(typeof r2.key("tick").get()).toBe("number");
+      expect(storedValues(tickId)).toHaveLength(1);
       expect(
         commitConflictCount() - conflictsBefore,
         "acquiring a stored clock cell must not commit-conflict",
@@ -181,5 +200,10 @@ describe("wish-now-interval-cold-replica", () => {
       await rt1.dispose();
       await rt2.dispose();
     }
-  });
+  }
+
+  it("publishes no tick from a second session until the stored clock cell has loaded, and then commits without a conflict", () =>
+    verifyColdPublication(true));
+  it("keeps an eager consumer's output unwritten through the clock load", () =>
+    verifyColdPublication(false));
 });

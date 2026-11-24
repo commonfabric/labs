@@ -20,7 +20,10 @@ import {
   Runtime,
   space,
 } from "./scheduler-test-utils.ts";
-import type { SchedulerTestStorageManager } from "./scheduler-test-utils.ts";
+import type {
+  EventHandler,
+  SchedulerTestStorageManager,
+} from "./scheduler-test-utils.ts";
 
 describe("linked-document readiness lifecycle", () => {
   let storageManager: SchedulerTestStorageManager;
@@ -31,6 +34,70 @@ describe("linked-document readiness lifecycle", () => {
     ({ storageManager, runtime, tx } = createSchedulerTestRuntime(
       import.meta.url,
     ));
+  });
+
+  it("holds only an unpublished output's own path and user until it is released", async () => {
+    const root = runtime.getCellFromLink<
+      { expected?: { child?: number }; sibling?: number }
+    >({
+      ...runtime.getCell(space, "held-output").getAsNormalizedFullLink(),
+      scope: "user",
+    });
+    const publication = root.key("expected").getAsNormalizedFullLink();
+    const child = root.key("expected", "child").getAsNormalizedFullLink();
+    const sibling = root.key("sibling").getAsNormalizedFullLink();
+    const own = runtime.scopeKeyIdentity;
+    const other = {
+      principal: (await Identity.fromPassphrase("other paused producer")).did(),
+    };
+    const release = runtime.holdPublication(publication, own);
+    expect(runtime.waitsForUnpublishedRead(tx, child)).toBe(true);
+    expect(runtime.waitsForUnpublishedRead(tx, sibling)).toBe(false);
+    const unrelatedRead = runtime.readTx();
+    unrelatedRead.tx.scopeKeyIdentity = other;
+    expect(runtime.waitsForUnpublishedRead(unrelatedRead, child)).toBe(false);
+    release();
+    expect(runtime.waitsForUnpublishedRead(tx, child)).toBe(false);
+
+    // A missing field of an already published object remains a mismatch;
+    // a producer waiting on its next update does not hide the current value.
+    root.withTx(tx).key("expected").set({});
+    const releaseRefresh = runtime.holdPublication(publication, own);
+    expect(runtime.waitsForUnpublishedRead(tx, child)).toBe(false);
+    releaseRefresh();
+  });
+
+  it("wakes an input-parked event when a held publisher stops without writing", async () => {
+    const output = runtime.getCell(space, "cancelled-publication")
+      .getAsNormalizedFullLink();
+    const events = runtime.getCell(space, "held-publication-events")
+      .getAsNormalizedFullLink();
+    const release = runtime.holdPublication(output);
+    const handled: number[] = [];
+    const handler: EventHandler = Object.assign(
+      (_tx: IExtendedStorageTransaction, payload: number) => {
+        handled.push(payload);
+      },
+      {
+        inputReadiness: (tx: IExtendedStorageTransaction) =>
+          runtime.waitsForUnpublishedRead(tx, output)
+            ? { ready: false as const, reason: "syncing" as const }
+            : { ready: true as const },
+      },
+    );
+    const cancel = runtime.scheduler.addEventHandler(handler, events);
+    try {
+      runtime.scheduler.queueEvent(events, 1);
+      runtime.scheduler.queueEvent(events, 2);
+      await runtime.scheduler.idle();
+      expect(handled).toEqual([]);
+      release();
+      await runtime.scheduler.idle();
+      expect(handled).toEqual([1, 2]);
+    } finally {
+      release();
+      cancel();
+    }
   });
 
   afterEach(async () => {

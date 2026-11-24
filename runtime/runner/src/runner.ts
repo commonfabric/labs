@@ -15178,7 +15178,10 @@ export class Runner {
       return {
         argument: undefined,
         isValidArgument: false,
-        unavailable: unavailable ?? unavailableMismatch(),
+        unavailable: unavailable ??
+          (this.#runtime.waitsForUnpublishedRead(tx)
+            ? UNAVAILABLE_SYNCING
+            : unavailableMismatch()),
       };
     }
     // A lazy root view reports both an admitted `undefined` and a root schema
@@ -16706,7 +16709,12 @@ export class Runner {
                   String(refusal),
                 ],
               );
-              if (isUnresolvedInputError(refusal)) {
+              if (
+                isSchemaMismatchError(refusal) &&
+                this.#runtime.waitsForUnpublishedRead(tx, refusal.link)
+              ) {
+                waitingForInput = true;
+              } else if (isUnresolvedInputError(refusal)) {
                 const status = this.#refusedLinkStatus(
                   tx,
                   refusal.link,
