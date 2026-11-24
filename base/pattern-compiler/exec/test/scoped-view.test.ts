@@ -276,3 +276,44 @@ describe("an output of the result of the scope `user`", () => {
     expect(summaries.sort()).toEqual(["nobody reads 1", "nobody reads 1"]);
   });
 });
+
+// `fixtures/scoped-bare.tsx`, the value of the scope placed as a bare name
+// and the state cell placed as a child, and `fixtures/scoped-computed.tsx`,
+// the value computed by an authored `computed` whose block body is not
+// promoted: in both, the cone of the tree places a value of another cone
+// and reads nothing of a scope (ruling Z94).
+for (const fixture of ["scoped-bare", "scoped-computed"]) {
+  describe(`a rendered tree over \`fixtures/${fixture}.tsx\`, beside the rows of a \`map\` over an array of references`, () => {
+    it("holds no row in a scope instance, and writes the same documents and no scope instance for an edit of one item, at 10 items as at 100", async () => {
+      const sizes = await Promise.all([10, 100].map(async (size) => {
+        const held = await started(fixture, size);
+        const writes = held.written(() => {
+          held.send("ann", "rename", { at: 3, title: "renamed" });
+          held.view("ann");
+          held.view("bob");
+        });
+        return { scoped: held.scoped(), writes };
+      }));
+
+      expect(sizes[1].scoped).toBe(sizes[0].scoped);
+      for (const { writes } of sizes) {
+        expect(writes.filter((write) => write.includes("~"))).toEqual([]);
+      }
+      expect(sizes[1].writes).toEqual(sizes[0].writes);
+    });
+
+    it("gives each principal the attribute its own nickname selects", async () => {
+      const { send, view } = await started(fixture, 10);
+      send("ann", "call", { name: "Ann" });
+
+      expect((view("ann").children?.[1] as Node).props?.disabled).toBe(
+        fixture === "scoped-bare",
+      );
+      expect((view("bob").children?.[1] as Node).props?.disabled).toBe(
+        fixture !== "scoped-bare",
+      );
+      expect(JSON.stringify(view("ann"))).toContain("Ann");
+      expect(JSON.stringify(view("bob"))).not.toContain("Ann");
+    });
+  });
+}
