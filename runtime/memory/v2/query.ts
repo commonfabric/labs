@@ -362,17 +362,28 @@ export class EngineObjectManager implements ObjectStorageManager {
   readonly #engine: Engine.Engine;
   readonly #branch: string;
   readonly #readSeq?: number;
+  readonly #held?: EngineObjectManager;
 
+  /**
+   * Constructs an instance which reads `branch` of `engine` as `principal`
+   * and `sessionId`, at `readSeq` when given. With `held`, a document `held`
+   * has read and found present is taken from it in place of a read of the
+   * engine, so the caller vouches that `held` holds no present document that
+   * has changed since `held` read it. A document `held` found absent is read
+   * from the engine again.
+   */
   constructor(
     engine: Engine.Engine,
     branch: string,
     readonly principal?: string,
     readonly sessionId?: string,
     readSeq?: number,
+    held?: EngineObjectManager,
   ) {
     this.#engine = engine;
     this.#branch = branch;
     this.#readSeq = readSeq;
+    this.#held = held;
   }
 
   /** The scope INSTANCE an address resolves to for this manager: the
@@ -435,6 +446,10 @@ export class EngineObjectManager implements ObjectStorageManager {
       this.#missing.set(key, true);
       return null;
     }
+    const held = this.#held === undefined
+      ? undefined
+      : this.#held.#attestations.get(key);
+    if (held !== undefined) return held;
 
     const state = this.readState(address.id, scope, scopeKey);
     this.#readCount++;
@@ -470,11 +485,11 @@ export class EngineObjectManager implements ObjectStorageManager {
     },
   ) {
     const scope = address.scope ?? DEFAULT_SCOPE;
-    return this.#details.get(
-      `${this.#scopeKeyFor(scope, address.scopeKey)}/${address.id}/${
-        address.type ?? "application/json"
-      }`,
-    );
+    const key = `${this.#scopeKeyFor(scope, address.scopeKey)}/${address.id}/${
+      address.type ?? "application/json"
+    }`;
+    return this.#details.get(key) ??
+      (this.#held === undefined ? undefined : this.#held.#details.get(key));
   }
 
   get readCount(): number {
@@ -500,14 +515,6 @@ export class EngineObjectManager implements ObjectStorageManager {
         scopeKey,
       };
     });
-  }
-
-  invalidateIds(ids: Iterable<string>, scope: CellScope = DEFAULT_SCOPE): void {
-    // Own-instance invalidation: the manager caches under its own bound
-    // identity's keys (plus explicitly named instances, which dirty
-    // marking addresses by exact key through the same construction).
-    const scopeKey = this.#scopeKeyFor(scope);
-    for (const id of ids) this.forgetInstance(scopeKey, id);
   }
 
   /** Drops what is cached for the instance `scopeKey` names of `id`, so
@@ -3091,7 +3098,6 @@ export const refreshTrackedGraph = (
   // their re-evaluation routes a still-absent outcome back into the miss
   // set (never the tracker, whose entries reach the wire).
   const affectedMisses = new Map<QueryDocKey, Set<SchemaPathSelector>>();
-  const invalidations = new Map<CellScope, Set<string>>();
   const identity = identityOf(state.manager);
   let outcome = "failed";
   let rootEvaluations = 0;
@@ -3120,21 +3126,14 @@ export const refreshTrackedGraph = (
       // the affected-tracker lookup is a direct join — no session-identity
       // re-resolution, and another principal's instance simply never
       // matches this state's tracker.
-      const { id, scopeKey, scope } = fromDirtyKey(dirtyId);
-      // The manager's read cache keys by (scope name, id) under its ONE
-      // bound identity, so invalidate only dirtiness aimed at THIS
-      // identity's own instance — a foreign instance was never cached here.
-      if (
-        canResolveScopeKey(scope, identity) &&
-        resolveScopeKey(scope, identity) === scopeKey
-      ) {
-        let scopedIds = invalidations.get(scope);
-        if (scopedIds === undefined) {
-          scopedIds = new Set();
-          invalidations.set(scope, scopedIds);
-        }
-        scopedIds.add(id);
-      }
+      const { id, scopeKey } = fromDirtyKey(dirtyId);
+      // The graph's own cache lets go of every dirty document, tracked or
+      // not: one that changed while nothing reached it is read at its stored
+      // version when a root added later does, and the walks below take every
+      // present document the cache still holds from it. A dirty key names
+      // one instance, and the cache holds an instance under that same key,
+      // whether the graph's identity resolves to it or a root named it.
+      state.manager.forgetInstance(scopeKey, id);
       const key: QueryDocKey = `${space}/${scopeKey}/${id}`;
       const selectors = state.tracker.get(key);
       if (selectors !== undefined && selectors.size > 0) {
@@ -3151,23 +3150,24 @@ export const refreshTrackedGraph = (
         affectedMisses.set(key, new Set(missedSelectors));
       }
     }
-    // The graph's own cache lets go of every dirty document, tracked or
-    // not: one that changed while nothing reached it is read at its stored
-    // version when a root added later does.
-    for (const [scope, ids] of invalidations) {
-      state.manager.invalidateIds(ids, scope);
-    }
     if (affectedDocs.size === 0 && affectedMisses.size === 0) {
       outcome = "untouched";
       return null;
     }
     phases.enter("rewalk");
 
+    // The walks take from the graph's cache the present documents it still
+    // holds, none of which is dirty, so of everything a changed document
+    // links to they read from the engine what changed with it, what no walk
+    // reached before, and what was absent. The cache takes what they read
+    // once the refresh has succeeded.
     const manager = walked = new EngineObjectManager(
       engine,
       state.branch,
       state.manager.principal,
       state.manager.sessionId,
+      undefined,
+      state.manager,
     );
     const sharedMemo = createSchemaMemo();
     const stats = createQueryTraversalStats();
@@ -3251,6 +3251,9 @@ export const refreshTrackedGraph = (
       touched.add(key);
     }
 
+    // What the walks read from the engine is delivered unless the graph
+    // holds that version of it already. A document they took from the cache
+    // is one an earlier pass read, and delivered then.
     phases.enter("loaded");
     for (const address of manager.loadedAddresses()) {
       const key: QueryDocKey = `${space}/${address.scopeKey}/${address.id}`;
