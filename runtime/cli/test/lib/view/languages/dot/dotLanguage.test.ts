@@ -335,6 +335,16 @@ describe("dotLanguage", () => {
       .toEqual(["string"]);
   });
 
+  it("lists subgraphs nested ten thousand deep, each inside the one before", () => {
+    const depth = 10_000;
+    const source = "digraph {" + "subgraph {".repeat(depth) + "}".repeat(depth);
+    const structure = dotLanguage.parseDocument(source).flatStructure;
+
+    expect(structure.length).toBe(depth + 1);
+    expect(structure.at(-1)?.depth).toBe(depth);
+    expect(structure.at(-1)?.label).toBe("subgraph");
+  });
+
   it("reconstructs incomplete input exactly", () => {
     for (
       const source of [
