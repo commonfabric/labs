@@ -579,3 +579,34 @@ for (const fixture of ["scoped-bare", "scoped-computed"]) {
     });
   });
 }
+
+// `fixtures/scoped-rows-confirm.tsx`: the body of a `map` over an array of
+// references declares whether the acting session picked the row, and
+// places a branch on it. The branch is a cone of its own that reads the
+// declaration's place; a derivation that brings the branch's place up to
+// date can bring the declaration's place up to date on the way, which
+// writes what the branch read.
+describe("a branch of a row on another cone of the row of the scope `session`", () => {
+  it("shows each principal the branch its own pick selects, at 10 items as at 100", async () => {
+    for (const size of [10, 100]) {
+      const held = await started("scoped-rows-confirm", size);
+      held.send("ann", "pick", { title: "item 3" });
+      const ann = (held.view("ann").children?.[0] as unknown[]).map((row) =>
+        JSON.stringify(row)
+      );
+      const bob = (held.view("bob").children?.[0] as unknown[]).map((row) =>
+        JSON.stringify(row)
+      );
+
+      expect(ann.filter((row) => row.includes("picked"))).toEqual([ann[3]]);
+      expect(bob.filter((row) => row.includes("picked"))).toEqual([]);
+      held.send("ann", "pick", { title: "item 5" });
+      const again = (held.view("ann").children?.[0] as unknown[]).map((row) =>
+        JSON.stringify(row)
+      );
+      expect(again.filter((row) => row.includes("picked"))).toEqual([
+        again[5],
+      ]);
+    }
+  });
+});

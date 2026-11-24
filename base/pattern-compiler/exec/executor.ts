@@ -9074,6 +9074,17 @@ export class Instance {
         !slot.suspects.has(dependency.on)) ||
       dependency.stamp(context) === dependency.seen
     );
+    // A dependency brought up to date while it was compared can write a
+    // position the entry read, as the place of a value of a scope that the
+    // entry reads through the reference it depends on: the position is
+    // compared too, and the entry is not current where it changed.
+    if (
+      current && slot !== undefined && slot.serial !== serial &&
+      slot.reads.size > 0 &&
+      this.store.changedSince(entry.evaluatedAt, [...slot.reads])
+    ) {
+      return false;
+    }
     // A check that evaluated something that wrote is no check at the
     // clock it ended at.
     if (current && this.store.clock === clock) entry.checkedAt = clock;
