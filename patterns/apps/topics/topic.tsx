@@ -562,6 +562,10 @@ export type TopicBoard = IndexedCollections<{ topics: TopicMirrored }>;
  * The topics that mention the topic bound as `:self_cf_link`, in filing
  * order, up to two hundred of them. A topic that mentions itself is not among
  * them, and one that mentions it twice is listed once.
+ *
+ * Filing order is the board's: numbered topics by number, then unnumbered
+ * topics in the order they joined the collection, which is the order of the
+ * table's `rowid`.
  */
 export const MENTIONED_BY_SQL = `
   SELECT m.member_cf_link AS topic FROM topics m
@@ -571,7 +575,8 @@ export const MENTIONED_BY_SQL = `
     UNION
     SELECT source_cf_link FROM topics_mentions
     WHERE target_cf_link = :self_cf_link)
-  ORDER BY m.createdAt, m.member_cf_link LIMIT 200`;
+  ORDER BY m.shortName IS NULL, CAST(m.shortName AS INTEGER), m.rowid
+  LIMIT 200`;
 
 /** A row of `MENTIONED_BY_SQL`: a mentioning topic, as an unread reference. */
 export interface MentionedByRow {
@@ -651,10 +656,11 @@ export interface TopicSummary {
  * status, labels, or assignees; what a topic grows next is part of the
  * experiment (CT-1878).
  *
- * This is the board-facing projection: the one stored in the tracker's list,
- * and the one a topic's editor autocompletes over through `mentionable`.
+ * This is the shared projection: what a topic publishes to any reader
+ * following a reference to it, and what a plain list of topics holds, such as
+ * a mention universe made of the topics themselves rather than a board's rows.
  * Session-local UI controls are intentionally excluded: a TopicPiece can be
- * followed from a shared list even when the viewer has no matching
+ * followed from a shared reference even when the viewer has no matching
  * session-local cells.
  */
 export interface TopicPiece extends TopicSummary {
@@ -708,18 +714,14 @@ export interface TopicPiece extends TopicSummary {
    * stops resolving into `mentions`. */
   links: TopicLink[];
 
-  /** Every piece this topic's prose and links point at, as references.
+  /** Every piece this topic's prose, links and `mentioned` point at, as
+   * references.
    *
-   * The board's pivot is declared over this and nothing else, so what one topic
-   * costs a full-board scan is exactly this list of identities. Declared
-   * `unknown[]` because these are references, and comparing them never reads
-   * what is behind them.
-   *
-   * The cell annotation that makes them comparable belongs to the READER, not
-   * here: the pivot declares its own view of this list as
-   * `TopicMentionSource.mentions: ComparableCell<unknown>[]`, and that is what
-   * makes its graph settle rather than depend on load order. A published
-   * `unknown[]` is what each reader annotates for itself.
+   * The board's collection mirrors this into its `topics_mentions` table, one
+   * row per reference, indexed on the piece referred to, which is what each
+   * topic's `MENTIONED_BY_SQL` looks itself up in. Declared `unknown[]`
+   * because these are references, and mirroring them never reads what is
+   * behind them.
    *
    * The default stands alone: a declared default and `| undefined` collide,
    * and the default is what a topic deployed before this path existed
@@ -735,7 +737,9 @@ export interface TopicPiece extends TopicSummary {
   /** Pieces referenced outside the prose, recorded by `mention`. */
   mentioned: unknown[] | Default<[]>;
 
-  /** The topics that mention this one, read out of the board's pivot.
+  /** The topics that mention this one, asked of the board's collection by
+   * `MENTIONED_BY_SQL`: each once, never this topic itself, in filing order,
+   * up to two hundred.
    *
    * Declared through `TopicSummary` rather than `TopicPiece`, and that is
    * load-bearing rather than stingy: a topic whose backlinks were topics would
@@ -797,7 +801,7 @@ export interface TopicOutput extends TopicPiece {
 
   /**
    * Session-local composer/edit state. These controls belong to a direct Topic
-   * instance, not the shared TopicPiece projection used by the tracker's list.
+   * instance, not the shared TopicPiece projection a reference resolves to.
    */
   commentDraft: PerSession<Writable<string>>;
   bodyDraft: PerSession<Writable<string>>;
@@ -2951,7 +2955,7 @@ export default pattern<TopicInput, TopicOutput>(
               </cf-vstack>
             </cf-card>
 
-            {/* ── Referenced by (derived from the board's pivot; nothing authored) ── */}
+            {/* ── Referenced by (asked of the board's collection; nothing authored) ── */}
             {hasReferences
               ? (
                 <cf-card>

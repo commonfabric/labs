@@ -1140,6 +1140,39 @@ export default pattern(() => {
     (strangerTopic.referencedBy ?? []).length === 0
   );
 
+  // --- Backlinks in filing order ---
+
+  // Two topics mention a third, and the one filed first carries the later
+  // creation time. Filing order lists it first all the same, as the board's
+  // reference graph does.
+  const orderListed = new Writable<TopicDemand[]>([]);
+  const orderBoard = Topics({ topics: orderListed });
+  const orderTarget = Topic({ title: "Order target", board: orderBoard.board });
+  const filedFirst = Topic({
+    title: "Filed first",
+    createdAt: 200,
+    board: orderBoard.board,
+  });
+  const filedSecond = Topic({
+    title: "Filed second",
+    createdAt: 100,
+    board: orderBoard.board,
+  });
+  const action_order_board_takes_three = action(() => {
+    orderListed.set([orderTarget, filedFirst, filedSecond]);
+    orderBoard.adoptTopics.send({ agentName: "Sol" });
+  });
+  const action_order_mentions = action(() => {
+    filedSecond.mention?.send({ topic: orderTarget });
+    filedFirst.mention?.send({ topic: orderTarget });
+  });
+  const assert_backlinks_follow_filing_order = assert(() => {
+    const backlinks = (orderTarget.referencedBy ?? []) as object[];
+    return backlinks.length === 2 &&
+      equals(backlinks[0], filedFirst) &&
+      equals(backlinks[1], filedSecond);
+  });
+
   // --- adoptTopics: a call adopts one batch of the list ---
 
   // A board whose list holds three topics, adopted two at a time: the first
@@ -1373,6 +1406,9 @@ export default pattern(() => {
       { assertion: assert_keyed_unmention_drops_one_backlink },
       { render: strangerTopic[UI] },
       { assertion: assert_unlisted_topic_has_no_backlinks },
+      { action: action_order_board_takes_three },
+      { action: action_order_mentions },
+      { assertion: assert_backlinks_follow_filing_order },
       { action: action_paged_board_adopts_two },
       { assertion: assert_paged_board_holds_two },
       { action: action_paged_board_adopts_the_rest },
