@@ -6648,14 +6648,26 @@ is relitigated.
   the read inside an authored `computed` or `lift` body. Those three are
   being built.
 
-- The labels of what a compiled piece commits are content-addressed
-  (2026-11-24, Z95). Asked whether to turn the experimental option
+- A compiled piece commits through the content-addressed label-envelope
+  path (2026-11-24, Z95). Asked whether to turn the experimental option
   `cfcContentAddressedLabels` on for compiled pieces, the owner answered
-  "Yes, for compiled"; today's path keeps its default. The reason is a
-  defect of today's runtime that a compiled piece reaches first: a commit
-  whose label table would expand past 16 MB is sent with its labels inline
-  and refused, which stops a piece over about 150 distinctly labeled items
-  from starting. Being built on the branch `merge-attempt/serving-m6`.
+  "Yes, for compiled"; today's path keeps its default. On that path a label
+  too large to stay inline in the envelope is stored once as a document
+  addressed by its content and referenced from each envelope; a small label
+  stays inline. The reason is a defect of today's runtime that a compiled
+  piece reaches first: a commit whose label table would expand past 16 MB
+  is sent with its labels inline and refused. Measured: the start of a
+  piece over 201 items, each under its own clause, is refused, and the same
+  start over 41 items commits; the size follows the items times the
+  clauses read, which puts the limit near 150 such items by arithmetic and
+  not by a run. The boundary of the ruling: the path writes version-2
+  envelopes, which a runtime from before version 2 refuses with
+  `UnknownCfcMetadataVersionError`. A compiled piece therefore uses it only
+  in a space whose every reader understands version-2 envelopes, and the
+  round that builds it shows that for each reader of a runtime with
+  `compiledPatterns` on; a space still read by an older runtime keeps the
+  option off until those readers are updated. Being built on the branch
+  `merge-attempt/serving-m6`.
 
 ## Provisional decisions awaiting the owner's ratification
 
