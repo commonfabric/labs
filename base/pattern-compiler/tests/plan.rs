@@ -5407,3 +5407,54 @@ export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
     assert_eq!(scopes("open", false), ["user", "space"]);
     assert_eq!(scopes("draft", false), ["session", "session"]);
 }
+
+/// P451: an operator expression written at a position of a rendered tree
+/// outside every element body, that reads a value of a scope narrower
+/// than the space, is a value of its own in a cone of its own, and the
+/// cone of the tree uses it without listing a slot of the scope: here the
+/// condition of a branch and an attribute that read a value computed from
+/// state of the scope `user`, beside a `map` over an array of references.
+/// The same expressions in the body of the `map` stay in the cone of the
+/// element, and an expression that reads nothing of a scope stays in the
+/// cone of the tree.
+#[test]
+fn an_expression_of_a_view_that_reads_a_value_of_a_scope_is_a_value_of_its_own() {
+    let analysis = program(
+        r#"import { Writable, computed, pattern, UI } from "commonfabric";
+interface Item { title: string }
+export const P = pattern<{ items: Writable<Item[]>; count: number }>(({ items, count }) => {
+  const nickname = new Writable.perUser<string>("");
+  const named = computed(() => nickname.get().length > 0);
+  return {
+    [UI]: (
+      <div>
+        {named ? <b>{nickname}</b> : <i>nobody</i>}
+        <button disabled={!named}>{count > 1 ? "many" : "one"}</button>
+        {items.map((item) => <b>{named ? item.title : "?"}</b>)}
+      </div>
+    ),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let cones = plan["cones"].as_array().expect("cones");
+    let entries: Vec<&str> = cones
+        .iter()
+        .map(|cone| cone["entry"].as_str().expect("an entry"))
+        .collect();
+    assert_eq!(entries, ["named", "child", "disabled", "map", "$UI"]);
+    let tree = cones
+        .iter()
+        .find(|cone| cone["entry"] == "$UI")
+        .expect("the tree");
+    let slots = plan["slots"].as_array().expect("slots");
+    let states: Vec<&Value> = tree["slots"]
+        .as_array()
+        .expect("the slots of the tree")
+        .iter()
+        .map(|slot| &slots[slot.as_u64().expect("a slot") as usize])
+        .filter(|slot| slot["root"]["kind"] == "state")
+        .collect();
+    assert_eq!(states, Vec::<&Value>::new());
+}
