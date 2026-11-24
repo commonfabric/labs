@@ -10,11 +10,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
-- [Joining a social space lists you in it](social-space-join-as-viewer.md)
-  gives every social-space root one `joinAsViewer` stream that adds the
-  viewer's own `#profile` to its participant roster, built on one shared
-  function the default app's Join and FabriChat's `joinRooms` also call, so a
-  host's join is one empty event and no host leaves its user drawn as a DID.
+- [Joining a Loom lists you in it](social-space-join-as-viewer.md) is a
+  stopgap so that a browser host's guests are named on a Loom's roster: the
+  host lists its guest through the existing `addParticipant`, and then the Loom
+  root exports `joinAsViewer`. READ link guests, people with several profiles,
+  rooms and older roots stay as the plan's accepted limits.
 - [CFC spec correspondence process](cfc-spec-correspondence-process.md)
   gives agents the procedure for changing Contextual Flow Control here: read
   the specification first, classify the change as host arrangement, conforming
