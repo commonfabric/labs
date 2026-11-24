@@ -1,10 +1,17 @@
 # A slow action and the spaces behind it
 
-Status: Proposed. Nothing here is built. The first run is stages 0 to 4, as
-the owner scoped it on 2026-11-16: isolate a space whose action holds a shared
-worker, and fail an action loudly once a run of it has held a thread for three
-minutes. Computing a slow derivation off the serving thread is deferred, under
-"Later".
+Status: Proposed. The first run is stages 0 to 4, as the owner scoped it on
+2026-11-16: isolate a space whose action holds a shared worker, and fail an
+action loudly once a run of it has held a thread for three minutes. Computing
+a slow derivation off the serving thread is deferred, under "Later". Stage 1 is
+[labs#10179](https://github.com/commonfabric/labs/pull/10179). Stages 2 and 4
+are being built by another session, as the owner decided on 2026-11-23, with
+one change to the text below: the rule that a stopped handler's event takes
+the error as its consequence, without the handler running again, applies when
+the watchdog ends a worker in the middle of a handler, and not only at the
+three-minute hard limit. The case behind it: a Topics `adoptTopics` call over
+3,281 Topics held a worker past 60 s and ran again on every placement, nine
+times in ten minutes and once more after a restart.
 
 A serving worker runs one action at a time, and an action runs to its end once
 it starts. An action that takes a minute holds its worker for a minute. Every
@@ -246,10 +253,12 @@ carries:
   space;
 - for sampled runs, the read-accounting counters.
 
-The list is ranked by total time. A host tracks 512 actions and lists 50, and
-a run of an action with no row takes the cheapest action's row only if it
-alone took longer than that action's total, so the table never trades an
-expensive action for a cheap one. An action's first run of a second or more
+The list is ranked by total time. A host tracks 512 actions and reports all
+of them, and the process lists 50 once the rows of every worker are together,
+so an action split across workers is ranked by its whole total. A run of an
+action with no row takes the cheapest action's row only if it alone took
+longer than that action's total, so the table never trades an expensive
+action for a cheap one. An action's first run of a second or more
 is logged once, as `slow-action`, with the same identity.
 
 The marker gained what the table needed: the piece, read from the action's
