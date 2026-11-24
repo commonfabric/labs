@@ -1,0 +1,55 @@
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    /* Surfaces */
+    --folio-page-bg:      #F4ECDB;
+    --folio-sidebar-bg:   #ECE2C9;
+    --folio-content-bg:   #F8F1E1;
+    /* Card bg warmed from #FAF3E2 (B226 — actually cooler than
+       page-bg's B219). Now B is lower than page-bg so cards
+       read distinctly warmer / more paper-like against the
+       page. */
+    --folio-card-bg:      #FAF1D5;
+    --folio-card-bg-soft: #F0E5C3;
+    --folio-result-bg:    #E7E9CC;
+  }
+
+  /* — Content FAB (page actions dropdown) — */
+  body:not(.dark) .content-fab {
+    background: var(--folio-card-bg);
+    border-color: var(--folio-rule);
+    color: var(--folio-ink-2);
+  }
+  body:not(.dark) .content-fab:hover {
+    background: var(--folio-card-bg-soft);
+    border-color: var(--folio-rule-strong);
+    color: var(--folio-ink);
+  }
+
+  /* — Toast — */
+  body:not(.dark) .toast {
+    background: var(--folio-card-bg);
+    color: var(--folio-ink);
+    border-color: var(--folio-rule);
+  }
+
+  /* — Links inside non-prose chrome —
+     A link drawn as a button (.ob-button) sets its own text colour against
+     its own background, so it is left out: coloured as a link, a primary
+     one is accent text on an accent background. :where() keeps this rule's
+     specificity what it was for every other link. */
+  body:not(.dark) a:not(.cm-prose-compact-link):not(.cm-prose-wikilink):where(:not(.ob-button)) {
+    color: var(--folio-accent);
+  }
+  body:not(.dark) a:not(.cm-prose-compact-link):not(.cm-prose-wikilink):where(:not(.ob-button)):hover {
+    color: var(--folio-accent-deep);
+  }
+
+  /* — Right panel (companion / chat) — */
+  body:not(.dark) #chatPanel {
+    background: var(--folio-sidebar-bg);
+    border-color: var(--folio-rule);
+    color: var(--folio-ink-2);
+  }
+  body:not(.dark) #chatResizer {
+    background: var(--folio-rule);
+  }

@@ -42,14 +42,15 @@ interpolations and template directives are code inside the string. C, C++, and
 CUDA have syntax highlighting and a structure tree of functions, declarations,
 named types, type aliases, and macros, and of C++'s namespaces and classes. A
 `.h` header, which C and C++ both write, uses a mode that claims neither dialect
-and parses with the C++ grammar until an explicit language names one. Starlark,
-which covers Bazel's build, module, workspace, and extension files, has syntax
-highlighting and a structure tree of functions, assigned names, and build
-targets, and Bazel rc files have syntax highlighting and a structure tree of
-imports and configurations. Java properties files, ProGuard and R8 keep rules,
-and XML, which covers Android manifests and resources, SVG, and Apple property
-lists, have syntax highlighting; properties files list their keys, and XML lists
-its elements.
+and parses with the C++ grammar until an explicit language names one. CSS has
+syntax highlighting and a structure tree of rule sets, at-rules, and custom
+property declarations. Starlark, which covers Bazel's build, module, workspace,
+and extension files, has syntax highlighting and a structure tree of functions,
+assigned names, and build targets, and Bazel rc files have syntax highlighting
+and a structure tree of imports and configurations. Java properties files,
+ProGuard and R8 keep rules, and XML, which covers Android manifests and
+resources, SVG, and Apple property lists, have syntax highlighting; properties
+files list their keys, and XML lists its elements.
 INI, which covers Ansible configuration and inventories and the configuration
 files of Python tools, has syntax highlighting and a structure tree of sections
 and the keys and hosts in each. Dotenv, which covers environment files and the
@@ -103,9 +104,9 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
-Tree-sitter through a shared, language-neutral adapter, which HTML will use as
-well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
+Python, Go, Swift, Kotlin, Rust, TOML, HCL, CSS, shell, C, C++, and Starlark run
+on Tree-sitter through a shared, language-neutral adapter, which HTML will use
+as well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
 and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
 assembly, SQL, linker scripts, and systemd units use focused scanners. The order
@@ -114,12 +115,12 @@ organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
-Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
-makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes,
-Git configuration, XML, Org mode, directive configuration, ignore-file, Graphviz
-DOT, CSV, TSV, `.dat` table, assembly, SQL, linker script, systemd unit, and
-diff support to honest handling of every textual syntax in the active
-`commonfabric` repositories.
+Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, CSS, shell, C, C++,
+CUDA, makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git
+attributes, Git configuration, XML, Org mode, directive configuration,
+ignore-file, Graphviz DOT, CSV, TSV, `.dat` table, assembly, SQL, linker script,
+systemd unit, and diff support to honest handling of every textual syntax in the
+active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -225,16 +226,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Shipped Starlark | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 50.8 ms, estimated | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 29.5 ms, estimated | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 31.1 ms, estimated | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 16.8 ms, estimated | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 0.13 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 0 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 91 lines | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Shipped Starlark | Shipped CSS | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 50.8 ms, estimated | 47.4 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 29.5 ms, estimated | 34.3 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 31.1 ms, estimated | 26.4 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 16.8 ms, estimated | 19.6 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 0.13 MiB | 0.19 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 0 MiB | 1.88 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 91 lines | 186 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -324,6 +325,13 @@ names the node types a structure entry can be found inside. Go is over the
 cumulative owned-source maximum, for the reason under "Go over the cumulative
 owned-source maximum".
 
+The CSS column is the
+[November 2026 CSS measurement](../history/packages/cli/cf-view-css-2026-11.md).
+It ran on a machine so loaded that a TOML control's medians took 2 to 24 times
+their recorded figures, so it measured each sample of CSS and of the control in
+turn, and its timings are estimates in the way the HCL column's are, from the
+largest ratio of CSS to TOML seen in any of its six rounds.
+
 The binary build leaves out every directory of a grammar package except the
 one holding its WebAssembly grammar, such as generated C source and native
 builds, which the pager never reads. Shell's compiled figure is measured with
@@ -342,9 +350,10 @@ high.
 Each later host grammar may add at most 10 MiB to both byte measures and 200
 owned source lines. The common runtime and the Python, Go, Bash, and HTML host
 grammars together may occupy at most 40 MiB and 1,000 owned source lines. Tests,
-fixtures, and generated code do not count toward the source limit. The separate
-nested-HTML measurement sets the limits for its CSS and JavaScript grammars
-before Stage 5.
+fixtures, and generated code do not count toward the source limit. CSS, as a
+language of its own, is held to the later-grammar maximums. The separate
+nested-HTML measurement sets the limits for the CSS and JavaScript grammars
+inside HTML before HTML delegates its regions to them.
 
 ### Parser decision
 
@@ -400,7 +409,7 @@ regions. The Tree-sitter startup and dependency-size measurements exclude those
 two embedded grammars. The startup measurement does not describe the nested
 setup, while the dependency-size measurements are lower bounds for the
 cumulative parser packages. Measure and record the complete nested-HTML setup
-before implementing Stage 5.
+before HTML delegates its regions to embedded grammars.
 
 Do not add another focused scanner for Python, Go, shell, or HTML.
 
@@ -817,7 +826,8 @@ diffs, and incomplete edits. The gate passes.
 
 ## Stage 5: web markup, styling, and XML
 
-- [ ] Add HTML, CSS, and SCSS.
+- [ ] Add HTML.
+- [x] Add CSS.
 - [ ] Delegate HTML `style` and `script` regions to CSS and JavaScript.
 - [x] Add strict XML separately from permissive HTML.
 - [x] Route SVG, Apple property lists, and entitlement files through XML.
@@ -835,6 +845,43 @@ entitlement, and privacy manifest files in the local checkouts of the
 organization's repositories without altering their source. A file that no name
 claims selects XML when its source starts with an XML declaration, which covers
 Interface Builder documents and project files.
+
+CSS is implemented ahead of HTML. A November 13, 2026 read of the
+local checkouts of the organization's repositories found 277 `.css` files in 10
+repositories, and 1,641 path-change events on CSS paths in 11 repositories in
+the six months before the read. Most of the files are build output and copies:
+241 are a website's built bundle, a Specs directory of generated prompt assets,
+and the Loom style system's built themes, which Dynabook holds and the two
+Weaver repositories copy. The other 36 files are in 9 repositories. 501 of the
+events are on build output and copies, and 1,140 on the other paths, 823 of
+them on Loom's web UI style sheet at its old and new paths.
+
+CSS runs on the Tree-sitter adapter with the official
+[`tree-sitter/tree-sitter-css`](https://github.com/tree-sitter/tree-sitter-css)
+grammar, whose npm package ships its WebAssembly build. The UI package's CSS
+parser is Lezer's, through `@codemirror/lang-css`, and the parser decision rules
+out a second parser family in the pager. `.css` selects CSS. Selectors color
+element names as type names, and class and ID names as the names a rule styles.
+A bare word in a value, such as the keyword `none` or a font family's name, is
+colored as a constant. A custom property's
+declaration is a definition, and a `var()` reference to it is an identifier.
+Structure lists rule sets, at-rules, and custom property declarations. The
+grammar reads `//` and the rest of its line as a comment, which a browser does
+not, so that text is left uncolored.
+
+A coverage check over the 277 files found every file reconstructed exactly and
+0.005 percent of characters other than white space without a token class, all
+of them in regions the grammar could not parse. Those regions cover 32 of the
+147,390 lines, in 10 files. The grammar does not parse a container style query,
+such as `@container style(--x: y)`, a fragment in `url(#arrow)`, or a custom
+property whose value is empty. Coloring continues around each region. Fixtures
+come from Loom and Dynabook. The
+[November 2026 CSS measurement](../history/packages/cli/cf-view-css-2026-11.md)
+records the costs, the coverage check, and a comparison with Lezer's parser.
+
+SCSS has no item. The only SCSS in the local checkouts of the organization's
+repositories is seven style sheets in gVisor's website, last changed on April
+15, 2026, so `.scss` stays plain text.
 
 Completion gate: host and embedded syntax ranges preserve the complete input,
 including malformed and partially edited markup.

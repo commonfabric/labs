@@ -166,6 +166,7 @@
     "npm:tree-sitter-bash@0.25.1": "0.25.1",
     "npm:tree-sitter-c@0.23.6": "0.23.6",
     "npm:tree-sitter-cpp@0.23.4": "0.23.4",
+    "npm:tree-sitter-css@0.25.0": "0.25.0",
     "npm:tree-sitter-go@0.25.0": "0.25.0",
     "npm:tree-sitter-python@0.25.0": "0.25.0",
     "npm:tree-sitter-rust@0.24.0": "0.24.0",
@@ -2774,6 +2775,14 @@
       ],
       "scripts": true
     },
+    "tree-sitter-css@0.25.0": {
+      "integrity": "sha512-FRc9R8ePrwJiUhZsuZ/wcFQ3K8Z+9yCgDrrUjuYswGWlN89UvcB9vslTUGZElQWGwhS8sUw3/r2n4lpb2sxT4Q==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
+    },
     "tree-sitter-go@0.25.0": {
       "integrity": "sha512-APBc/Dq3xz/e35Xpkhb1blu5UgW+2E3RyGWawZSCNcbGwa7jhSQPS8KsUupuzBla8PCo8+lz9W/JDJjmfRa2tw==",
       "dependencies": [
@@ -3050,6 +3059,7 @@
           "npm:tree-sitter-bash@0.25.1",
           "npm:tree-sitter-c@0.23.6",
           "npm:tree-sitter-cpp@0.23.4",
+          "npm:tree-sitter-css@0.25.0",
           "npm:tree-sitter-go@0.25.0",
           "npm:tree-sitter-python@0.25.0",
           "npm:tree-sitter-rust@0.24.0",

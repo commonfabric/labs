@@ -180,7 +180,6 @@ describe("diffcounts", () => {
 
   it("recognizes fallback comment syntax across supported file families", () => {
     const cases = [
-      ["style.css", "/* old */", "/* new */"],
       ["query.sql", "-- old", "-- new"],
       ["query-block.sql", "/* old */", "/* new */"],
       ["script.lua", "-- old", "-- new"],
@@ -218,6 +217,28 @@ describe("diffcounts", () => {
     ].join("\n");
 
     expect(countsFor(diff).comments.totals).toEqual({ adds: 1, dels: 1 });
+  });
+
+  it("discounts CSS comments, and counts the declarations beside them and text after a double slash", async () => {
+    await prepareLanguages([languageForFile("style.css")]);
+    const diff = [
+      "diff --git a/style.css b/style.css",
+      "--- a/style.css",
+      "+++ b/style.css",
+      "@@ -1,3 +1,4 @@",
+      "-/* old note */",
+      "-.a { color: red; } /* same */",
+      "+/* new note */",
+      "+.a { color: blue; } /* same */",
+      "+// not a comment",
+      " .b { }",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.normal.totals).toEqual({ adds: 3, dels: 2 });
+    expect(counts.comments.totals).toEqual({ adds: 2, dels: 1 });
   });
 
   it("does not treat an unquoted URL as a comment", () => {

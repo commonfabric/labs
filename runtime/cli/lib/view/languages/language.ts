@@ -62,6 +62,7 @@ import {
 } from "./c-family/language.ts";
 import { starlarkLanguage } from "./starlark/language.ts";
 import { bazelrcLanguage } from "./bazelrc/language.ts";
+import { cssLanguage } from "./css/language.ts";
 import { shellLanguage } from "./shell/language.ts";
 import { makeLanguage } from "./make/language.ts";
 import { dockerfileLanguage } from "./dockerfile/language.ts";
@@ -548,6 +549,7 @@ function allLanguages(): readonly Language[] {
     cFamilyHeaderLanguage,
     starlarkLanguage,
     bazelrcLanguage,
+    cssLanguage,
     shellLanguage,
     makeLanguage,
     dockerfileLanguage,

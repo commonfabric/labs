@@ -515,30 +515,32 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, shell,
-makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT, ProGuard, XML,
-Org mode, CSV, TSV, assembly, and SQL files use their own highlighting. A
-lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`,
-`.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select
-CUDA. C++ and CUDA share one grammar, which colors CUDA's qualifiers, such as
-`__global__`, as keywords. C and C++ both write `.h` headers, so a `.h` file is
-colored in a mode that claims neither dialect, using the C++ grammar, which
-reads the declarations C headers usually make; a C header that uses one of C++'s
-keywords, such as `new`, as a name is colored as C when piped with
-`--language
-c`. HCL covers OpenTofu and Terraform configuration named `.tf` or
-`.tofu`, variable definitions files named `.tfvars`, backend configuration files
-named `.tfbackend`, and other `.hcl` files, such as dependency lock files. A
-string's interpolations and template directives are colored as code inside the
-string. Starlark covers Bazel's build files, named `BUILD`, `BUILD.bazel`, or
-with a `.BUILD` suffix, its module, repository, and workspace files, `.bzl`
-extension files, and other `.star` files. Its structure tree lists functions,
-each name that a statement outside functions assigns a value to on its own, and
-the target that each rule call outside functions declares when its `name`
-argument is a string literal. The Bazel rc language covers `.bazelrc` and other
-files named with that suffix, and lists the files an rc file imports and the
-configurations it defines, such as `race` in `build:race`. `.bazelversion` is
-plain text. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
+Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, CSS,
+shell, makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT,
+ProGuard, XML, Org mode, CSV, TSV, assembly, and SQL files use their own
+highlighting. A lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`,
+`.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and
+`.cuh` select CUDA. C++ and CUDA share one grammar, which colors CUDA's
+qualifiers, such as `__global__`, as keywords. C and C++ both write `.h`
+headers, so a `.h` file is colored in a mode that claims neither dialect, using
+the C++ grammar, which reads the declarations C headers usually make; a C header
+that uses one of C++'s keywords, such as `new`, as a name is colored as C when
+piped with `--language
+c`. HCL covers OpenTofu and Terraform configuration named
+`.tf` or `.tofu`, variable definitions files named `.tfvars`, backend
+configuration files named `.tfbackend`, and other `.hcl` files, such as
+dependency lock files. A string's interpolations and template directives are
+colored as code inside the string. Starlark covers Bazel's build files, named
+`BUILD`, `BUILD.bazel`, or with a `.BUILD` suffix, its module, repository, and
+workspace files, `.bzl` extension files, and other `.star` files. Its structure
+tree lists functions, each name that a statement outside functions assigns a
+value to on its own, and the target that each rule call outside functions
+declares when its `name` argument is a string literal. The Bazel rc language
+covers `.bazelrc` and other files named with that suffix, and lists the files an
+rc file imports and the configurations it defines, such as `race` in
+`build:race`. `.bazelversion` is plain text. CSS covers style sheets named
+`.css`, with a structure tree of rule sets, at-rules, and custom property
+declarations. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
 `.command`, and Bash's startup files, such as `.bashrc` and `.profile`. A
 heredoc's body is colored as a string, with the expansions its delimiter allows.
 The makefile language reads GNU make's syntax in files named `Makefile`,

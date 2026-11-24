@@ -60,6 +60,7 @@ import {
 } from "../lib/view/languages/c-family/language.ts";
 import { starlarkLanguage } from "../lib/view/languages/starlark/language.ts";
 import { bazelrcLanguage } from "../lib/view/languages/bazelrc/language.ts";
+import { cssLanguage } from "../lib/view/languages/css/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { dockerfileLanguage } from "../lib/view/languages/dockerfile/language.ts";
@@ -227,6 +228,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("bazel"), starlarkLanguage);
   assertEquals(languageForName("bzl"), starlarkLanguage);
   assertEquals(languageForName("bazelrc"), bazelrcLanguage);
+  assertEquals(languageForName("css"), cssLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
@@ -295,6 +297,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "c-family-header",
     "starlark",
     "bazelrc",
+    "css",
     "shell",
     "make",
     "dockerfile",
@@ -370,6 +373,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "bzl",
     "star",
     "bazelrc",
+    "css",
     "shell",
     "sh",
     "bash",

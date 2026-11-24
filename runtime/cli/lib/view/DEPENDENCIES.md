@@ -114,3 +114,11 @@ generated C source, native bindings, and an install script, which the pager
 never uses; its dependencies are the two `tree-sitter-python` already brings.
 Roll it with the runtime, then run the `cf view` Go tests and `cf view` against
 a `.go` file.
+
+CSS reaches its grammar through `runtime/cli/lib/view/languages/css/css.ts`, and
+the CLI pins `tree-sitter-css` exactly. That package is the official CSS grammar
+and ships its WebAssembly build. Like `tree-sitter-python`, it also ships
+generated C source, native bindings, and an install script, which the pager
+never uses; its dependencies are the two `tree-sitter-python` already brings.
+Roll it with the runtime, then run the `cf view` CSS tests and `cf view` against
+a `.css` file.
