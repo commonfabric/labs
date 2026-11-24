@@ -30,10 +30,11 @@ place it on a loom by itself, and it is offered to people choosing what to
 place. Every pattern is also a part others may import; a file that is only a
 part gets a name that says what it is (`<name>/option-card.tsx`). The repository
 sync, and the index for a first version published with neither `--standalone`
-nor `--part`, read `main.tsx` this way, so a part named `main.tsx` is offered to
-people as something to place. A new version keeps its predecessor's answer;
-`--standalone` or `--part` on `cf pattern publish` changes it. A standalone
-entry has no required input without a default.
+nor `--part`, read `main.tsx` this way, so a part named `main.tsx` is marked as
+something to place. A new version keeps its predecessor's answer, and a remix
+its source's; `--standalone` or `--part` on `cf pattern publish` changes it. A
+pattern with a required input and no default is a part whatever it is named or
+asked, so give a standalone entry's inputs defaults.
 
 Also read the foundational reactivity references before implementing or
 debugging pattern state:

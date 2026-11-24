@@ -37,8 +37,9 @@ What the guides cannot leave to judgment:
   `guest.tsx` as browser sources rather than pattern entries, and the root
   `deno.jsonc` excludes `guest.js` from fmt, lint, and the type check by it.
 - `main.tsx` is the entry of a pattern that stands alone, one a person places on
-  a loom by itself. An iframe part that only another pattern composes, such as a
-  canvas fed by streams, gets a name that says what it is (`canvas.tsx`).
+  a loom by itself, and every one of its inputs needs a default to be offered
+  that way. An iframe part that only another pattern composes, such as a canvas
+  fed by streams, gets a name that says what it is (`canvas.tsx`).
 - The entry is hand-written from the guide's templates. It reads `guest.html`
   and `guest.js` with `dataFile()` and hands `cf-iframe` its cells as one
   `$context={{ ... }}` record. The `$` is what makes them live; a field that is

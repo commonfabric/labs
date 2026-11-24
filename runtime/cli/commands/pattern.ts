@@ -740,8 +740,9 @@ const shareOptions = (cmd: Command<any>) =>
       "--standalone",
       "Offer it to people choosing what to place, on its own at the top of a " +
         "loom. Without --standalone or --part, a new version keeps its " +
-        "predecessor's answer, and a first version stands alone when its " +
-        "entry file is main.tsx.",
+        "predecessor's answer, a remix its source's, and any other first " +
+        "version stands alone when its entry file is main.tsx. A pattern " +
+        "that needs an input with no default is a part either way.",
       { conflicts: ["part"] },
     )
     .option(

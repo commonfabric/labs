@@ -967,9 +967,10 @@ export interface PatternIndexPublishRequest {
    * Whether this pattern is offered to a person choosing what to place, on
    * its own at the top of a loom, rather than only as a part other patterns
    * build from. Sent only when the publisher knows: absent, the index takes
-   * it from the version this one follows (`priorPatternId`, else
-   * `remixedFrom`), and for a first version, from the entry file being
-   * named `main.tsx`. A pattern with a required input and no default is
+   * it from the version this one follows (`priorPatternId`), else from the
+   * pattern this remixes (`remixedFrom`: only this answer carries over from
+   * a remix's source), and otherwise from the entry file being named
+   * `main.tsx`. A pattern with a required input and no default is
    * stored as a part whatever this says.
    */
   standalone?: boolean;
