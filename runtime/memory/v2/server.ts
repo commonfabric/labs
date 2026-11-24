@@ -13561,12 +13561,13 @@ export class Server {
    * upstream of them alone.
    *
    * @returns The roots that pass, each with the piece it was judged as, the
-   * roots that nothing derives, the roots that are held, the reads that keep a held root or a running piece
-   * stale upstream, each with the piece to start for it, how many roots
-   * each reason refused, the slices marked since `space`'s serving loop
-   * last asked, and the earliest time a slice of `space` expires at or its
-   * arming with a space it reads runs out, where either does: the roots are
-   * to be judged again then, since no commit reports it.
+   * roots that nothing derives, the roots that are held, the reads that keep
+   * a held root or a running piece stale upstream, each with the piece to
+   * start for it, how many roots each reason refused, the slices marked
+   * since `space`'s serving loop last asked, and the earliest time a slice
+   * of `space` expires at or its arming with a space it reads runs out,
+   * where either does: the roots are to be judged again then, since no
+   * commit reports it.
    */
   async judgeCurrencyRoots(
     space: string,

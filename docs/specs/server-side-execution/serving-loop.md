@@ -2789,8 +2789,8 @@ demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
 {recordsStored, unvouched, judged, servable, refused, servedFromStore,
-underived, rearmed, indexWakes, expiryWakes, falseClean, carried, carriedRefused,
-heldUpstream, upstreamAbandoned},
+underived, rearmed, indexWakes, expiryWakes, falseClean, carried,
+carriedRefused, heldUpstream, upstreamAbandoned},
 settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
@@ -2991,11 +2991,11 @@ the roots a `skip` loop loaded that a judgment found stale only upstream,
 which a `start-upstream` loop would have held (§1), counted under no other
 mode;
 `servedFromStore` the roots the `skip` and `start-upstream` modes left
-unloaded on it, once each time a root is first left; `underived` the roots
-a judgment found nothing derives (§1), which the `skip` and
-`start-upstream` modes park without a load; `rearmed` the roots so left that were then
+unloaded on it, once each time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
-instance it does not vouch for; `falseClean` the pieces the index held
+instance it does not vouch for; `underived` the roots a judgment found
+nothing derives (§1), which the `skip` and `start-upstream` modes park
+without a load; `falseClean` the pieces the index held
 clean that wrote an instance they answered for again, to a value other than
 the one it held, with no input of theirs changed, each one a judgment that
 would have served a stale value. An instance a slice vouches for at its own

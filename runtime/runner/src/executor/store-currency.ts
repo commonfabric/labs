@@ -682,10 +682,9 @@ export class StoreCurrency {
    * where the loop skips (`skips`) and loads anyway under `record`, with the
    * pieces each rests on that record a source origin (`origins`), which the
    * caller follows first; the keys whose stored document leads to no piece
-   * and that nothing derives, which a load would park with no piece
-   * started, and which the caller parks so where the loop skips; the keys
-   * held because what the store holds of
-   * them is stale only upstream, which the caller leaves unloaded while the
+   * and that nothing derives, which the caller parks without a load where
+   * the loop skips; the keys held because what the store holds of them is
+   * stale only upstream, which the caller leaves unloaded while the
    * pieces upstream are started (`upstreamReads`), and which only a
    * `start-upstream` loop returns any of; and the keys a judgment had left
    * unloaded that an input has since marked, which the caller re-arms at
