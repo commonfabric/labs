@@ -93,8 +93,8 @@ export interface PushedBranch {
  * pull request, or null when it offers none; by default, it opens the page,
  * and the line it returns ends with what `onPushed` returns. When git fails
  * to push, or to say which branch is the default, calls `onFailed` with what
- * the push printed, which is nothing in the second case, and the line it
- * returns says the push was aborted when it failed after `signal` aborted;
+ * the push printed, which is nothing in the second case, and `origin`'s
+ * default branch, in the first case; the line it returns says the push was aborted when it failed after `signal` aborted;
  * git's own output has been shown by then.
  */
 export async function pushBranch<Asked = never>(
@@ -105,7 +105,7 @@ export async function pushBranch<Asked = never>(
     url: string | null,
   ) => Promise<TaskText> | TaskText = (_, url) =>
     url === null ? [] : openPage(io, url),
-  onFailed: (output: string) => void = () => {},
+  onFailed: (output: string, main?: string) => void = () => {},
   ask?: (
     branch: string,
     remote: PushedBranch,
@@ -159,7 +159,7 @@ export async function pushBranch<Asked = never>(
     `HEAD:refs/heads/${branch}`,
   ]);
   if (!push.success) {
-    onFailed(push.output);
+    onFailed(push.output, main);
     return signal?.aborted
       ? say`Push aborted.`
       : say`Pushing ${branch} to ${name("origin")} failed.`;

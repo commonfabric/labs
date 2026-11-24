@@ -1005,7 +1005,7 @@ export async function runPager(
         io,
         controller.signal,
         (branch, url) => pushed(io, branch, url, controller.signal),
-        (output) => pushFailed(output, confirmed, main),
+        (output, learned) => pushFailed(output, confirmed, learned),
         confirmed
           ? undefined
           : (branch, remote, main) =>

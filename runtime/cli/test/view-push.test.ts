@@ -561,14 +561,15 @@ describe("view-push", () => {
 
     it("hands what git printed to its failure callback when the push fails or is aborted", async () => {
       for (const abort of [false, true]) {
-        const handed: string[] = [];
-        const failed = (output: string) => {
-          handed.push(output);
+        const handed: Array<[string, string | undefined]> = [];
+        const failed = (output: string, main?: string) => {
+          handed.push([output, main]);
         };
         const controller = new AbortController();
         const { io } = fakeIo({
           pushSucceeds: false,
           pushOutput: "fatal: no network",
+          answers: { [ASK_ORIGIN_DEFAULT]: symrefListing("trunk") },
         });
 
         const summary = await pushBranch(
@@ -581,7 +582,7 @@ describe("view-push", () => {
         expect(plainText(summary)).toBe(
           abort ? "Push aborted." : "Pushing feature to origin failed.",
         );
-        expect(handed).toEqual(["fatal: no network"]);
+        expect(handed).toEqual([["fatal: no network", "trunk"]]);
       }
     });
 
@@ -2610,7 +2611,7 @@ describe("view-push", () => {
 
       expect(attempts).toBe(2);
       expect(drawn).toHaveLength(1);
-      expect(drawn[0]).toContain(`${ASKED_ORIGIN}... ◐`);
+      expect(drawn[0]).toContain("Pushing feature to origin... ◐");
       expect(armed).toBe(1);
     });
 
@@ -2706,8 +2707,13 @@ describe("view-push", () => {
     it("offers Retry push when the push fails or is aborted, which pushes again continuing the dialog's output", async () => {
       for (const abort of [false, true]) {
         let pushes = 0;
+        let asks = 0;
         const harness = pagerHarness((signal) => ({
           ...fakeIo().io,
+          queryAsync: (args) => {
+            asks++;
+            return fakeIo().io.queryAsync(args);
+          },
           run: () => {
             if (pushes++ > 0) {
               return Promise.resolve({ success: true, output: "" });
@@ -2742,6 +2748,8 @@ describe("view-push", () => {
         ]);
 
         expect(pushes).toBe(2);
+        // The retry keeps to the default branch the failed push learned.
+        expect(asks).toBe(1);
         const retrying = harness.writes.find((text) =>
           text.includes(" Abort ") && text.includes("To retry") &&
           text.includes("Pushing feature to origin...")
