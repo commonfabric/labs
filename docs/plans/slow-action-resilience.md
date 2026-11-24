@@ -228,24 +228,37 @@ thread each cost fell on, and whether the watchdog loop above happened.
 
 ### 1. Each action's cost on the health route
 
-The serving loop keeps, per space, a bounded table of its most expensive
-actions, filled from the scheduler's `ActionStats`, and posts it with the
-stats a worker already sends. The main thread reports it under `servingLoop`
-on `/api/health/stats`, in the shape `sessionReports` has: lifetime counts and
-a bounded list of entries. An entry carries:
+Each serving host keeps a bounded table of the actions its runtimes have spent
+the most wall time on, fed from the scheduler's `scheduler.run.complete`
+marker, and posts it with the full stats a worker already sends. The main
+thread reports it under `servingLoop.actions` on `/api/health/stats`, in the
+shape `sessionReports` has: a bounded list of entries and counts of what the
+list leaves out. Rows of one action of one space that two workers reported,
+the one before a kill and its successor, are taken together. An entry
+carries:
 
-- the action's identity: the pattern, the module, the verified source location
-  where the action is authored, and the piece instance it belongs to;
+- the action's identity: the space, the scheduler's id, the pattern and module
+  names, the verified source location where the action is authored, and the
+  result cell of the piece it belongs to;
 - runs, total wall time, the longest run, and the last run;
 - how many of its runs a change to its inputs caused, which is what separates
   an action that is slow once from one that is slow on every write to the
   space;
 - for sampled runs, the read-accounting counters.
 
-An action is logged once when it first passes a threshold, with the same
-fields.
+The list is ranked by total time. A host tracks 512 actions and lists 50, and
+a run of an action with no row takes the cheapest action's row only if it
+alone took longer than that action's total, so the table never trades an
+expensive action for a cheap one. An action's first run of a second or more
+is logged once, as `slow-action`, with the same identity.
 
-Read accounting stays off for ordinary runs. A run is sampled when the
+The marker gained what the table needed: the piece, read from the action's
+observation identity (`schedulerObservationIdentity.pieceRootId`), which the
+scheduler already reads when it attributes a commit rejection; whether an input
+change caused the run, which is whether the run had invalidation causes; and
+the authored location on every run rather than only on measured ones.
+
+Read accounting stays off for ordinary runs. A run is to be sampled when the
 action's previous run passed the threshold, so the cost of measuring falls on
 actions that are already expensive. Today the setting is the scheduler's
 (`setReadStatsEnabled()`), nothing on a server turns it on, and a run keeps
@@ -253,12 +266,10 @@ the one it started with, so this needs the setting to be choosable per run.
 `read-accounting.md` asks for the overhead to be measured on the workload
 before any timing claim, and that measurement is part of this stage.
 
-`ActionStats` has the run count, the total and the last run's time. The
-longest run and the count of runs an input change caused are new. So is the
-piece instance in the attribution, which the scheduler already resolves when
-it reports an action's error (`handleSchedulerError`,
-`scheduler/diagnostics.ts`). Without it the table cannot say which board is
-the slow one.
+Built in [labs#10179](https://github.com/commonfabric/labs/pull/10179): the
+table, the merge across workers, the marker's new fields, and the log line. Not built yet: the sampled read counters with the per-run setting and
+the overhead measurement, and event handlers, whose runs report no duration
+(`scheduler.invocation` has none), so a slow handler has no entry.
 
 The entry is written for two readers. An operator reads which action in which
 space holds a worker. An authoring agent reads what to change: a location, a
@@ -267,7 +278,8 @@ to any of them, which together point at a collection index or an aggregate
 ([reactive collections](../common/concepts/reactive-collections.md)).
 
 Exit: on a fixture board, the route names the slow action, its piece and its
-counts, and an action under the threshold has no entry.
+counts, ahead of every action that cost less, and the log names only actions
+whose run passed the threshold.
 
 ### 2. A beacon the main thread reads
 
