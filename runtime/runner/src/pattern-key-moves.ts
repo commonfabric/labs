@@ -57,6 +57,10 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "counter/": "examples/counter/",
   "cozy-poll/": "apps/cozy-poll/",
   "deep-research.tsx": "apps/deep-research/deep-research.tsx",
+  "dev/map-captured-object-spread/main.test.tsx":
+    "dev/map-captured-object-spread/map-captured-object-spread.test.tsx",
+  "dev/map-captured-object-spread/main.tsx":
+    "dev/map-captured-object-spread/map-captured-object-spread.tsx",
   "dice-handlers.ts": "showcase/dice/dice-handlers.ts",
   "dice.test.tsx": "showcase/dice/dice.test.tsx",
   "dice.tsx": "showcase/dice/dice.tsx",

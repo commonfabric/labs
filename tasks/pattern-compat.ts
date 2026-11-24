@@ -30,6 +30,7 @@
  * the run prints, so a test can state the facts and read the verdict.
  */
 
+import { basename } from "@std/path/basename";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
@@ -39,6 +40,7 @@ import {
   collectAllPatternFiles,
   collectCompatibilityPaths,
   patternKey,
+  PATTERNS_DIR,
   REPO_ROOT,
 } from "./pattern-files.ts";
 import { UNEVALUABLE_PATTERNS } from "./pattern-compat-unevaluable.ts";
@@ -51,10 +53,12 @@ import { type CommandOutput, emit } from "./command-output.ts";
 import {
   acceptedBreakKey,
   checkPattern,
+  checkRunsAlone,
   type Finding,
   parseArgs,
   partitionAcceptedBreaks,
   type PatternContract,
+  PENDING_STANDALONE_RENAMES,
   readBaselines,
   selectItems,
   shouldRecord,
@@ -81,6 +85,9 @@ export interface CompatGateInput {
 
   /** Patterns known to fail evaluation, keyed as `patternKey()` keys them. */
   unevaluable: ReadonlySet<string>;
+
+  /** `main.tsx` entries known not to run alone while their rename waits. */
+  pendingStandaloneRenames: ReadonlySet<string>;
 
   /** Compiles and evaluates one pattern file, returning its module's exports. */
   evaluate(file: string): Promise<unknown>;
@@ -213,7 +220,15 @@ export async function judgeCompatibility(
     const current = contracts.get(key);
     const baselines = await readBaselines(input.baselinesDir, key);
     const checkStarted = performance.now();
-    const allFindings = checkPattern(key, current, baselines);
+    const allFindings = [
+      ...checkPattern(key, current, baselines),
+      ...checkRunsAlone(
+        key,
+        item.startsWith(`${PATTERNS_DIR}/`) && basename(item) === "main.tsx",
+        current,
+        input.pendingStandaloneRenames,
+      ),
+    ];
     const checkMs = performance.now() - checkStarted;
     const ms = Math.round(checkMs);
     // A slow check means validating an unrecorded contract, or proving the
@@ -354,6 +369,20 @@ export async function judgeCompatibility(
           `\n${finding.pattern}\n  contract ${finding.hash} is not recorded.` +
             `\n  Run: deno task pattern-compat --update`,
         );
+      } else if (finding.kind === "not-standalone") {
+        err.push(
+          `\n${finding.pattern}\n  is a main.tsx entry, which is offered as ` +
+            `standalone, but requires ${finding.inputs.join(", ")} with no ` +
+            `default, so it cannot run alone.` +
+            `\n  Give each a default (an input a host fills in is optional), ` +
+            `or rename the file: main.tsx is kept for a pattern that stands ` +
+            `alone.`,
+        );
+      } else if (finding.kind === "stale-pending-rename") {
+        err.push(
+          `\n${finding.pattern}\n  runs alone now. Remove it from ` +
+            `PENDING_STANDALONE_RENAMES in tasks/pattern-compat-lib.ts.`,
+        );
       } else if (finding.kind === "invalid-schema") {
         err.push(
           `\n${finding.pattern}\n  ${finding.role} schema is not valid on its ` +
@@ -482,6 +511,7 @@ export async function runPatternCompat(
       baselinesDir: `${REPO_ROOT}/${BASELINES_DIR}`,
       acceptedBreaks: ACCEPTED_CONTRACT_BREAKS,
       unevaluable: UNEVALUABLE_PATTERNS,
+      pendingStandaloneRenames: PENDING_STANDALONE_RENAMES,
       evaluate: async (file) => {
         const program = await resolveLocalProgram(
           (resolver) => engine.resolve(resolver),

@@ -25,6 +25,7 @@ import {
   type JSONSchema,
   type Pattern,
 } from "@commonfabric/runner";
+import { inputsNeededToRun } from "@commonfabric/pattern-index/standalone";
 import { validateSchemaDefinition } from "@commonfabric/runner/cfc";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
@@ -78,7 +79,14 @@ export type Finding =
   /** The current contract is not a well-formed schema on its own terms. */
   | { kind: "invalid-schema"; pattern: string; role: string; detail: string }
   /** Baselines outlived their source: pieces tracking this path are pinned. */
-  | { kind: "retired"; pattern: string; baselines: string[] };
+  | { kind: "retired"; pattern: string; baselines: string[] }
+  /**
+   * A `main.tsx` entry, which a repository offers as standalone, requires
+   * these inputs and gives them no default, so it cannot run alone.
+   */
+  | { kind: "not-standalone"; pattern: string; inputs: string[] }
+  /** A pending rename's entry now runs alone, so its exemption is stale. */
+  | { kind: "stale-pending-rename"; pattern: string };
 
 /**
  * How much of the base64url SHA-256 goes in a filename. The hash only has to
@@ -274,6 +282,45 @@ export function checkPattern(
   }
 
   return findings;
+}
+
+/**
+ * The `main.tsx` entries under `patterns/` that cannot run alone, each
+ * waiting on a rename that is held until the pattern index keeps a pattern's
+ * history across a move. The list can only shrink: an entry that runs alone
+ * again fails the run until it leaves.
+ */
+export const PENDING_STANDALONE_RENAMES: ReadonlySet<string> = new Set([
+  // Needs `originatorProfile`. Its standalone entry is `library.tsx`, which
+  // moves to `library/main.tsx`; this file becomes `invitation.tsx`.
+  "apps/recommend-a-book/main.tsx",
+]);
+
+/**
+ * Check that a pattern a repository offers as standalone can run alone.
+ *
+ * In a repository `<name>/main.tsx` is a pattern's standalone entry, so a
+ * `main.tsx` under `patterns/` (`offered`) has to run with no other piece
+ * wired in: every input it requires carries a default. Connector views, whose
+ * host fills their inputs in, live in other trees and are not offered.
+ * `pending` names entries known to fail while their rename waits.
+ */
+export function checkRunsAlone(
+  pattern: string,
+  offered: boolean,
+  current: PatternContract | undefined,
+  pending: ReadonlySet<string>,
+): Finding[] {
+  if (!offered || current === undefined) return [];
+  const inputs = inputsNeededToRun(current.argumentSchema);
+  if (pending.has(pattern)) {
+    return inputs.length === 0
+      ? [{ kind: "stale-pending-rename", pattern }]
+      : [];
+  }
+  return inputs.length === 0
+    ? []
+    : [{ kind: "not-standalone", pattern, inputs }];
 }
 
 //

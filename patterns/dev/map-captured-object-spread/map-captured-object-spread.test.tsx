@@ -1,5 +1,5 @@
 import { action, assert, pattern, TESTS } from "commonfabric";
-import CapturedObjectSpread from "./main.tsx";
+import CapturedObjectSpread from "./map-captured-object-spread.tsx";
 
 export default pattern(() => {
   const subject = CapturedObjectSpread({
