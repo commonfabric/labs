@@ -131,10 +131,10 @@ The source decides "stale upstream" with the predicate it already applies
 to a local reader's input: a recorded piece computes the instance, and a
 slice that decides it is marked or no piece vouches for it, or the instance
 is a derived document no recorded piece writes that no computation may
-have produced yet, as the first plan's list says. An instance no recorded piece writes is otherwise
-plain data, and only a commit moves it. The source takes an instance for a
-derived document where its id has the form of one, or a serving loop's
-commit wrote it.
+have produced yet, as the first plan's list says. An instance no recorded
+piece writes is otherwise plain data, and only a commit moves it. The
+source takes an instance for a derived document where its id has the form
+of one, or a serving loop's commit wrote it.
 
 Those rows change in two places the index already has. An advance that
 finds a registered instance changed records its new head. And wherever a

@@ -1361,9 +1361,8 @@ executing:
   to its readers, in the space and across spaces, marking them only when
   it changes, unless no computation may have produced it yet: a derived
   document the store holds no instance of, or a cell of a piece (its
-  `result` back-link names the piece) that holds no value or whose piece
-  the index holds no record of. A slice is stored
-  marked `2` where its read is behind that head or the space cannot be
+  `result` back-link names the piece) the index holds no record of. A
+  slice is stored marked `2` where its read is behind that head or the space cannot be
   asked, and `1` where the instance is stale there. A judgment that may rest
   on such a slice first pulls, from each space the slices its demand rows
   are resolved under read, what changed since its last pull, and the space

@@ -3545,9 +3545,15 @@ describe("currency-index", () => {
           expect(reportedStale(OWNED)).toBe(true);
         });
 
-        it("returns stale a cell that holds the back-link and no value, of a recorded piece", () => {
+        it("returns current a cell that holds no value, of a piece whose record names no write of it", () => {
           const asOf = serve(OWNED, false);
           storeSource(asOf, [record(OWNER)]);
+
+          expect(reportedStale(OWNED)).toBe(false);
+        });
+
+        it("returns stale a cell that holds no value, of a piece the source holds no record of", () => {
+          serve(OWNED, false);
 
           expect(reportedStale(OWNED)).toBe(true);
         });
@@ -3561,23 +3567,6 @@ describe("currency-index", () => {
           storeSource(asOf, [record(OWNER, { writes: [OWNED] })]);
 
           expect(reportedStale(OWNED)).toBe(true);
-        });
-      });
-
-      describe("pullCurrencyExports()", () => {
-        it("returns current that cell once a write gives it a value", () => {
-          storeSource(serve(OWNED, false), [record(OWNER)]);
-          register(OWNED);
-
-          serve(OWNED);
-
-          expect(
-            pullCurrencyExports(source, {
-              space: SOURCE,
-              reader: SPACE,
-              since: 0,
-            }).entries.map(({ id, stale }) => ({ id, stale })),
-          ).toEqual([{ id: OWNED, stale: false }]);
         });
       });
 

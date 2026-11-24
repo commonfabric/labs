@@ -918,13 +918,13 @@ const vouchesFor = (
 
 /**
  * Whether the instance `(id, scopeKey)` of this store, a derived document no
- * recorded piece writes, may hold no value a computation produced: the
- * store holds no such instance, or the instance is a cell of a piece, with
- * the `result` back-link its piece's setup writes, and holds no value or
- * belongs to a piece the index holds no record of. Setup writes a piece's
- * cells before its computations run, a default into some, and only the
- * piece's record says which of them its computations write. An instance
- * read at no one key is not asked about.
+ * recorded piece writes, may be one no computation has produced yet: the
+ * store holds no such instance, or the instance is a cell of a piece the
+ * index holds no record of, by the `result` back-link its piece's setup
+ * writes. Setup writes a piece's cells before its computations run, a
+ * default into some, and only the piece's record, whose write rows name the
+ * cells its computations write, tells those from the rest. An instance read
+ * at no one key is not asked about.
  */
 const unproduced = (
   context: Context,
@@ -941,8 +941,7 @@ const unproduced = (
   const link = document.result;
   if (!isLinkRef(link)) return false;
   const owner = linkRefPayload(link).id;
-  return !("value" in document) || typeof owner !== "string" ||
-    slicesOf(context, owner).length === 0;
+  return typeof owner !== "string" || slicesOf(context, owner).length === 0;
 };
 
 /**

@@ -47,8 +47,7 @@ from such a document while the document's writer has not run since an
 input of that writer changed, and that is accepted, in preference to
 starting pieces to catch it ("Known limits"). One case of it is still held
 stale, so that a reader does not pass on what a piece's setup left before
-the piece ran: a cell of a piece that holds no value, or whose piece the
-index holds no record of.
+the piece ran: a cell of a piece the index holds no record of.
 
 ## The modes
 
@@ -297,12 +296,12 @@ inputs is stale, and `0` otherwise. An input is stale when:
   included;
 - it is a derived document no recorded piece writes that no computation
   may have produced yet: the store holds no instance of it, or it is a cell
-  of a piece, holding the `result` back-link its piece's setup writes, that
-  holds no value or whose piece has no record. Setup writes a piece's cells
-  before its computations run, a default into some, and only the piece's
-  record says which of them its computations write. Any other derived
-  document no recorded piece writes is an input like any other, and marks
-  its readers when it changes. A
+  of a piece the index holds no record of, by the `result` back-link its
+  piece's setup writes. Setup writes a piece's cells before its
+  computations run, a default into some, and only the piece's record,
+  whose write rows name the cells its computations write, tells those from
+  the rest. Any other derived document no recorded piece writes is an input
+  like any other, and marks its readers when it changes. A
   document whose only writer names no piece, and which the slice answers
   for, is an input too: the slice took over what that writer read;
 - a recorded piece computes it and no piece vouches for the instance read. A
