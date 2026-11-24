@@ -7546,11 +7546,12 @@ export class SpaceServer implements TransactionSealDestination {
    * (`carriedRowsOf()`). This space is sent, the same way, the instances
    * that keep a root or a running piece of it stale upstream, and those a
    * run here is withdrawn for until their writer produces them
-   * (serving-loop.md §1, "A root stale upstream").
+   * (serving-loop.md §1, "A root stale upstream"). A loop whose index mode
+   * carries no demand (`StoreCurrency.carriesDemand`) sends none.
    */
   #syncCarriedDemand(): void {
     const currency = this.#currency;
-    if (currency === undefined) return;
+    if (currency === undefined || !currency.carriesDemand) return;
     const reads = [
       ...[...currency.foreignReads.values()].flat(),
       ...currency.upstreamReads,
