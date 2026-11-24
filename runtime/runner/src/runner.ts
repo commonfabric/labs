@@ -6058,8 +6058,10 @@ export class Runner {
 
   /**
    * Helper for a handler's result on a serving runtime, which stops the pieces
-   * the result started once its transaction has committed, leaving what the store
-   * holds. A demand or an event starts one again, as either does after a restart.
+   * the result started once its transaction has committed and the scheduler is
+   * idle after it, leaving what the store holds, including what the work that
+   * commit set off read of them. A demand or an event starts one again, as
+   * either does after a restart.
    * A piece keeps running where a client demands, at this moment, its document or
    * anything its nodes write: that demand has already made its one attempt to load
    * the piece, and nothing would make another. A stopped piece's index entry goes
@@ -14917,18 +14919,29 @@ export class Runner {
         this.stop(resultCell);
       });
       // A serving runtime keeps no graph nothing demands (serving-loop.md §1),
-      // so the parent holds nothing past this transaction's commit.
+      // so the parent holds nothing past this transaction's commit and the
+      // work it sets off. That work includes every derivation that reads what
+      // the new pieces derive, a board's index of its topics among them, and
+      // it runs before the scheduler is idle. A piece released at the commit
+      // itself would have written none of those values, and a read that
+      // reaches them through a link does not start it to write them.
       if (waveRunContextOf(tx) === undefined || cancelDeferredStart) {
         addCancel(cancelOwnedStart);
       } else {
         tx.addCommitCallback((_committedTx, commitResult) => {
-          if (!commitResult.error) {
+          if (commitResult.error) return;
+          this.#runtime.idle().then(() =>
             this.#releaseServedHandlerResult(
               resultCell,
               installedCancel,
               resultPattern,
-            );
-          }
+            )
+          ).catch((error) => {
+            logger.warn("served-release-failed", () => [
+              "releasing the pieces a handler's result started failed:",
+              error,
+            ]);
+          });
         });
       }
       // Spec scheduler-v2 §7.6 rule 2: the launch is speculative; if this

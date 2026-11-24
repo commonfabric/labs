@@ -62,9 +62,10 @@ the main thread under the worker arm and so are not on the worker.
 
 - A pattern built while a program runs binds a child graph that reaches no outer
   cell once rather than per event (`moduleWithReusedGraphBindings`).
-- Once a handler's transaction commits on a serving runtime, its result is released
-  (`#releaseServedHandlerResult` in `runner.ts`, serving-loop.md §1). A demand for a
-  value, or an event to a stream, starts the piece again.
+- Once a handler's transaction commits on a serving runtime and the scheduler is
+  idle after it, its result is released (`#releaseServedHandlerResult` in
+  `runner.ts`, serving-loop.md §1). A demand for a value, or an event to a stream,
+  starts the piece again.
 - The release drops the result pattern's keyless index entry, and a stopped piece's
   node bindings go too (`NodeBindingMemo.release()`). Both hold the cells of the run
   that started it, and through them its transaction.

@@ -65,8 +65,9 @@ released loads them again when its next event arrives.
 A release pass runs when something that read documents has gone: when a piece
 is stopped (`Runner.stop()`, which also runs when the runtime restarts a
 piece), when a serving runtime stops the pieces a handler's result started once
-the handler's transaction commits, which leaves running one a client demands
-at that moment (`#releaseServedHandlerResult` in
+the handler's transaction commits and the scheduler is idle after it, which
+leaves running one a client demands at that moment
+(`#releaseServedHandlerResult` in
 `runtime/runner/src/runner.ts`; "A piece a handler starts" in
 [`../specs/server-side-execution/serving-loop.md`](../specs/server-side-execution/serving-loop.md)),
 when a host's client cancels a cell subscription
