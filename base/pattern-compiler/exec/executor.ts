@@ -2604,6 +2604,15 @@ export class Host {
         ) filled.add(JSON.stringify(at));
       }
     }
+    // An `identity` entry of `Body.computed` is a handle to the reference
+    // the cone computed there (ES §2.4, "A handle or a reference from a
+    // computed input"). An entry at a path through `*` stands for each
+    // child the path reaches, as each row of the result of a `map` that
+    // holds a reference: `pass` hands each such child as the handle and
+    // reads nothing of what it names.
+    const identities = instance.plan.bodies[body].computed.filter((
+      { observes },
+    ) => observes === "identity");
     let argument = this.pass(computed, {
       entries: [
         ...instance.plan.bodies[body].computed,
@@ -2613,44 +2622,13 @@ export class Host {
         })),
       ],
       filled,
+      handles: identities.filter(({ at }) => at.includes("*")),
     });
-    // An `identity` entry of `Body.computed` is a handle to the reference
-    // the cone computed there (ES §2.4, "A handle or a reference from a
-    // computed input").
-    for (
-      const { at, observes, schema } of instance.plan.bodies[body].computed
-    ) {
-      if (observes !== "identity" || at.includes("*")) continue;
-      // A marker at such a path is handed to the body as the reference
-      // to its stream (ES §2.2, assumed there under question 78).
-      const reference = this.at(computed, at);
-      if (
-        reference instanceof Ref || reference instanceof StreamRef ||
-        reference instanceof StreamMarker
-      ) {
-        argument = instance.placed(
-          argument,
-          at,
-          instance.handleOf(reference, this, undefined, schema),
-        );
-        continue;
-      }
-      // An array that a body returned whole is a handle to its place: the
-      // path of the result where the output is kept, or the document of
-      // the output (FA §6.2, "A handle bound to a value the instance
-      // computed"; ruling Z53).
-      const held = reference instanceof Assembled
-        ? this.settled(reference)
-        : reference;
-      const output = Array.isArray(held)
-        ? instance.placeOfOutput(held)
-        : undefined;
-      if (output !== undefined) {
-        argument = instance.placed(
-          argument,
-          at,
-          instance.handleOf(output, this, undefined, schema),
-        );
+    for (const { at, schema } of identities) {
+      if (at.includes("*")) continue;
+      const handle = this.#handleAt(this.at(computed, at), schema);
+      if (handle !== undefined) {
+        argument = instance.placed(argument, at, handle);
       }
     }
     // The slot part of the argument: each entry of `Body.reads` at its
@@ -2751,6 +2729,32 @@ export class Host {
   }
 
   /**
+   * What a body is handed for what the cone computed at the path of an
+   * `identity` entry of `Body.computed`: a handle to the reference there,
+   * or nothing where it holds none. A marker is handed as the reference
+   * to its stream (ES §2.2, assumed there under question 78). An array
+   * that a body returned whole is a handle to its place: the path of the
+   * result where the output is kept, or the document of the output (FA
+   * §6.2, "A handle bound to a value the instance computed"; ruling Z53).
+   */
+  #handleAt(reference: unknown, schema: string | undefined): unknown {
+    const instance = this.#instance;
+    if (
+      reference instanceof Ref || reference instanceof StreamRef ||
+      reference instanceof StreamMarker
+    ) return instance.handleOf(reference, this, undefined, schema);
+    const held = reference instanceof Assembled
+      ? this.settled(reference)
+      : reference;
+    const output = Array.isArray(held)
+      ? instance.placeOfOutput(held)
+      : undefined;
+    return output === undefined
+      ? undefined
+      : instance.handleOf(output, this, undefined, schema);
+  }
+
+  /**
    * The members of the operand of a spread in the reactive tier, each as
    * what its position holds: the reference to the cell where the position
    * holds a link, and the value where it holds one. So a spread of an
@@ -2813,6 +2817,13 @@ export class Host {
        * is given.
        */
       filled?: ReadonlySet<string>;
+      /**
+       * The `identity` entries of `Body.computed` at a path through `*`:
+       * at each path one of them matches, the value is handed as the
+       * handle `#handleAt` gives, where it gives one, and nothing of it is
+       * read.
+       */
+      handles?: readonly { at: string[]; schema?: string }[];
     },
     path: readonly string[] = [],
   ): unknown {
@@ -2820,6 +2831,14 @@ export class Host {
       narrowed?.filled !== undefined && path.length > 0 &&
       narrowed.filled.has(JSON.stringify(path))
     ) return undefined;
+    const identity = narrowed?.handles?.find(({ at }) =>
+      at.length === path.length &&
+      at.every((segment, index) => segment === "*" || segment === path[index])
+    );
+    if (identity !== undefined) {
+      const handle = this.#handleAt(value, identity.schema);
+      if (handle !== undefined) return handle;
+    }
     if (value instanceof Assembled) {
       return this.pass(this.settled(value), narrowed, path);
     }
