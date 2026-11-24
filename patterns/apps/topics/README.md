@@ -208,7 +208,8 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   A topic filed before the board held a collection also has nothing bound to its
   `board` input, so it shows no backlinks. `scripts/topics-bind-board.ts` links
   each such topic's `board` to the board's, once the topic runs the pattern that
-  declares it. The restore tooling (`scripts/topics-rehearsal-lib.ts`) relinks
+  declares it, and refuses a topic whose `board` already reaches another board's
+  collection. The restore tooling (`scripts/topics-rehearsal-lib.ts`) relinks
   `board` on a topic that declares it and leaves it out on one that predates it,
   and retires `boardCrossrefs` and `boardCrossrefIndex` on a topic that no
   longer declares them.
