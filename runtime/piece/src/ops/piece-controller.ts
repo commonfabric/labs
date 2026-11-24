@@ -1916,11 +1916,14 @@ function suppliedLinks(
  * complete source intersection is accepted by the target intersection.
  * Possible absence of a source value rides the contracts' `mayBeMissing`
  * flags and is resolved per source/target pair inside the proof.
+ * `pieceEvolution` says the sources are the piece's own prior input contract,
+ * as `SchemaSubsetOptions.pieceEvolution` describes.
  */
 function assertContractSubset(
   sources: readonly PathSchemaContract[],
   targets: readonly PathSchemaContract[],
   label: string,
+  pieceEvolution: boolean = false,
 ): void {
   for (const target of targets) {
     let lastError: unknown;
@@ -1946,7 +1949,11 @@ function assertContractSubset(
           withoutTopLevelScope(sourceSchema),
           withoutTopLevelScope(target.schema),
           label,
-          { sourceRoot: source.root, targetRoot: target.root },
+          {
+            sourceRoot: source.root,
+            targetRoot: target.root,
+            pieceEvolution,
+          },
         );
         return true;
       } catch (error) {
@@ -2434,11 +2441,16 @@ function policePreservedEnvelope(
   };
 }
 
-/** Prove a rebuilt link's payload flow from source to destination. */
+/**
+ * Prove a rebuilt link's payload flow from source to destination, under the
+ * piece-evolution policy when `pieceEvolution` says the source is the piece's
+ * own prior input contract.
+ */
 function proveRebuiltContracts(
   sourceContracts: readonly PathSchemaContract[],
   targetContracts: readonly PathSchemaContract[],
   displayPath: string,
+  pieceEvolution: boolean,
 ): void {
   // Nested (non-stream) Cell wrappers are read-side projections, not part
   // of the payload contract: a wrapper-declaring source may serve a plain
@@ -2466,21 +2478,34 @@ function proveRebuiltContracts(
     sourceContracts,
     proofTargets,
     `input link at ${displayPath}`,
+    pieceEvolution,
   );
 }
 
-/** Prove a preserved handle's payload flow, in both directions it can move. */
+/**
+ * Prove a preserved handle's payload flow, in both directions it can move.
+ * `pieceEvolution` says the source is the piece's own prior input contract,
+ * and reaches the read direction alone: a write back through the handle is
+ * the candidate's value, which the document's prior contract must hold as it
+ * stands.
+ */
 function provePreservedContracts(
   sourceContracts: readonly PathSchemaContract[],
   targetContracts: readonly PathSchemaContract[],
   targetOuter: OuterCellShape,
   displayPath: string,
+  pieceEvolution: boolean,
 ): void {
   const label = `input link at ${displayPath}`;
   if (
     targetOuter.kind !== "writeonly" && targetOuter.kind !== "stream"
   ) {
-    assertContractSubset(sourceContracts, targetContracts, label);
+    assertContractSubset(
+      sourceContracts,
+      targetContracts,
+      label,
+      pieceEvolution,
+    );
   }
   if (cellKindCanWrite(targetOuter.kind)) {
     // A writable handle can send values back to the producer, so the
@@ -2590,7 +2615,10 @@ export function assertSuppliedLinkSchemasCompatible(
      * handle's consumer contract unchanged. Such a handle keeps the linked
      * producer's policy without requiring that policy on the consumer schema.
      * The same proof admits a committed link to a metadata-less document
-     * whose contract is unchanged, without the new-link proof.
+     * whose contract is unchanged, without the new-link proof. Where that
+     * contract changed, a committed link to such a document is proved under
+     * the piece-evolution policy, as the same value written inline in the
+     * input is: the document is the piece's own input one hop away.
      */
     priorArgumentSchema?: JSONSchema;
 
@@ -2676,12 +2704,21 @@ export function assertSuppliedLinkSchemasCompatible(
         displayPath,
       );
     }
+    // A metadata-less document is held to the piece's prior input contract,
+    // so the proof below compares that contract with the candidate's at this
+    // path. Where the link is also the one already committed, the document is
+    // the piece's own input one hop away, and the update judges it as it
+    // judges the same value written inline: under the piece-evolution policy.
+    // A link staged by this update, or one a caller rebuilds, is a new
+    // binding and keeps the proof without it.
+    const pieceEvolution = heldToPriorContract &&
+      options.linksPreservedVerbatim === true &&
+      options.destinationIsStream !== true &&
+      linkMatchesCommittedState(suppliedLink, baseCell, basePath);
     if (preservedOuter === undefined) {
-      // A metadata-less document is held to the prior contract, so its
-      // producer proof compares that contract with the candidate's. When the
-      // link is the one already committed and the contract is unchanged, that
-      // proof can only refuse what new-link default insertion refuses, and a
-      // link carried over byte for byte is not new.
+      // When the contract is also unchanged, the proof can only refuse what
+      // new-link default insertion refuses, and a link carried over byte for
+      // byte is not new.
       if (
         heldToPriorContract &&
         options.linksPreservedVerbatim === true &&
@@ -2694,7 +2731,12 @@ export function assertSuppliedLinkSchemasCompatible(
           targetContracts,
         )
       ) continue;
-      proveRebuiltContracts(sourceContracts, targetContracts, displayPath);
+      proveRebuiltContracts(
+        sourceContracts,
+        targetContracts,
+        displayPath,
+        pieceEvolution,
+      );
     } else {
       const localized = policePreservedEnvelope(
         suppliedLink,
@@ -2720,6 +2762,7 @@ export function assertSuppliedLinkSchemasCompatible(
         localized.targetContracts,
         preservedOuter,
         displayPath,
+        pieceEvolution,
       );
     }
   }

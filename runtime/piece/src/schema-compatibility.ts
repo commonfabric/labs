@@ -121,6 +121,17 @@ interface CompatibilityContext {
 export interface SchemaSubsetOptions {
   sourceRoot?: JSONSchema;
   targetRoot?: JSONSchema;
+
+  /**
+   * Whether `source` and `target` are one piece's input contract before and
+   * after a pattern update, at one path below its root, rather than a
+   * producer's contract and a reader's. The piece-evolution policy then
+   * applies to the proof as {@link assertPatternSchemasBackwardCompatible}
+   * applies it to the whole input, and stays sound the same way: setup
+   * validates the stored input against the candidate, reading through each
+   * link it can.
+   */
+  pieceEvolution?: boolean;
 }
 
 /** One issue that stops a schema compatibility proof. */
@@ -990,6 +1001,12 @@ export function patternSchemaIncompatibilities(
  * writer identity would therefore withhold no authority, and the binding
  * `path` and the whole `uiContract` are compared here as they are for a
  * pattern update.
+ *
+ * The proof carries no piece-evolution policy unless
+ * {@link SchemaSubsetOptions.pieceEvolution} says the two schemas are one
+ * piece's input contract across an update. A producer's contract is not
+ * replaced by its reader's update, so an open object there keeps admitting any
+ * value under a name it does not declare.
  */
 export function assertSchemaSubset(
   sourceInput: JSONSchema,
@@ -1026,7 +1043,7 @@ export function assertSchemaSubset(
     role: "argument",
     activePairs: new WeakMap(),
     sourceUnionSplitDepth: 0,
-    allowEvolutionPolicy: false,
+    allowEvolutionPolicy: options.pieceEvolution === true,
     allowEvolutionDefaults: true,
     allowTargetDefaults: true,
     defaultComparison: "target",

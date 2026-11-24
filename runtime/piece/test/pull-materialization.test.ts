@@ -1319,6 +1319,225 @@ describe("piece pull materialization", () => {
     ).not.toThrow();
   });
 
+  it("lets a retained pushed element take a contract that names a new optional field", async () => {
+    // The Topics shape: a comment pushed onto `comments` is a document of its
+    // own, with no contract of its own, and the piece's input holds a link to
+    // it. A source update holds such a document to the piece's prior input
+    // contract at the link's path, so the element is the piece's own input one
+    // hop away, and the update judges it as it judges the same object written
+    // inline: an open object may gain an optional named field.
+    const authorWith = (
+      extra: Record<string, JSONSchema>,
+      rest: Record<string, unknown> = {},
+    ): JSONSchema => ({
+      type: "object",
+      properties: {
+        kind: { type: "string" },
+        name: { type: "string" },
+        ...extra,
+      },
+      required: ["kind", "name"],
+      ...rest,
+    });
+    const argumentWith = (author: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        createdBy: author,
+        comments: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { author, body: { type: "string" } },
+            required: ["body"],
+          },
+        },
+      },
+      required: ["comments"],
+    });
+    const blob: JSONSchema = {
+      type: "object",
+      properties: { space: { type: "string" }, id: { type: "string" } },
+      required: ["space", "id"],
+    };
+    const prior = argumentWith(authorWith({}));
+    const candidate = argumentWith(authorWith({ pictureBlob: blob }));
+
+    const ada = { kind: "person", name: "Ada" };
+    const comment = runtime.getCell(
+      pieces.getSpace(),
+      "pushed-comment-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      comment.withTx(tx).set({ author: ada, body: "first" });
+    });
+    const base = runtime.getCell(
+      pieces.getSpace(),
+      "pushed-comment-argument-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      base.withTx(tx).set({ createdBy: ada, comments: [comment] });
+    });
+
+    const raw = base.getRaw() as { comments: unknown[] };
+    // Guard the premise: the update sees a SERIALIZED link to a document that
+    // carries no contract, which is what holds it to the prior contract.
+    expect(isLink(raw.comments[0])).toBe(true);
+    expect(isCell(raw.comments[0])).toBe(false);
+
+    const update = (
+      destination: JSONSchema,
+      priorArgumentSchema: JSONSchema = prior,
+      options: { linksPreservedVerbatim?: boolean } = {
+        linksPreservedVerbatim: true,
+      },
+      path: (string | number)[] = ["comments", 0],
+    ) =>
+      assertSuppliedLinkSchemasCompatible(
+        [{ path, value: raw.comments[0] }],
+        destination,
+        base,
+        pieces,
+        { priorArgumentSchema, ...options },
+      );
+
+    expect(() => update(candidate)).not.toThrow();
+
+    // The policy is the one the piece's own contract gets and no wider. A
+    // field the prior contract named may not narrow.
+    expect(() => update(argumentWith(authorWith({ name: { type: "number" } }))))
+      .toThrow(/comments\.0\.author\.name/);
+
+    // A newly named field may not be required without a default.
+    expect(() =>
+      update(
+        argumentWith(
+          authorWith({ pictureBlob: blob }, {
+            required: ["kind", "name", "pictureBlob"],
+          }),
+        ),
+      )
+    ).toThrow(/newly required argument field has no default/);
+
+    // A prior index signature over a narrower type promised that type for
+    // every unnamed field, this one included.
+    expect(() =>
+      update(
+        argumentWith(
+          authorWith({ pictureBlob: blob }, {
+            additionalProperties: { type: "string" },
+          }),
+        ),
+        argumentWith(
+          authorWith({}, { additionalProperties: { type: "string" } }),
+        ),
+      )
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // A caller that rebuilds its links declares no retained input, and the
+    // same link supplied where it is not already committed is a new one. Both
+    // keep the producer-side proof, which has no such policy.
+    expect(() => update(candidate, prior, {})).toThrow(
+      /comments\.0\.author\.pictureBlob/,
+    );
+    expect(() =>
+      update(candidate, prior, { linksPreservedVerbatim: true }, [
+        "comments",
+        1,
+      ])
+    ).toThrow(/comments\.1\.author\.pictureBlob/);
+  });
+
+  it("holds a retained link to another piece's result to the full producer proof", async () => {
+    // The board's shape: its `topics` list links to Topics, each a piece with
+    // a contract of its own. That contract is a producer's, which the update
+    // does not replace, so everything it admits must still be accepted: an
+    // open object there admits any value under a name it does not declare.
+    const authorWith = (extra: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: {
+        kind: { type: "string" },
+        name: { type: "string" },
+        ...extra,
+      },
+      required: ["kind", "name"],
+    });
+    const argumentWith = (author: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        topics: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { createdBy: author },
+            required: ["createdBy"],
+          },
+        },
+      },
+      required: ["topics"],
+    });
+    const priorAuthor = authorWith({});
+    const candidateAuthor = authorWith({
+      pictureBlob: {
+        type: "object",
+        properties: { space: { type: "string" }, id: { type: "string" } },
+        required: ["space", "id"],
+      },
+    });
+    const prior = argumentWith(priorAuthor);
+    const candidate = argumentWith(candidateAuthor);
+    const producerWith = (author: JSONSchema) =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: { type: "object", properties: {} },
+          resultSchema: {
+            type: "object",
+            properties: { createdBy: author },
+            required: ["createdBy"],
+          },
+          result: { createdBy: { kind: "person", name: "Ada" } },
+          nodes: [],
+        }),
+        {},
+        undefined,
+        { start: true },
+      );
+
+    const base = runtime.getCell(
+      pieces.getSpace(),
+      "board-argument-" + crypto.randomUUID(),
+    );
+    const updateOver = async (
+      topic: Awaited<ReturnType<typeof producerWith>>,
+      destination: JSONSchema,
+    ) => {
+      await runtime.editWithRetry((tx) => {
+        base.withTx(tx).set({ topics: [topic] });
+      });
+      const raw = base.getRaw() as { topics: unknown[] };
+      expect(isLink(raw.topics[0])).toBe(true);
+      expect(isCell(raw.topics[0])).toBe(false);
+      return () =>
+        assertSuppliedLinkSchemasCompatible(
+          [{ path: ["topics", 0], value: raw.topics[0] }],
+          destination,
+          base,
+          pieces,
+          { priorArgumentSchema: prior, linksPreservedVerbatim: true },
+        );
+    };
+
+    const topic = await producerWith(priorAuthor);
+    expect(await updateOver(topic, prior)).not.toThrow();
+    expect(await updateOver(topic, candidate)).toThrow(
+      /topics\.0\.createdBy\.pictureBlob/,
+    );
+
+    // Once the producer's own contract names the field, the same update of
+    // the reader is accepted.
+    const moved = await producerWith(candidateAuthor);
+    expect(await updateOver(moved, candidate)).not.toThrow();
+  });
+
   it("refuses a preserved link whose carried wrapper widens its contract", async () => {
     // The envelope on a SERIALIZED link is caller-written bytes. Declaring
     // that links are preserved verbatim must not become a way to smuggle a
