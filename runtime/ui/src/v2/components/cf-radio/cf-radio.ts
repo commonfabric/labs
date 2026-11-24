@@ -1,5 +1,4 @@
 import { css, html } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
 import { BaseElement } from "../../core/base-element.ts";
 
 /**
@@ -96,19 +95,6 @@ export class CFRadio extends BaseElement {
     .radio.checked .indicator {
       opacity: 1;
       transform: scale(1);
-    }
-
-    /* Hidden native input for form compatibility */
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border-width: 0;
     }
 
     /* Hover state */
@@ -209,16 +195,6 @@ export class CFRadio extends BaseElement {
         <span class="indicator" part="indicator"></span>
       </div>
       <slot></slot>
-      <input
-        type="radio"
-        class="sr-only"
-        ?checked="${this.checked}"
-        ?disabled="${this.disabled}"
-        name="${ifDefined(this.name || undefined)}"
-        value="${this.value}"
-        tabindex="-1"
-        aria-hidden="true"
-      />
     `;
   }
 

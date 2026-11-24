@@ -52,13 +52,6 @@ function box(element: CFCheckbox): Element {
   return found;
 }
 
-/** The native input `element` renders for form submission. */
-function input(element: CFCheckbox): HTMLInputElement {
-  const found = element.shadowRoot!.querySelector("input");
-  if (!found) throw new Error("cf-checkbox rendered no input");
-  return found;
-}
-
 /** A keydown of `key` sent to `element`, reporting whether it was handled. */
 function pressKey(element: HTMLElement, key: string): boolean {
   const event = new KeyboardEvent("keydown", { key, cancelable: true });
@@ -174,19 +167,18 @@ describe("CFCheckbox", () => {
   });
 
   describe("render()", () => {
-    it("renders a checked box and a checked input for a checked value", async () => {
+    it("renders a checked box for a checked value", async () => {
       const element = await checkbox({ checked: true });
 
       expect(box(element).classList.contains("checked")).toBe(true);
-      expect(input(element).checked).toBe(true);
       expect(element.getAttribute("aria-checked")).toBe("true");
     });
 
-    it("renders an unchecked box and input for an unchecked value", async () => {
+    it("renders an unchecked box for an unchecked value, with no native input of its own", async () => {
       const element = await checkbox();
 
+      expect(element.shadowRoot!.querySelector("input")).toBeNull();
       expect(box(element).classList.contains("checked")).toBe(false);
-      expect(input(element).checked).toBe(false);
       expect(element.getAttribute("aria-checked")).toBe("false");
     });
 
@@ -198,24 +190,10 @@ describe("CFCheckbox", () => {
       expect(element.getAttribute("aria-checked")).toBe("mixed");
     });
 
-    it("renders a disabled box and input when disabled", async () => {
+    it("renders a disabled box when disabled", async () => {
       const element = await checkbox({ disabled: true });
 
       expect(box(element).classList.contains("disabled")).toBe(true);
-      expect(input(element).disabled).toBe(true);
-    });
-
-    it("gives the input the name and value to submit", async () => {
-      const element = await checkbox({ name: "terms", value: "yes" });
-
-      expect(input(element).getAttribute("name")).toBe("terms");
-      expect(input(element).getAttribute("value")).toBe("yes");
-    });
-
-    it("gives the input no name when the checkbox has none", async () => {
-      const element = await checkbox();
-
-      expect(input(element).hasAttribute("name")).toBe(false);
     });
   });
 

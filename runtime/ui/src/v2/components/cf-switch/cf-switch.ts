@@ -1,7 +1,6 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
 import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createBooleanCellController } from "../../core/cell-controller.ts";
@@ -118,18 +117,6 @@ export class CFSwitch extends BaseElement {
       transform: translateX(var(--cf-switch-thumb-travel));
     }
 
-    /* Hidden native input for form compatibility */
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border-width: 0;
-    }
 
     /* Hover state */
     :host(:not([disabled]):hover) .switch:not(.checked) {
@@ -246,16 +233,6 @@ export class CFSwitch extends BaseElement {
       >
         <span class="thumb" part="thumb"></span>
       </div>
-      <input
-        type="checkbox"
-        class="sr-only"
-        ?checked="${isChecked}"
-        ?disabled="${this.disabled}"
-        name="${ifDefined(this.name || undefined)}"
-        value="${this.value}"
-        tabindex="-1"
-        aria-hidden="true"
-      />
     `;
   }
 

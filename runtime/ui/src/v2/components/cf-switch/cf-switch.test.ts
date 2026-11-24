@@ -27,9 +27,6 @@ async function switchWith(properties: Partial<CFSwitch> = {}) {
 const track = (element: CFSwitch) =>
   element.shadowRoot!.querySelector(".switch")!;
 
-const checkbox = (element: CFSwitch) =>
-  element.shadowRoot!.querySelector("input")!;
-
 const written = (cell: CellHandle<boolean>) =>
   writesSent(cell).map((write) => write.value);
 
@@ -64,7 +61,6 @@ describe("CFSwitch", () => {
       expect(element.getAttribute("aria-disabled")).toBe("true");
       expect(element.tabIndex).toBe(-1);
       expect(track(element).classList.contains("disabled")).toBe(true);
-      expect(checkbox(element).disabled).toBe(true);
     });
 
     it("follows `disabled` as it changes", async () => {
@@ -77,24 +73,20 @@ describe("CFSwitch", () => {
   });
 
   describe("render()", () => {
-    it("draws an unchecked switch with a hidden checkbox carrying its value", async () => {
+    it("draws an unchecked switch, with no native input of its own", async () => {
       const { element } = await switchWith();
       expect([...track(element).classList]).toEqual(["switch"]);
-      expect(checkbox(element).checked).toBe(false);
-      expect(checkbox(element).hasAttribute("name")).toBe(false);
-      expect(checkbox(element).value).toBe("on");
+      expect(element.getAttribute("aria-checked")).toBe("false");
+      expect(element.shadowRoot!.querySelector("input")).toBeNull();
     });
 
-    it("draws a checked switch, named for a form", async () => {
+    it("draws a checked switch", async () => {
       const { element } = await switchWith({
         checked: true,
         name: "alerts",
         value: "yes",
       });
       expect([...track(element).classList]).toEqual(["switch", "checked"]);
-      expect(checkbox(element).checked).toBe(true);
-      expect(checkbox(element).name).toBe("alerts");
-      expect(checkbox(element).value).toBe("yes");
       expect(element.getAttribute("aria-checked")).toBe("true");
     });
   });
@@ -107,7 +99,6 @@ describe("CFSwitch", () => {
       expect(element.checked).toBe(true);
       expect(element.hasAttribute("checked")).toBe(true);
       expect(element.getAttribute("aria-checked")).toBe("true");
-      expect(checkbox(element).checked).toBe(true);
 
       element.click();
       await element.updateComplete;
@@ -186,7 +177,6 @@ describe("CFSwitch", () => {
       });
       expect(element.getAttribute("aria-checked")).toBe("true");
       expect(track(element).classList.contains("checked")).toBe(true);
-      expect(checkbox(element).checked).toBe(true);
     });
 
     it("writes the toggle of the cell's value once on a click, and announces it", async () => {
@@ -215,7 +205,6 @@ describe("CFSwitch", () => {
       await element.updateComplete;
 
       expect(track(element).classList.contains("checked")).toBe(true);
-      expect(checkbox(element).checked).toBe(true);
       expect(element.getAttribute("aria-checked")).toBe("true");
       expect(changes).toEqual([{ checked: true }]);
       expect(written(checked)).toEqual([]);
