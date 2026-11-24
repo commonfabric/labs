@@ -866,14 +866,16 @@ at the link's path: the candidate's contract there must accept everything that
 contract admits. One case is judged under the piece-evolution policy instead, as
 the same value written inline in the input is. The link sits at a position the
 candidate reads as a value, and the document is in the input document's own
-space and scope and is present in the validating transaction. A link the
+space and scope, stores no confidentiality label, and is present in the
+validating transaction. A link the
 document holds leads to more of the same: it sits at a position the candidate
 reads as a value, and reaches a document that meets these conditions in turn and
 carries no contract of its own, as a pushed comment whose author is an earlier
 comment's author does. Stored-argument validation reads such a document in
 full, so a stored value the candidate cannot read still refuses the update. A
-handle, a document in another space or scope, and a document that links to
-anything else keep the proof without the policy.
+handle, a document in another space or scope, a labeled document, and a document
+that links to anything else keep the proof without the policy. A labeled
+document's value is not read to decide this, as validation does not read it.
 
 Whether an automatic origin update runs these comparisons turns on one
 question: did anything gate the release that produced the candidate?

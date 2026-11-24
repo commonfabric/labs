@@ -38,6 +38,7 @@ import {
   isCell,
   isCellResultForDereferencing,
   isLink,
+  isStoredArgumentOwnData,
   isStream,
   type JSONSchema,
   KeepAsCell,
@@ -2518,18 +2519,22 @@ const MAX_OWN_INPUT_DEPTH = 8;
 
 /**
  * Whether what `linkedCell` holds is input that setup's validation of the
- * stored input reads in full: a value present in this transaction, in the
- * input document's own space and scope, in which every link leads to more of
- * the same. Setup validates such a value against the candidate and refuses
- * one the candidate cannot read, which is what keeps the piece-evolution
- * policy sound for it.
+ * stored input reads in full: a value present in this transaction, in a
+ * document that is the input's own data by the runner's rule
+ * (`isStoredArgumentOwnData`: the input document's own space and scope, and
+ * no confidentiality label), in which every link leads to more of the same.
+ * Setup validates such a value against the candidate and refuses one the
+ * candidate cannot read, which is what keeps the piece-evolution policy sound
+ * for it. The rule is asked before a document's value is read, so a labeled
+ * document is not read here either.
  *
  * A link inside the value is followed where setup follows it: at a position
  * the candidate reads as a value, which `readsAsValue` decides from the path
  * below the link being proved, to a document that carries no contract of its
  * own. Setup reads only the top level behind a position typed as a cell
- * handle and does not read a value in another space or scope, and a document
- * with a contract is another piece's.
+ * handle and does not read a value in another space or scope or one that
+ * stores a confidentiality label, and a document with a contract is another
+ * piece's.
  */
 function holdsOwnPlainInput(
   linkedCell: Cell<unknown>,
@@ -2538,6 +2543,7 @@ function holdsOwnPlainInput(
   readsAsValue: (path: readonly (string | number)[]) => boolean,
 ): boolean {
   const base = baseCell.getAsNormalizedFullLink();
+  const tx = cellTx(linkedCell) ?? pieces.runtime.readTx();
   const visited = new Set<string>();
   const plain = (
     cell: Cell<unknown>,
@@ -2545,7 +2551,7 @@ function holdsOwnPlainInput(
     depth: number,
   ): boolean => {
     const at = cell.getAsNormalizedFullLink();
-    if (at.space !== base.space || at.scope !== base.scope) return false;
+    if (!isStoredArgumentOwnData(tx, at, base)) return false;
     // A value already being read is judged where it was first met.
     const key = JSON.stringify([at.id, at.path, path]);
     if (visited.has(key)) return true;

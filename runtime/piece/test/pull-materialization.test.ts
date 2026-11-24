@@ -58,6 +58,11 @@ import {
 } from "../src/ops/piece-controller.ts";
 import { readPieceSourceState } from "../src/ops/piece-origin.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
@@ -6652,6 +6657,46 @@ describe("piece pull materialization", () => {
     );
     await expect(elsewhere.controller.setPattern(candidate())).rejects.toThrow(
       /input link at other/,
+    );
+
+    // The same value in a pushed element that stores a confidentiality
+    // label: setup reads the label and not the element, so the schema proof
+    // refuses it too.
+    const labeled = await holder();
+    const labeledItem = runtime.getCell(
+      pieces.getSpace(),
+      "labeled-item-" + crypto.randomUUID(),
+    );
+    const seed = runtime.edit();
+    writeSeedEnvelopeDoc(seed, pieces.getSpace());
+    seedStoredEnvelope(seed, {
+      space: pieces.getSpace(),
+      scope: "space",
+      id: labeledItem.getAsNormalizedFullLink().id,
+      path: [],
+    }, {
+      value: { title: "a", pictureBlob: "legacy" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["pictureBlob"],
+            label: {
+              confidentiality: [{
+                type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+                owner: pieces.getSpace(),
+              }],
+            },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await store(labeled.argument, "items", [labeledItem]);
+    await expect(labeled.controller.setPattern(candidate())).rejects.toThrow(
+      /input link at items\.0/,
     );
   });
 

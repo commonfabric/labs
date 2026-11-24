@@ -624,11 +624,27 @@ function reachesBeyondOwnData(
   context: HandleViewContext,
 ): boolean {
   const ownData = (link: NormalizedFullLink) =>
-    link.space === context.home.space &&
-    (link.scope ?? "space") === (context.home.scope ?? "space") &&
-    !storesConfidentiality(context.tx, link);
+    isStoredArgumentOwnData(context.tx, link, context.home);
   return readStoredLinkChainRaw(context.tx, link, new Set(), ownData)
     .outside === true;
+}
+
+/**
+ * Whether the document `link` names is the own data of an argument whose
+ * document is at `home`: in the same space and scope, and storing no
+ * confidentiality label. Validation of a stored argument reads the payload of
+ * such a document and of no other, as `reachesBeyondOwnData()` describes, so
+ * a caller that depends on what that validation read asks this before it
+ * reads a payload itself. Of the document, only label metadata is read.
+ */
+export function isStoredArgumentOwnData(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  home: { space: string; scope: string | undefined },
+): boolean {
+  return link.space === home.space &&
+    (link.scope ?? "space") === (home.scope ?? "space") &&
+    !storesConfidentiality(tx, link);
 }
 
 /**
