@@ -24084,3 +24084,326 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    P451 and in one of three before. Whether the refusal is the label that the
    copy owes, and the earlier outcome an under-label, or the scoped place stores
    a larger label than the value had, is not decided.
+
+## Round nineteen, second continuation: content-addressed labels for compiled pieces, creates with more sessions, `profile-embed`, and P451's other cases
+
+The coordinator's second continuation of 2026-11-23 on the branch
+`merge-attempt/serving-m6`, from `00d56b203e`. The notes are numbered from 1003,
+the provisional decisions from P452. The logs are in the folder
+`r19-topics-edit/c3/` of the session. The owner's rulings this continuation
+builds on are Z94 (P451's approach, and that its other cases are to be covered)
+and Z95 (content-addressed labels for compiled pieces).
+
+1003. **Findings, first.**
+      - _Structure, closed by ruling Z95: the start over 201 distinctly labelled
+        items is no longer refused._ Every transaction a compiled piece commits
+        now stores version-2 envelopes (P452, note 1004). The largest commit of
+        that start stood for 1,421,245 slots and 34.7 MB and was refused with
+        `MessageTooLargeError`; it stands for 22,224 slots and 452 KB.
+        `test/compiled/` passes in full on both storages for the first time on
+        this branch.
+      - _Scale, unchanged, stated as a finding: a start still writes one label
+        entry for each written path of its lists of readers_ (1,186 entries in
+        the largest commit before, 1,200 after, at 201 items). Version 2 stores
+        the join once and references it from each entry; the number of entries
+        still follows rows times parts.
+      - _Structure, open: a Topics create is refused once for each session of
+        the pass but one._ (note 1005)
+      - _CFC, not a defect of P451: `profile-embed`'s refusals are the label the
+        copy of the profile carries._ (note 1006)
+      - _P451's other cases_ (note 1007): a bare name and an authored `computed`
+        or `lift` whose body is not promoted were already covered by P451's
+        executor part, and now have tests; a read inside the body of a
+        per-element construct is not built, and its plan is in note 1007.
+
+1004. **Content-addressed labels for compiled pieces (P452, ruling Z95).**
+      - _Which way, and why._ The envelope version is a property of the
+        transaction: the runtime sets it from its option when it makes the
+        transaction (`Runtime.edit`, `setCfcContentAddressedLabels`), and the
+        preparation of the commit reads it (`prepare.ts`, the envelope's
+        `version`). The dial is a spelling dial: either version resolves to the
+        same labels, and nothing pins it. So it is set per transaction of a
+        compiled piece, which is the narrowest way: `RuntimeTransactions` sets
+        it on each transaction it is handed (`within`) and on each it opens
+        itself (`#edit`, which replaces the adapter's sixteen calls of
+        `Runtime.edit`). A transaction of today's path keeps the runtime's
+        option, with `compiledPatterns` on or off. This is a host arrangement of
+        an existing mechanism: what a label is, and what CFC decides with it,
+        does not change; how the label is spelled in the envelope does.
+      - _The path._ In a version-2 envelope a label whose canonical JSON is
+        longer than `CFC_LABEL_INLINE_LIMIT`, 128 bytes as UTF-8
+        (`cfc/label-documents.ts`), is stored once as a content-addressed label
+        document of the space (`cid:`), and each entry that carries it holds a
+        reference to it; a label of at most 128 bytes stays inline. The commit
+        carries the label documents it references that the space does not hold,
+        and the storage refuses one that references a document neither.
+      - _Who reads it._ A runtime from before version 2 cannot read such a
+        document: its metadata reader throws `UnknownCfcMetadataVersionError`
+        when it reads the labels. The owner accepted that for compiled pieces
+        ("don't worry about backwards compatibility", ruling Z95), so there is
+        no gating by space and no handling of an older reader. The readers of
+        this build read it: the runtime that runs the piece
+        (`row-documents.test.ts`, the clause stored for each row), a client and
+        a second piece on the same storage (`content-addressed-labels.test.ts`),
+        and clients of a serving loop over a socket (`scoped-view.test.ts`,
+        `scoped-serving.test.ts`).
+      - _Compatibility dropped._ By the same ruling, nothing in this round keeps
+        a compiled piece readable by an older runtime, or reads older stored
+        data of compiled pieces specially: the version-1 envelopes a compiled
+        piece stored before are rewritten in version 2 at their next commit, as
+        the persist path does for any document.
+      - _Tests, seen failing first._ The serving branch's case of
+        `row-documents.test.ts` at 201 items and the trunk's three cases of that
+        file run at 201 items in the place of 41 (now written so), refused with
+        `MessageTooLargeError` before, pass on emulated storage and over a
+        socket. `content-addressed-labels.test.ts`: a piece over three labelled
+        items, and a second piece in another runtime over the rows the first
+        stored, read by a client: the envelopes are version 2 and their labels
+        equal those the same runs give when every transaction spells version 1
+        (seen failing with version 1 before the change); a document today's path
+        writes is version 1 with `compiledPatterns` on and off.
+      - _Sizes of the start over 201 items_ (the commits as the client builds
+        them, before a label table): the largest commit 1,421,245 slots,
+        34,714,631 bytes, 1,186 label entries and 287 operations before,
+        refused; 22,224 slots, 452,159 bytes, 1,200 label entries and 602
+        operations after, the label documents among them; all the start's
+        commits 1,449,275 slots and 35.3 MB before, 44,271 slots and 1.09 MB
+        after.
+
+1005. **A Topics create with more sessions** (counts, not times). The arm
+      `serving` on `filing-order` at 100 and 1,000 topics, three creates in each
+      run, with clients added beside the sender, the reader and the harness's
+      third client, which reads the path of a caption and is then disposed (its
+      session is still derived, note 990): two or six more of the same
+      principal, or two or six more each of a principal of its own. A debug log
+      of each derivation, the session it ran for and the documents it wrote, and
+      of each refused commit and the document it names, was kept outside the
+      repository.
+
+      | Clients (sessions seen) | Principals | Derivations per create | Records per create | Refusals per create |
+      | ----------------------- | ---------- | ---------------------- | ------------------ | ------------------- |
+      | 2 live (3)              | 1          | 13 to 16               | 197 to 229         | 1                   |
+      | 4 live (5)              | 1          | 25 to 30               | 393 to 457         | 3                   |
+      | 8 live (9)              | 1          | 50 to 88               | 665 to 1,122       | 3                   |
+      | 4 live (5)              | 3          | 42 to 57               | 475 to 503         | 3                   |
+      | 8 live (9)              | 7          | 96 to 105              | 1,111 to 1,271     | 3                   |
+
+      Every count is the same at 100 and at 1,000 topics within a few records
+      (the run of four live clients of three principals at 100 topics broke off
+      before its creates and is left out). One live client alone was not run:
+      the harness's sender and reader are both needed for its timing, and the
+      session of the disposed client stays.
+      - _The document refused, and the two writers._ With five or more sessions,
+        each refusal names the board's result document
+        (`of:fid1:zx-pf3zz…qYntiVm7W8`, of the kind `result` in the executor's
+        store). In each create one run of the pass, for the first session,
+        writes it; the runs for the other sessions in the same pass read it as
+        their replica held it before that commit, write their session's instance
+        of the created topic's scoped outputs and two content-addressed label
+        documents (the same two in every run), and are refused; three are
+        refused in each create, the others commit in a later pass. With three
+        sessions the one refusal names another document
+        (`of:fid1:fYDK…WQQdNysYE`), which no run of the piece wrote through its
+        transaction and which is not in the executor's store: a document the
+        adapter writes in a transaction of its own, by its kind a list document;
+        not traced further.
+      - _What the counts say about the split of the pass._ Derivations and
+        records per create grow with the sessions that demand the piece, about
+        100 records for each further session, and about 6 derivations for each
+        further session of the same principal and 15 for each further principal,
+        and do not grow with the board. The refusals are the runs for further
+        sessions reading the space's documents that the first run of the same
+        pass wrote. A pass split into a part of the space, committed first, and
+        parts of the scopes run after it would give the records of the space's
+        documents once per create, and each part of a scope would read the
+        space's documents as committed; what each session's part would still
+        write is its own scope instance. Not built, by the coordinator's
+        instruction.
+
+1006. **`profile-embed`: which reading holds** (finding 3 of the round's first
+      continuation; CFC question 5 of round nineteen continued).
+      - _What is refused._ Writes of two documents that are not in the
+        executor's store of the piece (`of:fid1:PSS51…` and `of:fid1:O-Bzce…`),
+        by an action the runtime names `anon-1`, logged as "Owner-protected
+        write dropped", with
+        `writer-fit confidentiality misfit … at /
+        (canWrite, §8.12.4)`
+        naming two atoms the write carries and the target does not admit: `User`
+        of the space's profile digest and `User` of the acting principal's DID.
+        The drafts of the piece (`nameDraft`, `bioDraft`, `editing`) commit,
+        each stored with the clause `User` of the profile digest.
+      - _The labels, printed from the storage after the corpus's events_
+        (`runner-corpus.ts` with a dump of the stored envelope of each document
+        of the piece, kept outside the repository). After P451 the places of the
+        scoped values of the name and the bio in the scope instance of the
+        document of the scoped values store two confidentiality clauses, `User`
+        of the DID and `User` of the digest. The place of `$NAME`, the same
+        value, in the scope instance of the document of the scoped outputs
+        stores the same two clauses after P451 and before it (`223bd9d007`). So
+        P451 stores no larger label for the value than the value had: no
+        representation defect of P451.
+      - _Before P451 the same refusal occurs._ On `223bd9d007`, of two runs one
+        handled all five events with two refusals and one handled one with four,
+        the same two documents and the same two atoms; the earlier count was one
+        run in three. After P451 every run is the second outcome. So the refusal
+        is the label the copy carries: the profile's name and bio, of the scope
+        `user`, reach a write of a document whose writer policy admits neither
+        atom. Why the outcome varied before was not traced; a likely reading,
+        not checked, is the order in which the handler's state read the value or
+        its place against the commit that stored the place's label.
+      - _Today's path, not run._ `compare/both-paths.ts` has no scenario for the
+        module (its schemas declare no write policy, which
+        `both-paths-corpus.ts` selects on), and `values-corpus.ts` sent none of
+        its events on today's runtime. Whether today's path refuses the same
+        writes is not known. Left as CFC question 1 below; nothing was changed.
+
+1007. **P451's other cases (ruling Z94).**
+      - _(a) A bare name._ `<b>{named}</b>` and `disabled={named}`, where
+        `named` is a value of the scope `user`, and `{nickname}`, the state cell
+        of that scope (`fixtures/scoped-bare.tsx`). The crate already planned
+        the bare name as the value of another cone, which the tree's cone places
+        (`$h.output(n)`), and the state cell as a reference (`$h.slot(n)`,
+        observing `identity`), so no change of the crate was needed; what made
+        the tree of the scope was the executor's `Host.output`, which gave the
+        value, and P451's executor part gives the reference. Test
+        (`exec/test/scoped-view.test.ts`): the scope instances hold the same
+        bytes at 10 and at 100 items, an edit of one item writes the same
+        documents at both sizes and no scope instance, and each principal reads
+        its own value; seen failing on the executor before P451 (`223bd9d007`)
+        with the rows in the scope instances.
+      - _(c) An authored `computed` or `lift`._ A `computed` whose body is
+        promoted (`language-subset.md` §6.1) is a value of its own cone, as
+        `named` in `scoped-view.tsx` is, and an expression of a tree that reads
+        it is planned apart (note 996). A `computed` whose block body is not
+        promoted (`fixtures/scoped-computed.tsx`, a loop over the nickname) is a
+        use of a body, `$h.invoke(n)`, in a cone of its own that holds that body
+        alone; the tree places it or reads it through an expression planned
+        apart. The same test as (a), with the same outcome, seen failing the
+        same way. The result of a `lift` applied to a scoped argument is a use
+        of a body in a cone of its own in the same way; it was not tested apart.
+      - _Labels, (a) and (c)._ As note 997: the tree's cone does not read the
+        value, a position that holds it has the template `output n` of the value
+        and joins its label, and the scoped place carries the record of the
+        value's output. No new code, so nothing changed of what a label is.
+      - _(b) A read in the body of a per-element construct: not built; the
+        plan._ Today a row whose body reads a value of a scope is of that scope,
+        for a `map` over an array of references, over an array of plain values
+        in place and over the result of another per-element construct alike, and
+        the assembly is stored whole in the scope instance of each key (note
+        998). The target: the row stays a row of the space, a unit of the result
+        and a row document where rows are documents, evaluated once for every
+        key; the expression that reads the scoped value is a value of the scope
+        for each row and each key, held from the row by reference. What it
+        takes:
+        1. The crate: `Emitter::hoisted_scope` drops its condition that no
+           element body is around, so an operator expression of a row that reads
+           a place of a scope is a cone of its own within the element
+           (`within: [{ element: n }]`, as a `computed` in a body already is),
+           and `eval_placed` is used for the members of a record a callback
+           returns as well as for JSX.
+        2. The executor: `Host.output` gives the reference with element keys in
+           the context; the place is named by the output and the keys of the row
+           (`#scopedPlace` at `[output, ...keys]` in the document of the scoped
+           values), and `#valueWrites` gives the record of the per-element
+           output at that path.
+        3. What is stored: R rows of the space, and up to R times K scoped
+           places for K scope keys, one for each row the key's run evaluated. As
+           `#pullScoped` is built, a place is brought up to date for every key
+           the piece runs for, by visiting every registered pull at every pass:
+           the places exist for every key the piece has seen, not on a reader's
+           demand, and each run would visit all R of them. That is a scaling
+           finding of the plan: without a pull of the places whose inputs
+           changed for the acting key alone, every edit would again follow the
+           rows, once for each key. The pull by change is the first step;
+           demand-driven creation of the places is the second, not built here.
+        4. Labels: the row's position that holds the reference has the template
+           of the per-element output and joins its label; the place carries its
+           record; a reader that follows the reference reads the scope instance.
+           The same argument as note 997, per row.
+        5. Tests to write first: `fixtures/scoped-view-rows.tsx` at 10 and 100
+           items, two principals: the rows are row documents of the space, the
+           scope instances hold one value per row and key, an edit of one item
+           writes one row document and the scoped place of that row for each key
+           that reads it, and each principal reads its own rows; and the same
+           over an array of plain values in place and over the result of a
+           `filter`.
+      - _FabriChat's `messageRights`_, a `map` over the stored messages, an
+        array of references, whose rows read values of the scope `session` (the
+        reader, whether the session may send, whether it owns the room): its
+        rows are of the scope, and the scope instances of the room's piece hold
+        them (`compare/fabrichat/scale.ts runner room`, `SCALE_STAND_INS=table`,
+        the scope instances summed as JSON): about 79 to 90 KB at 10 messages,
+        575 to 587 KB at 100 and 5.54 to 5.55 MB at 1,000, about 5.5 KB more for
+        each send at every size; a send gives 59 to 61 records at 10, and 148 at
+        100 and at 1,000, so the records no longer grow with the room, while the
+        documents a send changes do, 101 to 110 KB, 525 to 532 KB and 3.86 to
+        3.87 MB, and so does its time, 68 to 72 ms, 160 to 170 ms and 1.39 to
+        1.60 s at load averages of 14 to 21. With (b) the rows would be of the
+        space and the scoped places one value per message and session; with the
+        pull by change, a send would bring one place per session up to date.
+
+1008. **Measured at `f41cf1b4da`,** one run of each cell with the corpus run
+      beside them; the Topics boards of the measurement branch copied in.
+      - _Topics, the arm `serving` on `filing-order`, counts first,_ the same at
+        100, 1,000 and 2,000 topics: an edit of a title runs 1 derivation and 5
+        evaluations and gives 9 records; the executor's scope instances hold 448
+        bytes; a create runs 13 to 16 derivations, gives 197 to 229 records and
+        is refused once (note 1005). The second client and the piece's own time,
+        in milliseconds (load averages 10 to 21):
+
+        | Step                               | 100           | 1,000         | 2,000         |
+        | ---------------------------------- | ------------- | ------------- | ------------- |
+        | edit of a title, middle            | 23.9 / 2.9    | 61.3 / 3.9    | 48.7 / 3.4    |
+        | edit of the mentions               | 66.8 / 5.1    | 100.7 / 6.7   | 108.5 / 5.9   |
+        | edit of the `shortName`            | 51.3 / 5.4    | 64.8 / 7.3    | 68.5 / 5.1    |
+        | create, three turns, second client | 247; 183; 164 | 316; 237; 227 | 303; 221; 206 |
+
+        These equal note 1000's after P451 within the noise; the
+        content-addressed labels changed no count of these steps.
+      - _FabriChat_ (`SCALE_STAND_INS=table`, `runner room 100`): a send gives
+        148 records, 32 evaluations, and changes 19 documents of 525 to 532 KB
+        (578 to 585 KB with labels inline, note 1000); 180 to 195 ms at a load
+        average of about 21.
+      - _`compare/serving-path.ts 1000`:_ the piece is found current after the
+        takeover with no evaluation, 6 evaluations at the wake, 11 derivations,
+        no refusal, 33.4 ms of its own for its ten events and derivations (load
+        13 to 24).
+
+1009. **The corpus,** `compare/runner-corpus.ts` in its four modes and with
+      `--references`, one run each at `db660cbff0`, against the runs of note
+      1001 after P451 (`626d7e9333`): as started, every event handled, equal,
+      the same in every mode (259, 216, 230 on the runner path; 235, 202, 212
+      serving; 259, 215, 226 after a resume; 235, 201, 210 serving with a
+      resume; 235, 202, 206 with `--references`). Modules whose line changes:
+      `apps/reward-spinner/reward-spinner.tsx` (serving, and serving with a
+      resume) and `showcase/scrabble/scrabble.tsx` (after a resume), the first
+      difference from the executor in memory, which varies between runs with a
+      random draw (note 1001); `examples/fair-share/main.tsx` and
+      `system/profile-embed/profile-embed.tsx` after a resume, where the resume
+      writes one document more, 17 for 16 and 11 for 10: a label document of
+      version 2.
+
+1010. **Provisional decision, and what was not verified.** P452: every
+      transaction a compiled piece commits spells its labels as version-2
+      envelopes, set per transaction by the adapter (note 1004), as ruling Z95
+      asks. Not verified: a runtime from before version 2 (not run, by the
+      owner's ruling); whether today's path refuses `profile-embed`'s writes
+      (note 1006); which document `of:fid1:fYDK…WQQdNysYE` is (note 1005); the
+      result of a `lift` over a scoped argument (note 1007, by the plan alone);
+      one live client alone on Topics.
+
+### CFC questions deferred, round nineteen, second continuation
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Note 1006: `profile-embed` copies the profile's name and bio, labelled with
+   `User` of the profile's digest and of the acting principal's DID, into writes
+   of two documents whose writer policy admits neither; the compiled path
+   refuses them in every run since P451 and in some runs before it, with the
+   same labels at the scoped places as at the result's scoped outputs. Whether
+   today's path refuses them too, and whether the pattern should be refused, is
+   open.
+2. Note 1007, plan (b): a row's position that holds the reference to a per-row
+   scoped place would no longer join that value's label for the row's other
+   positions. The same change as P451's (CFC question 3 of the first
+   continuation), per row; not built.
