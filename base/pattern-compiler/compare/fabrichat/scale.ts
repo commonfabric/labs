@@ -44,6 +44,10 @@
  * the arm `runner` lists each document its commits changed, with its scope
  * and its size as JSON after the commit, largest first (`changes`).
  *
+ * With `SCALE_BASIS` set, the arm `runner` prints after the timed sends of
+ * `room` what the basis of the piece holds: its size as JSON and the
+ * documents it lists, counted by kind and scope (`basis`).
+ *
  * With `SCALE_CPU_PROFILE` set to the path of a file, the timed sends of
  * `room` and the event of `home` are sampled and the profile is written
  * to that path followed by the size.
@@ -90,6 +94,7 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "../../../../runtime/runner/src/cfc/ui-contract.ts";
+import { basisDocumentOf } from "../../../../runtime/runner/src/compiled/basis.ts";
 import { listenCompiledServingMemoryServer } from "../../../../runtime/runner/src/compiled/serving-memory-server.deno.ts";
 import { compiledPiecesOf } from "../../../../runtime/runner/src/compiled/serving.ts";
 import { setUpCompiledPiece } from "../../../../runtime/runner/src/compiled/setup.ts";
@@ -230,6 +235,12 @@ type Started = {
   adapter?: () => Record<string, number>;
   /** The counts of `SCALE_TRACE` since the last call. */
   trace?: () => Record<string, number>;
+  /**
+   * What the basis of the piece holds, for `SCALE_BASIS`: its size as
+   * JSON, and the documents it lists, counted by the kind the executor
+   * holds each as and by scope. Absent for the executor in memory.
+   */
+  basis?: () => Record<string, unknown>;
   /** Sends an event to the stream of a binding and waits for the piece. */
   send: (
     binding: number,
@@ -522,6 +533,29 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         ownMs: piece.counts.ownMs,
         changedDocuments: changedByCommits.documents,
         changedBytes: changedByCommits.bytes,
+      };
+    },
+    basis: () => {
+      const { id } = result.getAsNormalizedFullLink();
+      const held = piece.transactions.heldOwn(basisDocumentOf(id)) as
+        | { documents?: Record<string, number> }
+        | undefined;
+      const listed = Object.keys(held?.documents ?? {});
+      const kinds: Record<string, number> = {};
+      for (const doc of listed) {
+        const scope = doc.includes("~")
+          ? ` ${doc.slice(doc.indexOf("~"))}`
+          : "";
+        const kind = `${
+          piece.instance.store.docs.get(doc)?.kind ??
+            (doc.startsWith("of:") ? "stream" : "none")
+        }${scope}`;
+        kinds[kind] = (kinds[kind] ?? 0) + 1;
+      }
+      return {
+        bytes: (JSON.stringify(held) ?? "").length,
+        documents: listed.length,
+        kinds,
       };
     },
     stop: async () => {
@@ -857,6 +891,9 @@ for (
       });
     }
     await stopProfile();
+    if (Deno.env.get("SCALE_BASIS") !== undefined && started.basis) {
+      print({ ...base, step: "basis", ...started.basis() });
+    }
     if (Deno.env.get("SCALE_DUMP") !== undefined) {
       await Deno.writeTextFile(
         Deno.env.get("SCALE_DUMP")!,
