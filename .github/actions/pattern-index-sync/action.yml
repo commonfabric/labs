@@ -30,10 +30,11 @@ inputs:
   moves-table:
     description: >-
       plan: where the repository records how its patterns moved, relative to
-      its root: a JSON object, or a module exporting `MOVED_PATTERN_KEYS`, that
-      maps former paths to current ones below `program-root`. A moved file
-      continues its old path's lineage. No file there means no moves.
-    default: "runtime/runner/src/pattern-key-moves.ts"
+      its root: a JSON object, or a module exporting `MOVED_PATTERN_KEYS`,
+      mapping former paths to current ones below `program-root`. A moved file
+      continues its old path's lineage. Empty: no moves are followed. A path
+      named here that holds no table fails the plan.
+    default: ""
   labs-path:
     description: >-
       A Labs checkout to run from, relative to the repository root: for a

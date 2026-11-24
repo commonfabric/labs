@@ -8,7 +8,7 @@ import {
 } from "../src/client.ts";
 import {
   findEntries,
-  formerPathsByKey,
+  formerPathsIn,
   type PlanDeps,
   planRepo,
   type RepoEntryOptions,
@@ -386,52 +386,68 @@ describe("repo-sync", () => {
     });
   });
 
-  describe("formerPathsByKey()", () => {
-    // Two moves of one file, and a key that maps to itself.
-    const moves: Record<string, string> = {
-      "apps/notes/main.tsx": "apps/notes/notes.tsx",
-      "apps/notes/notes.tsx": "notes.tsx",
+  describe("formerPathsIn()", () => {
+    // Former path to current path. The notes moved twice, and the table
+    // keeps every old path pointing straight at the newest one.
+    const moves = {
+      "notes.tsx": "apps/notes/main.tsx",
+      "apps/notes/notes.tsx": "apps/notes/main.tsx",
     };
-    const formerKey = (key: string) => moves[key] ?? key;
 
-    it("returns every path a file had, nearest first", () => {
+    it("returns every path that moved to a file, not only the first", () => {
       expect(
-        formerPathsByKey("patterns", formerKey)("patterns/apps/notes/main.tsx"),
-      ).toEqual(["patterns/apps/notes/notes.tsx", "patterns/notes.tsx"]);
+        formerPathsIn("patterns", moves)("patterns/apps/notes/main.tsx"),
+      ).toEqual(["patterns/notes.tsx", "patterns/apps/notes/notes.tsx"]);
+    });
+
+    it("returns both paths of a category-sorted file later renamed to `main.tsx`, as Labs records it", () => {
+      // The directory moved when patterns were sorted into categories, and
+      // then its entry was renamed.
+      const labs = {
+        "annotation/": "apps/annotation/",
+        "apps/annotation/annotation.tsx": "apps/annotation/main.tsx",
+      };
+      expect(
+        formerPathsIn("patterns", labs)("patterns/apps/annotation/main.tsx"),
+      ).toEqual([
+        "patterns/apps/annotation/annotation.tsx",
+        "patterns/annotation/annotation.tsx",
+      ]);
+    });
+
+    it("follows a chain of moves back, nearest first", () => {
+      const chain = { "a.tsx": "b.tsx", "b.tsx": "c/main.tsx" };
+      expect(formerPathsIn("p", chain)("p/c/main.tsx")).toEqual([
+        "p/b.tsx",
+        "p/a.tsx",
+      ]);
     });
 
     it("returns none for a file that never moved or lies outside the program root", () => {
-      const former = formerPathsByKey("patterns/", formerKey);
+      const former = formerPathsIn("patterns/", moves);
       expect(former("patterns/apps/other/main.tsx")).toEqual([]);
       expect(former("elsewhere/apps/notes/main.tsx")).toEqual([]);
     });
 
-    it("reads keys from the repository root when that is the program root", () => {
-      const moves: Record<string, string> = {
-        "src/patterns/cf-calendar/main.tsx": "src/patterns/cf-calendar.tsx",
+    it("reads paths from the repository root when that is the program root", () => {
+      const loom = {
+        "src/patterns/cf-calendar.tsx": "src/patterns/cf-calendar/main.tsx",
       };
       for (const root of [".", "./"]) {
         expect(
-          formerPathsByKey(root, (key) => moves[key] ?? key)(
-            "src/patterns/cf-calendar/main.tsx",
-          ),
+          formerPathsIn(root, loom)("src/patterns/cf-calendar/main.tsx"),
         ).toEqual(["src/patterns/cf-calendar.tsx"]);
       }
     });
 
-    it("stops at a key it already passed", () => {
-      const cycle: Record<string, string> = {
-        "a.tsx": "b.tsx",
-        "b.tsx": "a.tsx",
-      };
-      expect(
-        formerPathsByKey("p", (key) => cycle[key] ?? key)("p/a.tsx"),
-      ).toEqual(["p/b.tsx"]);
+    it("stops at a path it already passed", () => {
+      const cycle = { "a.tsx": "b.tsx", "b.tsx": "a.tsx" };
+      expect(formerPathsIn("p", cycle)("p/a.tsx")).toEqual(["p/b.tsx"]);
     });
 
     it("is what the plan records for each compiled entry", async () => {
       const plan = await planRepo(
-        { ...OPTIONS, formerPaths: formerPathsByKey("patterns", formerKey) },
+        { ...OPTIONS, formerPaths: formerPathsIn("patterns", moves) },
         planDeps({
           "patterns/apps/notes/main.tsx": DESCRIBED,
           "patterns/b.tsx": DESCRIBED,
@@ -442,8 +458,8 @@ describe("repo-sync", () => {
         entry.status === "compiled" ? entry.formerPaths : undefined,
       ])).toEqual([
         ["patterns/apps/notes/main.tsx", [
-          "patterns/apps/notes/notes.tsx",
           "patterns/notes.tsx",
+          "patterns/apps/notes/notes.tsx",
         ]],
         ["patterns/b.tsx", undefined],
       ]);
@@ -473,7 +489,10 @@ describe("repo-sync", () => {
     });
 
     it("names the head of the path a new entry moved from as its predecessor", async () => {
-      const { client, published } = fakeIndex([head("p/old.tsx")]);
+      const { client, published, withdrawals } = fakeIndex([
+        head("p/old.tsx"),
+        head("p/deleted.tsx"),
+      ]);
       await publishPlan(
         {
           entries: [{
@@ -487,6 +506,35 @@ describe("repo-sync", () => {
       );
       expect(published[0].source?.path).toBe("p/new/main.tsx");
       expect(published[0].priorPatternId).toBe("head:p/old.tsx");
+      // The moved lineage is at its new path now; only the deleted file's
+      // is withdrawn.
+      expect(withdrawals).toEqual([["p/deleted.tsx"]]);
+    });
+
+    it("returns a move the index ignored as failed", async () => {
+      const { client } = fakeIndex([head("p/old.tsx")]);
+      client.publishPattern = (request) =>
+        Promise.resolve({
+          patternId: request.patternId,
+          created: true,
+          ignored: ["priorPatternId"],
+        });
+      const report = await publishPlan(
+        {
+          entries: [{
+            ...compiled("p/new/main.tsx"),
+            formerPaths: ["p/old.tsx"],
+          }],
+          selected: ["p/new/main.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries).toEqual([{
+        path: "p/new/main.tsx",
+        status: "failed",
+        reason: "the index did not move the lineage of p/old.tsx to this path",
+      }]);
     });
 
     it("names no predecessor for an entry with its own head, or whose former path is still selected or already claimed", async () => {

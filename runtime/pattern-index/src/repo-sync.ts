@@ -268,6 +268,13 @@ const publishEntry = async (
   if (response.ignored?.includes("source")) {
     throw new Error("the index ignored the repository source");
   }
+  // Ignored, the move would start a new lineage at the new path, and no
+  // later sync would try it again: the new path has a head from then on.
+  if (response.ignored?.includes("priorPatternId")) {
+    throw new Error(
+      `the index did not move the lineage of ${movedFrom?.path} to this path`,
+    );
+  }
   const status = response.unchanged === true
     ? "unchanged"
     // The same source is already public under another publisher, so the
@@ -358,8 +365,10 @@ export const publishPlan = async (
     }
   }
   const entryPaths = new Set(plan.entries.map((entry) => entry.path));
+  // A path whose lineage moved this run is not withdrawn: the lineage is at
+  // its new path now.
   const gone = heads.map((head) => head.path).filter((path) =>
-    !selected.has(path)
+    !selected.has(path) && !claimed.has(path)
   ).sort();
   let withdrawn: string[] = [];
   let withdrawFailure: string | undefined;

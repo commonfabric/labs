@@ -10,11 +10,10 @@
  *     [--include ...] [--exclude '<glob>' ...] --out <plan.json> \
  *     [--summary <file>] [--moves-table <path>]
  *
- * A repository that records how its patterns moved has each entry's former
- * paths in the plan, so a moved file continues its old path's lineage. The
- * table is at `--moves-table`, relative to the repository root, or else at
- * Labs' {@link MOVES_TABLE}; a repository with no file there has no moves to
- * follow.
+ * `--moves-table` names where the repository records how its patterns
+ * moved, relative to its root. Each entry's former paths are then in the
+ * plan, so a moved file continues its old path's lineage. Without it there
+ * are no moves to follow.
  *
  * It holds no credential and contacts no index, so it is also the dry run.
  * It compiles in a runtime with in-memory storage, writing nothing to any
@@ -30,15 +29,11 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { join, resolve, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
-import {
-  experimentalOptionsFromEnv,
-  formerKeyIn,
-  Runtime,
-} from "@commonfabric/runner";
+import { experimentalOptionsFromEnv, Runtime } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { compileProgram } from "./src/publish.ts";
-import { formerPathsByKey, planRepo } from "./src/repo-plan.ts";
+import { formerPathsIn, type MovesTable, planRepo } from "./src/repo-plan.ts";
 import type { RepoSyncPlan } from "./src/repo-sync.ts";
 
 /** The repository's tracked files, relative to its root. */
@@ -58,57 +53,36 @@ const gitTrackedFiles = async (repoRoot: string): Promise<string[]> => {
   );
 };
 
-/**
- * Where a repository records how its patterns moved, from its root, unless
- * `--moves-table` names another place: Labs' own table.
- */
-const MOVES_TABLE = "runtime/runner/src/pattern-key-moves.ts";
-
-/** Whether `value` is a table of moves: former keys to current keys. */
-const isMovesTable = (value: unknown): value is Record<string, string> =>
+/** Whether `value` is a table of moves: former paths to current ones. */
+const isMovesTable = (value: unknown): value is MovesTable =>
   typeof value === "object" && value !== null && !Array.isArray(value) &&
   Object.values(value).every((to) => typeof to === "string");
 
 /**
- * The former key of each key in the repository's table of moves at `table`,
- * or `undefined` when there is no file there. The table maps former keys to
- * current ones below the program root, as `MOVED_PATTERN_KEYS` does: a JSON
+ * The repository's table of moves at `table`, relative to its root: a JSON
  * object, or a module exporting `MOVED_PATTERN_KEYS`. It is read from the
  * repository being synced, never from this Labs, which a vendoring
  * repository runs from but whose moves are not its own.
  *
- * @throws Error when the file holds no such table.
+ * @throws Error when there is no file there, or it holds no such table: a
+ *   table named and not found would otherwise lose every move's history
+ *   with the job still green.
  */
-const repositoryFormerKey = async (
+const repositoryMoves = async (
   repoRoot: string,
   table: string,
-): Promise<((key: string) => string) | undefined> => {
+): Promise<MovesTable> => {
   const path = join(repoRoot, table);
-  let moves: unknown;
-  try {
-    moves = path.endsWith(".json")
-      ? JSON.parse(await Deno.readTextFile(path))
-      : (await import(toFileUrl(path).href)).MOVED_PATTERN_KEYS;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return undefined;
-    // A module that is not there fails its import with no `NotFound`.
-    if (!(await exists(path))) return undefined;
-    throw error;
-  }
+  const moves: unknown = path.endsWith(".json")
+    ? JSON.parse(await Deno.readTextFile(path))
+    : (await import(toFileUrl(path).href)).MOVED_PATTERN_KEYS;
   if (!isMovesTable(moves)) {
     throw new Error(
-      `${table} holds no table of moves (former key to current key)`,
+      `${table} holds no table of moves (former path to current path)`,
     );
   }
-  return formerKeyIn(moves);
+  return moves;
 };
-
-/** Whether a file is at `path`. */
-const exists = (path: string): Promise<boolean> =>
-  Deno.stat(path).then(() => true, (error) => {
-    if (error instanceof Deno.errors.NotFound) return false;
-    throw error;
-  });
 
 /** What a plan holds, for the job summary. */
 const planMarkdown = (plan: RepoSyncPlan): string => {
@@ -153,10 +127,10 @@ const main = async (): Promise<number> => {
     return 2;
   }
   const repoRoot = resolve(flags["repo-root"] ?? ".");
-  const formerKey = await repositoryFormerKey(
-    repoRoot,
-    flags["moves-table"] ?? MOVES_TABLE,
-  );
+  const movesTable = flags["moves-table"];
+  const moves = movesTable === undefined || movesTable === ""
+    ? undefined
+    : await repositoryMoves(repoRoot, movesTable);
   const signer = await Identity.generate();
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -172,9 +146,9 @@ const main = async (): Promise<number> => {
         programRoot,
         include: flags.include,
         exclude: flags.exclude,
-        ...(formerKey === undefined
+        ...(moves === undefined
           ? {}
-          : { formerPaths: formerPathsByKey(programRoot, formerKey) }),
+          : { formerPaths: formerPathsIn(programRoot, moves) }),
       },
       {
         trackedFiles: () => gitTrackedFiles(repoRoot),

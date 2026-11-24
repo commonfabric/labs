@@ -93,11 +93,20 @@ deleted, moved, or newly excluded), its lineage is withdrawn: unlisted, and
 still readable by id. A path that comes back resumes the same lineage. A
 repository that records how its patterns moved keeps a moved file's lineage,
 history included: the sync names the old path's newest version as the moved
-file's predecessor. The table is at `moves-table`, relative to the repository
-root: a JSON object, or a module exporting `MOVED_PATTERN_KEYS` (Labs' own,
-`runtime/runner/src/pattern-key-moves.ts`, is the default), mapping former paths
-to current ones below `program-root`. A key ending in `/` moves a whole
-directory. A repository with no file there has no moves to follow.
+file's predecessor, and does not withdraw the old path. The table is at
+`moves-table`, relative to the repository root: a JSON object, or a module
+exporting `MOVED_PATTERN_KEYS` (Labs passes its own,
+`runtime/runner/src/pattern-key-moves.ts`), mapping former paths to current ones
+below `program-root`. A key ending in `/` moves a whole directory. A file may
+have several former paths, as when every old path points straight at the newest
+one; the sync takes the nearest the index holds a lineage for. Without
+`moves-table` no moves are followed, and a `moves-table` that names no table
+fails the plan.
+
+Following moves backward can reach further than a file's real history: a new
+file in a directory the table moved takes the lineage of a deleted file at the
+same name in the old directory, and a file moved back to a path it had before
+resumes that path's lineage, leaving the history kept at the path in between.
 
 ## What a run does
 

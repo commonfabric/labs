@@ -205,30 +205,56 @@ const planEntry = async (
 };
 
 /**
- * The former paths of a file under `programRoot`, nearest first, from a
- * table of moves keyed as `programRoot`-relative paths: `formerKey` answers
- * the key a pattern had before its latest move, or the key itself when it
- * never moved. Following it back walks every move the table records.
+ * A table of moves: each key a path a pattern had, each value the path it
+ * moved to, both relative to the program root. A key and value that end in
+ * `/` move a whole directory. Labs' `MOVED_PATTERN_KEYS` is one.
  */
-export const formerPathsByKey = (
+export type MovesTable = Readonly<Record<string, string>>;
+
+/**
+ * The former paths of a file under `programRoot`, nearest moves first: every
+ * path the table says moved to it, then every path that moved to one of
+ * those, and so on. A file can have several, as when a table keeps each old
+ * path pointing straight at the newest one, so the publish phase takes the
+ * first of them the index holds a lineage for.
+ */
+export const formerPathsIn = (
   programRoot: string,
-  formerKey: (key: string) => string,
+  table: MovesTable,
 ): (path: string) => readonly string[] => {
   // The repository root itself (`.`) prefixes nothing.
   const root = normalize(programRoot).replace(/\/+$/, "");
   const prefix = root === "." || root === "" ? "" : `${root}/`;
+  const moves = Object.entries(table);
+  /**
+   * The keys the table says moved straight to `key`. An entry naming the
+   * file itself says where it came from, so a directory moved to where it
+   * now lies does not; only without one does the directory's move speak
+   * for it.
+   */
+  const movedTo = (key: string): string[] => {
+    const files = moves.filter(([, to]) => to === key).map(([from]) => from);
+    if (files.length > 0) return files;
+    return moves.flatMap(([from, to]) =>
+      to.endsWith("/") && from.endsWith("/") && key.startsWith(to)
+        ? [from + key.slice(to.length)]
+        : []
+    );
+  };
   return (path) => {
     if (!path.startsWith(prefix)) return [];
-    const paths: string[] = [];
-    const seen = new Set<string>();
-    let key = path.slice(prefix.length);
-    for (;;) {
-      seen.add(key);
-      const former = formerKey(key);
-      if (seen.has(former)) return paths;
-      paths.push(prefix + former);
-      key = former;
+    const start = path.slice(prefix.length);
+    const seen = new Set([start]);
+    const former: string[] = [];
+    for (let next = [start]; next.length > 0;) {
+      next = next.flatMap(movedTo).filter((key) => {
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      for (const key of next) former.push(key);
     }
+    return former.map((key) => prefix + key);
   };
 };
 

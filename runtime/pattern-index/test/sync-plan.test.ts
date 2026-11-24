@@ -138,7 +138,8 @@ describe("sync-plan", () => {
     if (counter.status !== "compiled") throw new Error("not compiled");
     expect(counter.request.description).toBe("Counts clicks.");
     expect(counter.request.hashtags).toEqual(["demo"]);
-    expect(counter.formerPaths).toEqual(["patterns/tally/main.tsx"]);
+    // No `--moves-table`, so no moves, though the repository keeps a table.
+    expect(counter.formerPaths).toBeUndefined();
     expect(await Deno.readTextFile(`${repo}/summary.md`)).toContain(
       "3 entries: 1 compiled, 1 without a description, 1 failed.",
     );
@@ -169,7 +170,29 @@ describe("sync-plan", () => {
     ]);
   });
 
-  it("follows no moves when `--moves-table` names no file", async () => {
+  it("reads a record of moves kept as a module exporting MOVED_PATTERN_KEYS", async () => {
+    const output = await runPlan([
+      "--repo-root",
+      repo,
+      "--program-root",
+      "patterns",
+      "--include",
+      "patterns/counter/**",
+      "--moves-table",
+      "runtime/runner/src/pattern-key-moves.ts",
+      "--out",
+      `${repo}/module-moved.json`,
+    ]);
+    expect(output.code).toBe(0);
+    const plan: RepoSyncPlan = JSON.parse(
+      await Deno.readTextFile(`${repo}/module-moved.json`),
+    );
+    const [counter] = plan.entries;
+    if (counter.status !== "compiled") throw new Error("not compiled");
+    expect(counter.formerPaths).toEqual(["patterns/tally/main.tsx"]);
+  });
+
+  it("exits nonzero, writing no plan, when `--moves-table` names no file", async () => {
     const output = await runPlan([
       "--repo-root",
       repo,
@@ -182,13 +205,8 @@ describe("sync-plan", () => {
       "--out",
       `${repo}/unmoved.json`,
     ]);
-    expect(output.code).toBe(0);
-    const plan: RepoSyncPlan = JSON.parse(
-      await Deno.readTextFile(`${repo}/unmoved.json`),
-    );
-    const [counter] = plan.entries;
-    if (counter.status !== "compiled") throw new Error("not compiled");
-    expect(counter.formerPaths).toBeUndefined();
+    expect(output.code).not.toBe(0);
+    await expect(Deno.stat(`${repo}/unmoved.json`)).rejects.toThrow();
   });
 
   it("writes the same source hash and pattern id for the same source on a second run", async () => {
