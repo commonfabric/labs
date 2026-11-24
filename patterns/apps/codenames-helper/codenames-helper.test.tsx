@@ -1,9 +1,8 @@
 /**
  * Codenames Helper tests.
  *
- * LLM calls do not run under `cf test`, so the photo reading and clue steps
- * are tested as the pure functions they are built from (`board.ts`), and the
- * flows through the pattern drive its streams with readings supplied by hand.
+ * Mock model answers drive the photo and clue controls. The board rules are
+ * also tested as pure functions and through the pattern's streams.
  *
  * Run: deno task cf test patterns/apps/codenames-helper/codenames-helper.test.tsx --verbose
  */
@@ -293,6 +292,13 @@ export default pattern(() => {
   const assert_photo_card_shown = assert(() =>
     hasText(helper[UI], "Discard") && hasText(helper[UI], "hoto 1")
   );
+  const action_click_unusable_photo = action(() =>
+    clickButton(helper[UI], "Apply to board")
+  );
+  const assert_photo_not_applied = assert(() =>
+    helper.board[0].word === "WORD1" && hasText(helper[UI], "Discard") &&
+    !hasText(helper[UI], "applied to the board")
+  );
   const action_discard_photo = action(() => clickButton(helper[UI], "Discard"));
   const assert_photo_hidden = assert(() => !hasText(helper[UI], "Discard"));
 
@@ -338,10 +344,14 @@ export default pattern(() => {
     !helper.clueRequest.includes("WORD1,") &&
     helper.clueRequest.includes("WORD2")
   );
+  const assert_red_clue_shown = assert(() =>
+    hasText(helper[UI], "OCEAN") && hasText(helper[UI], "WORD2, WORD3")
+  );
   const action_switch_team = action(() => myTeam.set("blue"));
   const action_request_again = action(() => helper.requestClues.send());
   const assert_blue_request = assert(() =>
-    helper.clueRequest.startsWith("Team: BLUE")
+    helper.clueRequest.startsWith("Team: BLUE") &&
+    hasText(helper[UI], "FOREST") && !hasText(helper[UI], "OCEAN")
   );
 
   const assert_fs_projection = assert(() =>
@@ -399,6 +409,8 @@ export default pattern(() => {
       { assertion: assert_bad_reading_ignored },
       { action: action_upload_photo },
       { assertion: assert_photo_card_shown },
+      { action: action_click_unusable_photo },
+      { assertion: assert_photo_not_applied },
       { action: action_discard_photo },
       { assertion: assert_photo_hidden },
       { action: action_clear_colors },
@@ -412,8 +424,11 @@ export default pattern(() => {
       { assertion: assert_no_request_yet },
       { action: action_request_clues },
       { assertion: assert_request_made },
+      { settle: true },
+      { assertion: assert_red_clue_shown },
       { action: action_switch_team },
       { action: action_request_again },
+      { settle: true },
       { assertion: assert_blue_request },
       { assertion: assert_fs_projection },
       { action: action_new_board },

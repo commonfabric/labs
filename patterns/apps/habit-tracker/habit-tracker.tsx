@@ -9,6 +9,7 @@ import {
   computed,
   NAME,
   pattern,
+  resultOf,
   UI,
   wish,
   Writable,
@@ -36,12 +37,9 @@ const getDateDaysAgo = (date: string, daysAgo: number): string =>
 
 export default pattern<HabitTrackerInput, HabitTrackerOutput>(
   ({ habits, logs }) => {
-    // Today, from a clock that ticks every five minutes, so it advances while
-    // the piece stays open and on every later load.
     const nowCell = wish<number>({ query: "#now/300" });
-    const todayDate = computed(() =>
-      nowCell.result == null ? "" : toDateString(nowCell.result)
-    );
+    const nowCellValue = resultOf(nowCell.result);
+    const todayDate = computed(() => toDateString(nowCellValue));
     const newHabitName = new Writable("");
     const newHabitIcon = new Writable("✓");
 

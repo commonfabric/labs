@@ -16,6 +16,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -85,7 +86,8 @@ const countButtons = (ui: unknown, label: string): number =>
   findNodes(ui, isButton(label)).length;
 
 export default pattern(() => {
-  const home = wish<Writable<HomeDefault>>({ query: "#default" }).result!;
+  const homeWish = wish<Writable<HomeDefault>>({ query: "#default" });
+  const home = resultOf(homeWish.result);
   const login = Target({ name: "Login page" });
   const open = Note({
     name: "Check copy",

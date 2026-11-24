@@ -3,7 +3,8 @@
  * `wish({ query: "#default" })` resolves as it does in a deployed space, where
  * `default-app.tsx` provides it. It holds the piece registry, its `addPiece`
  * stream, and the `testPieceRegistrationCount` a test reads to see that a
- * registration happened.
+ * registration happened. Optional learned context and summary entries are
+ * explicitly empty so a test can distinguish that state from a pending load.
  *
  * It is a compiled pattern rather than a handler registered on the test's
  * runtime because on the server-execution arm the serving loop runs the
@@ -40,6 +41,8 @@ export default pattern(() => {
     addPiece: addPiece({ pieceRegistry, testPieceRegistrationCount }),
     testPieceRegistrationCount,
     backlinksIndex: { mentionable: [] },
+    learned: { summary: "" },
+    summaryIndex: { entries: [] },
   };
 });
 `;

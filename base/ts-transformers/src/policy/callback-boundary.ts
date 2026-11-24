@@ -145,7 +145,7 @@ export function classifyCallbackBoundary(
   // JSX lookup starts from the usage site rather than the callback itself.
   const jsxParent = outermostTransparentWrapper(callback).parent;
   if (
-    ts.isJsxExpression(jsxParent) &&
+    jsxParent !== undefined && ts.isJsxExpression(jsxParent) &&
     ts.isJsxAttribute(jsxParent.parent) &&
     isEventHandlerJsxAttribute(jsxParent.parent, checker)
   ) {

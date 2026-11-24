@@ -11,9 +11,11 @@
  * onExceed:"skip" returns exactly the fitting rows.
  */
 
+import { hasError } from "@commonfabric/data-model/availability";
 import { equal } from "@std/assert";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 import app from "../../toolshed/app.ts";
 import { cfcLabelViewForDereferenceTraces } from "../src/cfc/label-view.ts";
@@ -64,54 +66,31 @@ async function runTest(base: URL) {
         result.key("seed").withTx(tx).send({})
       );
 
-      // Wait until all three queries settled (q + qSkim with rows, qCount
-      // with an error).
-      const deadline = Date.now() + 30000;
-      let ready = false;
-      while (Date.now() < deadline) {
-        await runtime.idle();
-        await runtime.storageManager.synced();
-        const qPending = result.key("q").key("pending").get() as unknown;
-        const skimPending = result.key("qSkim").key("pending").get() as
-          | boolean
-          | unknown;
-        const countPending = result.key("qCount").key("pending").get() as
-          | boolean
-          | unknown;
-        const clearPending = result.key("qClear").key("pending").get() as
-          | boolean
-          | unknown;
-        if (
-          qPending === false && skimPending === false &&
-          countPending === false && clearPending === false
-        ) {
-          const arr = result.key("q").key("result").getRaw() as
-            | unknown[]
-            | undefined;
-          if (Array.isArray(arr) && arr.length === 2) {
-            ready = true;
-            break;
-          }
-        }
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      if (!ready) {
-        const dump = (k: string) => {
-          const q = result.key(k);
-          return {
-            pending: q.key("pending").getRaw(),
-            error: q.key("error").getRaw(),
-            result: q.key("result").getRaw(),
-          };
-        };
-        throw new Error(
-          "queries never settled; " + JSON.stringify({
-            q: dump("q"),
-            qCount: dump("qCount"),
-            qSkim: dump("qSkim"),
-          }),
-        );
-      }
+      // An empty array can predate both inserts. Wait for each projection's
+      // own evidence that it has seen the seeded rows.
+      await Promise.all([
+        waitForCellValue(
+          runtime,
+          result.key("q").key("rows"),
+          (rows) => Array.isArray(rows) && rows.length === 2,
+          { stuckLabel: "email rows" },
+        ),
+        waitForCellValue(
+          runtime,
+          result.key("qSkim").key("rows"),
+          (rows) => Array.isArray(rows) && rows.length > 0,
+          { stuckLabel: "ceiling-filtered rows" },
+        ),
+        waitForCellValue(runtime, result.key("qCount"), hasError, {
+          stuckLabel: "aggregate query refusal",
+        }),
+        waitForCellValue(
+          runtime,
+          result.key("qClear").key("withheld"),
+          (count) => count === 2,
+          { stuckLabel: "clearance-filtered row count" },
+        ),
+      ]);
 
       // THE POINT: distinct per-row labels, re-derived from row data.
       // Reading row[i] traverses pattern result -> query result -> the row's
@@ -119,7 +98,7 @@ async function runTest(base: URL) {
       // those dereferences (per-row ROOT label + per-column field labels).
       const rowLabel = async (i: number) => {
         const dtx = runtime.edit();
-        const leaf = result.key("q").key("result").key(i).key("body")
+        const leaf = result.key("q").key("rows").key(i).key("body")
           .withTx(dtx);
         leaf.get();
         const view = cfcLabelViewForDereferenceTraces(
@@ -219,44 +198,42 @@ async function runTest(base: URL) {
       );
 
       // Aggregate on a rule-bearing table fails closed.
-      const countError = result.key("qCount").key("error").get() as unknown;
+      const countUnavailable = result.key("qCount").resolveAsCell().getRaw();
+      const countError = hasError(countUnavailable)
+        ? countUnavailable.message
+        : undefined;
       if (
+        !hasError(countUnavailable) ||
+        countUnavailable.errorKind !== "general" ||
         typeof countError !== "string" || !countError.includes("aggregate")
       ) {
         throw new Error(
           `qCount should have failed closed; got error=${
             JSON.stringify(countError)
-          } result=${
-            JSON.stringify(result.key("qCount").key("result").getRaw())
-          }`,
+          } result=${JSON.stringify(countUnavailable)}`,
         );
       }
 
       // Declared ceiling + onExceed:"skip": exactly row 1 survives.
-      const skim = result.key("qSkim").key("result").get() as
+      const skim = result.key("qSkim").resolveAsCell().key("rows").get() as
         | { id: number }[]
         | undefined;
       if (!Array.isArray(skim) || skim.length !== 1 || skim[0].id !== 1) {
         throw new Error(
           `qSkim should keep exactly the fitting row; got ${
             JSON.stringify(skim)
-          } error=${JSON.stringify(result.key("qSkim").key("error").getRaw())}`,
+          } request=${JSON.stringify(result.key("qSkim").getRaw())}`,
         );
       }
 
       // Read-time clearance (Phase 3.b): the owner satisfies no row's
       // conjunctive rule (the did:mailto participants are required too), so a
       // cleared query returns zero rows and reports withheld: 2.
-      const clearErr = result.key("qClear").key("error").getRaw();
-      const cleared = result.key("qClear").key("result").get() as
+      const cleared = result.key("qClear").resolveAsCell().key("rows").get() as
         | unknown[]
         | undefined;
-      const withheld = result.key("qClear").key("withheld").get() as unknown;
-      if (clearErr !== undefined) {
-        throw new Error(
-          `qClear should not error; got ${JSON.stringify(clearErr)}`,
-        );
-      }
+      const withheld = result.key("qClear").resolveAsCell().key("withheld")
+        .get() as unknown;
       if (!Array.isArray(cleared) || cleared.length !== 0) {
         throw new Error(
           `qClear should withhold every row for the owner; got ${

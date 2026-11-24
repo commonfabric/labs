@@ -3,6 +3,11 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  unavailableObsolete,
+} from "@commonfabric/data-model/availability";
+import {
   type ClientMessage,
   decodeMemoryBoundary,
 } from "@commonfabric/memory/v2";
@@ -10,10 +15,10 @@ import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { defer } from "@commonfabric/async/defer";
 
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
-import { NAME } from "../../src/builder/types.ts";
+import { type JSONSchema, NAME } from "../../src/builder/types.ts";
 import { wish } from "../../src/builtins/wish.ts";
 import { useCancelGroup } from "../../src/cancel.ts";
-import type { Cell } from "../../src/cell.ts";
+import { type Cell, isCell } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
 import {
   EmulatedStorageManager,
@@ -44,6 +49,91 @@ function makeRuntime(storageManager: Runtime["storageManager"]): Runtime {
 }
 
 describe("wish-availability", () => {
+  for (
+    const scenario of [
+      { name: "an absent writable slot", handle: true, value: undefined },
+      { name: "an absent value", handle: false, value: undefined },
+      {
+        name: "a pending writable slot",
+        handle: true,
+        value: UNAVAILABLE_PENDING,
+      },
+      {
+        name: "an obsolete writable slot",
+        handle: true,
+        value: unavailableObsolete("Use entries instead"),
+      },
+      {
+        name: "an errored writable slot",
+        handle: true,
+        value: unavailableError("Journal is unavailable"),
+      },
+    ]
+  ) {
+    it(`preserves the distinction between a handle and contents for ${scenario.name}`, async () => {
+      const manager = EmulatedStorageManager.emulate({ as: user });
+      const runtime = makeRuntime(manager);
+      const [cancel, addCancel] = useCancelGroup();
+      try {
+        const schema: JSONSchema = {
+          type: "array",
+          items: { type: "string" },
+          ...(scenario.handle ? { asCell: ["writeonly"] } : {}),
+        };
+        const home = runtime.getCell(user.did(), "writable journal home");
+        const inputs = runtime.getCell(user.did(), "writable journal inputs");
+        const owner = runtime.getCell(user.did(), "writable journal owner");
+        const seed = runtime.edit();
+        home.withTx(seed).set(
+          scenario.value === undefined ? {} : { journal: scenario.value },
+        );
+        runtime.getHomeSpaceCell(seed).asSchema(undefined).set({
+          defaultPattern: home,
+        });
+        inputs.withTx(seed).set({ query: "#journal", schema });
+        owner.withTx(seed).set({});
+        runtime.prepareTxForCommit(seed);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        await manager.synced();
+
+        let output: Cell<unknown> | undefined;
+        const resolver = wish(
+          inputs as Cell<[unknown, unknown]>,
+          (_tx, value) => {
+            output = value as Cell<unknown>;
+          },
+          addCancel,
+          [owner],
+          owner,
+          runtime,
+        );
+        const resolving = runtime.edit();
+        resolver.action(resolving);
+        runtime.prepareTxForCommit(resolving);
+        expect((await resolving.commit().settled).error).toBeUndefined();
+        expect(output).toBeDefined();
+        const selected = output!.withTx(undefined).key("result");
+        if (scenario.handle && scenario.value === undefined) {
+          const handle = selected.asSchema(schema).get();
+          expect(isCell(handle)).toBe(true);
+          const write = runtime.edit();
+          (handle as Cell<string[]>).withTx(write).set(["First entry"]);
+          runtime.prepareTxForCommit(write);
+          expect((await write.commit().settled).error).toBeUndefined();
+          expect(home.key("journal").get()).toEqual(["First entry"]);
+        } else {
+          expect(selected.getRaw({ lastNode: "value" })).toEqual(
+            scenario.value ?? UNAVAILABLE_PENDING,
+          );
+        }
+      } finally {
+        cancel();
+        await manager.synced();
+        await runtime.dispose();
+      }
+    });
+  }
+
   for (
     const scenario of [
       {
@@ -138,7 +228,11 @@ describe("wish-availability", () => {
         const state = output!.withTx(undefined);
         expect(state.key("error").get()).toContain(scenario.error);
         expect(state.key("candidates").get()).toEqual([]);
-        expect(state.key("result").get()).toBeUndefined();
+        expect(state.key("result").get()).toMatchObject({
+          reason: "error",
+          errorKind: "general",
+          message: expect.stringContaining(scenario.error),
+        });
       } finally {
         cancel();
         await manager.synced();

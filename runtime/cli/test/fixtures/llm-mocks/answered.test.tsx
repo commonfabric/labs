@@ -7,6 +7,7 @@ import {
   generateObject,
   generateText,
   pattern,
+  resultOf,
   TESTS,
 } from "commonfabric";
 
@@ -28,8 +29,8 @@ export default pattern(() => {
   });
   return {
     [TESTS]: [
-      { assertion: assert(() => capital.result === "Paris.") },
-      { assertion: assert(() => person.result?.name === "Ada") },
+      { assertion: assert(() => resultOf(capital) === "Paris.") },
+      { assertion: assert(() => resultOf(person).name === "Ada") },
     ],
   };
 });

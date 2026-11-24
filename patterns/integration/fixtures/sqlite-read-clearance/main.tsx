@@ -15,6 +15,7 @@ import {
   handler,
   NAME,
   pattern,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
 } from "commonfabric";
@@ -81,12 +82,14 @@ export default pattern(() => {
     "SELECT id, reader, body FROM notes ORDER BY id",
     { reactOn: db, readClearance: true },
   );
+  const allResult = resultOf(qAll);
+  const clearResult = resultOf(qClear);
 
   return {
     [NAME]: "SQLite read-time clearance (multi-runtime fixture)",
     db,
-    qAll,
-    qClear,
+    qAll: allResult,
+    qClear: clearResult,
     seed: seed({ db }),
   };
 });

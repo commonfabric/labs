@@ -17,7 +17,13 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { settle: true },
       { assertion: assert(() => board.topicCount === 0) },
+      {
+        assertion: assert(() =>
+          board.titles.pending === false && board.titles.result?.length === 0
+        ),
+      },
 
       { action: action(() => board.addTopic.send({ title: "alpha" })) },
       { action: action(() => board.addTopic.send({ title: "beta" })) },

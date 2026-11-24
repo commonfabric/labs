@@ -110,7 +110,7 @@ Status legend:
 | 47 | `sqliteDatabase`/`sqliteQuery`: server RPC via signed first-party fetch; exec folded into caller commit; `reactOn` | `builtins/sqlite-builtins.ts`, `builtins/index.ts` (the `sqliteQuery` registration), signing `toolshed-http-auth.ts` | builtins §2 (reader principal in key) | CHANGED |
 | 48 | `streamData`: polling generator loop | `builtins/stream-data.ts` | README §3.5, builtins §5 (disabled) | COVERED |
 | 49 | `navigateTo`: `runtime.navigateCallback` + post-commit outbox effect; session-scoped result cell | `builtins/navigate-to.ts` (`navigateTo`: its session-scoped `createCell` and its `enqueuePostCommitEffect` call) | builtins §4, protocol §5 | CHANGED |
-| 50 | `wish`: mention resolution, favorites, 50ms debounce — and per-runtime interval `#now` timers (ticking cells) | `builtins/wish.ts` (`MIN_INTERVAL_SECONDS`, `MAX_INTERVAL_SECONDS`, `intervalNowTimers`), `builtins/index.ts` (`WISH_DEBOUNCE_MS`) | builtins §1 (listed pure) | GAP |
+| 50 | `wish`: mention resolution, favorites, immediate availability refresh — and per-runtime interval `#now` timers (ticking cells) | `builtins/wish.ts` (`MIN_INTERVAL_SECONDS`, `MAX_INTERVAL_SECONDS`, `intervalNowTimers`), `builtins/index.ts` (`registerBuiltins`) | builtins §1 (listed pure) | GAP |
 | 51 | `ifElse`/`when`/`unless`, list support modules, `inspectConfLabel`, `scopePolicy` | `builtins/if-else.ts` etc. | builtins §1 | COVERED |
 | 52 | Post-commit effect outbox on the transaction: navigate, CFC sink-request release, sqlite writeback; `settled()` tracks flushes | `builtins/navigate-to.ts` (`enqueuePostCommitEffect`), `cfc/sink-request.ts`, `scheduler/run.ts` (`hasPendingPostCommitEffects` in `finalizeReactiveActionCommit`) | serving-loop §5 | COVERED |
 

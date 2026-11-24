@@ -7,6 +7,7 @@ import {
   generateText,
   multiUserTest,
   pattern,
+  resultOf,
   TESTS,
 } from "commonfabric";
 
@@ -18,14 +19,14 @@ export const llmMocks = [
 export const alice = pattern(() => {
   const reply = generateText({ prompt: "I am alice" });
   return {
-    [TESTS]: [{ assertion: assert(() => reply.result === "Hello, alice.") }],
+    [TESTS]: [{ assertion: assert(() => resultOf(reply) === "Hello, alice.") }],
   };
 });
 
 export const bob = pattern(() => {
   const reply = generateText({ prompt: "I am bob" });
   return {
-    [TESTS]: [{ assertion: assert(() => reply.result === "Hello, bob.") }],
+    [TESTS]: [{ assertion: assert(() => resultOf(reply) === "Hello, bob.") }],
   };
 });
 

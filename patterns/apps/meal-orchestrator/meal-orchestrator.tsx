@@ -26,9 +26,14 @@ import {
   FS,
   generateObject,
   handler,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -647,13 +652,32 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
       // so name one that accepts it. Remove once top/3114 is fixed.
       model: "anthropic:claude-haiku-4-5",
     });
-    const suggestions = computed((): MenuSuggestions | null =>
-      suggestRequest.get() && suggestLlm.result ? suggestLlm.result : null
+    const suggestionsState = computed(
+      (): {
+        proposal: MenuSuggestions | null;
+        pending: boolean;
+        error: string;
+      } => {
+        if (!suggestRequest.get()) {
+          return { proposal: null, pending: false, error: "" };
+        }
+        if (isPending(suggestLlm) || isSyncing(suggestLlm)) {
+          return { proposal: null, pending: true, error: "" };
+        }
+        if (hasError(suggestLlm) || isObsolete(suggestLlm)) {
+          return {
+            proposal: null,
+            pending: false,
+            error: suggestLlm.message ||
+              "The menu suggestions output was retired.",
+          };
+        }
+        return { proposal: resultOf(suggestLlm), pending: false, error: "" };
+      },
     );
-    const suggesting = computed(() => !!suggestLlm.pending);
-    const suggestError = computed(() =>
-      suggestRequest.get() && suggestLlm.error ? String(suggestLlm.error) : ""
-    );
+    const suggestions = suggestionsState.proposal;
+    const suggesting = suggestionsState.pending;
+    const suggestError = suggestionsState.error;
     const suggestLabel = computed(() =>
       suggesting ? "Suggesting..." : "Suggest Improvements"
     );
@@ -694,13 +718,35 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
       // so name one that accepts it. Remove once top/3114 is fixed.
       model: "anthropic:claude-haiku-4-5",
     });
-    const linkAnalysis = computed((): LinkAnalysis | null =>
-      linkRequest.get() && linkLlm.result ? linkLlm.result : null
+    const linkAnalysisState = computed(
+      (): {
+        proposal: LinkAnalysis | null;
+        pending: boolean;
+        error: string;
+      } => {
+        if (!linkRequest.get()) {
+          return {
+            proposal: null,
+            pending: false,
+            error: "",
+          };
+        }
+        if (isPending(linkLlm) || isSyncing(linkLlm)) {
+          return { proposal: null, pending: true, error: "" };
+        }
+        if (hasError(linkLlm) || isObsolete(linkLlm)) {
+          return {
+            proposal: null,
+            pending: false,
+            error: linkLlm.message || "The dish linking output was retired.",
+          };
+        }
+        return { proposal: resultOf(linkLlm), pending: false, error: "" };
+      },
     );
-    const linking = computed(() => !!linkLlm.pending);
-    const linkError = computed(() =>
-      linkRequest.get() && linkLlm.error ? String(linkLlm.error) : ""
-    );
+    const linkAnalysis = linkAnalysisState.proposal;
+    const linking = linkAnalysisState.pending;
+    const linkError = linkAnalysisState.error;
     const linkLabel = computed(() =>
       linking ? "Linking..." : "Link Dishes from Notes"
     );

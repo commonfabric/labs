@@ -260,11 +260,7 @@ Known runtime issues this pattern works around:
    `ItemLabel({goal, item})` mapped over the items, returning `{id, answer}`)
    never delivers a label: every row stays unlabelled. The hi-fi calls stay in
    the parent's map.
-3. Right after the goal changes, a hi-fi call can still hold the old goal's
-   answer, not yet marked pending. Each hi-fi entry carries the prompt it is
-   asked now (`asked`), and an answer counts only if the call's last user
-   message is that prompt.
-4. An item seeded with the piece is stored inline and has no document of its
+3. An item seeded with the piece is stored inline and has no document of its
    own, so a reference held to one names its slot: once an earlier item is
    removed, that reference matches nothing, and `removeItem` with it does
    nothing. An item added through `addItem` is a link, and its reference

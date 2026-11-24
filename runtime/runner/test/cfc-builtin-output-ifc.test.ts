@@ -272,7 +272,10 @@ describe("cfc-builtin-output-ifc", () => {
               [],
               LABELED_MESSAGES_SCHEMA,
             );
-            const dialog = llmDialog({ messages } as never);
+            const dialog = llmDialog<unknown>({
+              messages,
+              resultSchema: {},
+            } as never);
             return {
               addMessage: dialog.addMessage,
               pending: dialog.pending,

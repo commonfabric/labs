@@ -233,9 +233,25 @@ export type CallKind =
   | { kind: "cell-factory"; symbol?: ts.Symbol; factoryName: string }
   | { kind: "cell-for"; symbol?: ts.Symbol }
   | { kind: "wish"; symbol?: ts.Symbol }
+  | { kind: "llm-dialog"; symbol?: ts.Symbol }
   | { kind: "generate-text"; symbol?: ts.Symbol }
-  | { kind: "generate-object"; symbol?: ts.Symbol }
+  | { kind: "generate-object"; symbol?: ts.Symbol; exportName: string }
   | { kind: "pattern-tool"; symbol?: ts.Symbol }
+  | {
+    kind: "availability-guard";
+    symbol?: ts.Symbol;
+    reason: "pending" | "error" | "syncing" | "obsolete" | "schemaMismatch";
+    variantTypeName:
+      | "IsPending"
+      | "HasError"
+      | "IsSyncing"
+      | "IsObsolete"
+      | "HasSchemaMismatch";
+  }
+  | { kind: "availability-result"; symbol?: ts.Symbol }
+  | { kind: "partial-result"; symbol?: ts.Symbol }
+  | { kind: "compile-diagnostics"; symbol?: ts.Symbol }
+  | { kind: "availability-observer"; symbol?: ts.Symbol }
   | {
     kind: "runtime-call";
     symbol?: ts.Symbol;
@@ -1112,8 +1128,16 @@ function isReactiveOriginKind(callKind: CallKind): boolean {
       return COMMONFABRIC_REACTIVE_ORIGIN_CALL_EXPORT_NAMES.has(
         "generateObject",
       );
+    case "llm-dialog":
+      return COMMONFABRIC_REACTIVE_ORIGIN_CALL_EXPORT_NAMES.has("llmDialog");
     case "runtime-call":
       return callKind.reactiveOrigin;
+    case "availability-guard":
+    case "availability-result":
+    case "partial-result":
+    case "compile-diagnostics":
+    case "availability-observer":
+      return true;
     default:
       return false;
   }
@@ -1298,6 +1322,21 @@ function hasReactiveCollectionProvenanceInternal(
     ) {
       return hasReactiveCollectionProvenanceInternal(
         target.expression.expression,
+        checker,
+        options,
+        seenSymbols,
+      );
+    }
+
+    if (
+      options.sameScope &&
+      detectCallKind(target, checker)?.kind === "availability-result"
+    ) {
+      // A result view preserves its source's ownership; it does not create
+      // a fresh reactive collection inside an existing computation.
+      const source = target.arguments[0];
+      return source !== undefined && hasReactiveCollectionProvenanceInternal(
+        source,
         checker,
         options,
         seenSymbols,
@@ -2177,18 +2216,49 @@ function createNamedCallKind(
         : { kind: "cell-factory", factoryName: name };
     case "wish":
       return symbol ? { kind: "wish", symbol } : { kind: "wish" };
+    case "llm-dialog":
+      return symbol ? { kind: "llm-dialog", symbol } : { kind: "llm-dialog" };
     case "generate-text":
       return symbol
         ? { kind: "generate-text", symbol }
         : { kind: "generate-text" };
     case "generate-object":
       return symbol
-        ? { kind: "generate-object", symbol }
-        : { kind: "generate-object" };
+        ? { kind: "generate-object", symbol, exportName: name }
+        : { kind: "generate-object", exportName: name };
     case "pattern-tool":
       return symbol
         ? { kind: "pattern-tool", symbol }
         : { kind: "pattern-tool" };
+    case "availability-guard":
+      return symbol
+        ? {
+          kind: "availability-guard",
+          symbol,
+          reason: spec.availabilityReason,
+          variantTypeName: spec.variantTypeName,
+        }
+        : {
+          kind: "availability-guard",
+          reason: spec.availabilityReason,
+          variantTypeName: spec.variantTypeName,
+        };
+    case "availability-observer":
+      return symbol
+        ? { kind: "availability-observer", symbol }
+        : { kind: "availability-observer" };
+    case "availability-result":
+      return symbol
+        ? { kind: "availability-result", symbol }
+        : { kind: "availability-result" };
+    case "partial-result":
+      return symbol
+        ? { kind: "partial-result", symbol }
+        : { kind: "partial-result" };
+    case "compile-diagnostics":
+      return symbol
+        ? { kind: "compile-diagnostics", symbol }
+        : { kind: "compile-diagnostics" };
     case "runtime-call":
       return symbol
         ? {

@@ -1,0 +1,75 @@
+{
+  "argumentSchema": {
+    "asCell": [
+      "opaque"
+    ]
+  },
+  "pattern": "examples/fetch-program-test.tsx",
+  "resultSchema": {
+    "$defs": {
+      "FetchProgramResult": {
+        "properties": {
+          "files": {
+            "items": {
+              "properties": {
+                "contents": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "contents"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "main": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "files",
+          "main"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Test pattern for fetchProgram builtin.\nFetches a program from a URL and compiles it.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "type": "unknown"
+      },
+      "program": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/FetchProgramResult"
+          }
+        ]
+      },
+      "result": {
+        "type": "unknown"
+      },
+      "url": {
+        "type": "unknown"
+      }
+    },
+    "required": [
+      "url",
+      "program",
+      "result",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

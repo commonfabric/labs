@@ -5,6 +5,7 @@ import {
   isWalkableObjectOrArray,
   valueEqual,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { isPrimitiveCellLink } from "./link-utils.ts";
 import { normalizeCellScope } from "./scope.ts";
@@ -173,19 +174,21 @@ export function addressesToPathByEntity(
  * Whether the descent below may address `value` by key.
  *
  * This is {@link isWalkableObjectOrArray} with its refusal of a
- * `FabricInstance` replaced by `true`. The descent reads an instance by
+ * `FabricInstance` or `FabricUnavailable` replaced by `true`. The descent reads an instance by
  * property name, reaching the accessors a `FabricError` carries and finding
- * nothing on a `FabricMap`. Answering `false` would make an instance
+ * nothing on a `FabricMap`. It also reaches unavailable-marker state accessors.
+ * Answering `false` would make an instance or unavailable marker
  * indistinguishable from a leaf, and a read below one would then stop
  * triggering when the instance is deleted or replaced by a scalar.
  *
  * TODO(danfuzz): remove this once `isWalkableObjectOrArray()` stops throwing
  * for a `FabricInstance`. The descent it gains at that point is the one this
- * function already performs, so the two answers converge and the call sites
- * below name the shared predicate directly.
+ * function already performs for instances. Unavailable-marker traversal must
+ * remain explicit unless the shared predicate also admits those primitives.
  */
 function isKeyable(value: unknown): boolean {
-  return value instanceof FabricInstance || isWalkableObjectOrArray(value);
+  return isUnavailable(value) || value instanceof FabricInstance ||
+    isWalkableObjectOrArray(value);
 }
 
 /**
@@ -264,7 +267,8 @@ export function determineActionTriggers(
   const afterValues: FabricValue[] = [after];
 
   // *LastObject: Last key-able object along currentPath. A `FabricPrimitive`
-  // is not key-able: its state sits behind no property name, so the descent
+  // other than `FabricUnavailable` is not key-able: its state sits behind no
+  // property name, so the descent
   // stops at one and a path continuing below reads as unreachable rather than
   // as present-and-empty.
   //
@@ -412,8 +416,10 @@ function commonPrefixLength(
  * catches a changed value underneath it. It says nothing useful about any
  * other object: a `FabricPrimitive` holds its state in private fields, so
  * comparing key sets reports every two of them as unchanged — and because that
- * state sits behind no enumerable key, no deeper subscriber path reaches it
- * either. The change goes unnoticed at every depth, which is what separates
+ * state sits behind no enumerable key, ordinary deeper subscriber paths do
+ * not reach it. Unavailable markers are the exception: their reason, kind,
+ * and message accessors support deeper subscriptions. Other primitive changes
+ * go unnoticed at every depth, which is what separates
  * this from a plain object's values being skipped by design. Those are leaves,
  * and a leaf is compared by value.
  *

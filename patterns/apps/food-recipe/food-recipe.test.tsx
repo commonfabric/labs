@@ -39,6 +39,10 @@ import type { StepGroup } from "./schemas.tsx";
 
 export const llmMocks = [
   {
+    when: { lastMessageContains: "Illegible recipe card" },
+    error: "The recipe card could not be read.",
+  },
+  {
     when: { lastMessageContains: "Grandma's roast chicken" },
     // The all-required wire shape the model fills: "" and 0 mean unknown.
     object: {
@@ -220,6 +224,22 @@ export default pattern(() => {
   );
 
   const action_apply = action(() => clickButton(recipe[UI], "Apply"));
+  const action_extract_unreadable = action(() => {
+    notes.set("Illegible recipe card");
+    recipe.extract.send();
+  });
+  const assert_failed_extraction = assert(() =>
+    recipe.extraction === null &&
+    hasText(recipe[UI], "The recipe card could not be read.")
+  );
+  const assert_failed_apply_keeps_recipe = assert(() =>
+    recipe.name === "Roast Chicken" && recipe.ingredients.length === 2 &&
+    notes.get() === "Illegible recipe card"
+  );
+  const assert_failure_dismissed = assert(() =>
+    recipe.extraction === null &&
+    !hasText(recipe[UI], "The recipe card could not be read.")
+  );
   const assert_applied = assert(() =>
     recipe.name === "Roast Chicken" &&
     recipe.servings === 6 &&
@@ -324,6 +344,13 @@ export default pattern(() => {
       { action: action_apply },
       { assertion: assert_applied },
       { assertion: assert_oven_derived },
+      { action: action_extract_unreadable },
+      { settle: true },
+      { assertion: assert_failed_extraction },
+      { action: recipe.applyExtraction },
+      { assertion: assert_failed_apply_keeps_recipe },
+      { action: recipe.cancelExtraction },
+      { assertion: assert_failure_dismissed },
       { action: action_double },
       { assertion: assert_doubled },
       { action: action_edit_group },

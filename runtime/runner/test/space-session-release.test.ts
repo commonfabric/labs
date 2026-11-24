@@ -216,6 +216,33 @@ describe("space-session-release", () => {
     expect(released).toEqual([space]);
   });
 
+  it("reports an unused connection as idle until the next session is ready", async () => {
+    const { space, id } = await spaceWith(1);
+    await load(space, id);
+    const states: string[] = [];
+    const cancel = readerStorage.subscribeConnectionState(
+      space,
+      ({ status, epoch }) => {
+        states.push(`${status}:${epoch}`);
+      },
+    );
+    await releaseTwice();
+    const late: string[] = [];
+    const cancelLate = readerStorage.subscribeConnectionState(
+      space,
+      ({ status, epoch }) => {
+        late.push(`${status}:${epoch}`);
+      },
+    );
+    expect(isOpen(space)).toBe(false);
+    expect(late).toEqual(["idle:1"]);
+    await load(space, id);
+    expect(states).toEqual(["ready:1", "idle:1", "ready:2"]);
+    expect(late).toEqual(["idle:1", "ready:2"]);
+    cancelLate();
+    cancel();
+  });
+
   it("opens a released space again on its next read, with the value the server now holds", async () => {
     const { space, id } = await spaceWith(1);
     await load(space, id);

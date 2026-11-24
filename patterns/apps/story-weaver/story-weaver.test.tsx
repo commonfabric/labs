@@ -18,7 +18,6 @@ import {
 } from "../../tools/test-support/vnode-helpers.ts";
 import StoryWeaver, { type Level, type Spindle } from "./story-weaver.tsx";
 import {
-  answers,
   boardPaths,
   boardView,
   buildPrompt,
@@ -26,6 +25,7 @@ import {
   pinsLostByBranch,
   storyMarkdown,
   withBranch,
+  withCardPin,
   withLastLevelRemoved,
   withPinned,
   withRespin,
@@ -77,12 +77,6 @@ export const llmMocks = [
       options: [{ content: "Cy rows out." }, { content: "Di stays home." }],
     },
   },
-  {
-    when: { lastMessageContains: "Cy rows out.\n\nWrite detailed" },
-    object: { options: [{ content: "Cy's chapter: the crossing." }] },
-  },
-  // Asked again once Ada's chapter takes its card: the request follows the
-  // card, not the path. Toolshed's cache answers that live.
   {
     when: { lastMessageContains: "Cy rows out.\n\nWrite detailed" },
     object: { options: [{ content: "Cy's chapter: the crossing." }] },
@@ -207,12 +201,6 @@ export default pattern(() => {
       !md.includes("## Chapters");
   });
 
-  const assert_answers_only_its_prompt = assert(() =>
-    answers([{ content: "a" }, { content: "reply" }], "a") &&
-    !answers([{ content: "b" }], "a") &&
-    !answers(undefined, "a") &&
-    !answers([{ content: "" }], "")
-  );
   const assert_story_markdown_nests_headings = assert(() => {
     const md = storyMarkdown("T", LEVELS, "seed", [
       pinned("1", "# Bo\n\n```\n# not a heading\n```", "seed"),
@@ -220,6 +208,19 @@ export default pattern(() => {
     return md.includes("### Characters · 2 of 2\n\n#### Bo") &&
       md.includes("\n# not a heading\n") &&
       demoteHeadings("##### Deep", 3) === "###### Deep";
+  });
+
+  const assert_click_must_match_current_request_and_pin = assert(() => {
+    const prompt = boardView(LEVELS, "sea", [])[0].spindles[0].activePrompt;
+    const click = { path: "0", prompt, option: 0, text: "Bea", unpin: false };
+    const chosen = withCardPin(LEVELS, "sea", [], click);
+    if (chosen?.[0]?.pinnedText !== "Bea") return false;
+    const unpin = { ...click, unpin: true };
+    return withCardPin(LEVELS, "land", [], click) === undefined &&
+      withCardPin(LEVELS, "sea", [], { ...click, path: "1" }) === undefined &&
+      withCardPin(LEVELS, "sea", chosen, click) === undefined &&
+      withCardPin(LEVELS, "sea", [], unpin) === undefined &&
+      withCardPin(LEVELS, "sea", chosen, unpin)?.[0]?.pinnedText === "";
   });
 
   // --- Through the pattern --------------------------------------------------
@@ -316,12 +317,8 @@ export default pattern(() => {
   const action_remove_level = action(() => board.removeLastLevel.send());
   const assert_level_removed = assert(() => board.levels.length === 2);
 
-  // Cards follow list position. Pinning "0" puts 0.0 on the card that was
-  // showing 1.0, and until that card's request catches up, the options on
-  // hand are 1.0's (Cy's): they must not show on Ada's card, where a Pin
-  // would file Cy's chapter under Ada. The harness lets the request catch up
-  // before it looks, so this checks where each card lands; the guard itself
-  // is pinned by `assert_answers_only_its_prompt`.
+  // Pinning "0" inserts Ada's card at the position where Cy's card was.
+  // Cy's request must stay on Cy's card while Ada's request arrives.
   const action_wide_open_second = action(() => {
     wide.pin.send({
       path: "1",
@@ -357,6 +354,19 @@ export default pattern(() => {
     showsMarkdown(wide[UI], "Cy's chapter: the crossing.")
   );
 
+  // A client can still hold the rendered Pin button when the level's
+  // instruction changes. Dispatch that click against the revised board.
+  const action_click_superseded_pin = action(() => {
+    clickButton(wide[UI], "📌 Pin");
+    wideLevels.key(0).key("prompt").set("Name different characters.");
+  });
+  const assert_superseded_answer_not_pinned = assert(() =>
+    wide.levels[0].prompt === "Name different characters." &&
+    wide.spindles.find((s) => s.path === "0")?.pinnedText ===
+      "Ada keeps the lamp." &&
+    wide.spindles.find((s) => s.path === "1")?.pinnedText === "Cy rows out."
+  );
+
   return {
     [TESTS]: [
       { assertion: assert_no_board_before_synopsis },
@@ -370,7 +380,7 @@ export default pattern(() => {
       { assertion: assert_remove_level_drops_its_spindles },
       { assertion: assert_story_markdown_lists_pins },
       { assertion: assert_story_markdown_nests_headings },
-      { assertion: assert_answers_only_its_prompt },
+      { assertion: assert_click_must_match_current_request_and_pin },
       { assertion: assert_starts_empty },
       { action: action_write_synopsis },
       { action: action_start },
@@ -402,6 +412,8 @@ export default pattern(() => {
       { assertion: assert_wide_no_borrowed_options },
       { settle: true },
       { assertion: assert_wide_both_children },
+      { action: action_click_superseded_pin },
+      { assertion: assert_superseded_answer_not_pinned },
     ],
     allowConsoleWarnings: true,
     board,

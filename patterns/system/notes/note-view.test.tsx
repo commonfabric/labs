@@ -22,6 +22,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -54,8 +55,8 @@ const LONG_WORDS = "word ".repeat(50).trim();
 const LONG_RUN = "x".repeat(250);
 
 export default pattern(() => {
-  const mentionable = wish<Writable<object[]>>({ query: "#mentionable" })
-    .result!;
+  const mentionableWish = wish<Writable<object[]>>({ query: "#mentionable" });
+  const mentionable = resultOf(mentionableWish.result);
 
   const subject = Note({ title: "Subject", content: "", isHidden: false });
   const holding = Shelf({ notes: [subject] });

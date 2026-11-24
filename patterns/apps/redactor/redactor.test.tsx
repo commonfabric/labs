@@ -72,6 +72,7 @@ export default pattern(() => {
   const action_paste_reply = action(() =>
     pastedReply.set("Dear Bob Brown, I'll pay on Friday. Thanks, Mr. Brown!")
   );
+  const clearPastedReply = action(() => pastedReply.set(""));
 
   const assert_empty_start = assert(() => redactor.modelPrompt === "");
 
@@ -146,6 +147,10 @@ export default pattern(() => {
       { assertion: assert_real_mention_kept },
       { assertion: assert_no_leaks },
       { assertion: assert_found_list },
+      { action: action_paste_reply },
+      { assertion: assert_reply_restored },
+      { assertion: assert_raw_refused },
+      { action: clearPastedReply },
       { assertion: assert_raw_refused },
       // The raw draft is refused at the public prompt.
       { action: redactor.sendRawDraft },

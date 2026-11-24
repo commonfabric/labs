@@ -5,16 +5,17 @@
  * nothing over a result the node already holds, so a client starting a piece
  * cold, whose first runs read inputs in spaces it has not loaded yet, never
  * replaces a stored result, for itself or for any other client, with one read
- * from data that had not arrived. Once the input has arrived, a refused run
- * clears the result, as one whose input holds nothing it can use should.
+ * from data that had not arrived. A confirmed refusal replaces the stale
+ * value with a diagnostic describing the failure.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -76,6 +77,7 @@ interface Shape {
 
 describe("refused-run-keeps-result", () => {
   let server: MemoryV2Server.Server;
+  let sessions: MemoryV2Server.SessionRegistry;
   let opened: { runtime: Runtime; storage: EmulatedStorageManager }[];
   let inputSpaceHeld: PromiseWithResolvers<void> | undefined;
   let shape: Shape;
@@ -99,7 +101,8 @@ describe("refused-run-keeps-result", () => {
     opened = [];
     inputSpaceHeld = undefined;
     shape = { pattern: COMPUTED_PATTERN };
-    server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
+    sessions = new MemoryV2Server.SessionRegistry();
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0, sessions });
     // A session on the input space opens only once the test lets it, so a
     // cold runtime's first run reads its input before the input arrives.
     const openSession = server.openSession.bind(server);
@@ -191,11 +194,11 @@ describe("refused-run-keeps-result", () => {
    */
   const startCold = async (
     compiled: { resultSchema?: unknown },
-    prepare?: (storage: EmulatedStorageManager) => void,
+    prepare?: (storage: EmulatedStorageManager, runtime: Runtime) => void,
   ) => {
     inputSpaceHeld = Promise.withResolvers<void>();
     const cold = open();
-    prepare?.(opened.at(-1)!.storage);
+    prepare?.(opened.at(-1)!.storage, cold);
     const coldResult = cold.getCell<Record<string, unknown>>(
       space,
       "result",
@@ -219,257 +222,283 @@ describe("refused-run-keeps-result", () => {
     await runtime.idle();
   };
 
-  it("leaves a result it already holds in place while its input has not arrived, and writes the input's result once it has", async () => {
-    // The stored `out` is stale: the input was renamed once the warm runtime
-    // stopped the piece, so the cold start's run has a different result to
-    // write once its input arrives. A third runtime watches `out` without
-    // running the piece, as another client showing it does.
-
-    const { warm, compiled, ref, result, outId } = await standUp("abc", true);
-    warm.runner.stop(result);
-    await rename(warm, ref, "def");
-    const watcher = open();
-    const watched = watcher.getCell<Record<string, unknown>>(
-      space,
-      "result",
-      compiled.resultSchema as never,
-    );
-    await watched.sync();
-    const watcherSeen: unknown[] = [];
-    const watcherSawNew = Promise.withResolvers<void>();
-    const cancelWatcher = watched.key("out").sink((value) => {
-      watcherSeen.push(value);
-      if ((value as unknown) === "out:def") watcherSawNew.resolve();
-    });
-    await watcher.idle();
-    await watcher.storageManager.synced();
-    expect(outRuns(watcher)).toBe(0);
-    const before = await storedValues(outId);
-
-    const { cold, coldResult, seen, cancel } = await startCold(compiled);
-    expect(outRuns(cold)).toBe(1);
-    expect(await storedValues(outId)).toEqual(before);
-    expect(coldResult.key("out").get()).toBe("out:abc");
-
-    await releaseInput(cold);
-    await watcher.idle();
-    await watcher.storageManager.synced();
-    expect(outRuns(cold)).toBe(2);
-    expect(coldResult.key("out").get()).toBe("out:def");
-    const after = await storedValues(outId);
-    expect(after.slice(0, before.length)).toEqual(before);
-    expect(after.slice(before.length)).toHaveLength(1);
-    expect(after.some((data) => data.includes("Undefined"))).toBe(false);
-    expect(seen).toEqual(["out:abc", "out:def"]);
-    // The server pushes the new value to the watcher after the cold runtime
-    // settles, so the case waits for the push to reach the watcher's
-    // subscription.
-    await watcherSawNew.promise;
-    expect(watcherSeen).toEqual(["out:abc", "out:def"]);
-    expect(outRuns(watcher)).toBe(0);
-    cancel();
-    cancelWatcher();
-  });
-
-  it("writes no result for a node that holds none while its input has not arrived, and writes the input's result once it has", async () => {
-    const { compiled, outId } = await standUp("abc", false);
-    const before = await storedValues(outId);
-    expect(before).toEqual([]);
-
-    const { cold, coldResult, cancel } = await startCold(compiled);
-    expect(outRuns(cold)).toBe(1);
-    expect(await storedValues(outId)).toEqual([]);
-    expect(coldResult.key("out").get()).toBeUndefined();
-
-    await releaseInput(cold);
-    expect(outRuns(cold)).toBe(2);
-    expect(coldResult.key("out").get()).toBe("out:abc");
-    const after = await storedValues(outId);
-    expect(after).toHaveLength(1);
-    expect(after[0]).toContain("out:abc");
-    cancel();
-  });
-
-  it("clears a result when its input has arrived holding a value of another shape", async () => {
-    // The input is here, so its value is what it is, and a run refused for
-    // it clears the result.
-
-    const { warm, ref, result, outId } = await standUp("abc", true);
-    const seen: unknown[] = [];
-    const cancel = result.key("out").sink((value) => {
-      seen.push(value);
-    });
-    await warm.idle();
-    {
-      const tx = warm.edit();
-      ref.withTx(tx).setRaw({ name: 5 } as never);
-      expect((await tx.commit().settled).error).toBeUndefined();
-    }
-    await warm.idle();
-    await warm.storageManager.synced();
-    expect(result.key("out").get()).toBeUndefined();
-    const stored = await storedValues(outId);
-    expect(stored.at(-1)).toContain("Undefined");
-    expect(seen.at(-1)).toBeUndefined();
-    cancel();
-  });
-
-  it("clears a result it kept through its input's transit once the input arrives absent", async () => {
-    // The piece's argument is pointed at a document nothing has written, in
-    // the input space, while nothing demands `out`. The cold start keeps the
-    // stored result while that space is out of reach, and clears it once the
-    // space has loaded and the document is known to be absent.
-
-    const { warm, compiled, result, outId } = await standUp("abc", true);
-    warm.runner.stop(result);
-    {
-      const tx = warm.edit();
-      result.withTx(tx).getArgumentCell<{ ref: unknown }>()!.key("ref").set(
-        warm.getCell<{ name: string }>(inputSpace, "never-written") as never,
-      );
-      expect((await tx.commit().settled).error).toBeUndefined();
-    }
-    await warm.idle();
-    await warm.storageManager.synced();
-    const before = await storedValues(outId);
-
-    const { cold, coldResult, cancel } = await startCold(compiled);
-    expect(await storedValues(outId)).toEqual(before);
-    expect(coldResult.key("out").get()).toBe("out:abc");
-
-    await releaseInput(cold);
-    expect(coldResult.key("out").get()).toBeUndefined();
-    const after = await storedValues(outId);
-    expect(after.slice(0, before.length)).toEqual(before);
-    expect(after.at(-1)).toContain("Undefined");
-    cancel();
-  });
-
-  it("clears a result it kept through its input's transit once the input's load fails, and asks for the load once", async () => {
-    // Every load of the input space's documents on the cold runtime fails
-    // once the case lets it, while the space stays out of reach. A failed
-    // load leaves the input unexamined, so a run that kept the result and
-    // asked for the load again would do so after every failure. The case
-    // counts the loads the runner asks for, of the input's whole document
-    // with no schema, apart from the schema-shaped ones the piece's start
-    // asks for.
-
-    const { warm, compiled, ref, result, outId } = await standUp("abc", true);
-    warm.runner.stop(result);
-    await rename(warm, ref, "def");
-    const before = await storedValues(outId);
-
-    const failure = Promise.withResolvers<never>();
-    failure.promise.catch(() => {});
-    let inputLoads = 0;
-    const secondLoad = Promise.withResolvers<"asked again">();
-    const { cold, coldResult, cancel } = await startCold(
-      compiled,
-      (storage) => {
-        const syncCell = storage.syncCell.bind(storage);
-        storage.syncCell = (cell, options) => {
-          const link = cell.getAsNormalizedFullLink();
-          if (link.space !== inputSpace) return syncCell(cell, options);
-          if (link.schema === undefined) {
-            inputLoads += 1;
-            if (inputLoads > 1) secondLoad.resolve("asked again");
-          }
-          return failure.promise;
-        };
-      },
-    );
-    expect(outRuns(cold)).toBe(1);
-    expect(inputLoads).toBe(1);
-    expect(coldResult.key("out").get()).toBe("out:abc");
-    const cleared = Promise.withResolvers<"cleared">();
-    const cancelCleared = coldResult.key("out").sink((value) => {
-      if (value === undefined) cleared.resolve("cleared");
-    });
-
-    failure.reject(new Error("Document load failed"));
-    expect(await Promise.race([cleared.promise, secondLoad.promise]))
-      .toBe("cleared");
-    await cold.idle();
-    expect(outRuns(cold)).toBe(2);
-    expect(inputLoads).toBe(1);
-    await cold.storageManager.synced();
-    const after = await storedValues(outId);
-    expect(after.slice(0, before.length)).toEqual(before);
-    expect(after.at(-1)).toContain("Undefined");
-    cancelCleared();
-    cancel();
-  });
-
-  it("clears a result it kept through its input's transit once the input's space refuses it, and asks for the load once", async () => {
-    // The input space is deleted while the cold runtime waits on it, so the
-    // space refuses the runtime's session and the input never arrives. A
-    // refused space neither delivers the document nor reports it absent, so
-    // a run that kept the result and asked for the load again would do so
-    // for as long as the runtime ran. The case counts the loads the runner
-    // asks for once the space is deleted, as the case above does, and races
-    // a second one against the result's clearing, so a run that keeps asking
-    // fails the case rather than holding it.
-
-    const { warm, compiled, ref, result, outId } = await standUp("abc", true);
-    warm.runner.stop(result);
-    await rename(warm, ref, "def");
-    const before = await storedValues(outId);
-
-    let deleted = false;
-    // The refusal the server gives every command to a deleted space.
-    const refusal: NonNullable<
-      Awaited<ReturnType<MemoryV2Server.Server["deletedSpaceRefusal"]>>
-    > = {
-      name: "AuthorizationError",
-      message: `Space ${inputSpace} is deleted`,
-      deleted: true,
-      permanentEvidence: true,
-      aclRevision: 1,
+  /** Counts loads initiated to establish readiness, apart from link prefetches. */
+  function watchReadinessLoads(
+    storage: EmulatedStorageManager,
+    runtime: Runtime,
+    target: Cell<{ name: string }>,
+    onLoad: () => void,
+    failure?: Promise<never>,
+  ): void {
+    const targetId = target.getAsNormalizedFullLink().id;
+    let checkingReadiness = false;
+    const ensure = runtime.ensureLinkedDocLoaded.bind(runtime);
+    runtime.ensureLinkedDocLoaded = (...args) => {
+      checkingReadiness = true;
+      try {
+        return ensure(...args);
+      } finally {
+        checkingReadiness = false;
+      }
     };
-    const deletedSpaceRefusal = server.deletedSpaceRefusal.bind(server);
-    server.deletedSpaceRefusal = (asked) =>
-      deleted && asked === inputSpace
-        ? Promise.resolve(refusal)
-        : deletedSpaceRefusal(asked);
+    const sync = storage.syncCell.bind(storage);
+    storage.syncCell = (cell, options) => {
+      const link = cell.getAsNormalizedFullLink();
+      if (link.space === inputSpace && link.id === targetId) {
+        if (checkingReadiness) onLoad();
+        if (failure !== undefined) return failure;
+      }
+      return sync(cell, options);
+    };
+  }
 
-    let loadsSinceDeletion = 0;
-    const secondLoad = Promise.withResolvers<"asked again">();
-    const { cold, coldResult, cancel } = await startCold(
-      compiled,
-      (storage) => {
-        const syncCell = storage.syncCell.bind(storage);
-        storage.syncCell = (cell, options) => {
-          const link = cell.getAsNormalizedFullLink();
-          if (
-            deleted && link.space === inputSpace && link.schema === undefined
-          ) {
-            loadsSinceDeletion += 1;
-            if (loadsSinceDeletion > 1) secondLoad.resolve("asked again");
-          }
-          return syncCell(cell, options);
-        };
-      },
-    );
-    expect(outRuns(cold)).toBe(1);
-    expect(coldResult.key("out").get()).toBe("out:abc");
-    const cleared = Promise.withResolvers<"cleared">();
-    const cancelCleared = coldResult.key("out").sink((value) => {
-      if (value === undefined) cleared.resolve("cleared");
+  function verifyRefusals() {
+    it("leaves a result it already holds in place while its input has not arrived, and writes the input's result once it has", async () => {
+      // The stored `out` is stale: the input was renamed once the warm runtime
+      // stopped the piece, so the cold start's run has a different result to
+      // write once its input arrives. A third runtime watches `out` without
+      // running the piece, as another client showing it does.
+
+      const { warm, compiled, ref, result, outId } = await standUp("abc", true);
+      warm.runner.stop(result);
+      await rename(warm, ref, "def");
+      const watcher = open();
+      const watched = watcher.getCell<Record<string, unknown>>(
+        space,
+        "result",
+        compiled.resultSchema as never,
+      );
+      await watched.sync();
+      const watcherSeen: unknown[] = [];
+      const watcherSawNew = Promise.withResolvers<void>();
+      const cancelWatcher = watched.key("out").sink((value) => {
+        watcherSeen.push(value);
+        if ((value as unknown) === "out:def") watcherSawNew.resolve();
+      });
+      await watcher.idle();
+      await watcher.storageManager.synced();
+      expect(outRuns(watcher)).toBe(0);
+      const before = await storedValues(outId);
+
+      const { cold, coldResult, seen, cancel } = await startCold(compiled);
+      expect(outRuns(cold)).toBe(1);
+      expect(await storedValues(outId)).toEqual(before);
+      expect(coldResult.key("out").get()).toBe("out:abc");
+
+      await releaseInput(cold);
+      await watcher.idle();
+      await watcher.storageManager.synced();
+      expect(outRuns(cold)).toBe(2);
+      expect(coldResult.key("out").get()).toBe("out:def");
+      const after = await storedValues(outId);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length)).toHaveLength(1);
+      expect(after.some((data) => data.includes("Undefined"))).toBe(false);
+      expect(seen).toEqual(["out:abc", "out:def"]);
+      // The server pushes the new value to the watcher after the cold runtime
+      // settles, so the case waits for the push to reach the watcher's
+      // subscription.
+      await watcherSawNew.promise;
+      expect(watcherSeen).toEqual(["out:abc", "out:def"]);
+      expect(outRuns(watcher)).toBe(0);
+      cancel();
+      cancelWatcher();
     });
 
-    deleted = true;
-    inputSpaceHeld!.resolve();
-    expect(await Promise.race([cleared.promise, secondLoad.promise]))
-      .toBe("cleared");
-    await cold.idle();
-    expect(loadsSinceDeletion).toBeLessThanOrEqual(1);
-    await cold.storageManager.synced();
-    const after = await storedValues(outId);
-    expect(after.slice(0, before.length)).toEqual(before);
-    expect(after.at(-1)).toContain("Undefined");
-    cancelCleared();
-    cancel();
-  });
+    it("writes no result for a node that holds none while its input has not arrived, and writes the input's result once it has", async () => {
+      const { compiled, outId } = await standUp("abc", false);
+      const before = await storedValues(outId);
+      expect(before).toEqual([]);
+
+      const { cold, coldResult, cancel } = await startCold(compiled);
+      expect(outRuns(cold)).toBe(1);
+      expect(await storedValues(outId)).toEqual([]);
+      expect(coldResult.key("out").get()).toBeUndefined();
+
+      await releaseInput(cold);
+      expect(outRuns(cold)).toBe(2);
+      expect(coldResult.key("out").get()).toBe("out:abc");
+      const after = await storedValues(outId);
+      expect(after).toHaveLength(1);
+      expect(after[0]).toContain("out:abc");
+      cancel();
+    });
+
+    it("replaces a stale result with a schema error when the input has the wrong shape", async () => {
+      const { warm, ref, result, outId } = await standUp("abc", true);
+      const seen: unknown[] = [];
+      const cancel = result.key("out").sink((value) => {
+        seen.push(value);
+      });
+      await warm.idle();
+      {
+        const tx = warm.edit();
+        ref.withTx(tx).setRaw({ name: 5 } as never);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await warm.idle();
+      await warm.storageManager.synced();
+      const error = result.key("out").get();
+      expect(isUnavailable(error) && error.errorKind).toBe("schemaMismatch");
+      const stored = await storedValues(outId);
+      expect(stored.at(-1)).toContain("schemaMismatch");
+      expect(seen.at(-1)).toEqual(error);
+      cancel();
+    });
+
+    it("reports a schema error only after the store confirms the input is absent", async () => {
+      // The piece's argument is pointed at a document nothing has written, in
+      // the input space, while nothing demands `out`. The cold start keeps the
+      // stored result while that space is out of reach.
+
+      const { warm, compiled, result, outId } = await standUp("abc", true);
+      warm.runner.stop(result);
+      {
+        const tx = warm.edit();
+        result.withTx(tx).getArgumentCell<{ ref: unknown }>()!.key("ref").set(
+          warm.getCell<{ name: string }>(inputSpace, "never-written") as never,
+        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await warm.idle();
+      await warm.storageManager.synced();
+      const before = await storedValues(outId);
+
+      const { cold, coldResult, cancel } = await startCold(compiled);
+      expect(await storedValues(outId)).toEqual(before);
+      expect(coldResult.key("out").get()).toBe("out:abc");
+
+      await releaseInput(cold);
+      const error = coldResult.key("out").get();
+      expect(isUnavailable(error) && error.errorKind).toBe("schemaMismatch");
+      const after = await storedValues(outId);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length)).toHaveLength(1);
+      expect(after.at(-1)).toContain("schemaMismatch");
+      cancel();
+    });
+
+    it("reports the failed load once, with its cause, without asking for it again", async () => {
+      // Every load of the input space's documents on the cold runtime fails
+      // once the case lets it, while the space stays out of reach. A failed
+      // load leaves the input unexamined, so a run that kept the result and
+      // asked for the load again would do so after every failure. The case
+      // counts storage requests made to establish readiness, separately from
+      // best-effort prefetches made while resolving the piece's links.
+
+      const { warm, compiled, ref, result, outId } = await standUp("abc", true);
+      warm.runner.stop(result);
+      await rename(warm, ref, "def");
+      const before = await storedValues(outId);
+
+      const failure = Promise.withResolvers<never>();
+      failure.promise.catch(() => {});
+      let inputLoads = 0;
+      const secondLoad = Promise.withResolvers<"asked again">();
+      const { cold, coldResult, cancel } = await startCold(
+        compiled,
+        (storage, runtime) => {
+          watchReadinessLoads(storage, runtime, ref, () => {
+            if (++inputLoads > 1) secondLoad.resolve("asked again");
+          }, failure.promise);
+        },
+      );
+      expect(outRuns(cold)).toBe(1);
+      expect(inputLoads).toBe(1);
+      expect(coldResult.key("out").get()).toBe("out:abc");
+      const reported = Promise.withResolvers<"reported">();
+      const cancelReported = coldResult.key("out").sink((value) => {
+        if (isUnavailable(value) && value.errorKind === "sync") {
+          reported.resolve("reported");
+        }
+      });
+
+      failure.reject(new Error("Document load failed"));
+      expect(await Promise.race([reported.promise, secondLoad.promise]))
+        .toBe("reported");
+      await cold.idle();
+      expect(outRuns(cold)).toBe(2);
+      expect(inputLoads).toBe(1);
+      await cold.storageManager.synced();
+      const after = await storedValues(outId);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length)).toHaveLength(1);
+      expect(after.at(-1)).toContain("Document load failed");
+      const error = coldResult.key("out").get();
+      expect(isUnavailable(error) && error.message).toBe(
+        "Document load failed",
+      );
+      cancelReported();
+      cancel();
+    });
+    it("reports a terminal refusal once the input's space refuses the reader, without repeatedly requesting it", async () => {
+      // The input space is deleted while the cold runtime waits on it, so the
+      // space refuses the runtime's session and the input never arrives. A
+      // refused space neither delivers the document nor reports it absent, so
+      // a run that kept the result and asked for the load again would do so
+      // for as long as the runtime ran. The case counts the loads the runner
+      // asks for once the space is deleted, as the case above does, and races
+      // a second one against the diagnostic, so a run that keeps asking
+      // fails the case rather than holding it.
+
+      const { warm, compiled, ref, result, outId } = await standUp("abc", true);
+      warm.runner.stop(result);
+      await rename(warm, ref, "def");
+      const before = await storedValues(outId);
+
+      let deleted = false;
+      // The refusal the server gives every command to a deleted space.
+      const refusal: NonNullable<
+        Awaited<ReturnType<MemoryV2Server.Server["deletedSpaceRefusal"]>>
+      > = {
+        name: "AuthorizationError",
+        message: `Space ${inputSpace} is deleted`,
+        deleted: true,
+        permanentEvidence: true,
+        aclRevision: 1,
+      };
+      const deletedSpaceRefusal = server.deletedSpaceRefusal.bind(server);
+      server.deletedSpaceRefusal = (asked) =>
+        deleted && asked === inputSpace
+          ? Promise.resolve(refusal)
+          : deletedSpaceRefusal(asked);
+
+      let loadsSinceDeletion = 0;
+      const secondLoad = Promise.withResolvers<"asked again">();
+      const { cold, coldResult, cancel } = await startCold(
+        compiled,
+        (storage, runtime) => {
+          watchReadinessLoads(storage, runtime, ref, () => {
+            if (deleted && ++loadsSinceDeletion > 1) {
+              secondLoad.resolve("asked again");
+            }
+          });
+        },
+      );
+      expect(outRuns(cold)).toBe(1);
+      expect(coldResult.key("out").get()).toBe("out:abc");
+      const reported = Promise.withResolvers<unknown>();
+      const cancelReported = coldResult.key("out").sink((value) => {
+        if (isUnavailable(value) && value.isError()) reported.resolve(value);
+      });
+
+      deleted = true;
+      inputSpaceHeld!.resolve();
+      const error = await Promise.race([reported.promise, secondLoad.promise]);
+      expect(isUnavailable(error) && error.errorKind).toBe("schemaMismatch");
+      await cold.idle();
+      expect(loadsSinceDeletion).toBeLessThanOrEqual(1);
+      await cold.storageManager.synced();
+      const after = await storedValues(outId);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length)).toHaveLength(1);
+      expect(after.at(-1)).toContain("schemaMismatch");
+      cancelReported();
+      cancel();
+    });
+  }
+
+  describe("a computed with lazy inputs", verifyRefusals);
 
   it("keeps a result through a later transit of an input whose kept load delivered it", async () => {
     // The cold runtime keeps the stored result through its input's transit,
@@ -535,8 +564,19 @@ describe("refused-run-keeps-result", () => {
     expect(coldResult.key("out").get()).toBe("out:def:0");
     expect(await storedValues(outId)).toEqual(before);
 
+    // A new route has no session from the previous route. The loopback
+    // server serves both, so remove only that route's detached session.
+    sessions.remove(inputSpace, cold.storageManager.id);
     inputSpaceHeld.resolve();
     await replaced;
+    await cold.idle();
+    await cold.storageManager.synced();
+    await cold.idle();
+    expect(coldResult.key("out").get()).toBe("out:def:1");
+    const after = await storedValues(outId);
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(after.slice(before.length)).toHaveLength(1);
+    expect(after.at(-1)).toContain("out:def:1");
     cancel();
   });
 
@@ -548,25 +588,6 @@ describe("refused-run-keeps-result", () => {
       shape = { pattern: LIFT_PATTERN, lazyMaterialization: false };
     });
 
-    it("leaves a result it already holds in place while its argument has not arrived, and writes the argument's result once it has", async () => {
-      const { warm, compiled, ref, result, outId } = await standUp(
-        "abc",
-        true,
-      );
-      warm.runner.stop(result);
-      await rename(warm, ref, "def");
-      const before = await storedValues(outId);
-
-      const { cold, coldResult, cancel } = await startCold(compiled);
-      expect(outRuns(cold)).toBe(1);
-      expect(await storedValues(outId)).toEqual(before);
-      expect(coldResult.key("out").get()).toBe("out:abc");
-
-      await releaseInput(cold);
-      expect(coldResult.key("out").get()).toBe("out:def");
-      const after = await storedValues(outId);
-      expect(after.some((data) => data.includes("Undefined"))).toBe(false);
-      cancel();
-    });
+    verifyRefusals();
   });
 });

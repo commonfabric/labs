@@ -7,6 +7,7 @@ import {
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   SELF,
   Stream,
   UI,
@@ -291,7 +292,7 @@ const deleteSelectedNotes = handler<
   {
     notes: Writable<NotePiece[]>;
     selectedNoteIndices: Writable<number[]>;
-    pieceRegistry: Writable<NotePiece[] | Default<[]>>;
+    pieceRegistry: Writable<MinimalPiece[] | Default<[]>>;
     notebooks: Writable<NotebookPiece[]>;
   }
 >((_, { notes, selectedNoteIndices, pieceRegistry, notebooks }) => {
@@ -551,10 +552,13 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
     const notebooks = notebookWish.candidates;
 
     // The registry is writable for creating notes and notebooks.
-    const pieceRegistry = wish<Writable<NotePiece[]>>({
+    const pieceRegistryWish = wish<Writable<MinimalPiece[]>>({
       query: "#pieceRegistry",
       headless: true,
-    }).result!;
+    });
+    const pieceRegistry: Writable<MinimalPiece[]> = resultOf(
+      pieceRegistryWish.result,
+    );
 
     // Use computed() for proper reactive tracking of notes.length
     const noteCount = computed(() => notes.get().length);

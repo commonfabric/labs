@@ -11,8 +11,14 @@ import {
   computed,
   type Default,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -108,7 +114,13 @@ export default pattern<AgentInput, AgentOutput>(
       query: "#activityLog",
       headless: true,
     });
-    const activityLog = activityLogWish.result;
+    const activityLog = hasError(activityLogWish.result) ||
+        isObsolete(activityLogWish.result) ||
+        isPending(activityLogWish.result) ||
+        isSyncing(activityLogWish.result) ||
+        hasSchemaMismatch(activityLogWish.result)
+      ? undefined
+      : resultOf(activityLogWish.result);
 
     // Bind module-scope handlers
     const setDirective = setDirectiveHandler({ directive });

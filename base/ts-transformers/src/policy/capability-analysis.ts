@@ -1649,6 +1649,20 @@ function isCallOrNewArgumentUsage(
   return false;
 }
 
+function isAvailabilityGuardArgumentUsage(
+  usage: ts.Expression,
+  checker?: ts.TypeChecker,
+): boolean {
+  const parent = usage.parent;
+  return !!(
+    checker &&
+    parent &&
+    ts.isCallExpression(parent) &&
+    parent.arguments.includes(usage) &&
+    detectCallKind(parent, checker)?.kind === "availability-guard"
+  );
+}
+
 function isArrayIdentityWriterArgumentUsage(
   usage: ts.Expression,
 ): boolean {
@@ -2014,7 +2028,9 @@ function isKnownIdentityArgumentCall(
   checker?: ts.TypeChecker,
 ): boolean {
   return isKnownIdentityEqualsCall(call, checker) ||
-    isKnownIdentityNavigationCallee(call.expression, checker);
+    isKnownIdentityNavigationCallee(call.expression, checker) ||
+    (checker !== undefined &&
+      detectCallKind(call, checker)?.kind === "availability-guard");
 }
 
 function isAliasShape(binding: AliasBinding): binding is AliasShape {
@@ -3109,6 +3125,13 @@ export function analyzeFunctionCapabilities(
       expression: ts.Expression,
     ): AliasBinding | undefined => {
       const current = unwrapExpression(expression);
+      if (
+        checker && ts.isCallExpression(current) &&
+        detectCallKind(current, checker)?.kind === "availability-result" &&
+        current.arguments[0]
+      ) {
+        return resolveBinding(current.arguments[0]);
+      }
       // A fallback's value is one operand's, and a conditional's one branch's.
       // An operand that resolves to nothing tracked contributes no ref.
       const operands = ts.isBinaryExpression(current) &&
@@ -3684,11 +3707,12 @@ export function analyzeFunctionCapabilities(
     const markIdentityUseRef = (
       ref: SourceRef,
       expr?: ts.Expression,
-      options?: { comparable?: boolean },
+      options?: { comparable?: boolean; cellLike?: boolean },
     ): void => {
-      const cellLike = expr
-        ? isCellLikeExpression(expr) || !isPrimitiveLikeExpression(expr)
-        : false;
+      const cellLike = options?.cellLike ??
+        (expr
+          ? isCellLikeExpression(expr) || !isPrimitiveLikeExpression(expr)
+          : false);
       const record = options?.comparable
         ? recordComparablePath
         : recordIdentityPath;
@@ -4459,6 +4483,8 @@ export function analyzeFunctionCapabilities(
                 )
               )
             ) {
+              const availabilityGuardArgumentUse =
+                isAvailabilityGuardArgumentUsage(usage, checker);
               const identityArrayLocal =
                 getIdentityArrayLocalNameForElementUsage(usage);
               const identityOnlyArrayElementUse = !!identityArrayLocal &&
@@ -4502,7 +4528,8 @@ export function analyzeFunctionCapabilities(
                 ) {
                   if (identityOnlyArgumentUse) {
                     recordIdentityPath(resolvedSource.root, [], {
-                      cellLike: isCellLikeExpression(usage),
+                      cellLike: !availabilityGuardArgumentUse &&
+                        isCellLikeExpression(usage),
                     });
                   }
                   markPassthrough(
@@ -4518,7 +4545,8 @@ export function analyzeFunctionCapabilities(
                   identityOnlyArgumentUse && !resolvedSource.dynamic
                 ) {
                   recordIdentityPath(resolvedSource.root, resolvedSource.path, {
-                    cellLike: isCellLikeExpression(usage),
+                    cellLike: !availabilityGuardArgumentUse &&
+                      isCellLikeExpression(usage),
                   });
                 } else if (
                   (identityOnlyArrayElementUse ||
@@ -4555,6 +4583,10 @@ export function analyzeFunctionCapabilities(
           if (
             !(parent && ts.isCallExpression(parent) &&
               parent.expression === node) &&
+            !isAvailabilityGuardArgumentUsage(
+              outermostTransparentWrapper(node),
+              checker,
+            ) &&
             !isOptionalAliasInitializerMemberUsage(node) &&
             // A member-access argument (e.g. `state.auth`) whose callee parameter
             // type already supplied the capability is accounted for, same as a
@@ -4668,6 +4700,8 @@ export function analyzeFunctionCapabilities(
         }
 
         const identityEqualsCall = isKnownIdentityEqualsCall(node, checker);
+        const availabilityGuardCall = checker !== undefined &&
+          detectCallKind(node, checker)?.kind === "availability-guard";
         const identityArgumentCall = isKnownIdentityArgumentCall(node, checker);
         const capabilityHandledArgs = new Set<number>();
         const calleeSummary = resolveInterproceduralSummary(node);
@@ -4989,7 +5023,11 @@ export function analyzeFunctionCapabilities(
 
         // Passing a tracked root object into an opaque helper can conceal
         // indirect traversal/mutation; conservatively disable shrinking.
-        if (!identityArgumentCall) {
+        if (
+          !identityArgumentCall &&
+          !(checker &&
+            detectCallKind(node, checker)?.kind === "availability-result")
+        ) {
           for (const [index, argument] of node.arguments.entries()) {
             if (capabilityHandledArgs.has(index)) {
               continue;
@@ -5014,6 +5052,7 @@ export function analyzeFunctionCapabilities(
             for (const source of sources) {
               markIdentityUseRef(source, comparedArgument, {
                 comparable: identityEqualsCall,
+                ...(availabilityGuardCall ? { cellLike: false } : {}),
               });
             }
             if (sources.length > 0) identityArgumentUses.add(comparedArgument);

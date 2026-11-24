@@ -71,9 +71,7 @@ describe("wish favorite discovery", () => {
       const restore = runtime.edit();
       missing.withTx(restore).set({ version: 1, name: "Restored provider" });
       expect((await restore.commit().settled).error).toBeUndefined();
-      // The wish builtin is debounced; move logical time past the window.
-      await clock.tick(100);
-      await runtime.idle();
+      await runtime.settled();
       expect(found.key("candidates").get()).toHaveLength(2);
       expect(selected.key("name").get()).toBe("Restored provider");
     } finally {

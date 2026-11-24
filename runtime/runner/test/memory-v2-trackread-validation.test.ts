@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { ignoreReadForCommit } from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase("memory-v2-trackread-validation");
 const space = signer.did();
@@ -70,6 +71,46 @@ describe("trackReadWithoutLoad validation", () => {
       tx1Commit.error.name,
       "StorageTransactionInconsistent",
       "error should be StorageTransactionInconsistent",
+    );
+  });
+
+  it("does not validate a read explicitly ignored for commit", async () => {
+    const sourceId = "of:ignore-read-for-commit-source" as const;
+    const outputId = "of:ignore-read-for-commit-output" as const;
+
+    const seedTx = storage.edit();
+    const seedWrite = seedTx.write(
+      { space, id: sourceId, type, path: [] },
+      { value: { count: 0 } },
+    );
+    assert(seedWrite.ok, "seed write should succeed");
+    assert((await seedTx.commit().settled).ok, "seed commit should succeed");
+
+    const tx1 = storage.edit();
+    const ignoredRead = tx1.read(
+      { space, id: sourceId, type, path: [] },
+      { meta: ignoreReadForCommit },
+    );
+    assert(ignoredRead.ok, "ignored read should succeed");
+
+    const tx2 = storage.edit();
+    const concurrentWrite = tx2.write(
+      { space, id: sourceId, type, path: [] },
+      { value: { count: 1 } },
+    );
+    assert(concurrentWrite.ok, "concurrent write should succeed");
+    assert((await tx2.commit().settled).ok, "concurrent commit should succeed");
+
+    const unrelatedWrite = tx1.write(
+      { space, id: outputId, type, path: [] },
+      { value: { unrelated: true } },
+    );
+    assert(unrelatedWrite.ok, "unrelated write should succeed");
+
+    const tx1Commit = await tx1.commit().settled;
+    assert(
+      tx1Commit.ok,
+      `ignored read must not reject commit: ${tx1Commit.error?.name}`,
     );
   });
 });

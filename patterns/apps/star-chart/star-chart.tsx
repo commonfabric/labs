@@ -28,9 +28,11 @@ import {
   Default,
   FS,
   handler,
+  ifElse,
   NAME,
   pattern,
   type PerSpace,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -582,13 +584,11 @@ const StarChart = pattern<StarChartInput, StarChartOutput>(
   ({ goalName, goalDescription, days, todayOverride }) => {
     // Re-read every five minutes; only the date part is used.
     const nowCell = wish<number>({ query: "#now/300" });
-    const today = computed(() => {
-      const override = todayOverride.get();
-      if (override) return override;
-      return nowCell.result == null
-        ? ""
-        : formatLocalDate(new Date(nowCell.result));
-    });
+    const tick = resultOf(nowCell.result);
+    const clockDate = computed(() =>
+      tick == null ? "" : formatLocalDate(new Date(tick))
+    );
+    const today = ifElse(todayOverride.get(), todayOverride.get(), clockDate);
 
     const viewMode = new Writable.perSession<ViewMode>("main");
 

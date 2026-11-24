@@ -6,13 +6,15 @@
  */
 import {
   compileAndRun,
+  compileDiagnosticsOf,
   computed,
   Default,
   handler,
-  ifElse,
+  hasError,
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   UI,
   Writable,
 } from "commonfabric";
@@ -55,12 +57,19 @@ const handleEditContent = handler<
 );
 
 export default pattern<Input>(({ code }) => {
-  const { result, error, errors } = compileAndRun({
+  const compileRequest = compileAndRun({
     files: [{ name: "/main.tsx", contents: code }],
     main: "/main.tsx",
   });
+  const result = resultOf(compileRequest);
 
-  const problem = computed(() => compileFailure(error, errors));
+  const diagnostics = compileDiagnosticsOf(compileRequest);
+  const problem = computed(() =>
+    compileFailure(
+      hasError(compileRequest) ? compileRequest.message : undefined,
+      diagnostics,
+    )
+  );
 
   return {
     [NAME]: "My First Compiler",
@@ -71,15 +80,11 @@ export default pattern<Input>(({ code }) => {
           language="text/x.typescript"
           oncf-change={updateCode({ code })}
         />
-        {ifElse(
-          problem,
-          <b>fix the error: {problem}</b>,
-          <cf-button
-            onClick={visit({ result })}
-          >
-            Navigate To Piece
-          </cf-button>,
-        )}
+        {problem
+          ? <b>fix the error: {problem}</b>
+          : (
+            <cf-button onClick={visit({ result })}>Navigate To Piece</cf-button>
+          )}
       </div>
     ),
     code,

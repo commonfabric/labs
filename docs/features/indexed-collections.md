@@ -23,10 +23,12 @@ gives it. The declaration is plain data read when the pattern is built.
 
 ```tsx
 import {
+  type AsyncResult,
   handler,
   indexedCollections,
   type IndexedCollections,
   pattern,
+  type SqliteQueryResult,
   type Stream,
 } from "commonfabric";
 
@@ -43,7 +45,7 @@ const stock = handler<{ donut: Donut }, { shop: Shop }>(
 );
 
 export default pattern<Record<string, never>, {
-  cheapest: { pending: boolean; result?: { name: string }[] };
+  cheapest: AsyncResult<SqliteQueryResult<{ name: string }>>;
   stock: Stream<{ donut: Donut }>;
 }>(() => {
   const shop = indexedCollections<{ donuts: Donut }>({
@@ -160,10 +162,12 @@ one statement can join them.
 
 ```tsx
 import {
+  type AsyncResult,
   handler,
   indexedCollections,
   type IndexedCollections,
   pattern,
+  type SqliteQueryResult,
   type Stream,
 } from "commonfabric";
 
@@ -183,10 +187,7 @@ const place = handler<{ order: Order }, { shop: Shop }>(
 );
 
 export default pattern<Record<string, never>, {
-  lastOrdered: {
-    pending: boolean;
-    result?: { name: string; last: number | null }[];
-  };
+  lastOrdered: AsyncResult<SqliteQueryResult<{ name: string; last: number | null }>>;
   place: Stream<{ order: Order }>;
 }>(() => {
   const shop = indexedCollections<{ donuts: Donut; orders: Order }>({

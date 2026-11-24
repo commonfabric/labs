@@ -417,6 +417,15 @@ export type ConnectionState =
   | "failed"
   | "closed";
 
+/** Per-space lifecycle, ready only after that session's restore barrier settles. */
+export type SpaceSessionConnectionState =
+  | { readonly status: "ready"; readonly epoch: number }
+  | {
+    readonly status: "disconnected" | "closed";
+    readonly epoch: number;
+    readonly cause: Error;
+  };
+
 export type MountOptions = {
   /** Require the space's complete persisted custom-root intent. */
   genesisRoot?: GenesisRoot;
@@ -3339,7 +3348,7 @@ export class Client {
       for (const session of this.#spaces) session.invalidateDelivery(error);
     }
     for (const session of this.#spaces) {
-      session.handleDisconnect();
+      session.handleDisconnect(toConnectionError(error));
     }
     this.#rejectPending(toConnectionError(error));
     void this.#reconnect().catch(() => undefined);
@@ -3469,7 +3478,7 @@ export class Client {
     // session's restore to fail.
     this.#rejectPending(toConnectionError(err));
     for (const session of this.#spaces) {
-      session.handleDisconnect();
+      session.handleDisconnect(toConnectionError(err));
     }
     // A restore can fail after hello succeeded while the socket stays open.
     // The next hello needs a new connection and auth challenge.
@@ -3549,6 +3558,14 @@ export class SpaceSession {
   #viewIntentVersion = 0;
   #restoreComplete: PromiseWithResolvers<void> | undefined;
   #viewCapabilityLostObservers = new Set<() => void>();
+  #connectionState: SpaceSessionConnectionState = Object.freeze({
+    status: "ready",
+    epoch: 1,
+  });
+  #connectionGeneration = 0;
+  readonly #connectionObservers = new Set<
+    (state: SpaceSessionConnectionState) => void
+  >();
   #terminationObservers = new Set<(error: Error) => void>();
   #serverSeqObservers = new Set<(serverSeq: number) => void>();
   #watchSpecPositions = new Map<string, number[]>();
@@ -4799,6 +4816,39 @@ export class SpaceSession {
     this.#noteCaughtUpLocalSeq(effect.caughtUpLocalSeq);
   }
 
+  /** Observes this space's restored and disconnected states, including its current state. */
+  subscribeConnectionState(
+    callback: (state: SpaceSessionConnectionState) => void,
+  ): () => void {
+    if (!this.#closed) this.#connectionObservers.add(callback);
+    this.#notifyConnectionObserver(callback);
+    return () => {
+      this.#connectionObservers.delete(callback);
+    };
+  }
+
+  #notifyConnectionObserver(
+    callback: (state: SpaceSessionConnectionState) => void,
+  ): void {
+    try {
+      callback(this.#connectionState);
+    } catch (error) {
+      console.error("session-connection subscriber threw:", error);
+    }
+  }
+
+  #publishConnectionState(state: SpaceSessionConnectionState): void {
+    this.#connectionState = Object.freeze(state);
+    for (const callback of [...this.#connectionObservers]) {
+      if (this.#connectionState !== state) break;
+      this.#notifyConnectionObserver(callback);
+    }
+  }
+
+  get connectionState(): SpaceSessionConnectionState {
+    return this.#connectionState;
+  }
+
   /** Waits for session authentication and watch restoration on this connection. */
   async whenRestored(): Promise<void> {
     this.#assertOpen();
@@ -4814,6 +4864,7 @@ export class SpaceSession {
     if (this.#closed) {
       return;
     }
+    const connectionGeneration = this.#connectionGeneration;
     if (
       (this.holdingsProvider !== undefined ||
         this.#invalidDelivery !== undefined) &&
@@ -4957,11 +5008,30 @@ export class SpaceSession {
       }
       this.#rejoinPresenceRooms();
       await Promise.all(replayTasks);
+      if (this.#closed) return;
+      if (
+        this.#connectionGeneration !== connectionGeneration ||
+        !this.#client.isConnected()
+      ) {
+        throw toConnectionError(
+          new Error("connection lost during restoration"),
+        );
+      }
+      this.#restoreComplete?.resolve();
+      this.#restoreComplete = undefined;
+      if (
+        !this.#closed && this.#readyOnConnection &&
+        this.#client.isConnected() &&
+        this.#connectionState.status === "disconnected"
+      ) {
+        this.#publishConnectionState({
+          status: "ready",
+          epoch: this.#connectionState.epoch + 1,
+        });
+      }
       if (
         this.#client.isConnected() && this.#invalidDelivery === invalidDelivery
       ) this.#invalidDelivery = undefined;
-      this.#restoreComplete?.resolve();
-      this.#restoreComplete = undefined;
       this.#heldRestores = 0;
       if (wasHeld) this.#client.noteHoldEnded();
     } catch (error) {
@@ -5088,6 +5158,12 @@ export class SpaceSession {
     }
     this.#closed = true;
     this.#closeError = new Error("memory session closed");
+    this.#publishConnectionState({
+      status: "closed",
+      epoch: this.#connectionState.epoch,
+      cause: this.#closeError,
+    });
+    this.#connectionObservers.clear();
     this.#endHold();
     if (
       this.#client.serverFlags?.sessionClose === true &&
@@ -5188,6 +5264,12 @@ export class SpaceSession {
     this.#closed = true;
     this.#terminated = true;
     this.#closeError = error;
+    this.#publishConnectionState({
+      status: "closed",
+      epoch: this.#connectionState.epoch,
+      cause: error,
+    });
+    this.#connectionObservers.clear();
     this.#endHold();
     this.#restoreComplete?.reject(error);
     this.#restoreComplete = undefined;
@@ -5238,22 +5320,29 @@ export class SpaceSession {
     this.#terminateSession(error);
   }
 
-  /**
-   * Marks the session as needing a restore on the next connection. A closed
-   * session is no longer the client's, so the client never calls this on one.
-   */
-  handleDisconnect(): void {
+  handleDisconnect(
+    cause: Error = new Error("memory session connection lost"),
+  ): void {
+    if (this.#closed) {
+      return;
+    }
     // The next connection restores this session; a held retry belongs to
     // the connection that is gone.
     this.#held = false;
     this.#cancelHeldRestore();
     this.#heldRestores = 0;
     this.#readyOnConnection = false;
-    // The restore this session now needs is pending from here on, so a
-    // request made before the reconnect reaches it waits for it.
+    this.#connectionGeneration++;
     if (this.#restoreComplete === undefined) {
       this.#restoreComplete = Promise.withResolvers<void>();
       this.#restoreComplete.promise.catch(() => {});
+    }
+    if (this.#connectionState.status !== "disconnected") {
+      this.#publishConnectionState({
+        status: "disconnected",
+        epoch: this.#connectionState.epoch,
+        cause,
+      });
     }
   }
 

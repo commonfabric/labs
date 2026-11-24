@@ -29,6 +29,10 @@ import MealOrchestrator from "./meal-orchestrator.tsx";
 
 export const llmMocks = [
   {
+    when: { lastMessageContains: "Unreadable planning notes" },
+    error: "No dishes could be read.",
+  },
+  {
     when: { lastMessageContains: "- 1 whole turkey" },
     object: {
       compatible: ["gluten-free"],
@@ -225,6 +229,23 @@ export default pattern(() => {
     hasText(meal[UI], "Skip: already in the meal") &&
     hasText(meal[UI], '"Sam brings rolls"')
   );
+  const action_write_unreadable = action(() =>
+    typeInto(
+      meal[UI],
+      "Rough ideas: turkey, Mom's stuffing, pie from Costco, Sam brings rolls...",
+      "Unreadable planning notes",
+    )
+  );
+  const assert_failed_linking = assert(() =>
+    meal.linkAnalysis === null && hasText(meal[UI], "No dishes could be read.")
+  );
+  const assert_failed_apply_keeps_menu = assert(() =>
+    meal.recipes.length === 3 && meal.preparedFoods.length === 1 &&
+    meal.recipes[2]?.name === "Green Beans"
+  );
+  const assert_failure_dismissed = assert(() =>
+    meal.linkAnalysis === null && !hasText(meal[UI], "No dishes could be read.")
+  );
 
   // Uncheck the cranberry sauce, then add the rest.
   const action_apply = action(() => {
@@ -316,6 +337,14 @@ export default pattern(() => {
       { assertion: assert_review },
       { action: action_apply },
       { assertion: assert_applied },
+      { action: action_write_unreadable },
+      { action: action_link },
+      { settle: true },
+      { assertion: assert_failed_linking },
+      { action: meal.applyLinking },
+      { assertion: assert_failed_apply_keeps_menu },
+      { action: meal.cancelLinking },
+      { assertion: assert_failure_dismissed },
       { action: action_mark },
       { assertion: assert_marked },
       { action: action_guests },

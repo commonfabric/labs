@@ -1,3 +1,11 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  unavailableMismatch,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
+
 import type {
   BuiltInGenerateObjectParams,
   BuiltInGenerateTextParams,
@@ -7,6 +15,7 @@ import type {
 import type { Schema } from "@commonfabric/api/schema";
 import { toDeepFrozenSchema } from "@commonfabric/data-model-schema";
 import { hashOf } from "@commonfabric/data-model";
+
 import {
   DEFAULT_GENERATE_OBJECT_MODEL,
   DEFAULT_MODEL_NAME,
@@ -38,6 +47,7 @@ import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
 import {
   schemaWithInjectionSafeAnnotations,
   validateAgainstSchema,
+  validateSchemaValue,
 } from "../cfc/schema-sanitization.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import {
@@ -55,6 +65,7 @@ import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { selectUnavailableInput } from "../data-unavailability.ts";
 import { llmToolExecutionHelpers } from "./llm-dialog.ts";
 import {
   GenerateObjectParamsSchema,
@@ -82,6 +93,80 @@ const logger = getLogger("llm", {
 });
 
 const client = new LLMClient();
+
+class GenerateObjectSchemaMismatchError extends Error {
+  override readonly name = "GenerateObjectSchemaMismatchError";
+}
+
+function errorUnavailable(error: unknown): UnavailableVariant {
+  return unavailableError(
+    error instanceof Error ? error : new Error(String(error)),
+  );
+}
+
+function generationUnavailableForError(
+  error: unknown,
+): UnavailableVariant {
+  return error instanceof GenerateObjectSchemaMismatchError
+    ? unavailableMismatch(error.message)
+    : errorUnavailable(error);
+}
+
+/**
+ * Upgrade a terminal pre-FabricUnavailable generation state in place. Legacy
+ * runtimes persisted `result: undefined` plus the sibling error string; the
+ * request hash still makes that state a cache hit, so reconcile it before the
+ * cache check rather than retrying the provider or leaving the direct result
+ * undefined forever.
+ */
+function reconcileLegacyGenerationError(
+  tx: IExtendedStorageTransaction,
+  requestHash: string,
+  currentRequestHash: string | undefined,
+  result: Cell<unknown>,
+  partial: Cell<unknown>,
+  pending: Cell<boolean>,
+  legacyError: unknown,
+): boolean {
+  if (
+    requestHash !== currentRequestHash || legacyError === undefined ||
+    result.withTx(tx).resolveAsCell().getRaw() !== undefined
+  ) {
+    return false;
+  }
+
+  const unavailable = errorUnavailable(legacyError);
+  result.withTx(tx).setRawUntyped(unavailable);
+  partial.withTx(tx).setRawUntyped(unavailable);
+  pending.withTx(tx).set(false);
+  return true;
+}
+
+function markerIsPending(marker: UnavailableVariant): boolean {
+  return marker.reason === "pending" || marker.reason === "syncing";
+}
+
+function generationResultIsSettled(value: unknown): boolean {
+  return value !== undefined &&
+    !(isUnavailable(value) && markerIsPending(value));
+}
+
+function markerErrorMessage(
+  marker: UnavailableVariant,
+): string | undefined {
+  return marker.reason === "error" ? marker.rawMessage ?? undefined : undefined;
+}
+
+function selectUnavailableGenerationInput(
+  inputsCell: Cell<unknown>,
+  tx: IExtendedStorageTransaction,
+  runtime: Runtime,
+): UnavailableVariant | undefined {
+  return selectUnavailableInput(
+    inputsCell.withTx(tx).resolveAsCell().getRaw(),
+    { runtime, tx, base: inputsCell },
+  );
+}
 
 // TODO(ja): investigate if generateText should be replaced by
 // a fetch builtin with streaming support
@@ -158,12 +243,24 @@ function setStampedObjectResult(
   resultSchema: JSONSchema | undefined,
   object: unknown,
 ): void {
+  // A pending/error FabricUnavailable occupies the result root as a concrete
+  // FabricInstance. Structured schema writes descend into object properties;
+  // replace that leaf with the legacy empty value first so nested stamped
+  // writes cannot be blocked by the prior control value. This is an internal
+  // write in the same transaction; no unavailable `undefined` is published,
+  // and every model byte still flows through the schema below.
+  const resultRoot = resultCell.key("result");
+  resultRoot.withTx(tx).setRawUntyped(undefined);
   const disabled = runtime.cfcEnforcementMode === "disabled";
-  const target = disabled
-    ? (resultSchema === undefined
-      ? resultCell.key("result")
-      : resultCell.key("result").asSchema(resultSchema))
-    : resultCell.key("result").asSchema(withLlmDerivedStamp(resultSchema));
+  if (disabled) {
+    if (resultSchema === undefined) {
+      resultRoot.withTx(tx).setRawUntyped(object as any);
+    } else {
+      resultRoot.asSchema(resultSchema).withTx(tx).set(object);
+    }
+    return;
+  }
+  const target = resultRoot.asSchema(withLlmDerivedStamp(resultSchema));
   target.withTx(tx).set(object);
 }
 
@@ -293,6 +390,10 @@ function createUpdatePartialCallback(
             return;
           }
           return runtime.editWithRetry((tx) => {
+            // `editWithRetry` re-runs this callback after a storage conflict.
+            // A newer request can become current between attempts, so the
+            // callback itself is the final writeback CAS boundary.
+            if (completed || thisRun !== getCurrentRun()) return;
             const partialCell = resultCell.key("partial").withTx(tx);
             partialCell.set(textToWrite);
           });
@@ -442,6 +543,7 @@ async function handleLLMError<T, P>(
   getCurrentRun: () => number,
   thisRun: number,
   resetPreviousHash: () => void,
+  resultForError?: (error: unknown) => unknown,
   /** The served-effect id this error writeback completes
    * (`<sink>:<hash>` — the enqueue id). Marks the write as an
    * effect-completion transaction under the serving posture
@@ -512,8 +614,14 @@ async function handleLLMError<T, P>(
     wrote = true;
     pendingCell.withTx(tx).set(false);
     errorCell.withTx(tx).set(message);
-    resultCell.withTx(tx).set(undefined as T);
-    partialCell.withTx(tx).set(undefined as P);
+    if (resultForError) {
+      const unavailable = resultForError(error);
+      resultCell.withTx(tx).setRawUntyped(unavailable as any);
+      partialCell.withTx(tx).setRawUntyped(unavailable as any);
+    } else {
+      resultCell.withTx(tx).set(undefined as T);
+      partialCell.withTx(tx).set(undefined as P);
+    }
     requestHashCell.withTx(tx).set(servedEnding ? undefined : requestHash);
   };
   if (abandoned !== undefined) {
@@ -899,7 +1007,9 @@ async function pullContextCells(
 }
 
 /**
- * Generate data via an LLM.
+ * Legacy stateful generation producer retained for persisted graph
+ * compatibility. New pattern code uses the direct generation APIs or
+ * `llmDialog<T>()`.
  *
  * Returns the complete result as `result` and the incremental result as
  * `partial`. `pending` is true while a request is pending.
@@ -1147,18 +1257,20 @@ export function llm(
     pendingWithLog.set(true);
     if (served) requestHashWithLog.set(hash);
 
-    // When queued, disable run cancellation — the queue manages lifecycle.
-    const getRunForCancellation = queueName
+    const getRunForWrite = queueName
       ? () => thisRun
       : requestGuard
       ? () => requestGuard.isCurrent(hash) ? thisRun : -1
       : () => state.currentRun;
+    // When queued, disable execution cancellation — the queue manages the
+    // provider lifecycle — while retaining current-request checks for writes.
+    const getRunForExecution = queueName ? () => thisRun : getRunForWrite;
 
     const { callback: updatePartial, cleanup: cleanupPartial } =
       createUpdatePartialCallback(
         resultCell,
         runtime,
-        getRunForCancellation,
+        getRunForWrite,
         thisRun,
       );
 
@@ -1176,7 +1288,7 @@ export function llm(
         resultCell.key("partial"),
         resultCell.key("requestHash"),
         hash,
-        getRunForCancellation,
+        getRunForExecution,
         thisRun,
         () => {
           // Only clear if this is still the current request; a newer request
@@ -1185,6 +1297,7 @@ export function llm(
             state.previousCallHash = undefined;
           }
         },
+        undefined,
         effectKey,
         undefined,
         requestGuard,
@@ -1214,6 +1327,7 @@ export function llm(
             state.previousCallHash = undefined;
           }
         },
+        undefined,
         effectKey,
         announceResult,
         requestGuard,
@@ -1268,7 +1382,7 @@ export function llm(
                 updatePartial,
                 runtime,
                 space: parentCell.space,
-                getCurrentRun: getRunForCancellation,
+                getCurrentRun: getRunForExecution,
                 thisRun,
                 onComplete: async (llmResult) => {
                   // Skip if a newer request has already superseded this one.
@@ -1280,6 +1394,10 @@ export function llm(
                   const groundingSources = extractGroundingSources(llmResult);
 
                   await runtime.editWithRetry((tx) => {
+                    if (
+                      (!served || queueName) &&
+                      hash !== state.previousCallHash
+                    ) return;
                     markEffectCompletion(tx, effectKey);
                     if (requestGuard && !requestGuard.accept(tx, hash)) return;
                     // D1b: attribute FIRST, then stamp the model-output fields —
@@ -1433,6 +1551,77 @@ export function generateText(
 
   const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
+
+    const unavailableInput = selectUnavailableGenerationInput(
+      inputsCell,
+      tx,
+      runtime,
+    );
+    if (unavailableInput) {
+      const outputScope = tx.getNarrowestReadScope();
+      const served = runtime.servingPosture &&
+        runtime.experimental.serverExecution;
+      const identity = served
+        ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
+        : undefined;
+      const stateKey = identity
+        ? resolveScopeKey(outputScope ?? "space", identity)
+        : "local";
+      let state = states.get(stateKey);
+      if (!state) {
+        state = {
+          currentRun: 0,
+          activeWork: 0,
+          lastRequestQueued: false,
+          staging: new Map(),
+        };
+        states.set(stateKey, state);
+      }
+      if (!state.cellsInitialized || state.cellScope !== outputScope) {
+        state.resultCell = ownedCell(
+          runtime,
+          tx,
+          parentCell,
+          { generateText: { result: cause } },
+          GenerateTextResultSchema,
+          outputScope,
+        );
+        state.resultCell.sync();
+        state.cellsInitialized = true;
+        state.cellScope = outputScope;
+      }
+      const resultCell = state.resultCell!;
+      const lifecycle = identity
+        ? trackLLMRequestLifecycle(
+          runtime,
+          tx,
+          states,
+          stateKey,
+          state,
+          resultCell,
+          identity,
+          publicationBinding,
+          ++requestSequence,
+        )
+        : undefined;
+      sendResult(tx, resultCell);
+      lifecycle?.recordPublication(tx);
+
+      state.currentRun++;
+      state.previousCallHash = undefined;
+      resultCell.key("pending").withTx(tx).set(
+        markerIsPending(unavailableInput),
+      );
+      resultCell.key("result").withTx(tx).setRawUntyped(unavailableInput);
+      resultCell.key("error").withTx(tx).set(
+        markerErrorMessage(unavailableInput),
+      );
+      resultCell.key("partial").withTx(tx).setRawUntyped(unavailableInput);
+      resultCell.key("requestHash").withTx(tx).set(undefined);
+      resultCell.key("groundingSources").withTx(tx).set(undefined);
+      return;
+    }
+
     const {
       system,
       prompt,
@@ -1542,9 +1731,14 @@ export function generateText(
         state.currentRun++;
         state.previousCallHash = undefined;
       }
-      resultWithLog.set(undefined);
+      const unavailable = unavailableError(
+        "Text generation requires a prompt or messages",
+        "invalidInput",
+      );
+      resultWithLog.setRawUntyped(unavailable);
       errorWithLog.set(undefined);
-      partialWithLog.set(undefined);
+      partialWithLog.setRawUntyped(unavailable);
+      requestHashWithLog.set(undefined);
       pendingWithLog.set(false);
       if (served && !state.lastRequestQueued) requestHashWithLog.set(undefined);
       return;
@@ -1588,13 +1782,27 @@ export function generateText(
       | string
       | undefined;
     const currentRequestHash = requestHashWithLog.get();
-    const currentResult = resultWithLog.get();
     const currentError = errorWithLog.get();
+    if (
+      reconcileLegacyGenerationError(
+        tx,
+        hash,
+        currentRequestHash,
+        resultCell.key("result"),
+        resultCell.key("partial"),
+        resultCell.key("pending"),
+        currentError,
+      )
+    ) {
+      return;
+    }
+    const currentResult = resultWithLog.get();
 
     // Return if the same request is being made again
     // Also return if there's an error for this request (don't retry automatically)
     if (
-      (currentResult !== undefined || currentError !== undefined) &&
+      (generationResultIsSettled(currentResult) ||
+        currentError !== undefined) &&
       hash === currentRequestHash
     ) {
       // The §4 memo hit (server-execution v2): stored key matches — the
@@ -1630,26 +1838,27 @@ export function generateText(
     }
     const thisRun = state.currentRun;
 
-    resultWithLog.set(undefined);
+    resultWithLog.setRawUntyped(UNAVAILABLE_PENDING);
     errorWithLog.set(undefined);
-    partialWithLog.set(undefined);
+    partialWithLog.setRawUntyped(UNAVAILABLE_PENDING);
     pendingWithLog.set(true);
     if (served) requestHashWithLog.set(hash);
 
     // When queued, disable run cancellation — the queue manages lifecycle.
     // Once enqueued, the job must run to completion to avoid abandoning
     // HTTP streams (which causes ERR_INCOMPLETE_CHUNK_ENCODING).
-    const getRunForCancellation = queueName
+    const getRunForWrite = queueName
       ? () => thisRun
       : requestGuard
       ? () => requestGuard.isCurrent(hash) ? thisRun : -1
       : () => state.currentRun;
+    const getRunForExecution = queueName ? () => thisRun : getRunForWrite;
 
     const { callback: updatePartial, cleanup: cleanupPartial } =
       createUpdatePartialCallback(
         resultCell,
         runtime,
-        getRunForCancellation,
+        getRunForWrite,
         thisRun,
       );
 
@@ -1671,7 +1880,7 @@ export function generateText(
         resultCell.key("partial"),
         resultCell.key("requestHash"),
         hash,
-        getRunForCancellation,
+        getRunForExecution,
         thisRun,
         () => {
           // Only clear if this is still the current request; a newer request
@@ -1680,6 +1889,7 @@ export function generateText(
             state.previousCallHash = undefined;
           }
         },
+        errorUnavailable,
         effectKey,
         undefined,
         requestGuard,
@@ -1709,6 +1919,7 @@ export function generateText(
             state.previousCallHash = undefined;
           }
         },
+        errorUnavailable,
         effectKey,
         announceResult,
         requestGuard,
@@ -1759,15 +1970,18 @@ export function generateText(
                 updatePartial,
                 runtime,
                 space: parentCell.space,
-                getCurrentRun: getRunForCancellation,
+                getCurrentRun: getRunForExecution,
                 thisRun,
                 onComplete: async (llmResult) => {
+                  if (thisRun !== getRunForWrite()) return;
                   await runtime.idle();
+                  if (thisRun !== getRunForWrite()) return;
 
                   const textResult = extractTextFromLLMResponse(llmResult);
                   const groundingSources = extractGroundingSources(llmResult);
 
                   await runtime.editWithRetry((tx) => {
+                    if (thisRun !== getRunForWrite()) return;
                     markEffectCompletion(tx, effectKey);
                     if (requestGuard && !requestGuard.accept(tx, hash)) return;
                     // D1b: attribute FIRST, then stamp the model-output fields.
@@ -1864,6 +2078,77 @@ export function generateObject<T extends Record<string, unknown>>(
 
   const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
+
+    const unavailableInput = selectUnavailableGenerationInput(
+      inputsCell,
+      tx,
+      runtime,
+    );
+    if (unavailableInput) {
+      const outputScope = tx.getNarrowestReadScope();
+      const served = runtime.servingPosture &&
+        runtime.experimental.serverExecution;
+      const identity = served
+        ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
+        : undefined;
+      const stateKey = identity
+        ? resolveScopeKey(outputScope ?? "space", identity)
+        : "local";
+      let state = states.get(stateKey);
+      if (!state) {
+        state = {
+          currentRun: 0,
+          activeWork: 0,
+          lastRequestQueued: false,
+          staging: new Map(),
+        };
+        states.set(stateKey, state);
+      }
+      if (!state.cellsInitialized || state.cellScope !== outputScope) {
+        state.resultCell = ownedCell(
+          runtime,
+          tx,
+          parentCell,
+          { generateObject: { result: cause } },
+          GenerateObjectResultSchema,
+          outputScope,
+        );
+        state.resultCell.sync();
+        state.cellsInitialized = true;
+        state.cellScope = outputScope;
+      }
+      const resultCell = state.resultCell!;
+      const lifecycle = identity
+        ? trackLLMRequestLifecycle(
+          runtime,
+          tx,
+          states,
+          stateKey,
+          state,
+          resultCell,
+          identity,
+          publicationBinding,
+          ++requestSequence,
+        )
+        : undefined;
+      sendResult(tx, resultCell);
+      lifecycle?.recordPublication(tx);
+
+      state.currentRun++;
+      state.previousCallHash = undefined;
+      resultCell.key("pending").withTx(tx).set(
+        markerIsPending(unavailableInput),
+      );
+      resultCell.key("result").withTx(tx).setRawUntyped(unavailableInput);
+      resultCell.key("messages").withTx(tx).set(undefined);
+      resultCell.key("error").withTx(tx).set(
+        markerErrorMessage(unavailableInput),
+      );
+      resultCell.key("partial").withTx(tx).setRawUntyped(unavailableInput);
+      resultCell.key("requestHash").withTx(tx).set(undefined);
+      return;
+    }
+
     const {
       prompt,
       messages,
@@ -1987,10 +2272,17 @@ export function generateObject<T extends Record<string, unknown>>(
         state.currentRun++;
         state.previousCallHash = undefined;
       }
-      resultWithLog.set(undefined);
+      const unavailable = unavailableError(
+        schema === undefined
+          ? "Object generation requires a result schema"
+          : "Object generation requires a prompt or messages",
+        "invalidInput",
+      );
+      resultWithLog.setRawUntyped(unavailable);
       messagesWithLog.set(undefined);
       errorWithLog.set(undefined);
-      partialWithLog.set(undefined);
+      partialWithLog.setRawUntyped(unavailable);
+      requestHashWithLog.set(undefined);
       pendingWithLog.set(false);
       if (served && !state.lastRequestQueued) requestHashWithLog.set(undefined);
       return;
@@ -2041,6 +2333,15 @@ export function generateObject<T extends Record<string, unknown>>(
     const validationSchema = schemaSanitizePromptInjection
       ? toDeepFrozenSchema(schema)
       : undefined;
+    const declaredResultSchema = toDeepFrozenSchema(schema);
+    const validateDeclaredResult = (value: unknown): void => {
+      const failure = validateSchemaValue(declaredResultSchema, value);
+      if (failure !== undefined) {
+        throw new GenerateObjectSchemaMismatchError(
+          `generateObject result failed schema validation: ${failure}`,
+        );
+      }
+    };
     const resultSchemaForObserved = (
       observedConfidentiality: readonly CfcConfClause[],
     ) =>
@@ -2127,8 +2428,21 @@ export function generateObject<T extends Record<string, unknown>>(
         | string
         | undefined;
       const currentRequestHash = requestHashWithLog.get();
-      const currentResult = resultWithLog.get();
       const currentError = errorWithLog.get();
+      if (
+        reconcileLegacyGenerationError(
+          tx,
+          hash,
+          currentRequestHash,
+          resultCell.key("result"),
+          resultCell.key("partial"),
+          resultCell.key("pending"),
+          currentError,
+        )
+      ) {
+        return;
+      }
+      const currentResult = resultWithLog.get();
       const toolsRequestSummary = summarizeGenerateObjectRequest({
         hash,
         path: "tools",
@@ -2143,7 +2457,8 @@ export function generateObject<T extends Record<string, unknown>>(
       // Return if the same request is being made again
       // Also return if there's an error for this request (don't retry automatically)
       if (
-        (currentResult !== undefined || currentError !== undefined) &&
+        (generationResultIsSettled(currentResult) ||
+          currentError !== undefined) &&
         hash === currentRequestHash
       ) {
         // The §4 memo hit (server-execution v2): no re-fire.
@@ -2180,10 +2495,10 @@ export function generateObject<T extends Record<string, unknown>>(
       }
       const thisRun = state.currentRun;
 
-      resultWithLog.set(undefined);
+      resultWithLog.setRawUntyped(UNAVAILABLE_PENDING);
       messagesWithLog.set(undefined);
       errorWithLog.set(undefined);
-      partialWithLog.set(undefined);
+      partialWithLog.setRawUntyped(UNAVAILABLE_PENDING);
       // TODO(danfuzz): Latent — schemas don't admit `Fabric*` values on this
       // `.get()`-path today, but will in the not-too-distant future; at that
       // point this JSON round-trip silently loses any `FabricPrimitive`/
@@ -2193,22 +2508,22 @@ export function generateObject<T extends Record<string, unknown>>(
       pendingWithLog.set(true);
       if (served) requestHashWithLog.set(hash);
 
-      // When queued, disable run cancellation — the queue manages lifecycle.
-      const getRunForCancellation = queueName
+      const getRunForWrite = queueName
         ? () => thisRun
         : requestGuard
         ? () => requestGuard.isCurrent(hash) ? thisRun : -1
         : () => state.currentRun;
-      const isRunCancelled = () => thisRun !== getRunForCancellation();
+      const getRunForExecution = queueName ? () => thisRun : getRunForWrite;
+      const isRunCancelled = () => thisRun !== getRunForExecution();
+      const isWriteStale = () => thisRun !== getRunForWrite();
 
       const { callback: updatePartial, cleanup: cleanupPartial } =
         createUpdatePartialCallback(
           resultCell,
           runtime,
-          getRunForCancellation,
+          getRunForWrite,
           thisRun,
         );
-
       // The one way this request ends badly, whether the tools loop failed or
       // the request never went out at all.
       const settleWithError = (error: unknown) => {
@@ -2225,11 +2540,12 @@ export function generateObject<T extends Record<string, unknown>>(
           resultCell.key("partial"),
           resultCell.key("requestHash"),
           hash,
-          getRunForCancellation,
+          getRunForExecution,
           thisRun,
           () => {
             state.previousCallHash = undefined;
           },
+          generationUnavailableForError,
           effectKey,
           undefined,
           requestGuard,
@@ -2260,6 +2576,7 @@ export function generateObject<T extends Record<string, unknown>>(
           () => {
             state.previousCallHash = undefined;
           },
+          generationUnavailableForError,
           effectKey,
           announceResult,
           requestGuard,
@@ -2389,6 +2706,11 @@ export function generateObject<T extends Record<string, unknown>>(
                         llmToolExecutionHelpers.PRESENT_RESULT_TOOL_NAME,
                   );
                   if (presentResultPart) {
+                    // Validate the provider's JSON payload before link-shaped
+                    // values are cellified into live query proxies. Those
+                    // proxies intentionally expose runtime fields and are not
+                    // themselves the authored response shape.
+                    validateDeclaredResult(presentResultPart.input);
                     finalResult = llmToolExecutionHelpers.traverseAndCellify(
                       runtime,
                       parentCell.space,
@@ -2461,8 +2783,7 @@ export function generateObject<T extends Record<string, unknown>>(
               });
 
               await runtime.idle();
-
-              if (isRunCancelled()) {
+              if (isWriteStale()) {
                 logGenerateObject(
                   "write-skipped-cancelled",
                   toolsRequestSummary,
@@ -2470,9 +2791,12 @@ export function generateObject<T extends Record<string, unknown>>(
                 return;
               }
 
-              await runtime.editWithRetry((tx) => {
+              const writeback = await runtime.editWithRetry((tx) => {
+                if (isWriteStale()) return false;
                 markEffectCompletion(tx, effectKey);
-                if (requestGuard && !requestGuard.accept(tx, hash)) return;
+                if (requestGuard && !requestGuard.accept(tx, hash)) {
+                  return false;
+                }
                 // The InjectionSafe annotations on resultSchema are minted by
                 // the trusted sanitizer; attribute this write to the builtin so
                 // the persist-time evidence gate trusts them (audit S4). The
@@ -2504,8 +2828,11 @@ export function generateObject<T extends Record<string, unknown>>(
                 );
                 resultCell.key("error").withTx(tx).set(undefined);
                 resultCell.key("requestHash").withTx(tx).set(hash);
+                return true;
               });
-              logGenerateObject("write-complete", toolsRequestSummary);
+              if (writeback.ok) {
+                logGenerateObject("write-complete", toolsRequestSummary);
+              }
             } finally {
               cleanupPartial();
             }
@@ -2554,8 +2881,21 @@ export function generateObject<T extends Record<string, unknown>>(
         | string
         | undefined;
       const currentRequestHash = requestHashWithLog.get();
-      const currentResult = resultWithLog.get();
       const currentError = errorWithLog.get();
+      if (
+        reconcileLegacyGenerationError(
+          tx,
+          hash,
+          currentRequestHash,
+          resultCell.key("result"),
+          resultCell.key("partial"),
+          resultCell.key("pending"),
+          currentError,
+        )
+      ) {
+        return;
+      }
+      const currentResult = resultWithLog.get();
       const directRequestSummary = summarizeGenerateObjectRequest({
         hash,
         path: "direct",
@@ -2569,7 +2909,8 @@ export function generateObject<T extends Record<string, unknown>>(
       // Return if the same request is being made again
       // Also return if there's an error for this request (don't retry automatically)
       if (
-        (currentResult !== undefined || currentError !== undefined) &&
+        (generationResultIsSettled(currentResult) ||
+          currentError !== undefined) &&
         hash === currentRequestHash
       ) {
         // The §4 memo hit (server-execution v2): no re-fire.
@@ -2609,10 +2950,10 @@ export function generateObject<T extends Record<string, unknown>>(
       }
       const thisRun = state.currentRun;
 
-      resultWithLog.set(undefined);
+      resultWithLog.setRawUntyped(UNAVAILABLE_PENDING);
       messagesWithLog.set(undefined);
       errorWithLog.set(undefined);
-      partialWithLog.set(undefined);
+      partialWithLog.setRawUntyped(UNAVAILABLE_PENDING);
       // TODO(danfuzz): Latent — schemas don't admit `Fabric*` values on this
       // `.get()`-path today, but will in the not-too-distant future; at that
       // point this JSON round-trip silently loses any `FabricPrimitive`/
@@ -2622,12 +2963,13 @@ export function generateObject<T extends Record<string, unknown>>(
       pendingWithLog.set(true);
       if (served) requestHashWithLog.set(hash);
 
-      const getRunForCancellation = queueName
+      const getRunForWrite = queueName
         ? () => thisRun
         : requestGuard
         ? () => requestGuard.isCurrent(hash) ? thisRun : -1
         : () => state.currentRun;
-      const isRunCancelled = () => thisRun !== getRunForCancellation();
+      const getRunForExecution = queueName ? () => thisRun : getRunForWrite;
+      const isWriteStale = () => thisRun !== getRunForWrite();
 
       // The one way this request ends badly, whether the model call failed or
       // the request never went out at all.
@@ -2645,11 +2987,12 @@ export function generateObject<T extends Record<string, unknown>>(
           resultCell.key("partial"),
           resultCell.key("requestHash"),
           hash,
-          getRunForCancellation,
+          getRunForExecution,
           thisRun,
           () => {
             state.previousCallHash = undefined;
           },
+          generationUnavailableForError,
           effectKey,
           undefined,
           requestGuard,
@@ -2680,6 +3023,7 @@ export function generateObject<T extends Record<string, unknown>>(
           () => {
             state.previousCallHash = undefined;
           },
+          generationUnavailableForError,
           effectKey,
           announceResult,
           requestGuard,
@@ -2729,6 +3073,9 @@ export function generateObject<T extends Record<string, unknown>>(
                 docs: "",
                 observedConfidentiality: [],
               };
+            // Pulling the inputs and context can select a newer request. Check
+            // at dispatch so a superseded prompt never reaches the provider.
+            if (thisRun !== getRunForExecution()) return;
             logGenerateObject("client-generateObject-start", {
               ...directRequestSummary,
               observedConfidentialityCount: uniqueCfcAtoms([
@@ -2756,6 +3103,7 @@ export function generateObject<T extends Record<string, unknown>>(
               ...directRequestSummary,
               objectKeys: Object.keys(response.object ?? {}),
             });
+            validateDeclaredResult(response.object);
             validateResultForSchemaSanitization(response.object);
             const livePromptObservedConfidentiality =
               collectGenerateObjectPromptConfidentiality(inputs);
@@ -2776,9 +3124,9 @@ export function generateObject<T extends Record<string, unknown>>(
 
           return resultPromise
             .then(async (response) => {
+              if (response === undefined) return;
               await runtime.idle();
-
-              if (isRunCancelled()) {
+              if (isWriteStale()) {
                 logGenerateObject(
                   "write-skipped-cancelled",
                   directRequestSummary,
@@ -2786,9 +3134,12 @@ export function generateObject<T extends Record<string, unknown>>(
                 return;
               }
 
-              await runtime.editWithRetry((tx) => {
+              const writeback = await runtime.editWithRetry((tx) => {
+                if (isWriteStale()) return false;
                 markEffectCompletion(tx, effectKey);
-                if (requestGuard && !requestGuard.accept(tx, hash)) return;
+                if (requestGuard && !requestGuard.accept(tx, hash)) {
+                  return false;
+                }
                 // The InjectionSafe annotations on resultSchema are minted by
                 // the trusted sanitizer; attribute this write to the builtin
                 // so the persist-time evidence gate trusts them (audit S4).
@@ -2825,8 +3176,11 @@ export function generateObject<T extends Record<string, unknown>>(
                 ] as any);
                 resultCell.key("error").withTx(tx).set(undefined);
                 resultCell.key("requestHash").withTx(tx).set(hash);
+                return true;
               });
-              logGenerateObject("write-complete", directRequestSummary);
+              if (writeback.ok) {
+                logGenerateObject("write-complete", directRequestSummary);
+              }
             })
             .catch(settleWithError);
         },

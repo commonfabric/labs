@@ -26,6 +26,7 @@ import {
   action,
   assert,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -106,10 +107,12 @@ const dropOntoHeader = (root: unknown, sourceCell: unknown) =>
   );
 
 export default pattern(() => {
-  const mentionable = wish<Writable<object[]>>({ query: "#mentionable" })
-    .result!;
-  const pieceRegistry = wish<Writable<object[]>>({ query: "#pieceRegistry" })
-    .result!;
+  const mentionableWish = wish<Writable<object[]>>({ query: "#mentionable" });
+  const mentionable = resultOf(mentionableWish.result);
+  const pieceRegistryWish = wish<Writable<object[]>>({
+    query: "#pieceRegistry",
+  });
+  const pieceRegistry = resultOf(pieceRegistryWish.result);
 
   const alpha = Note({ title: "Alpha", content: "", isHidden: true });
   const beta = Note({ title: "Beta", content: "", isHidden: true });

@@ -44,10 +44,11 @@ export default pattern<{ count?: PerUser<Writable<number | Default<0>>> }>(
 
 /** A fetch of a URL a client writes, which on the ON arm the loop makes. */
 const FETCH_SOURCE = `
-import { fetchJson, pattern, Writable } from "commonfabric";
+import { fetchJson, pattern, resultOf, Writable } from "commonfabric";
 export default pattern<{ url: Writable<string> }>(({ url }) => {
-  const fetched = fetchJson<{ v: number }>({ url });
-  return { url, v: fetched.result.v };
+  const request = fetchJson<{ v: number }>({ url });
+  const fetched = resultOf(request);
+  return { url, v: fetched.v };
 });
 `;
 

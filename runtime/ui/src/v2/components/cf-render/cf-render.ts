@@ -22,6 +22,7 @@ import "../cf-loader/index.ts";
 import "../cf-drag-source/index.ts";
 import "../cf-piece-menu/index.ts";
 import { targetsTextEntry } from "../text-entry.ts";
+import { watchPendingBoxes } from "./pending-boxes.ts";
 
 import {
   closePieceMenuFor,
@@ -172,6 +173,24 @@ export class CFRender extends BaseElement {
       width: 100%;
       height: 100%;
       overflow: auto;
+    }
+
+    /* The renderer owns pending semantics; cf-render owns their presentation.
+      Ambient custom properties cross the shadow boundary just like the rest of
+      the theme, so hosts can tune the treatment without runtime style tags. */
+    .render-container[data-cf-pending-box],
+    .render-container [data-cf-pending-box] {
+      opacity: var(--cf-render-pending-opacity, 0.55) !important;
+      filter: var(--cf-render-pending-filter, grayscale(0.8)) !important;
+    }
+
+    ::highlight(cf-render-pending-text) {
+      color: color-mix(
+        in srgb,
+        var(--cf-theme-color-text, CanvasText) calc(100% *
+        var(--cf-render-pending-opacity, 0.55)),
+        transparent
+      );
     }
 
     .piece-menu-highlight {
@@ -337,6 +356,8 @@ export class CFRender extends BaseElement {
 
   #needsReconnectRender = false;
 
+  #pendingPresentation?: ReturnType<typeof watchPendingBoxes>;
+
   /**
    * The root piece cell after resolving the (possibly link) `cell`. Reset
    * whenever `cell` changes.
@@ -396,6 +417,15 @@ export class CFRender extends BaseElement {
 
   protected override updated(changedProperties: PropertyValues) {
     if (!this.isConnected) return;
+    const container = this._containerRef.value;
+    if (container?.isConnected) {
+      if (this.#pendingPresentation?.container !== container) {
+        this.#pendingPresentation?.dispose();
+        this.#pendingPresentation = watchPendingBoxes(container);
+      } else {
+        this.#pendingPresentation.refresh();
+      }
+    }
     const cellChanged = changedProperties.has("cell");
     const variantChanged = changedProperties.has("variant");
 
@@ -770,6 +800,8 @@ export class CFRender extends BaseElement {
   }
 
   override disconnectedCallback() {
+    this.#pendingPresentation?.dispose();
+    this.#pendingPresentation = undefined;
     closePieceMenuFor(this);
     this.removeEventListener("contextmenu", this._onContextMenu);
     super.disconnectedCallback();

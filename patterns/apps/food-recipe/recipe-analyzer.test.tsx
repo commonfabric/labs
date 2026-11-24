@@ -60,7 +60,7 @@ export default pattern(() => {
   );
 
   const assert_not_analyzed_yet = assert(() =>
-    !analyzer.analyzed && !analyzer.pending &&
+    !analyzer.analyzed && !analyzer.pending && analyzer.error === "" &&
     analyzer.dietarySource === "none" &&
     analyzer.dietaryCompatibility.compatible.length === 0 &&
     hasText(analyzer[UI], "Not analyzed yet.")
@@ -88,7 +88,10 @@ export default pattern(() => {
   // gone, and asking again retries rather than repeating the failed request.
   const action_reanalyze = action(() => analyzer.analyze.send());
   const assert_failed = assert(() =>
-    analyzer.error !== "" && analyzer.dietarySource === "none"
+    analyzer.error.includes("Not answered in this test.") &&
+    !analyzer.analyzed && !analyzer.pending &&
+    analyzer.dietarySource === "none" &&
+    analyzer.dietaryCompatibility.compatible.length === 0
   );
   const action_retry = action(() => analyzer.analyze.send());
   const assert_retried = assert(() =>

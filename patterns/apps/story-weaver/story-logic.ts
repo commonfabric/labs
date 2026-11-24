@@ -229,15 +229,6 @@ export const buildPrompt = (
     spindle.respins > 0 ? `[Generation attempt: ${spindle.respins}]` : "",
   ].filter((part) => part.trim() !== "").join("\n\n");
 
-/** Whether a model call's state (its `messages`, the first of which is the
- * request) answers `prompt`. A card's request is tied to its list position,
- * not its spindle, so when the board shifts a card holds another spindle's
- * result until its own request catches up; this tells the two apart. */
-export const answers = (
-  messages: readonly { content?: unknown }[] | undefined,
-  prompt: string,
-): boolean => prompt !== "" && messages?.[0]?.content === prompt;
-
 export const summaryPrompt = (pinnedText: string): string =>
   pinnedText
     ? `${pinnedText}\n\n---\n\nSummarize the above in 2-3 concise sentences.`
@@ -352,6 +343,41 @@ export const withPinned = (
           requested: true,
         },
   );
+
+/** A Pin or Unpin from a rendered option, including the request that owns it. */
+export interface CardPin {
+  path: string;
+  prompt: string;
+  option: number;
+  text: string;
+  unpin: boolean;
+}
+
+/** Applies a rendered click only if the same option can still take that action. */
+export function withCardPin(
+  levels: readonly Level[],
+  synopsis: string,
+  spindles: readonly Spindle[],
+  click: CardPin,
+): Spindle[] | undefined {
+  const card = boardView(levels, synopsis, spindles)
+    .flatMap((level) => level.spindles).find((s) => s.path === click.path);
+  if (
+    !card || !click.text || (!click.unpin && !card.ready) ||
+    card.activePrompt !== click.prompt ||
+    click.unpin !==
+      (card.pinned === click.option && card.pinnedText === click.text)
+  ) {
+    return undefined;
+  }
+  return withPinned(
+    spindles,
+    click.path,
+    click.option,
+    click.text,
+    parentText(click.path, synopsis, spindles),
+  );
+}
 
 /** Asks `path` for fresh options, dropping its pin. */
 export const withRespin = (

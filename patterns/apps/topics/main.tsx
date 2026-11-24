@@ -7,21 +7,28 @@
  */
 import {
   action,
+  computed,
   Default,
   equals,
   equalsKey,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   lift,
   NAME,
   pattern,
   type PerSession,
   type ReadonlyCell,
+  resultOf,
   Stream,
+  toSchema,
   UI,
   type VNode,
   wish,
   Writable,
 } from "commonfabric";
+import type {} from "commonfabric/schema";
 
 import {
   mentionableIndex,
@@ -292,10 +299,13 @@ export interface TopicIndexRow {
  * question about the cell contract rather than about this pattern, and it is
  * not answered here.
  */
-export function mentionListsOf<M>(
+export function mentionListsOf<M extends readonly unknown[]>(
   sources: readonly ({ get(): { mentions: M } | undefined } | undefined)[],
 ): (M | undefined)[] {
-  return Array.from(sources, (source) => source?.get()?.mentions);
+  return Array.from(sources, (source) => {
+    const mentions = source?.get()?.mentions;
+    return Array.isArray(mentions) ? mentions : undefined;
+  });
 }
 
 /**
@@ -407,6 +417,15 @@ export function distinctByIdentity<T extends object>(
   return distinct;
 }
 
+/** Two projections of the same topic list, for identity and readiness. */
+interface TopicCrossrefInput {
+  /** Stable reference handles used to address rows and read mention lists. */
+  sources: (ReadonlyCell<TopicMentionSource> | undefined)[] | Default<[]>;
+
+  /** The same list as `sources`, selected for unavailable-input preflight. */
+  values: Default<TopicMentionSource, { mentions: [] }>[] | Default<[]>;
+}
+
 /**
  * The board's mention pivot: one row per distinct topic, naming the topics that
  * mention it.
@@ -439,32 +458,28 @@ export function distinctByIdentity<T extends object>(
  * is reordered. That is what lets every topic's lookup lift re-run freely on
  * any board change and still write nothing: an unchanged row recomputes to the
  * same links at the same address.
+ *
+ * `sources` supplies stable identity handles, and `values` declares the narrow
+ * readiness projection of that same list. The explicit input contract keeps
+ * unavailable-input preflight before the callback's handle reads. Pending,
+ * syncing, obsolete, or error data propagates without replacing durable backlinks
+ * with an empty graph. The explicit output contract keeps the rows' topic
+ * references opaque to readers which select no fields below them.
+ * Ordinary absent entries have no source identity and are omitted; the value
+ * default for those unused slots does not apply to native unavailable markers.
  */
-const crossrefTable = lift(
+export const crossrefTable = lift(
   (
-    { sources }: {
-      // An array of CELLS, which is what lets ONE declaration answer both of
-      // the pivot's questions: the cell is the topic's identity, and its value
-      // is the short list of what that topic points at. A cell always writes as
-      // a link, so the rows below are deterministic; an element read as a value
-      // writes a link only while it still carries provenance and an inline copy
-      // once it does not, which makes the same inputs produce two different
-      // documents and fails the idempotency recheck.
-      sources: ReadonlyCell<TopicMentionSource>[] | Default<[]>;
-    },
+    { sources }: TopicCrossrefInput,
   ): TopicCrossrefNamedRow[] => {
     const rows: unknown[] = [];
-    // Every pass below reads this plain array: an element read through the
-    // reactive array resolves a link every time, and each pass reads every
-    // element. It holds each distinct topic at its first entry, and
-    // is both the list of rows and the join's sources. An entry with nothing
-    // behind it yet (mid-sync) has no identity to address a row by, and
+    // Read each distinct handle once and keep first-occurrence row order.
     // `Writable.for(undefined)` is not a cause, so `distinctByIdentity` leaves
     // it out. It gets no row rather than a junk one — the lookup is by
     // identity, not by position, so a shorter table costs nothing.
     const list = distinctByIdentity(Array.from(sources));
-    // Materialize each mention array once, from `list` itself, so `mentions[i]`
-    // is what `list[i]` points at.
+    // Read each distinct source once after preflight has admitted the same
+    // list, and scan plain mention arrays throughout the join.
     const mentions = mentionListsOf(list).map((refs) =>
       refs === undefined ? undefined : Array.from(refs)
     );
@@ -486,6 +501,8 @@ const crossrefTable = lift(
     });
     return rows as TopicCrossrefNamedRow[];
   },
+  toSchema<TopicCrossrefInput>(),
+  toSchema<TopicCrossrefNamedRow[]>(),
 );
 
 /**
@@ -844,9 +861,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // so a reader in any session that has not run the board finds no rows. A
   // document under this name has no such link, and the run stores the rows in
   // it at space scope, where every reader finds them.
-  const pivot = crossrefTable({ sources: topics });
-  // The pivot's rows by number, so each topic reads the positions filed under
-  // its own number rather than every row.
+  const pivot = crossrefTable({ sources: topics, values: topics });
   const crossrefIndex = crossrefIndexOf({ rows: pivot });
   // Also derived once for the whole board: the mention universe every
   // child's editor autocompletes over, as one document of copies instead of
@@ -871,8 +886,17 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // the fields once here would pin the composer to the empty profile the board
   // started with: the Start button never enables, and a topic filed through it
   // carries blank attribution.
-  const profileName = profileWish.result?.name ?? "";
+  const profileName = computed(() => {
+    if (
+      hasError(profileWish.result) || isPending(profileWish.result) ||
+      isSyncing(profileWish.result)
+    ) return "";
+    return resultOf(profileWish.result).name ?? "";
+  });
   const hasProfile = profileName.trim().length > 0;
+  const profileView = computed(() => ({
+    name: profileName,
+  }));
 
   const addTopic = action<AddTopicEvent, AddTopicResult>((
     { title, body, agentName },
@@ -959,7 +983,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
                 {hasProfile
                   ? (
                     <cf-profile-badge
-                      $profile={profileWish.result}
+                      $profile={profileView}
                       size="sm"
                       noNavigate
                     />

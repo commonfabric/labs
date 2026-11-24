@@ -67,4 +67,11 @@ describe("fake-clock caller classification survives SES lockdown", () => {
     await sleep(500);
     expect(Date.now() - started).toBe(500);
   });
+
+  it("auto-advances every src timer due at the same logical instant", async () => {
+    ensureSESLockdown();
+    const first = sleep(500);
+    const second = sleep(500);
+    await Promise.all([first, second]);
+  });
 });

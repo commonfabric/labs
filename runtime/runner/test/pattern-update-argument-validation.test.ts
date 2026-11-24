@@ -1,3 +1,7 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_SYNCING,
+} from "@commonfabric/data-model/availability";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
@@ -98,6 +102,18 @@ const typedCount = (marker: string): RuntimeProgram =>
   programOf([
     "import { pattern } from 'commonfabric';",
     "interface Args { count?: number; [key: string]: any }",
+    "export default pattern<Args, { marker: string }>(() => {",
+    `  return { marker: ${JSON.stringify(marker)} };`,
+    "});",
+    "",
+  ].join("\n"));
+
+/** A candidate whose profile slot normally holds a plain object. */
+const typedProfile = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { pattern } from 'commonfabric';",
+    "interface Profile { name?: string }",
+    "interface Args { profile?: Profile; [key: string]: any }",
     "export default pattern<Args, { marker: string }>(() => {",
     `  return { marker: ${JSON.stringify(marker)} };`,
     "});",
@@ -391,6 +407,27 @@ describe("pattern update validates the stored argument", () => {
       "the refused setup stamped its completion marker, so a later boot would " +
         "read the root as fully staged for a version that never staged it",
     ).toBe(vintageIdentity);
+  });
+
+  it("accepts an authenticated unavailable value in a typed stored slot", async () => {
+    const unavailable = UNAVAILABLE_SYNCING;
+    const { cell } = await setupVintage(
+      openArgument("v1"),
+      { profile: unavailable },
+      "roll-forward-unavailable-profile",
+    );
+
+    const { error, identity } = await rollForward(cell, typedProfile("v2"));
+
+    expect(
+      error,
+      "the source update treated a transient availability marker as the " +
+        "profile's business value and permanently refused the candidate",
+    ).toBeUndefined();
+    expect(getPatternSetupIdentityRef(cell)?.identity).toBe(identity);
+    const argument = rt.getCellFromLink(getMetaLink(cell, "argument")!)
+      .getRaw();
+    expect((argument as { profile?: unknown }).profile).toBe(unavailable);
   });
 
   it("accepts an optional property a handler stored as undefined", async () => {
@@ -1729,18 +1766,14 @@ describe("pattern update validates the stored argument", () => {
       ).not.toContainEqual(personalSpaceOf(space));
     });
 
-    it("rolls forward over a wrong-typed value behind the link, which the new version reads as `undefined`", async () => {
+    it("rolls forward over a wrong-typed value behind the link and reports a schema mismatch on read", async () => {
       // The trade the deferral makes: the same value in a document that
       // stores no label refuses the update ("still refuses a READABLE
       // wrong-typed value behind the same hop", above).
       //
-      // TODO(danfuzz): The mismatch is caught nowhere here: the update
-      // commits and the new version's reads of the row come back
-      // `undefined`, with no refusal or diagnostic. A link that leaves the
-      // argument's space is deferred the same way. The expected outcome is
-      // that the deferred check surfaces where the new version reads the
-      // value. See the matching `TODO` at `reachesBeyondOwnData()` in
-      // `stored-argument-validation.ts`.
+      // Validation is deferred at the labeled link. The update commits, but
+      // reading the wrong-typed value through the new schema must publish a
+      // diagnostic rather than presenting it as an absent value.
 
       const row = await seedLabeled("labeled-wrong-type-row", {
         name: 7,
@@ -1755,8 +1788,13 @@ describe("pattern update validates the stored argument", () => {
       const { error } = await rollForward(cell, typedRowReader("v2"));
 
       expect(error).toBeUndefined();
-      expect(await cell.key("name").pull()).toBeUndefined();
-      expect(await cell.key("kind").pull()).toBeUndefined();
+      for (const key of ["name", "kind"] as const) {
+        const value = await cell.key(key).pull();
+        expect(isUnavailable(value)).toBe(true);
+        if (!isUnavailable(value)) throw new Error("Expected schema mismatch");
+        expect(value.reason).toBe("error");
+        expect(value.errorKind).toBe("schemaMismatch");
+      }
     });
   });
 
@@ -1873,7 +1911,7 @@ describe("pattern update validates the stored argument", () => {
     const { cell } = await setupVintage(
       typedCount("v1"),
       undefined,
-      "same-version-own-schema-mismatch",
+      "same-version-own-schemaMismatch",
     );
     const { error: writeError } = await rt.editWithRetry((tx) => {
       rt.getCellFromLink(getMetaLink(cell, "argument")!, undefined, tx)

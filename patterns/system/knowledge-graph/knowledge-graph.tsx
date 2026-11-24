@@ -10,12 +10,16 @@ import {
   type Default,
   equals,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   llmDialog,
   NAME,
+  observeAvailability,
   pattern,
   patternTool,
+  resultOf,
   Stream,
-  toSchema,
   UI,
   wish,
   Writable,
@@ -253,9 +257,16 @@ Use exact piece names from the piece list above for fromName/toName/pieceNames.`
 // --- Main pattern ---
 
 const KnowledgeGraph = pattern<Input>(({ messages }) => {
-  const mentionable = wish<Writable<MentionablePiece>[] | Default<[]>>({
+  const mentionableWish = wish<Writable<MentionablePiece>[] | Default<[]>>({
     query: "#mentionable",
-  }).result;
+  });
+  const mentionable = computed(() => {
+    const result = mentionableWish.result;
+    return isPending(result) || hasError(result) ||
+        isSyncing(result)
+      ? []
+      : resultOf(result);
+  });
 
   const baseEdges = computed(() => {
     const result: GraphEdge[] = [];
@@ -281,9 +292,24 @@ const KnowledgeGraph = pattern<Input>(({ messages }) => {
   });
 
   // Wish for summary index data
-  const { entries: summaryEntries } = wish<{ entries: SummaryEntry[] }>({
-    query: "#summaryIndex",
-  }).result!;
+  const summaryWish = wish<
+    {
+      entries: Array<
+        { piece: Writable<MentionablePiece>; summary: string; name: string }
+      >;
+    }
+  >({ query: "#summaryIndex" });
+  const summaryResult = resultOf(summaryWish.result);
+  const observedSummaryEntries = observeAvailability(
+    summaryResult.entries,
+  );
+  const summaryEntries = computed(() => {
+    const result = observedSummaryEntries;
+    return isPending(result) || hasError(result) ||
+        isSyncing(result)
+      ? []
+      : resultOf(result);
+  });
 
   const hasBeenBuilt = computed(() => messages.get().length > 0);
 
@@ -293,7 +319,7 @@ const KnowledgeGraph = pattern<Input>(({ messages }) => {
 
   const allEdgesFromBase = baseEdges;
 
-  // LLM dialog with resultSchema — agent produces structured annotations
+  // Typed LLM dialog — the transformer injects the presentResult schema.
   const dialogOptions = {
     system: agentSystemPrompt,
     messages,
@@ -304,11 +330,16 @@ const KnowledgeGraph = pattern<Input>(({ messages }) => {
       }),
     },
     builtinTools: false,
-    resultSchema: toSchema<GraphAnnotations>(),
   };
-  const { addMessage, pending, result: annotations } = llmDialog(
-    dialogOptions,
-  );
+  const dialog = llmDialog<GraphAnnotations>(dialogOptions);
+  const { addMessage, pending } = dialog;
+  const annotations = computed(() => {
+    const result = dialog.result;
+    return isPending(result) || hasError(result) ||
+        isSyncing(result)
+      ? undefined
+      : resultOf(result);
+  });
 
   const agentEdges = computed(() =>
     annotatedEdges(annotations, summaryEntries ?? [])

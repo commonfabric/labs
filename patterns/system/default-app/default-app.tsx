@@ -9,11 +9,16 @@ import {
   computed,
   equals,
   handler,
+  hasError,
   ifElse,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   navigateTo,
   pattern,
   type PerUser,
+  resultOf,
   spaceMembers,
   Stream,
   UI,
@@ -209,11 +214,23 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   const join = addParticipant({ roster: participants });
   const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
   const viewerName = wish<string>({ query: "#profileName" });
+  const profile = computed(() =>
+    hasError(viewerProfile.result) ? undefined : resultOf(viewerProfile.result)
+  );
+  const profileName = computed(() =>
+    hasError(viewerName.result) ? "" : resultOf(viewerName.result)
+  );
   // The name string is empty when no profile resolved, whereas a presence
   // test on the profile cell reads an absent profile as present.
-  const hasProfile = computed(() => (viewerName.result ?? "").trim() !== "");
+  const hasProfile = computed(() => profileName.trim() !== "");
   const isParticipant = computed(() => {
-    const mine = viewerProfile.result;
+    if (
+      hasError(viewerProfile.result) || isObsolete(viewerProfile.result) ||
+      isPending(viewerProfile.result) || isSyncing(viewerProfile.result)
+    ) {
+      return false;
+    }
+    const mine = profile;
     if (!mine) return false;
     return roster.some((entry) => equals(entry, mine));
   });
@@ -376,7 +393,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                       disabled={!hasProfile}
                       onClick={joinAsViewer({
                         join,
-                        profile: viewerProfile.result,
+                        profile,
                       })}
                     >
                       Join this space

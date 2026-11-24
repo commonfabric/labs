@@ -10,8 +10,9 @@
  * title editor, the model picker, Generate and Cancel, the keyboard shortcut,
  * and the editor's backlink events, which register the linked piece and, when
  * not navigating, make it mentionable. The model answers one conversation and
- * fails another, as `llmMocks` below states, and the failed generation stays
- * open until Cancel ends it.
+ * fails another, as `llmMocks` below states. A failed generation restores the
+ * user's text and unlocks the editor, and retrying that same conversation can
+ * complete normally.
  *
  * Run: deno task cf test patterns/dev/experimental/chat-note.test.tsx --root patterns
  */
@@ -20,6 +21,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -86,12 +88,14 @@ const generateDisabled = (ui: unknown): unknown =>
   propValue(findElementByText(ui, "cf-button", "Generate"), "disabled");
 
 export default pattern(() => {
-  const pieceRegistry = wish<Writable<Array<{ title?: string }>>>({
+  const pieceRegistryWish = wish<Writable<Array<{ title?: string }>>>({
     query: "#pieceRegistry",
-  }).result!;
-  const mentionable = wish<Writable<Array<{ title?: string }>>>({
+  });
+  const pieceRegistry = resultOf(pieceRegistryWish.result);
+  const mentionableWish = wish<Writable<Array<{ title?: string }>>>({
     query: "#mentionable",
-  }).result!;
+  });
+  const mentionable = resultOf(mentionableWish.result);
   const subject = ChatNote({ title: "Subject", content: "" });
   const linked = ChatNote({ title: "Linked", content: "Linked content" });
   const child = ChatNote({ title: "Child", parentNotebook: linked });
@@ -257,15 +261,21 @@ export default pattern(() => {
     subject.isGenerating === false && generateDisabled(subject[UI]) === true &&
     propValue(findElement(subject[UI], "cf-code-editor"), "readonly") === false
   );
-  // The model fails "Hi", so this generation never completes.
-  const assert_shortcut_generates_after_newline = assert(() =>
-    subject.content === "Hi\n---\n## AI\n" &&
-    subject.isGenerating === true && generateDisabled(subject[UI]) === true &&
-    propValue(findElement(subject[UI], "cf-code-editor"), "readonly") === true
+  // A terminal error removes only the generation-owned prefix and restores
+  // the user's newline, leaving both editing and Generate usable.
+  const assert_failed_shortcut_restores_content = assert(() =>
+    subject.content === "Hi\n" &&
+    subject.isGenerating === false && generateDisabled(subject[UI]) === false &&
+    propValue(findElement(subject[UI], "cf-code-editor"), "readonly") === false
   );
-  const assert_cancel_stops = assert(() =>
+  const assert_cancel_after_failure_preserves_content = assert(() =>
     subject.isGenerating === false &&
-    subject.content === "Hi\n---\n## AI\n"
+    subject.content === "Hi\n"
+  );
+  const assert_retry_completes = assert(() =>
+    subject.content === "Hi\n---\n## AI\nRecovered reply\n---\n" &&
+    subject.isGenerating === false && generateDisabled(subject[UI]) === true &&
+    propValue(findElement(subject[UI], "cf-code-editor"), "readonly") === false
   );
 
   const assert_link_registers_and_mentions = assert(() =>
@@ -283,7 +293,7 @@ export default pattern(() => {
   // list, and the note as they were.
   const assert_following_links_changes_nothing = assert(() =>
     pieceRegistry.get().length === 2 && mentionable.get().length === 1 &&
-    subject.content === "Hi\n---\n## AI\n"
+    subject.content === "Hi\n---\n## AI\nRecovered reply\n---\n"
   );
 
   return {
@@ -326,9 +336,11 @@ export default pattern(() => {
       { assertion: assert_generate_completes },
       { action: action_edit_with_newline },
       { action: action_shortcut },
-      { assertion: assert_shortcut_generates_after_newline },
+      { assertion: assert_failed_shortcut_restores_content },
       { action: action_cancel },
-      { assertion: assert_cancel_stops },
+      { assertion: assert_cancel_after_failure_preserves_content },
+      { action: action_generate },
+      { assertion: assert_retry_completes },
 
       { action: action_link_without_navigating },
       { assertion: assert_link_registers_and_mentions },
@@ -346,11 +358,13 @@ export default pattern(() => {
 });
 
 // The model replies to the conversation whose last turn is "Hello", and fails
-// the one whose last turn is "Hi".
+// the first request whose last turn is "Hi". A second request for that same
+// conversation succeeds, so retrying proves the failed request was cleared.
 export const llmMocks = [
   { when: { lastMessageContains: "Hello" }, text: "Hi there" },
   {
     when: { lastMessageContains: "Hi" },
     error: "The model is unavailable.",
   },
+  { when: { lastMessageContains: "Hi" }, text: "Recovered reply" },
 ];

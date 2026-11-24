@@ -404,7 +404,13 @@ export default pattern(() => {
     rubric.analyzeQuickAdd.send();
   });
   const assert_quick_add_error = assert(() =>
-    rubric.quickAddStatus === "error" && hasText(rubric[UI], "Error:")
+    rubric.quickAddStatus === "error" &&
+    hasText(rubric[UI], "Not answered in this test.")
+  );
+  const action_accept_error = action(() => rubric.acceptQuickAdd.send());
+  const assert_no_failed_proposal_added = assert(() =>
+    rubric.options.length === 3 && !rubric.quickAddPreview.ready &&
+    rubric.quickAddStatus === "error"
   );
   const action_clear = action(() => clickButton(rubric[UI], "Dismiss"));
   const assert_cleared = assert(() =>
@@ -476,6 +482,8 @@ export default pattern(() => {
       { action: action_quick_add_unanswered },
       { settle: true },
       { assertion: assert_quick_add_error },
+      { action: action_accept_error },
+      { assertion: assert_no_failed_proposal_added },
       { action: action_clear },
       { assertion: assert_cleared },
       { assertion: assert_fs_projection },

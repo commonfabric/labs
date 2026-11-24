@@ -3,6 +3,7 @@ import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import type { JSONSchema } from "@commonfabric/api";
 import { type FabricValue, taggedHashStringOf } from "@commonfabric/data-model";
+import { UNAVAILABLE_PENDING } from "@commonfabric/data-model/availability";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { encodeMemoryBoundary } from "../v2.ts";
 import {
@@ -168,6 +169,91 @@ Deno.test("memory v2 queryGraph reads the declared scoped root instance", async 
       seq: 1,
       document: { value: { name: "alice" } },
     }]);
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 query refresh replaces an unavailable ancestor selected through a descendant", async () => {
+  const { engine, path } = await createEngine();
+  const space = "did:key:z6Mk-unavailable-query-refresh";
+  try {
+    applyCommit(engine, {
+      sessionId: "session:writer",
+      invocation: invocationFor(1),
+      authorization,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [
+          {
+            op: "set",
+            id: "of:root",
+            value: {
+              value: {
+                program: { "/": { "link@1": { id: "of:program", path: [] } } },
+              },
+            },
+          },
+          {
+            op: "set",
+            id: "of:program",
+            value: { value: UNAVAILABLE_PENDING },
+          },
+        ],
+      },
+    });
+    const tracked = trackGraph(space, engine, {
+      roots: [{
+        id: "of:root",
+        selector: {
+          path: [],
+          schema: {
+            type: "object",
+            properties: {
+              program: {
+                type: "object",
+                properties: {
+                  files: {
+                    type: "object",
+                    properties: { length: { type: "number" } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }],
+    });
+    const program = {
+      files: [{ name: "/main.ts", contents: "export default 1;" }],
+      main: "/main.ts",
+    };
+    applyCommit(engine, {
+      sessionId: "session:writer",
+      invocation: invocationFor(2),
+      authorization,
+      commit: {
+        localSeq: 2,
+        reads: { confirmed: [], pending: [] },
+        operations: [
+          { op: "set", id: "of:program", value: { value: program } },
+        ],
+      },
+    });
+    const refreshed = refreshTrackedGraph(
+      space,
+      engine,
+      tracked.state,
+      new Set([toDirtyKey("of:program")]),
+    );
+    assertExists(refreshed);
+    const delivered = [...refreshed.updates.values()].find((entry) =>
+      entry.id === "of:program"
+    );
+    assertExists(delivered);
+    assertEquals(delivered.document, { value: program });
   } finally {
     close(engine);
     await Deno.remove(path);

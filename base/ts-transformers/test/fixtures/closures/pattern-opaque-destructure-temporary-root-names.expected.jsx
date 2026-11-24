@@ -7,7 +7,7 @@ function __cfHardenFn(fn: Function) {
     return fn;
 }
 import { __cfHelpers } from "commonfabric";
-import { computed, generateObject, pattern } from "commonfabric";
+import { computed, generateObjectStream, pattern, resultOf, } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
@@ -28,23 +28,21 @@ const __cfLift_1 = __cfHelpers.lift<{
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 const __cfLift_2 = __cfHelpers.lift<{
-    result?: any;
-}, any>(({ result }) => result?.title ?? "Untitled", {
+    request: any;
+}, any>(({ request }) => request?.title ?? "Untitled", {
     type: "object",
     properties: {
-        result: true
-    }
+        request: true
+    },
+    required: ["request"]
 } as const satisfies __cfHelpers.JSONSchema, true as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: pattern-opaque-destructure-temporary-root-names
-// Verifies: destructured opaque temporaries preserve generated root suffixes
-//   const { result } = generateObject(...) uses the synthesized __cf_destructure_* binding consistently
-// NOTE (CT-1800): generateObject's `result` is declared optional, so the captured
-//   `result` is emitted optional (absent from `required`). The lift therefore
-//   fires while pending, keeping the `?? "Untitled"` fallback live.
+// Verifies: a direct opaque stream result remains a stable reactive root before
+//   resultOf() projects its usable value.
 export default pattern((__cf_pattern_input) => {
     const messages = __cf_pattern_input.key("messages");
     const preview = __cfLift_1({ messages: messages }).for("preview", true);
-    const __cf_destructure_1 = generateObject({
+    const request = generateObjectStream({
         prompt: preview,
         schema: {
             type: "object",
@@ -53,8 +51,9 @@ export default pattern((__cf_pattern_input) => {
             },
             required: ["title"],
         },
-    }), result = __cf_destructure_1.key("result").for("result", true);
-    return <div>{__cfLift_2({ result: result })}</div>;
+    }).for("request", true);
+    const result = resultOf(request);
+    return <div>{__cfLift_2({ request: request })}</div>;
 }, {
     type: "object",
     properties: {

@@ -16151,3 +16151,6 @@ const parseDecodedClientMessage = (
 
   return null;
 };
+
+/** @internal Exported for deterministic timing-boundary coverage tests. */
+export const recordSlowQueryDurationForTesting = recordSlowQueryDuration;

@@ -24,9 +24,14 @@ import {
   equals,
   FS,
   generateObject,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -354,22 +359,28 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     // picks only when no model is given.
     const hifiModelName = computed(() => hifiModel.get() || undefined);
 
-    // One cached model call per item. `asked` lets grading ignore an answer
-    // the call still holds for the previous goal.
-    // TODO(pending-generate-object): remove `asked` once a `generateObject`
-    // whose prompt changes reads as pending until it answers the new one
-    // (top/TBD)
+    // Grading counts a label only when the model call has a usable answer.
     const hifi = items.map((item) => {
       const prompt = computed(() => buildHifiPrompt(goal.get(), item));
+      const request = generateObject<HifiAnswer>({
+        prompt,
+        system: HIFI_SYSTEM,
+        schema: HIFI_SCHEMA,
+        model: hifiModelName,
+      });
+      const answer = computed(() => {
+        if (isPending(request) || isSyncing(request)) return { pending: true };
+        if (hasError(request) || isObsolete(request)) {
+          return {
+            pending: false,
+            error: request.message || "This label output has been retired.",
+          };
+        }
+        return { pending: false, result: resultOf(request) };
+      });
       return {
         id: item.id,
-        asked: prompt,
-        answer: generateObject<HifiAnswer>({
-          prompt,
-          system: HIFI_SYSTEM,
-          schema: HIFI_SCHEMA,
-          model: hifiModelName,
-        }),
+        answer,
       };
     });
 
@@ -400,14 +411,20 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
       schema: PROPOSAL_SCHEMA,
       model: hifiModelName,
     });
+    const proposalState = computed(() => {
+      if (isPending(proposal) || isSyncing(proposal)) return { pending: true };
+      if (hasError(proposal) || isObsolete(proposal)) {
+        return {
+          pending: false,
+          error: proposal.message || "This rewrite output has been retired.",
+        };
+      }
+      return { pending: false, result: resultOf(proposal) };
+    });
     const rewrite = computed(() =>
       rewriteStatus(
         request,
-        {
-          pending: proposal.pending,
-          error: proposal.error,
-          result: proposal.result,
-        },
+        proposalState,
         rules.get(),
         rows,
         history.get(),
@@ -481,7 +498,12 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     });
     // Null, not undefined, when there is none: an action whose context
     // holds an undefined value does not run.
-    const target = pool ?? poolWish.result ?? null;
+    const discoveredPool = computed(() => {
+      const response = poolWish.result;
+      if (hasError(response) && poolWish.errorCode === "no-match") return null;
+      return resultOf(response);
+    });
+    const target = pool ?? discoveredPool;
 
     // Every hi-fi call is asked for the goal, so it changes only here, never
     // per keystroke. A new question withdraws the old one's contribution and

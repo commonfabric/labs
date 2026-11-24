@@ -21,9 +21,9 @@ interface BadgeState {
 const __cfLift_1 = __cfHelpers.lift<{
     profileInput?: Profile | undefined;
     profileWish: {
-        result: Profile | undefined;
+        result: __cfHelpers.AsyncResult<Profile>;
     };
-}, Profile | undefined>(({ profileInput, profileWish }) => profileInput ?? profileWish.result, {
+}, __cfHelpers.AsyncResult<Profile>>(({ profileInput, profileWish }) => profileInput ?? profileWish.result, {
     type: "object",
     properties: {
         profileInput: {
@@ -33,13 +33,36 @@ const __cfLift_1 = __cfHelpers.lift<{
             type: "object",
             properties: {
                 result: {
-                    $ref: "#/$defs/Profile"
+                    anyOf: [{
+                            $ref: "#/$defs/Profile"
+                        }, {
+                            $ref: "#/$defs/HasError"
+                        }, {
+                            $ref: "#/$defs/IsObsolete"
+                        }, {
+                            $ref: "#/$defs/IsPending"
+                        }, {
+                            $ref: "#/$defs/IsSyncing"
+                        }]
                 }
-            }
+            },
+            required: ["result"]
         }
     },
     required: ["profileWish"],
     $defs: {
+        IsSyncing: {
+            type: "FabricUnavailable"
+        },
+        IsPending: {
+            type: "FabricUnavailable"
+        },
+        IsObsolete: {
+            type: "FabricUnavailable"
+        },
+        HasError: {
+            type: "FabricUnavailable"
+        },
         Profile: {
             type: "object",
             properties: {
@@ -55,11 +78,29 @@ const __cfLift_1 = __cfHelpers.lift<{
     }
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
-            type: "undefined"
-        }, {
             $ref: "#/$defs/Profile"
+        }, {
+            $ref: "#/$defs/HasError"
+        }, {
+            $ref: "#/$defs/IsObsolete"
+        }, {
+            $ref: "#/$defs/IsPending"
+        }, {
+            $ref: "#/$defs/IsSyncing"
         }],
     $defs: {
+        IsSyncing: {
+            type: "FabricUnavailable"
+        },
+        IsPending: {
+            type: "FabricUnavailable"
+        },
+        IsObsolete: {
+            type: "FabricUnavailable"
+        },
+        HasError: {
+            type: "FabricUnavailable"
+        },
         Profile: {
             type: "object",
             properties: {

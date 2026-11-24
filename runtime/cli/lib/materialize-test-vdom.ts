@@ -1,9 +1,11 @@
 import { isWorkerVNode, WorkerReconciler } from "@commonfabric/html/worker";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { type Cell, isCell } from "@commonfabric/runner";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 
 function isRenderableRoot(value: unknown): boolean {
   if (value === null || value === undefined) return true;
+  if (isUnavailable(value)) return true;
   if (
     typeof value === "string" || typeof value === "number" ||
     typeof value === "boolean"

@@ -12,6 +12,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   type Stream,
   TESTS,
   UI,
@@ -48,8 +49,10 @@ export default pattern(() => {
   const log = ActivityLog({ events, mentioned });
   // The log declares its streams opaquely, so the test reaches `logEvent` the
   // way its consumers do: by favoriting the log and wishing for it.
-  const home = wish<Writable<HomeDefault>>({ query: "#default" }).result!;
+  const homeWish = wish<Writable<HomeDefault>>({ query: "#default" });
+  const home = resultOf(homeWish.result);
   const found = wish<FoundLog>({ query: "#activityLog", headless: true });
+  const foundLog = resultOf(found.result);
 
   const assert_starts_empty = assert(() =>
     log[NAME] === "Activity Log (0)" &&
@@ -61,7 +64,7 @@ export default pattern(() => {
     home.key("favorites").set([{ cell: log, tags: ["activitylog"] }]);
   });
   const action_log_events = action(() => {
-    found.result?.logEvent.send({
+    foundLog.logEvent.send({
       agent: "alice",
       action: "deployed",
       pieceName: "Notes",
@@ -69,7 +72,7 @@ export default pattern(() => {
     });
   });
   const action_log_more = action(() => {
-    found.result?.logEvent.send({
+    foundLog.logEvent.send({
       agent: "bob",
       action: "populated",
       pieceRef: { mentioned: [], backlinks: [] },

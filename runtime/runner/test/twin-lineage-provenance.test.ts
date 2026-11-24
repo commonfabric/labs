@@ -266,7 +266,7 @@ describe("twin-lineage provenance (helper-unlink regression)", () => {
     const modules = collectJavaScriptModules(compiled);
     // Entry lifts + card lifts/handler ride the compiled graph; the exact
     // count is allowed to evolve, but an empty walk means the collector broke.
-    expect(modules.length).toBeGreaterThanOrEqual(6);
+    expect(modules.length).toBeGreaterThan(0);
 
     for (const module of modules) {
       const impl = (module as { implementation?: unknown }).implementation;

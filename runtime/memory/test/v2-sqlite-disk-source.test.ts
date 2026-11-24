@@ -7,7 +7,7 @@
 //      by the handle cell id.
 //
 // Spec: docs/specs/sqlite-builtin/03-database-sources.md §03.3; plan
-// docs/specs/sqlite-builtin/plans/on-disk-source.md. Writes/reactivity for
+// docs/specs/sqlite-builtin/03-database-sources.md. Writes/reactivity for
 // on-disk sources are deferred (Q12/Q13/Q14).
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";

@@ -1,0 +1,76 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "title": {
+        "default": "Queue Test",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ],
+    "type": "object"
+  },
+  "pattern": "examples/queue-test.tsx",
+  "resultSchema": {
+    "$defs": {
+      "JSXElement": {
+        "anyOf": [
+          {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          {
+            "$ref": "#/$defs/UIRenderable"
+          },
+          {
+            "properties": {},
+            "type": "object"
+          }
+        ]
+      },
+      "UIRenderable": {
+        "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          }
+        },
+        "required": [
+          "$UI"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "#/$defs/JSXElement"
+      },
+      "responses": {
+        "items": {
+          "properties": {
+            "pending": {
+              "type": "boolean"
+            },
+            "result": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pending",
+            "result"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "responses"
+    ],
+    "type": "object"
+  }
+}

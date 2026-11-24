@@ -14,6 +14,7 @@ import {
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 import {
   isObjectNotArray,
@@ -61,8 +62,8 @@ const UNRESOLVED_LINK_PLACEHOLDER = Object.freeze({
 });
 
 /**
- * Whether `value` needs no schema check where it stands: an opaque Cell whose
- * wrapper the schema declares, or the placeholder
+ * Whether `value` needs no schema check where it stands: unavailable control
+ * data, an opaque Cell whose wrapper the schema declares, or the placeholder
  * {@link overlayUnreadableLinkPlaceholders} leaves for a stored link this
  * replica cannot read. The two together are what let a document be judged
  * here without judging values that are owned elsewhere.
@@ -71,6 +72,7 @@ export const acceptsOpaqueCellOrUnresolvedLink = (
   value: unknown,
   schema: JSONSchema,
 ): boolean =>
+  isUnavailable(value) ||
   value === UNRESOLVED_LINK_PLACEHOLDER ||
   schemaAcceptsOpaqueCellValue(value, schema);
 

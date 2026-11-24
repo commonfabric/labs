@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { OpaqueCell } from "@commonfabric/api";
+import { fabricAwareEqual } from "@commonfabric/data-model";
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+  unavailableMismatch,
+  unavailableObsolete,
+} from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { Cell } from "../src/cell.ts";
@@ -170,6 +178,75 @@ describe("child run ownership", () => {
     await expect(directStart).resolves.toBe(true);
     expect(runtime.runner.cancels.has(key(child!))).toBe(true);
     runtime.runner.stop(child!);
+  });
+
+  it("keeps an independently opened map child through unavailable input and recovery", async () => {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const op = pattern(({ element }: { element: number }) =>
+      lift((value: number) => value * 2)(element)
+    );
+    const Parent = pattern<{ values: number[] }>(({ values }) => {
+      const list = values as unknown as OpaqueCell<number[]>;
+      return {
+        out: list.mapWithPattern(
+          op as unknown as Parameters<typeof list.mapWithPattern>[0],
+          {},
+        ),
+      };
+    });
+    const tx = runtime.edit();
+    const parent = runtime.getCell<{ out: number[] }>(
+      space,
+      "map child retained across unavailable list",
+      undefined,
+      tx,
+    );
+    let child: Cell<unknown> | undefined;
+    const originalRun = runtime.runner.run;
+    runtime.runner.run = ((...args: Parameters<typeof originalRun>) => {
+      if (args[4]?.doNotUpdateOnPatternChange) child ??= args[3];
+      return Reflect.apply(originalRun, runtime.runner, args);
+    }) as typeof originalRun;
+    try {
+      runtime.run(tx, Parent, { values: [3] }, parent);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      expect(await parent.pull()).toEqual({ out: [6] });
+    } finally {
+      runtime.runner.run = originalRun;
+    }
+    expect(child).toBeDefined();
+    if (!child) throw new Error("The map did not start its element child");
+    await expect(runtime.start(child)).resolves.toBe(true);
+    const cancel = parent.sink(() => {});
+    try {
+      for (
+        const marker of [
+          UNAVAILABLE_PENDING,
+          UNAVAILABLE_SYNCING,
+          unavailableError("list failed"),
+          unavailableMismatch("invalid list"),
+          unavailableObsolete("Use the replacement list"),
+        ]
+      ) {
+        const unavailable = runtime.edit();
+        parent.getArgumentCell()!.withTx(unavailable).key("values")
+          .setRawUntyped(marker, true);
+        expect((await unavailable.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        expect(fabricAwareEqual(parent.key("out").get(), marker)).toBe(true);
+        expect(runtime.runner.cancels.has(key(child))).toBe(true);
+
+        const recovered = runtime.edit();
+        parent.getArgumentCell()!.withTx(recovered).key("values").set([3]);
+        expect((await recovered.commit().settled).error).toBeUndefined();
+        expect(await parent.pull()).toEqual({ out: [6] });
+      }
+    } finally {
+      cancel();
+    }
+    runtime.runner.stop(parent);
+    expect(runtime.runner.cancels.has(key(child))).toBe(true);
+    runtime.runner.stop(child);
   });
 
   it("tombstones a pending commit-gated start on an explicit stop", async () => {

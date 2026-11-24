@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { hasSchemaMismatch } from "@commonfabric/data-model/availability";
 import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -100,7 +101,8 @@ describe("runner action arguments", () => {
         { value: "two" },
         "mismatching argument",
       );
-      expect(await result.pull()).toEqual({ result: undefined });
+      await result.pull();
+      expect(hasSchemaMismatch(result.key("result").get())).toBe(true);
       expect(seen).toEqual([]);
 
       const argument = result.getArgumentCell<{ value: unknown }>()!;
@@ -142,7 +144,8 @@ describe("runner action arguments", () => {
     let matching!: Cell<{ result?: unknown }>;
     const lines = await collectingInfo(async () => {
       refused = start(doubling(body, schema), { value: { n: "bad" } }, "r");
-      expect(await refused.pull()).toEqual({ result: undefined });
+      await refused.pull();
+      expect(hasSchemaMismatch(refused.key("result").get())).toBe(true);
       matching = start(doubling(body, schema), { value: { n: 3 } }, "m");
       expect(await matching.pull()).toEqual({ result: 6 });
     });

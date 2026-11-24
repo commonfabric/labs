@@ -3,6 +3,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -25,9 +26,10 @@ const displayOf = (ui: unknown, name: string): unknown => {
 };
 
 export default pattern(() => {
-  const pieceRegistry = wish<Writable<MinimalPiece[]>>({
+  const pieceRegistryRequest = wish<Writable<MinimalPiece[]>>({
     query: "#pieceRegistry",
-  }).result!;
+  });
+  const pieceRegistry = resultOf(pieceRegistryRequest.result);
   const subject = NotebookNestBug({});
 
   const action_create_nested_notebooks = action(() => {

@@ -11,15 +11,22 @@
  * through which a field the collection does not mirror is read.
  */
 import {
+  type AsyncResult,
   type Cell,
   computed,
   type Default,
   handler,
+  hasError,
   type IndexedCollections,
   indexedCollections,
+  isObsolete,
+  isPending,
+  isSyncing,
+  lift,
   NAME,
   type OpaqueCell,
   pattern,
+  resultOf,
   SELF,
   type Stream,
   UI,
@@ -76,12 +83,24 @@ export interface MentioningTopic {
   title: string;
 }
 
-/** The settled or pending rows of a query. */
+/** A query's status and row projection; the rows retain native availability. */
 interface Rows<Row> {
   pending: boolean;
   result?: Row[];
   error?: unknown;
 }
+
+/** The board's public status fields, derived from the query that owns them. */
+export const queryStatus = lift((request: AsyncResult<object>) => {
+  if (isObsolete(request)) {
+    // The retired result carries its hint; retirement is not a query error.
+    return { pending: false, error: undefined };
+  }
+  return {
+    pending: isPending(request) || isSyncing(request),
+    error: hasError(request) ? request.message || "Query failed." : undefined,
+  };
+});
 
 export interface TopicOutput {
   [NAME]: string;
@@ -113,8 +132,10 @@ export const Topic = pattern<TopicInput, TopicOutput>(
         "WHERE e.target_cf_link = :self_cf_link ORDER BY m.title",
       { params: { self_cf_link: self } },
     );
-    const mentionedByTitles = computed<string[]>(() =>
-      (mentionedBy.result ?? []).map((row) => row.title)
+    const mentionedStatus = queryStatus(mentionedBy);
+    const mentioning = resultOf(mentionedBy).rows;
+    const mentionedByTitles = computed(() =>
+      mentioning.map((row) => row.title)
     );
 
     return {
@@ -129,7 +150,11 @@ export const Topic = pattern<TopicInput, TopicOutput>(
       ),
       title,
       mentions,
-      mentionedBy,
+      mentionedBy: {
+        pending: mentionedStatus.pending,
+        error: mentionedStatus.error,
+        result: mentioning,
+      },
       rename: renameTopic({ title }),
       mention: mentionTopic({ mentions }),
     };
@@ -192,8 +217,9 @@ export default pattern<Record<string, never>, BoardOutput>(() => {
   const counts = board.query<{ n: number }>(
     "SELECT count(*) AS n FROM topics",
   );
-  const topicCount = computed<number>(() => counts.result?.[0]?.n ?? 0);
-  const listed = computed<ListedTopic[]>(() => titles.result ?? []);
+  const topicCount = resultOf(counts).rows[0].n;
+  const listingStatus = queryStatus(titles);
+  const listed = resultOf(titles).rows;
 
   return {
     [NAME]: "Indexed topics",
@@ -213,7 +239,11 @@ export default pattern<Record<string, never>, BoardOutput>(() => {
         </cf-vstack>
       </cf-screen>
     ),
-    titles,
+    titles: {
+      pending: listingStatus.pending,
+      error: listingStatus.error,
+      result: listed,
+    },
     topicCount,
     selected,
     addTopic: addTopic({ board }),

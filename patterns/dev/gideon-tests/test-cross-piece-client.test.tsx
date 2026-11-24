@@ -14,6 +14,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -40,10 +41,13 @@ export default pattern(() => {
     lastInvocationStatus: "Not invoked yet",
     invocationCount: 0,
   });
-  const favorites = wish<Writable<Favorite[]>>({ query: "#favorites" });
+  const homeWish = wish<Writable<{ favorites: Favorite[] }>>({
+    query: "#default",
+  });
+  const home = resultOf(homeWish.result);
 
   const action_favorite_server = action(() => {
-    favorites.result?.push({
+    home.key("favorites").push({
       cell: server,
       tags: ["crosspiecetestserver"],
       userTags: [],

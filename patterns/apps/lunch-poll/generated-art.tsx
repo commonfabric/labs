@@ -2,8 +2,12 @@ import {
   computed,
   Default,
   fetchBinary,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
+  resultOf,
   UI,
   type VNode,
 } from "commonfabric";
@@ -164,12 +168,34 @@ export default pattern<GeneratedArtInput, GeneratedArtOutput>(
         mutexTimeoutMs: 30_000,
       },
     });
+    const imageState = computed(() => {
+      if (
+        isPending(generatedArt) || isSyncing(generatedArt)
+      ) {
+        return { kind: "pending" as const };
+      }
+      if (hasError(generatedArt)) {
+        return { kind: "error" as const };
+      }
+      return {
+        kind: "available" as const,
+        image: resultOf(generatedArt),
+      };
+    });
 
-    const imageBytes = computed(() => generatedArt.result?.bytes);
-    const imageMediaType = computed(() => generatedArt.result?.mediaType ?? "");
+    const imageBytes = computed(() =>
+      imageState.kind === "available" ? imageState.image.bytes : undefined
+    );
+    const imageMediaType = computed(() =>
+      imageState.kind === "available" ? imageState.image.mediaType : ""
+    );
     const imageDataUrl = computed(() => {
-      const bytes = generatedArt.result?.bytes;
-      const mediaType = generatedArt.result?.mediaType;
+      const bytes = imageState.kind === "available"
+        ? imageState.image.bytes
+        : undefined;
+      const mediaType = imageState.kind === "available"
+        ? imageState.image.mediaType
+        : undefined;
       if (!bytes || !mediaType) return "";
       // ~10 kB thumbnails; a simple char loop is fine at this size. `btoa` is
       // a hardened sandbox global; FabricBytes reads out via `slice()`.
@@ -181,15 +207,17 @@ export default pattern<GeneratedArtInput, GeneratedArtOutput>(
       return `data:${mediaType};base64,${btoa(binary)}`;
     });
     const hasSourceUrl = computed(() => safeImageUrl(sourceUrl) !== "");
-    const hasGeneratedImage = computed(() => !!generatedArt.result?.bytes);
+    const hasGeneratedImage = computed(() =>
+      imageState.kind === "available" && !!imageState.image.bytes
+    );
     const fetchState = computed(() =>
       deriveGeneratedArtFetchState(
         prompt,
         sourceUrl,
         shouldGenerate,
-        !!generatedArt.result?.bytes,
-        !!generatedArt.pending,
-        !!generatedArt.error,
+        hasGeneratedImage,
+        imageState.kind === "pending",
+        imageState.kind === "error",
       )
     );
 

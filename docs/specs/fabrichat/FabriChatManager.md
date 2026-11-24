@@ -217,6 +217,13 @@ isn't added.
 Offering a new room to a member adds that member's profile the same way (see
 [first contact](#first-contact)).
 
+The viewer's profile is an optional capability. A terminal error resolving
+`#profile` leaves the manager's indexes readable, disables its start controls,
+and makes start requests record a refusal without creating rooms or notices.
+Pending and syncing profiles retain their native unavailable states. A usable
+profile is passed through as its original cell handle, preserving its identity
+and principal labels.
+
 ## Creating a room
 
 `openDirect` (when it finds no room with the counterpart) and `createGroup`

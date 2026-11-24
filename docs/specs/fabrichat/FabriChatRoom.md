@@ -125,6 +125,12 @@ store is meant to be reachable and managed directly, through its own view
 ([`FileStoreView`](../fabrifile/FileStoreView.md)), where such an entry can be
 removed like any other; the composer's removal keeps the common case tidy, and
 an entry it leaves is not lost.
+The viewer's profile and chat manager are optional capabilities. Their terminal
+Wish errors leave the conversation readable: an absent profile exposes setup,
+and an absent manager offers neither starting a direct chat nor adding the room
+to its list. Pending and syncing wishes remain unavailable rather than being
+treated as confirmed absence. Successful profile and stream projections retain
+their original cell identities.
 
 A room that is its space's root shows its space's files itself, as a root
 offering file storage does ([`FileStoreView`](../fabrifile/FileStoreView.md)).

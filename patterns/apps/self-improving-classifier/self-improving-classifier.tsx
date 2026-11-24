@@ -17,10 +17,15 @@ import {
   type Default,
   generateObject,
   handler,
+  hasError,
   ifElse,
+  isObsolete,
+  isPending,
+  isSyncing,
   lift,
   NAME,
   pattern,
+  resultOf,
   Stream,
   toIndentedDebugString,
   UI,
@@ -983,7 +988,7 @@ export default pattern<ClassifierInput, ClassifierOutput>(
     });
 
     // LLM classification - only runs when there's a prompt
-    const llmResult = generateObject<LLMClassificationResult>({
+    const classificationRequest = generateObject<LLMClassificationResult>({
       prompt: classificationPrompt,
       system:
         `You are a precise classifier. Analyze the input and determine if it matches the question criteria.
@@ -993,6 +998,20 @@ Respond with:
 - confidence: a number between 0 and 1 indicating your confidence
 - reasoning: a brief explanation of why you classified it this way`,
     });
+    const llmResult = computed(() => ({
+      pending: isPending(classificationRequest) ||
+        isSyncing(classificationRequest),
+      error:
+        hasError(classificationRequest) || isObsolete(classificationRequest)
+          ? classificationRequest.message ||
+            "This classification output has been retired."
+          : undefined,
+      result:
+        isPending(classificationRequest) || isSyncing(classificationRequest) ||
+          hasError(classificationRequest) || isObsolete(classificationRequest)
+          ? undefined
+          : resultOf(classificationRequest),
+    }));
 
     // When LLM result arrives, compute the classification result
     // IMPORTANT: This computed has NO SIDE EFFECTS - it only derives state
@@ -1103,7 +1122,7 @@ Respond with:
     });
 
     // LLM rule generation - only runs when there's a prompt
-    const ruleGenResult = generateObject<RuleSuggestionsResult>({
+    const ruleSuggestionsRequest = generateObject<RuleSuggestionsResult>({
       prompt: ruleGenerationPrompt,
       system:
         `You are a pattern recognition expert. Analyze the examples and generate regex rules.
@@ -1114,6 +1133,20 @@ Each suggestion should have:
 - predicts: true for YES, false for NO
 - reasoning: why this pattern indicates the classification`,
     });
+    const ruleGenResult = computed(() => ({
+      pending: isPending(ruleSuggestionsRequest) ||
+        isSyncing(ruleSuggestionsRequest),
+      error:
+        hasError(ruleSuggestionsRequest) || isObsolete(ruleSuggestionsRequest)
+          ? ruleSuggestionsRequest.message ||
+            "This rule suggestion output has been retired."
+          : undefined,
+      result: isPending(ruleSuggestionsRequest) ||
+          isSyncing(ruleSuggestionsRequest) ||
+          hasError(ruleSuggestionsRequest) || isObsolete(ruleSuggestionsRequest)
+        ? undefined
+        : resultOf(ruleSuggestionsRequest),
+    }));
 
     // Derive visible suggestions from LLM result, filtered by dismissed indices
     // This is pure derivation with no side effects
@@ -1631,6 +1664,13 @@ Each suggestion should have:
               )}
 
               {/* Suggested Rules */}
+              {ifElse(
+                computed(() => ruleGenResult.error !== undefined),
+                <span role="status" style="color: var(--cf-theme-color-error);">
+                  Rule suggestions unavailable: {ruleGenResult.error}
+                </span>,
+                null,
+              )}
               {ifElse(
                 computed(() => visibleSuggestions.length > 0),
                 <cf-card style="border-left: 4px solid var(--cf-theme-color-success);">

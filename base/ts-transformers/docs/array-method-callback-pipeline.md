@@ -27,43 +27,44 @@ The stages relevant to array-method callbacks are:
 11. JsxExpressionSiteRouterTransformer
 12. AssertDiagnosticsTransformer             ← rewrites assert(...) bodies; not
                                                 array-method related
-13. LiftLoweringTransformer
-14. ClosureTransformer                       ← lowers .map() to .mapWithPattern()
+13. AvailabilityAnalysisTransformer
+14. LiftLoweringTransformer
+15. ClosureTransformer                       ← lowers .map() to .mapWithPattern()
                                                 + immediately runs the per-callback
                                                 expression-site lowering
-15. PatternOwnedExpressionSiteLoweringTransformer
-16. HelperOwnedExpressionSiteLoweringTransformer
-17. WriteAuthorizedByValidationTransformer
-18. PatternCallbackLoweringTransformer       ← __cf_pattern_input.key(...)
+16. PatternOwnedExpressionSiteLoweringTransformer
+17. HelperOwnedExpressionSiteLoweringTransformer
+18. WriteAuthorizedByValidationTransformer
+19. PatternCallbackLoweringTransformer       ← __cf_pattern_input.key(...)
                                                 destructuring (ONLY for destructured
                                                 first params)
-19. SchemaInjectionTransformer
-20. BuilderCallHoistingTransformer           ← hoists whole lift/handler calls and
+20. SchemaInjectionTransformer
+21. BuilderCallHoistingTransformer           ← hoists whole lift/handler calls and
                                                 argument-position pattern(...) to
                                                 module-scope consts, after schema
                                                 injection (CT-1644/CT-1655; replaced
                                                 the former BuilderCallbackHoisting +
                                                 LiftHoisting pair, #3864)
-21. SchemaGeneratorTransformer
-22. VerbTierMarkTransformer                  ← verb listing marks (WS-F)
-23. ReactiveVariableForTransformer
-24. ModuleScopeShadowingTransformer
-25. ModuleScopeCfDataTransformer
-26. PatternCoverageTransformer               ← no-op unless coverage is enabled
-27. ModuleScopeFunctionHardeningTransformer
+22. SchemaGeneratorTransformer
+23. VerbTierMarkTransformer                  ← verb listing marks (WS-F)
+24. ReactiveVariableForTransformer
+25. ModuleScopeShadowingTransformer
+26. ModuleScopeCfDataTransformer
+27. PatternCoverageTransformer               ← no-op unless coverage is enabled
+28. ModuleScopeFunctionHardeningTransformer
 ```
 
 A common misconception worth flagging up front:
-`PatternCallbackLoweringTransformer` (stage 18) runs _last_ among the lowering
+`PatternCallbackLoweringTransformer` (stage 19) runs _last_ among the lowering
 passes, not first. By the time it fires, expression-site lowering during
-`ClosureTransformer` (stage 14) has already had its say. The
+`ClosureTransformer` (stage 15) has already had its say. The
 `key()`-substitution prologue it generates is downstream of the analyzer-driven
 decisions about wrapping.
 
 This document focuses on reactive collection calls that `ClosureTransformer`
 rewrites. An ordinary eager `Array.map()` or `ReadonlyArray.map()` call remains
 plain JavaScript, but a callback in a pattern body can still carry pattern-owned
-value sites that stage 14 lowers. That permission is narrower than the
+value sites that stage 15 lowers. That permission is narrower than the
 `plain-array-value` callback boundary: `isCollectingPlainArrayMethodCallback`
 admits only argument zero of a `map` whose owner symbol includes the configured
 TypeScript default-library `Array`/`ReadonlyArray` declaration. Same-named
@@ -117,7 +118,7 @@ during `ClosureTransformer`. `PatternCallbackLoweringTransformer` sees only the
 synthesized destructured `({element, …})` param and handles all three
 identically as far as the key-prologue is concerned.
 
-| Source form                                             | `ClosureTransformer` (stage 14)                                                                                                                                                                                                                                                                                                               |
+| Source form                                             | `ClosureTransformer` (stage 15)                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `(elem) => …elem.foo…`                                  | Identifier form. `bindingName = elem`, no aliases, body unchanged. Later passes (and our new analyzer hook) recognize `elem` as the element binding via `mapCallbackRegistry`.                                                                                                                                                                |
 | `({piece, name}) => …` (plain object destructure)       | Destructure with no computed property names. `plan.aliases.length === 0`: the destructure binding passes through unchanged (no fresh `element` identifier synthesized). `PatternCallbackLoweringTransformer` sees the destructured param and generates a `key()` prologue (`const piece = __cf_pattern_input.key("element", "piece");` etc.). |
@@ -131,14 +132,14 @@ path is therefore the dominant one and the one most worth understanding deeply.
 
 For the identifier-form path, the late stages handle most of the lowering:
 
-- During `ClosureTransformer` (stage 14), expression-site lowering decides
+- During `ClosureTransformer` (stage 15), expression-site lowering decides
   whether each expression in the body needs an early lift-applied wrapper. The
   decision flows from `analyze(expression)` reporting `containsReactive` /
   `requiresRewrite` / `dataFlows`.
 - Most `elem.foo`-style passthrough reads (inside `{elem.foo}` JSX, inside
   `[elem.foo]` array literals, etc.) are deliberately **not** wrapped at this
   stage. They flow through to `PatternCallbackLoweringTransformer`.
-- During `PatternCallbackLoweringTransformer` (stage 18),
+- During `PatternCallbackLoweringTransformer` (stage 19),
   `pattern-body-reactive-root-lowering` walks the body and rewrites `elem.foo`
   to `elem.key("foo")` in place. This is the cheaper form — it gives the runtime
   a fine-grained key path without pulling `elem` into a lift's inputs.

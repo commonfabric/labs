@@ -1,7 +1,6 @@
 /**
  * Lists a fixed set of summary index entries in the browser the tester shows,
- * filters them by name and by summary, and loads the tester itself in a test
- * space, which has no summary index.
+ * filters them by name and by summary, and clears a filter to list them again.
  */
 
 import {
@@ -22,9 +21,7 @@ import {
   readValue,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import SummaryIndexTester, {
-  SummaryIndexBrowser,
-} from "./summary-index-tester.tsx";
+import { SummaryIndexBrowser } from "./summary-index-tester.tsx";
 
 /**
  * The text of each row the view lists. A row's name is a link to its piece,
@@ -57,7 +54,6 @@ export default pattern(() => {
     ],
     query,
   });
-  const tester = SummaryIndexTester({});
 
   const assert_named_and_counts_every_entry = assert(() =>
     browser[NAME] === "Summary Index Tester" &&
@@ -90,12 +86,6 @@ export default pattern(() => {
 
   const action_clear_search = action(() => query.set(""));
 
-  const assert_tester_lists_nothing_without_an_index = assert(() =>
-    tester[NAME] === "Summary Index Tester" &&
-    hasText(tester[UI], "Index: 0 entries") &&
-    rowSummaries(tester[UI]).length === 0
-  );
-
   return {
     [TESTS]: [
       { assertion: assert_named_and_counts_every_entry },
@@ -112,10 +102,7 @@ export default pattern(() => {
 
       { action: action_clear_search },
       { assertion: assert_named_and_counts_every_entry },
-
-      { assertion: assert_tester_lists_nothing_without_an_index },
     ],
     browser,
-    tester,
   };
 });

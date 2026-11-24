@@ -1,4 +1,5 @@
 import type ts from "typescript";
+import type { SchemaScope } from "@commonfabric/api";
 import { TransformationContext } from "./mod.ts";
 import type { CrossStageState } from "./cross-stage-state.ts";
 import type { BuilderSourceSite } from "./runtime-contract.ts";
@@ -55,6 +56,9 @@ export type SchemaHint = {
    * defining a document (`SchemaGenerationOptions.definesDocument`).
    */
   readonly definesDocument?: true;
+
+  /** The slot scope of a generated availability capture, not a handle cap. */
+  readonly availabilityCaptureScope?: SchemaScope;
 
   /**
    * Set on the node a verb's authored event is generated from: the handler

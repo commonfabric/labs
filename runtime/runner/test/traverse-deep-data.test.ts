@@ -10,6 +10,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
+import { unavailableObsolete } from "@commonfabric/data-model/availability";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import type {
@@ -340,6 +341,32 @@ describe("traverse", () => {
 
       expect(error).toBeUndefined();
       expect(depthOf(ok!)).toBe(NESTING_DEPTH);
+    });
+
+    it("preserves the unavailable leaf at the bottom of a recursive oneOf", () => {
+      const obsolete = unavailableObsolete("Read the replacement output.");
+      const values = new Map([["of:tree", nestedOf(NESTING_DEPTH, obsolete)]]);
+      const schema: JSONSchema = {
+        $defs: {
+          Tree: {
+            oneOf: [{
+              type: "object",
+              properties: { child: { $ref: "#/$defs/Tree" } },
+              required: ["child"],
+            }, { type: "number" }],
+          },
+        },
+        $ref: "#/$defs/Tree",
+      };
+
+      const { ok, error } = read(values, "of:tree", schema);
+
+      expect(error).toBeUndefined();
+      let leaf = ok;
+      for (let i = 0; i < NESTING_DEPTH; i++) {
+        leaf = (leaf as { child: FabricValue }).child;
+      }
+      expect(leaf).toBe(obsolete);
     });
 
     it("returns every level of a document nested under a recursive record schema", () => {

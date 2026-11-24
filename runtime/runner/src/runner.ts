@@ -1,4 +1,29 @@
 import {
+  isUnavailable,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+  unavailableMismatch,
+  type UnavailableObservationKind,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
+import {
+  dataUnavailableFromTransformFailure,
+  dataUnavailableReasonPrecedes,
+} from "./data-unavailability.ts";
+import { assertValidUnavailableInputPolicy } from "./unavailable-input-policy.ts";
+import type { HandlerInputReadiness } from "./scheduler/types.ts";
+import type { IAttestation } from "./storage/interface.ts";
+import {
+  ignoreReadForCommit,
+  internalVerifierRead,
+  isDurableReadTx,
+  linkResolutionProbe,
+  machineryRead,
+  markDurableReadTx,
+  schedulerDependencyRead,
+  writeDestinationRead,
+} from "./storage/reactivity-log.ts";
+import {
   convertibleJsFromFabricValue,
   debugStr,
   fabricFromConvertibleJsValue,
@@ -86,6 +111,7 @@ import {
   type NodeFactory,
   type Pattern,
   UI,
+  type UnavailableInputPolicyEntry,
 } from "./builder/types.ts";
 import {
   type AddCancel,
@@ -99,6 +125,7 @@ import {
   cellRuntime,
   cellTx,
   createCell,
+  getCellWithStatus,
   internCellLinkSchema,
   isCell,
   recordWriteDestinationPolicyInput,
@@ -134,13 +161,13 @@ import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
-import { documentLoad } from "./document-readiness.ts";
 import { type EntityKind, entityKindOfIdString } from "./entity-kind.ts";
 import { inSpaceRootCause } from "./in-space-root-cause.ts";
 import {
   MAX_PATH_RESOLUTION_LENGTH,
   readStoredReference,
   resolveLink,
+  unlessCyclic,
 } from "./link-resolution.ts";
 import { FILTER_INPUT_SCHEMA } from "./builtins/filter.ts";
 import { FLATMAP_INPUT_SCHEMA } from "./builtins/flatmap.ts";
@@ -238,16 +265,28 @@ import {
 import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
 import {
   isSchemaMismatchError,
+  isSchemaViewExcluded,
   isUnresolvedInputError,
+  narrowSchemaForValue,
+  schemaViewChildSchema,
 } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
-import { combineOptionalSchema } from "./traverse.ts";
+import {
+  combineOptionalSchema,
+  getJsonType,
+  isOpaquePosition,
+  SchemaObjectTraverser,
+} from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
   TransactionWrapper,
 } from "./storage/extended-storage-transaction.ts";
+import {
+  readAvailabilityValue,
+  recordUnavailableRead,
+} from "./storage/read-availability.ts";
 import {
   getDirectTransactionReadActivities,
   getTransactionReadActivities,
@@ -256,23 +295,18 @@ import {
 import {
   type CommitError,
   type IExtendedStorageTransaction,
+  type IMemorySpaceAddress,
+  type IReadActivity,
+  type IReadOptions,
   type IStorageSubscription,
   type MemorySpace,
+  type ReadError,
   type Result,
   toThrowable,
   type UnexaminedAbsence,
   type Unit,
   type URI,
 } from "./storage/interface.ts";
-import {
-  internalVerifierRead,
-  isDurableReadTx,
-  linkResolutionProbe,
-  machineryRead,
-  markDurableReadTx,
-  schedulerDependencyRead,
-  writeDestinationRead,
-} from "./storage/reactivity-log.ts";
 import {
   isCfcEnforcementRejection,
   isConflictRejection,
@@ -614,6 +648,442 @@ type InternalCellDescriptor = {
   link: SigilLink;
 };
 
+type UnavailableInput = Readonly<{
+  value: UnavailableVariant;
+  path: readonly string[];
+  overlayTarget?: NormalizedFullLink;
+}>;
+
+type AvailabilityPreflight = Readonly<{
+  unavailable?: UnavailableInput;
+  localSyncing?: boolean;
+  accepted: readonly UnavailableInput[];
+  requiresObservingScan?: boolean;
+}>;
+
+const AVAILABILITY_PREFLIGHT_PROBE_READ = {
+  ...ignoreReadForScheduling,
+  ...ignoreReadForCommit,
+  ...internalVerifierRead,
+};
+
+const AVAILABILITY_DEFINED_VALUE_SCHEMA = {
+  not: { type: "undefined" },
+} as const satisfies JSONSchema;
+
+function availabilityOverlayKey(address: IMemorySpaceAddress): string {
+  return JSON.stringify([
+    address.space,
+    address.scope ?? "space",
+    address.id,
+    address.path,
+  ]);
+}
+
+/** Presents policy-authorized readiness markers while validating the rest. */
+class AvailabilityOverlayTransaction extends TransactionWrapper {
+  readonly #source: IExtendedStorageTransaction;
+  readonly #overlays = new Map<string, UnavailableVariant>();
+
+  constructor(
+    source: IExtendedStorageTransaction,
+    accepted: readonly UnavailableInput[],
+  ) {
+    super(source);
+    this.#source = source;
+    for (const input of accepted) {
+      if (input.overlayTarget !== undefined) {
+        this.#overlays.set(
+          availabilityOverlayKey(toMemorySpaceAddress(input.overlayTarget)),
+          input.value,
+        );
+      }
+    }
+  }
+
+  #overlayFor(address: IMemorySpaceAddress): UnavailableVariant | undefined {
+    return this.#overlays.get(availabilityOverlayKey(address));
+  }
+
+  #recordOverlayRead(
+    address: IMemorySpaceAddress,
+    options?: IReadOptions,
+  ): void {
+    this.#source.read(address, {
+      ...options,
+      trackReadWithoutLoad: true,
+    });
+  }
+
+  override read(
+    address: IMemorySpaceAddress,
+    options?: IReadOptions,
+  ): Result<IAttestation, ReadError> {
+    const overlay = options?.trackReadWithoutLoad === true
+      ? undefined
+      : this.#overlayFor(address);
+    if (overlay === undefined) return super.read(address, options);
+
+    this.#recordOverlayRead(address, options);
+    const { space: _space, ...resolvedAddress } = address;
+    return { ok: { address: resolvedAddress, value: overlay } };
+  }
+
+  override readOrThrow(
+    address: IMemorySpaceAddress,
+    options?: IReadOptions,
+  ): FabricValue {
+    const overlay = this.#overlayFor(address);
+    if (overlay === undefined) return super.readOrThrow(address, options);
+    this.#recordOverlayRead(address, options);
+    return overlay;
+  }
+
+  override readValueOrThrow(
+    address: NormalizedFullLink,
+    options?: IReadOptions,
+  ): FabricValue {
+    return this.readOrThrow(toMemorySpaceAddress(address), options);
+  }
+}
+
+/** A readiness probe returns a refusal as data; only the body read latches it. */
+class AvailabilityProbeTransaction extends TransactionWrapper {
+  override noteSchemaRefusal(_refusal: unknown): void {}
+}
+
+function pathsEqual(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return left.length === right.length &&
+    left.every((part, index) => part === right[index]);
+}
+
+function handlerCapturedArgumentSchema(
+  schema: JSONSchema | undefined,
+): JSONSchema | undefined {
+  if (!isObjectNotArray(schema) || !isObjectNotArray(schema.properties)) {
+    return undefined;
+  }
+
+  const properties = { ...schema.properties };
+  delete properties.$event;
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((key) => key !== "$event")
+    : undefined;
+  return {
+    ...schema,
+    properties,
+    ...(required !== undefined && { required }),
+  } as JSONSchema;
+}
+
+function policyAcceptsUnavailableInput(
+  policy: readonly UnavailableInputPolicyEntry[] | undefined,
+  path: readonly string[],
+  value: UnavailableObservationKind | UnavailableVariant,
+): boolean {
+  const reason = typeof value === "string" ? value : value.reason;
+  return policy?.some((entry) =>
+    pathsEqual(entry.path, path) && (entry.reasons.includes(reason) ||
+      (typeof value !== "string" && value.reason === "error" &&
+        value.errorKind === "schemaMismatch" &&
+        entry.reasons.includes("schemaMismatch")))
+  ) ?? false;
+}
+
+/** Descend one schema edge while preserving local definition scope. */
+function unavailableInputChildSchema(
+  schema: JSONSchema | undefined,
+  key: string,
+  container: "object" | "array",
+): { selected: boolean; schema?: JSONSchema } {
+  if (schema === undefined) return { selected: true };
+  const child = schemaViewChildSchema(schema, key, container);
+  if (isSchemaViewExcluded(child)) return { selected: false };
+  return {
+    selected: true,
+    schema: cfcSchemaWithInheritedDefs(
+      child,
+      isObjectNotArray(schema) ? schema.$defs : undefined,
+    ),
+  };
+}
+
+/**
+ * Select the unavailable marker which controls this computation.
+ *
+ * Object keys provide deterministic argument order; a marker with a
+ * higher-priority reason replaces an earlier selection, while equal-priority
+ * markers retain that order.
+ */
+function scanUnavailableInputs(
+  inputBindings: unknown,
+  argumentSchema: JSONSchema | undefined,
+  policy: readonly UnavailableInputPolicyEntry[] | undefined,
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  inputsCell: Cell<any>,
+  observeReadiness: boolean,
+): AvailabilityPreflight {
+  // Track only the active recursion stack. The same container may be bound at
+  // multiple argument paths, and exact-path policy must inspect every such
+  // occurrence; a global visited set would let the first path hide the rest.
+  const active = new WeakSet<object>();
+  const activeLinks = new Set<string>();
+  let selected: UnavailableInput | undefined;
+  let selectedIsSyntheticSyncing = false;
+  let sawConcreteUnaccepted = false;
+  const accepted: UnavailableInput[] = [];
+  let requiresObservingScan = false;
+
+  const visit = (
+    value: unknown,
+    path: readonly string[],
+    sourceRoot: Cell<any>,
+    sourcePath: readonly string[],
+    schemaAtPath: JSONSchema | undefined,
+  ): void => {
+    const unavailable = isUnavailable(value);
+    if (
+      !unavailable &&
+      (value === null ||
+        (typeof value !== "object" && typeof value !== "function"))
+    ) {
+      return;
+    }
+    // An asCell argument is the handle itself. Reading through it here would
+    // both inspect data outside the callback's argument and turn sample() into
+    // a reactive read, so availability belongs to the callback's eventual
+    // get()/sample(), not this boundary.
+    if (SchemaObjectTraverser.hasAsCell(schemaAtPath)) return;
+
+    if (unavailable) {
+      if (policyAcceptsUnavailableInput(policy, path, value)) {
+        accepted.push({ value, path });
+        return;
+      }
+      sawConcreteUnaccepted = true;
+      if (
+        selected === undefined ||
+        dataUnavailableReasonPrecedes(value.reason, selected.value.reason) ||
+        (selectedIsSyntheticSyncing && value.reason === "syncing")
+      ) {
+        selected = { value, path };
+        selectedIsSyntheticSyncing = false;
+      }
+      return;
+    }
+
+    // An opaque schema position observes only the reached root. Its ordinary
+    // materialization follows links to that root but never reads below it, so
+    // preflight applies the same boundary after checking the root marker.
+    const valueType = getJsonType(value);
+    const narrowedSchema = narrowSchemaForValue(schemaAtPath, value);
+    // A link is transport, not the value which selects an optional handle.
+    // Narrow only at the reached value, as ordinary materialization does.
+    if (
+      !isCellLink(value) && SchemaObjectTraverser.hasAsCell(narrowedSchema)
+    ) return;
+    if (
+      !isCellLink(value) && narrowedSchema !== undefined &&
+      narrowedSchema !== false && valueType !== null &&
+      isOpaquePosition(narrowedSchema, valueType)
+    ) {
+      return;
+    }
+
+    if (isCellLink(value)) {
+      const source = sourcePath.length === 0
+        ? sourceRoot
+        : sourceRoot.key(...sourcePath);
+      const resolved = unlessCyclic(() =>
+        resolveLink(
+          runtime,
+          tx,
+          parseLink(value, source),
+          "value",
+          observeReadiness ? {} : { kickCrossSpaceTargets: false },
+        )
+      );
+      // A cycle names no value to classify. Ordinary argument reads retain
+      // their own handling of that cycle, including lazy unused captures.
+      if (resolved === undefined) return;
+      const target = runtime.getCellFromLink(
+        resolved,
+        undefined,
+        tx,
+      );
+      const link = target.getAsNormalizedFullLink();
+      const linkKey = JSON.stringify([
+        link.space,
+        link.scope,
+        link.id,
+        link.path,
+      ]);
+      // Use the recursion stack, not a global visited set: the same target can
+      // appear at multiple argument paths with different exact-path policy.
+      if (activeLinks.has(linkKey)) return;
+
+      if (!observeReadiness) {
+        const resolved = readAvailabilityValue(tx, toMemorySpaceAddress(link));
+        if (resolved.ok === undefined) {
+          // A later observing pass or ordinary schema materialization
+          // distinguishes syncing from a locally complete mismatch.
+          if (
+            policyAcceptsUnavailableInput(policy, path, "syncing") ||
+            argumentSchema === undefined || argumentSchema === false
+          ) {
+            requiresObservingScan = true;
+          }
+          return;
+        }
+        activeLinks.add(linkKey);
+        try {
+          visit(
+            resolved.ok.value,
+            path,
+            target.withTx(tx),
+            [],
+            schemaAtPath,
+          );
+        } finally {
+          activeLinks.delete(linkKey);
+        }
+        return;
+      }
+
+      // Probe through the serialized source position. This distinguishes a
+      // replica miss (syncing) from a locally complete mismatch.
+      const status = getCellWithStatus(
+        source.asSchema(AVAILABILITY_DEFINED_VALUE_SCHEMA).withTx(
+          new AvailabilityProbeTransaction(tx),
+        ),
+      );
+      if ("error" in status) {
+        const unavailable = dataUnavailableFromTransformFailure(status);
+        if (unavailable === undefined) return;
+        if (policyAcceptsUnavailableInput(policy, path, unavailable)) {
+          accepted.push({ value: unavailable, path, overlayTarget: link });
+        } else if (
+          selected === undefined ||
+          dataUnavailableReasonPrecedes(
+            unavailable.reason,
+            selected.value.reason,
+          )
+        ) {
+          selected = { value: unavailable, path };
+          selectedIsSyntheticSyncing = unavailable.reason === "syncing";
+        }
+        return;
+      }
+      activeLinks.add(linkKey);
+      try {
+        // The readiness schema is deliberately broad and cannot authenticate
+        // a FabricInstance nested inside a container. Inspect the raw target
+        // after status has established local coverage.
+        visit(
+          target.withTx(tx).getRaw(),
+          path,
+          target.withTx(tx),
+          [],
+          schemaAtPath,
+        );
+      } finally {
+        activeLinks.delete(linkKey);
+      }
+      return;
+    }
+
+    if (active.has(value)) return;
+    active.add(value);
+    try {
+      for (const key of Object.keys(value)) {
+        const child = unavailableInputChildSchema(
+          schemaAtPath,
+          key,
+          Array.isArray(value) ? "array" : "object",
+        );
+        if (!child.selected) continue;
+        visit(
+          (value as Record<string, unknown>)[key],
+          [...path, key],
+          sourceRoot,
+          [...sourcePath, key],
+          child.schema,
+        );
+      }
+    } finally {
+      active.delete(value);
+    }
+  };
+
+  visit(inputBindings, [], inputsCell, [], argumentSchema);
+  const deferSyntheticSyncingToSchema = selectedIsSyntheticSyncing &&
+    !sawConcreteUnaccepted &&
+    argumentSchema !== undefined &&
+    argumentSchema !== false;
+  return {
+    unavailable: deferSyntheticSyncingToSchema ? undefined : selected,
+    localSyncing: selectedIsSyntheticSyncing,
+    accepted,
+    ...(requiresObservingScan ? { requiresObservingScan: true } : {}),
+  };
+}
+
+/**
+ * Authenticates unavailable inputs before schema materialization.
+ *
+ * The first scan is a verifier probe: reading the raw binding and following
+ * its links do not become scheduler, conflict, or CFC inputs. If it finds a
+ * concrete marker, scan normally so a skipped computation remains reactive
+ * to the marker and its link topology,
+ * and so propagation retains the marker's CFC labels. Otherwise ordinary
+ * argument materialization supplies the computation's sole normal target
+ * reads. Both scans apply the same exact-path policy and precedence rules.
+ */
+function preflightUnavailableInputs(
+  argumentSchema: JSONSchema | undefined,
+  policy: readonly UnavailableInputPolicyEntry[] | undefined,
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  inputsCell: Cell<any>,
+): AvailabilityPreflight {
+  // Verifier-internal reads (§18.6.2) stay inside this probe. Application
+  // inputs come from ordinary schema materialization; a selected marker is
+  // read again normally below so its labels and dependencies are retained.
+  const probe = tx.runWithAmbientReadMeta(
+    AVAILABILITY_PREFLIGHT_PROBE_READ,
+    () =>
+      scanUnavailableInputs(
+        inputsCell.getRaw(),
+        argumentSchema,
+        policy,
+        runtime,
+        tx,
+        inputsCell,
+        false,
+      ),
+  );
+  if (
+    probe.unavailable === undefined &&
+    probe.accepted.length === 0 &&
+    probe.requiresObservingScan !== true
+  ) {
+    return probe;
+  }
+  return scanUnavailableInputs(
+    inputsCell.getRaw(),
+    argumentSchema,
+    policy,
+    runtime,
+    tx,
+    inputsCell,
+    true,
+  );
+}
+
 type StartAttempt = {
   readonly lifecycleEpoch: number;
   readonly generationsByDoc: Map<string, number>;
@@ -925,7 +1395,10 @@ export const recordOutputSchemaPolicyInputs = (
   //
   // TODO(danfuzz): descend by codec-mediated traversal into instance state, at
   // which point this becomes a walk rather than a refusal.
-  if (outputBinding instanceof FabricInstance) {
+  if (
+    outputBinding instanceof FabricInstance &&
+    !isUnavailable(outputBinding)
+  ) {
     refuseFabricInstance(
       outputBinding,
       "when recording output-schema policy inputs",
@@ -936,7 +1409,10 @@ export const recordOutputSchemaPolicyInputs = (
   // walk never reaches one and the link test decides nothing a `FabricLink`
   // reaches. The two sibling walks below carry no such refusal, and ask the
   // keyable question instead.
-  if (!isCellLink(outputBinding) && isWalkableObjectOrArray(outputBinding)) {
+  if (
+    !isUnavailable(outputBinding) && !isCellLink(outputBinding) &&
+    isWalkableObjectOrArray(outputBinding)
+  ) {
     for (const [key, child] of Object.entries(outputBinding)) {
       recordOutputSchemaPolicyInputs(
         tx,
@@ -1704,6 +2180,13 @@ const recordSetupProjectionPolicyInputs = (
         [...schemaPath, String(index)],
       )
     );
+    return;
+  }
+
+  // Availability markers are terminal control values. They carry no links or
+  // structural-provenance declarations, so this policy walk treats them as
+  // leaves while retaining the fail-closed rule for other FabricInstances.
+  if (isUnavailable(projection)) {
     return;
   }
 
@@ -2759,6 +3242,42 @@ function closedWorldEventRejection(
 }
 
 /**
+ * Whether a present event payload itself fails the handler's event schema.
+ * This is a terminal dispatch outcome: unlike a mismatch reached through the
+ * captured context, no later document arrival can change the queued payload.
+ */
+function eventPayloadSchemaMismatch(
+  argumentSchema: JSONSchema | undefined,
+  event: unknown,
+): boolean {
+  if (event === undefined) return false;
+  if (
+    !isObjectOrArray(argumentSchema) ||
+    !isObjectOrArray(argumentSchema.properties)
+  ) {
+    return false;
+  }
+  const eventSchema = argumentSchema.properties.$event;
+  if (eventSchema === undefined) return false;
+  const relaxedRoot = relaxDefaultedRequired(
+    argumentSchema,
+    argumentSchema,
+    new Map(),
+  );
+  if (
+    !isObjectOrArray(relaxedRoot) ||
+    !isObjectOrArray(relaxedRoot.properties)
+  ) {
+    return false;
+  }
+  const relaxedEvent = relaxedRoot.properties.$event;
+  return relaxedEvent !== undefined &&
+    validateSchemaValue(relaxedEvent, event, relaxedRoot, {
+        acceptOpaqueValue: (value) => isCellLink(value),
+      }) !== undefined;
+}
+
+/**
  * How setup should treat the state already stored on a result cell.
  *
  * They are distinct on purpose. `sameStoredSetup` answers "is this the same run
@@ -3163,19 +3682,6 @@ export class Runner {
   >();
 
   /**
-   * For each action, the documents whose load, asked for by a run of it kept
-   * in transit (`#keepsResultInTransit()`), failed, or settled with the
-   * document still in transit (`#transitAbsences()`), as a load from a space
-   * that refuses this replica settles (the store's ledger records no failure
-   * for one: the document is absent for its reader). Such a document is no
-   * longer on its way, so a later run refused for it clears its result rather
-   * than keeping it and asking for the load again. A load that delivered its
-   * document is not recorded, so a later transit of it, as a replaced
-   * replica's, keeps the result again.
-   */
-  readonly #settledTransitLoads = new WeakMap<Action, Set<string>>();
-
-  /**
    * Tombstones for `#sessionPatternPointers` entries dropped by _capacity
    * eviction_ — never by the sanctioned removals (a real pattern's durable
    * stamps superseding the pointer; a failed staging's cleanup). Each records
@@ -3449,6 +3955,20 @@ export class Runner {
    */
   #deferredStartCommitter: DeferredStartCommitter | undefined = undefined;
 
+  /** Test-only observation of JavaScript argument selection and result writes. */
+  #javascriptArgumentObserver:
+    | ((
+      result: {
+        argument: any;
+        isValidArgument: boolean;
+        unavailable?: UnavailableVariant;
+        unavailableFromInput?: boolean;
+      },
+      reads: readonly IReadActivity[],
+    ) => void)
+    | undefined;
+  #javascriptResultObserver: ((value: unknown) => void) | undefined;
+
   #crossSpaceChildSpaces = new WeakMap<
     IExtendedStorageTransaction,
     MemorySpace[]
@@ -3497,6 +4017,18 @@ export class Runner {
     dependencySyncer: DependencySyncer | undefined;
     deferredStartCommitter: DeferredStartCommitter | undefined;
     namingProbeBudget: number;
+    javascriptArgumentObserver:
+      | ((
+        result: {
+          argument: any;
+          isValidArgument: boolean;
+          unavailable?: UnavailableVariant;
+          unavailableFromInput?: boolean;
+        },
+        reads: readonly IReadActivity[],
+      ) => void)
+      | undefined;
+    javascriptResultObserver: ((value: unknown) => void) | undefined;
     createStorageSubscription(): IStorageSubscription;
     setupInternal<T, R>(
       providedTx: IExtendedStorageTransaction | undefined,
@@ -3592,6 +4124,18 @@ export class Runner {
       },
       set namingProbeBudget(value) {
         outerThis.#namingProbeBudget = value;
+      },
+      get javascriptArgumentObserver() {
+        return outerThis.#javascriptArgumentObserver;
+      },
+      set javascriptArgumentObserver(value) {
+        outerThis.#javascriptArgumentObserver = value;
+      },
+      get javascriptResultObserver() {
+        return outerThis.#javascriptResultObserver;
+      },
+      set javascriptResultObserver(value) {
+        outerThis.#javascriptResultObserver = value;
       },
       createStorageSubscription: () => this.#createStorageSubscription(),
       setupInternal: (
@@ -8214,7 +8758,11 @@ export class Runner {
           );
         }
         // Raw outputs and child graph roots are supplied by the server view plan.
-        if (!isModule(module) || module.type !== "javascript") {
+        if (
+          !isModule(module) ||
+          (module.type !== "javascript" &&
+            module.type !== "javascript-availability")
+        ) {
           pending.delete(index);
           continue;
         }
@@ -13615,27 +14163,49 @@ export class Runner {
     let module = nodeModule;
     let moduleRefName: string | undefined;
     while (module.type === "ref") {
+      if (module.unavailableInputPolicy !== undefined) {
+        assertValidUnavailableInputPolicy(module.unavailableInputPolicy);
+      }
       moduleRefName = module.implementation as string;
       module = this.#runtime.moduleRegistry.getModule(
         moduleRefName,
         module.defaultScope,
+        {
+          argumentSchema: module.argumentSchema,
+          resultSchema: module.resultSchema,
+          unavailableInputPolicy: module.unavailableInputPolicy,
+        },
       );
     }
     const resolved = module;
+    if (resolved.unavailableInputPolicy !== undefined) {
+      assertValidUnavailableInputPolicy(resolved.unavailableInputPolicy);
+    }
+    if (
+      resolved.type === "javascript-availability" &&
+      resolved.unavailableInputPolicy === undefined
+    ) {
+      throw new TypeError(
+        "Invalid unavailable input policy: javascript-availability modules require policy metadata",
+      );
+    }
     switch (resolved.type) {
       case "javascript":
+      case "javascript-availability":
       case "passthrough":
         return tx.runWithAmbientReadMeta(machineryRead, () => {
           const binding = this.#nodeIOBinding(
             node,
             resultCell,
             pattern,
-            resolved.type,
+            resolved.type === "passthrough" ? "passthrough" : "javascript",
             moduleRefName,
             argumentLink ?? getMetaLink(resultCell, "argument")!,
           );
           return {
-            kind: resolved.type as "javascript" | "passthrough",
+            kind: resolved.type === "passthrough"
+              ? "passthrough" as const
+              : "javascript" as const,
             module: resolved,
             inputs: binding.inputs,
             outputs: binding.outputs,
@@ -13963,7 +14533,11 @@ export class Runner {
           ]);
         }
       }
-      this.#runtime.getCellFromLink(target, target.schema, depTx)?.get();
+      // A cyclic static target names no dependency. The handler's own read
+      // still decides whether that capture is needed and can be resolved.
+      unlessCyclic(() =>
+        this.#runtime.getCellFromLink(target, target.schema, depTx)?.get()
+      );
     }
   }
 
@@ -14047,6 +14621,9 @@ export class Runner {
       //
       // TODO(danfuzz): descend by codec-mediated traversal into instance
       // state, at which point this becomes a walk rather than a refusal.
+      if (isUnavailable(currentValue)) {
+        return;
+      }
       if (currentValue instanceof FabricInstance) {
         refuseFabricInstance(
           currentValue,
@@ -14248,6 +14825,9 @@ export class Runner {
       //
       // TODO(danfuzz): descend by codec-mediated traversal into instance
       // state, at which point this becomes a walk rather than a refusal.
+      if (isUnavailable(currentValue)) {
+        return;
+      }
       if (currentValue instanceof FabricInstance) {
         refuseFabricInstance(
           currentValue,
@@ -14505,18 +15085,126 @@ export class Runner {
     module: Module,
     inputsCell: Cell<any>,
     tx: IExtendedStorageTransaction,
-    options: { bindTxToSchema?: boolean } = {},
-  ): { argument: any; isValidArgument: boolean } {
-    const argument = module.argumentSchema !== undefined
-      ? options.bindTxToSchema
-        ? inputsCell.asSchema(module.argumentSchema).withTx(tx).get()
-        : inputsCell.asSchema(module.argumentSchema).get()
-      : inputsCell.getAsQueryResult([], tx);
+    options: { bindTxToSchema?: boolean; writableProxy?: boolean } = {},
+  ): {
+    argument: any;
+    isValidArgument: boolean;
+    unavailable?: UnavailableVariant;
+    unavailableFromInput?: boolean;
+  } {
+    const observer = this.#javascriptArgumentObserver;
+    const readCountBefore = observer === undefined
+      ? 0
+      : [...(tx.getReadActivities?.() ?? [])].length;
+    const result = this.#readJavaScriptArgumentCore(
+      module,
+      inputsCell,
+      tx,
+      options,
+    );
+    observer?.(
+      result,
+      [...(tx.getReadActivities?.() ?? [])].slice(readCountBefore),
+    );
+    return result;
+  }
 
+  #readJavaScriptArgumentCore(
+    module: Module,
+    inputsCell: Cell<any>,
+    tx: IExtendedStorageTransaction,
+    options: { bindTxToSchema?: boolean; writableProxy?: boolean } = {},
+  ): {
+    argument: any;
+    isValidArgument: boolean;
+    unavailable?: UnavailableVariant;
+    unavailableFromInput?: boolean;
+  } {
+    // Inspect only the raw argument surface selected by the declared schema.
+    // This catches concrete availability markers before a structural object
+    // schema can admit them without resolving links or fields the callback
+    // cannot observe.
+    const availability = preflightUnavailableInputs(
+      module.argumentSchema,
+      module.unavailableInputPolicy,
+      this.#runtime,
+      tx,
+      inputsCell,
+    );
+    if (availability.unavailable !== undefined) {
+      return {
+        argument: undefined,
+        isValidArgument: false,
+        unavailable: availability.unavailable.value,
+        unavailableFromInput: !availability.localSyncing,
+      };
+    }
+
+    if (module.argumentSchema === undefined) {
+      const unresolvedArgument = inputsCell.getAsQueryResult([], tx);
+      return unresolvedArgument === undefined
+        ? {
+          argument: undefined,
+          isValidArgument: false,
+          unavailable: unavailableMismatch(),
+        }
+        : {
+          argument: unresolvedArgument,
+          isValidArgument: true,
+        };
+    }
+
+    // An explicit false schema invokes the callback with undefined. Concrete
+    // unavailable markers are handled by preflight before this bypass.
+    if (module.argumentSchema === false) {
+      return {
+        argument: undefined,
+        isValidArgument: true,
+      };
+    }
+
+    const hasOverlay = availability.accepted.some((input) =>
+      input.overlayTarget !== undefined
+    );
+    const schemaTx = hasOverlay
+      ? new AvailabilityOverlayTransaction(tx, availability.accepted)
+      : tx;
+    const schemaCell = options.bindTxToSchema || hasOverlay
+      ? inputsCell.asSchema(module.argumentSchema).withTx(schemaTx)
+      : inputsCell.asSchema(module.argumentSchema);
+    const transformed = getCellWithStatus(schemaCell);
+    if ("error" in transformed) {
+      const unavailable = dataUnavailableFromTransformFailure(transformed);
+      return {
+        argument: undefined,
+        isValidArgument: false,
+        unavailable: unavailable ??
+          (this.#runtime.waitsForUnpublishedRead(tx)
+            ? UNAVAILABLE_SYNCING
+            : unavailableMismatch()),
+      };
+    }
+    // A lazy root view reports both an admitted `undefined` and a root schema
+    // mismatch as `{ ok: undefined }`. Preserve authored undefined only when
+    // the schema itself admits it; otherwise retain the ordinary invalid-input
+    // suppression while returning the status-bearing marker.
+    if (
+      transformed.ok === undefined &&
+      validateSchemaValue(
+          module.argumentSchema,
+          undefined,
+          module.argumentSchema,
+        ) !== undefined
+    ) {
+      return {
+        argument: undefined,
+        isValidArgument: false,
+        unavailable: unavailableMismatch(),
+      };
+    }
     return {
-      argument,
-      isValidArgument: module.argumentSchema === false ||
-        argument !== undefined,
+      argument: transformed.ok,
+      isValidArgument: true,
     };
   }
 
@@ -15111,95 +15799,55 @@ export class Runner {
     return { resultCell, cancelDeferredStart };
   }
 
-  /**
-   * Whether a run of `action` through `tx`, disposed of as one whose input
-   * did not resolve, keeps the result it already holds: whether `tx` read as
-   * absent a document still in transit to this replica, one of `links` when
-   * given (`#transitAbsences()`), and one of `writes`, the documents the node
-   * writes, already holds a value. When it does, `action` runs again once the
-   * loads of those documents have settled, whatever they find, since a
-   * document that arrives absent changes no value the run's reads could see.
-   * A document whose load failed, or settled without delivering it, as one
-   * in a space that refuses this replica does, is no longer in transit
-   * (`#settledTransitLoads`), so the run after that clears the result
-   * instead of asking for the load again.
-   */
-  #keepsResultInTransit(
-    action: Action,
+  /** Local readiness of a refused link; a settled load leaves schema validation authoritative. */
+  #refusedLinkStatus(
     tx: IExtendedStorageTransaction,
-    writes: readonly NormalizedFullLink[],
-    links?: readonly NormalizedFullLink[],
-  ): boolean {
-    const identity = tx.tx.scopeKeyIdentity;
-    const keyIdentity = identity ?? this.#runtime.scopeKeyIdentity;
-    const settled = this.#settledTransitLoads.get(action);
-    const absences = this.#transitAbsences(tx, links).filter((absence) =>
-      !settled?.has(entityKey(absence, keyIdentity))
+    link: NormalizedFullLink,
+    sourceSpace: MemorySpace,
+  ): UnavailableVariant | undefined {
+    const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
+      tx.tx.scopeKeyIdentity;
+    const status = this.#runtime.ensureLinkedDocLoaded(
+      link,
+      sourceSpace,
+      identity,
     );
-    if (absences.length === 0 || !this.#holdsResult(tx, writes)) return false;
-    // Each load is asked for here, under the run's own scope identity, so
-    // that an absence no read has asked the store about yet settles too.
-    const settle = (absence: UnexaminedAbsence) => {
-      let keys = this.#settledTransitLoads.get(action);
-      if (keys === undefined) {
-        keys = new Set();
-        this.#settledTransitLoads.set(action, keys);
-      }
-      keys.add(entityKey(absence, keyIdentity));
-    };
-    const loads = absences.map((absence) =>
-      documentLoad(
-        this.#runtime,
-        this.#runtime.getCellFromLink({
-          space: absence.space,
-          id: absence.id,
-          path: [],
-          scope: absence.scope,
-        }),
-        identity,
-      ).then(
-        () => {
-          if (this.#stillInTransit(absence, identity)) settle(absence);
-        },
-        () => settle(absence),
-      )
-    );
-    // Not a task the scheduler waits on to be idle: the run has finished, and
-    // what follows is a new run, as a change arriving on the change channel
-    // would start. Document readiness's re-arm is not one either
-    // (`createDocumentReadiness()`), though it registers its load with
-    // `trackUntilSettled()`, which `synced()` and `Cell.pull()` wait on.
-    void Promise.all(loads).then(() =>
-      this.#runtime.scheduler.invalidateAction(action)
-    );
-    return true;
+    if (status === "settled") return undefined;
+    if (status === "error") {
+      return unavailableError(
+        this.#runtime.linkedDocLoadError(link, identity) ??
+          "Linked document load failed",
+        "sync",
+      );
+    }
+    recordUnavailableRead(tx, toMemorySpaceAddress(link));
+    return UNAVAILABLE_SYNCING;
   }
 
-  /**
-   * Whether `absence`, a document {@link #transitAbsences} found, is still in
-   * transit by the same test, now that its load has settled: still with no
-   * record in this replica, the space's replica since then if it was
-   * replaced, and not reported absent by the store. A document in a space
-   * that refuses this replica stays in transit by that test however often
-   * its load settles; a delivered one does not.
-   */
-  #stillInTransit(
-    absence: UnexaminedAbsence,
-    identity: ScopeKeyIdentity | undefined,
-  ): boolean {
-    const provider = this.#runtime.storageManager.open(absence.space);
-    const unexamined = provider.stillUnexamined?.([absence]) ?? [absence];
-    return unexamined.length > 0 &&
-      provider.storeReportedAbsent?.(
-          { id: absence.id, scope: absence.scope },
-          identity,
-        ) !== true;
+  /** Classifies absent document reads for an eager argument that did not resolve. */
+  #eagerTransitStatus(
+    tx: IExtendedStorageTransaction,
+    sourceSpace: MemorySpace,
+  ): UnavailableVariant | undefined {
+    let pending = false;
+    for (const absence of this.#transitAbsences(tx)) {
+      const link = this.#runtime.getCellFromLink({
+        space: absence.space,
+        id: absence.id,
+        scope: absence.scope,
+        path: [],
+      }).getAsNormalizedFullLink();
+      const status = this.#refusedLinkStatus(tx, link, sourceSpace);
+      if (status?.reason === "error") return status;
+      if (status?.reason === "syncing") pending = true;
+    }
+    return pending ? UNAVAILABLE_SYNCING : undefined;
   }
 
   /**
    * The documents `tx` read as absent that are still in transit to this
-   * replica, those among `links` when given: ones the replica has never
-   * examined, so that a load of each is in flight or was never asked for
+   * replica: ones the replica has never examined, so that a load of each
+   * is in flight or was never asked for
    * (`IStorageProvider.unexaminedAbsences()`), and that the store has not
    * reported holding nothing at either (`storeReportedAbsent()`). Such an
    * absence says nothing about the document yet, where one the replica or
@@ -15208,26 +15856,16 @@ export class Runner {
    */
   #transitAbsences(
     tx: IExtendedStorageTransaction,
-    links?: readonly NormalizedFullLink[],
   ): UnexaminedAbsence[] {
     const spaces = new Set<MemorySpace>();
-    if (links === undefined) {
-      for (const read of getDirectTransactionReadActivities(tx.tx) ?? []) {
-        spaces.add(read.space);
-      }
-    } else {
-      for (const link of links) spaces.add(link.space);
+    for (const read of getDirectTransactionReadActivities(tx.tx) ?? []) {
+      spaces.add(read.space);
     }
-    const wanted = links === undefined ? undefined : new Set(
-      links.map((link) => `${link.space}\0${link.id}\0${link.scope}`),
-    );
     const identity = tx.tx.scopeKeyIdentity;
     const found: UnexaminedAbsence[] = [];
     for (const space of spaces) {
       const provider = this.#runtime.storageManager.open(space);
       for (const absence of provider.unexaminedAbsences?.(tx.tx) ?? []) {
-        const key = `${absence.space}\0${absence.id}\0${absence.scope}`;
-        if (wanted !== undefined && !wanted.has(key)) continue;
         if (
           provider.storeReportedAbsent?.(
             { id: absence.id, scope: absence.scope },
@@ -15238,21 +15876,6 @@ export class Runner {
       }
     }
     return found;
-  }
-
-  /**
-   * Whether any of `writes`, the documents a node writes, holds a value, read
-   * through `tx` as a presence probe.
-   */
-  #holdsResult(
-    tx: IExtendedStorageTransaction,
-    writes: readonly NormalizedFullLink[],
-  ): boolean {
-    return writes.some((link) =>
-      tx.readOrThrow(toMemorySpaceAddress(link), {
-        meta: PRESENCE_PROBE_READ,
-      }) !== undefined
-    );
   }
 
   /**
@@ -15307,7 +15930,11 @@ export class Runner {
     previousResultCellRef: JavaScriptActionResultCells,
     narrowestReadScope?: CellScope,
   ): any {
-    if (!resultHasReactives && frame.reactives.size === 0) {
+    this.#javascriptResultObserver?.(result);
+    if (
+      (isUnavailable(result) || !resultHasReactives) &&
+      frame.reactives.size === 0
+    ) {
       recordOutputSchemaPolicyInputs(
         tx,
         this.#runtime,
@@ -15568,7 +16195,12 @@ export class Runner {
           tx,
         );
         logger.timeStart("stream", "readInputs");
-        const { argument, isValidArgument } = (() => {
+        const {
+          argument,
+          isValidArgument,
+          unavailable,
+          unavailableFromInput,
+        } = (() => {
           try {
             return this.#readJavaScriptArgument(module, inputsCell, tx);
           } finally {
@@ -15584,10 +16216,11 @@ export class Runner {
         );
 
         if (!isValidArgument) {
+          const unavailableReason = unavailable?.reason ?? "schemaMismatch";
           logger.error(
             "stream",
             () => [
-              "action argument is undefined (potential schema mismatch) -- not running",
+              `action argument is unavailable (${unavailableReason}) -- not running`,
               this.#getJavaScriptInputState(module, inputsCell),
             ],
           );
@@ -15601,6 +16234,14 @@ export class Runner {
           // that never happened.
           tx.dispatchedHandlerNotRun = {
             reason: "action argument is undefined (potential schema mismatch)",
+            // Only an explicit terminal control value is final. A plain
+            // schema mismatch can be the transient shape of an unresolved
+            // linked capture, and the event must retain main's read-driven
+            // re-arm in that case.
+            terminal: (unavailableFromInput === true &&
+              unavailable !== undefined &&
+              !unavailable.isTransient()) ||
+              eventPayloadSchemaMismatch(module.argumentSchema, event),
           };
         }
 
@@ -15791,6 +16432,42 @@ export class Runner {
         }
         : undefined;
 
+    const capturedInputs = { ...(inputs as Record<string, any>) };
+    delete capturedInputs.$event;
+    const capturedInputModule: Module = {
+      ...module,
+      argumentSchema: handlerCapturedArgumentSchema(module.argumentSchema),
+      ...(module.unavailableInputPolicy !== undefined && {
+        unavailableInputPolicy: module.unavailableInputPolicy.filter(
+          (entry) => entry.path[0] !== "$event",
+        ),
+      }),
+    };
+    const inputReadiness = (
+      readinessTx: IExtendedStorageTransaction,
+      _event: any,
+    ): HandlerInputReadiness => {
+      const inputsCell = this.#runtime.getImmutableCell(
+        resultCell.space,
+        capturedInputs,
+        undefined,
+        readinessTx,
+      );
+      // Readiness classifies availability only. Dispatch owns ordinary schema
+      // validation, so a probe never materializes the captured context.
+      const availability = preflightUnavailableInputs(
+        capturedInputModule.argumentSchema,
+        capturedInputModule.unavailableInputPolicy,
+        this.#runtime,
+        readinessTx,
+        inputsCell,
+      );
+      return availability.unavailable === undefined ? { ready: true } : {
+        ready: false,
+        reason: availability.unavailable.value.reason,
+      };
+    };
+
     // Tag the handler with its owning pattern instance so the delivery shaper
     // can group a pattern's input across its several streams into one shaping
     // window (per-pattern coalescing, W3). The result cell is stable per
@@ -15806,6 +16483,7 @@ export class Runner {
       writes,
       module,
       pattern,
+      inputReadiness,
       schedulerObservationIdentity: {
         // Per scope INSTANCE, matching schedulerObservationIdentity above
         // (key-vocabulary.md §5's serving-identity sites).
@@ -15974,18 +16652,19 @@ export class Runner {
         if (this.#runtime.experimental.lazyMaterialization) {
           tx.markLazyMaterialize(true);
         }
-        const { argument, isValidArgument } = (() => {
-          try {
-            return this.#readJavaScriptArgument(
-              module,
-              runInputsCell,
-              tx,
-              { bindTxToSchema: true },
-            );
-          } finally {
-            logger.timeEnd("action", "readInputs");
-          }
-        })();
+        const { argument, isValidArgument, unavailable, unavailableFromInput } =
+          (() => {
+            try {
+              return this.#readJavaScriptArgument(
+                module,
+                runInputsCell,
+                tx,
+                { bindTxToSchema: true },
+              );
+            } finally {
+              logger.timeEnd("action", "readInputs");
+            }
+          })();
 
         this.#updateInvalidInputFlag(
           name,
@@ -16000,7 +16679,7 @@ export class Runner {
             () => [
               isValidArgument
                 ? "action argument is valid now -- running"
-                : "action argument is undefined (potential schema mismatch) -- not running",
+                : `action argument is unavailable (${unavailable?.reason}) -- not running`,
               this.#getJavaScriptInputState(module, runInputsCell),
             ],
           );
@@ -16015,16 +16694,13 @@ export class Runner {
             // body that caught it — its own `try`/`catch`, a discarded
             // rejection — does not get to hand back a result built on data the
             // schema does not describe. Either way the run is disposed of as an
-            // argument that did not resolve, not an error: an undefined result
-            // through the ordinary path. The one exception is an input still
-            // in transit, a document this replica has not loaded yet, where
-            // a node that already holds a result keeps it, so that a result
-            // read from data that has not arrived never replaces one read
-            // from data that had. The reads the run took are registered,
+            // argument that did not resolve. A replica miss makes no output
+            // write, even for a node with no prior result. Otherwise the refusal
+            // is represented by its native availability state. Reads are kept,
             // including the one that failed, so it runs again when the data
             // changes and may then find it valid.
             const refusal = tx.takeSchemaRefusal();
-            let keepsResult = false;
+            let waitingForInput = false;
             if (refusal !== undefined) {
               logger.info(
                 "action",
@@ -16033,16 +16709,40 @@ export class Runner {
                   String(refusal),
                 ],
               );
-              result = undefined;
-              keepsResult = isUnresolvedInputError(refusal) &&
-                this.#keepsResultInTransit(action, tx, writes, [refusal.link]);
-            } else if (!isValidArgument) {
-              keepsResult = this.#keepsResultInTransit(action, tx, writes);
+              if (
+                isSchemaMismatchError(refusal) &&
+                this.#runtime.waitsForUnpublishedRead(tx, refusal.link)
+              ) {
+                waitingForInput = true;
+              } else if (isUnresolvedInputError(refusal)) {
+                const status = this.#refusedLinkStatus(
+                  tx,
+                  refusal.link,
+                  runInputsCell.getAsNormalizedFullLink().space,
+                );
+                waitingForInput = status?.reason === "syncing";
+                result = status ?? unavailableMismatch();
+              } else result = unavailableMismatch();
+            } else if (!isValidArgument && !unavailableFromInput) {
+              if (unavailable?.reason === "syncing") {
+                waitingForInput = true;
+              } else if (unavailable?.errorKind === "schemaMismatch") {
+                // An eager read can refuse an absent argument without having
+                // reached a link through the native readiness path.
+                const transit = this.#eagerTransitStatus(
+                  tx,
+                  runInputsCell.getAsNormalizedFullLink().space,
+                );
+                if (transit !== undefined) {
+                  waitingForInput = transit.reason === "syncing";
+                  result = transit;
+                }
+              }
             }
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
-            if (keepsResult) return undefined;
+            if (waitingForInput) return undefined;
             const normalized = normalizeSandboxResult(result, name);
             const written = this.#writeJavaScriptActionResult(
               tx,
@@ -16064,7 +16764,7 @@ export class Runner {
           }
         };
 
-        let result: any = undefined;
+        let result: any = unavailable;
         if (isValidArgument) {
           logger.timeStart("action", "invokeJavaScriptImplementation");
           try {
@@ -16090,7 +16790,7 @@ export class Runner {
           // An async body reaches mismatching data after an `await`, so its
           // refusal arrives as a rejection the synchronous catch below never
           // sees. Route it to the same disposition a synchronous one gets —
-          // an undefined result through the ordinary path — before the generic
+          // an unavailable result through the ordinary path — before the generic
           // error handler turns it into a reported action failure.
           ? result
             .then(postRun)

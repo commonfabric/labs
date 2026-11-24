@@ -3,13 +3,15 @@ import {
   computed,
   type Default,
   handler,
+  hasError,
+  isPending,
   llmDialog,
   NAME,
   pattern,
   patternTool,
+  resultOf,
   str,
   type Stream,
-  toSchema,
   UI,
   type VNode,
   Writable,
@@ -32,10 +34,10 @@ const triggerGeneration = handler<
   {
     addMessage: Stream<BuiltInLLMMessage>;
     situation: string;
-    result: any | null;
+    shouldGenerate: boolean;
   }
->((_, { addMessage, situation, result }) => {
-  if (!result) {
+>((_, { addMessage, situation, shouldGenerate }) => {
+  if (shouldGenerate) {
     addMessage.send({
       role: "user",
       content: [{ type: "text" as const, text: situation }],
@@ -82,11 +84,7 @@ Be thorough - search for multiple aspects of the question and read several sourc
 When done, call presentResult with your structured findings.`,
   );
 
-  const {
-    addMessage,
-    pending,
-    result: dialogResult,
-  } = llmDialog({
+  const dialog = llmDialog<ResearchResult>({
     system: systemPrompt,
     messages,
     tools: {
@@ -94,10 +92,16 @@ When done, call presentResult with your structured findings.`,
       readWebpage: patternTool(readWebpage),
     },
     context: computed(() => context ?? {}),
-    resultSchema: toSchema<ResearchResult>(),
   });
-
-  const result = computed(() => dialogResult as ResearchResult | undefined);
+  const { addMessage, pending } = dialog;
+  const shouldGenerate = computed(() =>
+    isPending(dialog.result) || hasError(dialog.result)
+  );
+  const result = computed(() =>
+    isPending(dialog.result) || hasError(dialog.result)
+      ? undefined
+      : resultOf(dialog.result)
+  );
   const showRefine = new Writable(false);
 
   return {
@@ -109,7 +113,7 @@ When done, call presentResult with your structured findings.`,
           onstart={triggerGeneration({
             addMessage,
             situation,
-            result,
+            shouldGenerate,
           })}
         />
         <cf-message-beads

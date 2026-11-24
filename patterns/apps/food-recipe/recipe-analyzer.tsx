@@ -18,7 +18,12 @@ import {
   computed,
   Default,
   generateObject,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   pattern,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -165,20 +170,38 @@ const RecipeAnalyzer = pattern<RecipeAnalyzerInput, RecipeAnalyzerOutput>(
       prompt: requested,
     });
 
-    const dietaryCompatibility = computed((): DietaryCompatibility => {
-      const r = llm.result;
-      return r
-        ? {
-          compatible: r.compatible ?? [],
-          incompatible: r.incompatible ?? [],
-          warnings: r.warnings ?? [],
-          primaryIngredients: r.primaryIngredients ?? [],
+    const analysis = computed(
+      (): {
+        dietary: DietaryCompatibility | null;
+        pending: boolean;
+        error: string;
+      } => {
+        if (!requested.get()) {
+          return { dietary: null, pending: false, error: "" };
         }
-        : EMPTY_DIETARY;
-    });
-    const analyzed = computed(() => !!llm.result);
-    const pending = computed(() => !!llm.pending);
-    const error = computed(() => (llm.error ? String(llm.error) : ""));
+        if (isPending(llm) || isSyncing(llm)) {
+          return {
+            dietary: null,
+            pending: true,
+            error: "",
+          };
+        }
+        if (hasError(llm) || isObsolete(llm)) {
+          return {
+            dietary: null,
+            pending: false,
+            error: llm.message || "The dietary analysis output was retired.",
+          };
+        }
+        return { dietary: resultOf(llm), pending: false, error: "" };
+      },
+    );
+    const dietaryCompatibility = computed(() =>
+      analysis.dietary ?? EMPTY_DIETARY
+    );
+    const analyzed = computed(() => analysis.dietary !== null);
+    const pending = analysis.pending;
+    const error = analysis.error;
     const stale = computed(() =>
       requested.get() !== "" &&
       requestedRecipe(requested.get()) !== currentPrompt

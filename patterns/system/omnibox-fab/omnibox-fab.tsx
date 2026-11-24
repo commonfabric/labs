@@ -11,10 +11,12 @@ import {
   computed,
   fetchText,
   handler,
+  hasError,
   NAME,
   navigateTo,
   pattern,
   patternTool,
+  resultOf,
   Stream,
   UI,
   when,
@@ -22,6 +24,7 @@ import {
   Writable,
 } from "commonfabric";
 import Chatbot from "../chatbot/chatbot.tsx";
+import { optionalWishText } from "../common-fabric/optional-wish-text.ts";
 import {
   bash,
   calculator,
@@ -129,31 +132,42 @@ export const wishTool = pattern<WishToolParameters, boolean>(
       return { query, ...(context && { context }) };
     });
     const wishResult = wish<any>(wishParams);
+    const wishedValue = resultOf(wishResult.result);
 
     // Navigate to wishResult.result (the actual cell), not the entire wish state object
-    return when(wishResult.result, navigateTo(wishResult.result));
+    return when(wishedValue, navigateTo(wishedValue));
   },
 );
 
 export default pattern<OmniboxFABInput>(
   ({ extraTools, extraSystemPrompt }) => {
-    const mentionable =
-      wish<MentionablePiece[]>({ query: "#mentionable" }).result;
-    const { entries: summaryEntries } = wish<{
+    const mentionableWish = wish<MentionablePiece[]>({
+      query: "#mentionable",
+    });
+    const mentionable = resultOf(mentionableWish.result);
+    const summaryWish = wish<{
       entries: SummaryIndexEntry[];
-    }>({ query: "#summaryIndex" }).result!;
+    }>({ query: "#summaryIndex" });
+    const { entries: summaryEntries } = resultOf(summaryWish.result);
 
     const profile = wish<string>({ query: "#learnedSummary" });
-
-    const patternIndexUrl = wish<{ url?: string }>({ query: "#patternIndex" });
-    const { result: patternIndex } = fetchText({
-      url: computed(() =>
-        patternIndexUrl.result?.url || "/api/patterns/index.md"
-      ),
+    const profileText = optionalWishText({
+      response: profile.result,
+      errorCode: profile.errorCode,
     });
 
+    const patternIndexUrl = wish<{ url?: string }>({ query: "#patternIndex" });
+    const patternIndexLocation = resultOf(patternIndexUrl.result);
+    const patternIndexRequest = fetchText({
+      url: computed(() =>
+        hasError(patternIndexUrl.result)
+          ? "/api/patterns/index.md"
+          : patternIndexLocation.url || "/api/patterns/index.md"
+      ),
+    });
+    const patternIndex = resultOf(patternIndexRequest);
+
     const profileContext = computed(() => {
-      const profileText = profile.result;
       return profileText
         ? `\n\n--- User Context ---\n${profileText}\n---\n`
         : "";

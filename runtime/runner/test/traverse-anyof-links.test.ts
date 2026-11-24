@@ -10,6 +10,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
+import { unavailableObsolete } from "@commonfabric/data-model/availability";
 import { internSchema } from "@commonfabric/data-model-schema";
 import type {
   Entity,
@@ -493,6 +494,69 @@ describe("traverse-anyof-links", () => {
       };
       const { reads } = expectSameWalk(docs, schema, false);
       expect(reads.filter((read) => read.startsWith("of:child"))).toEqual([]);
+    });
+  });
+
+  describe("an unavailable payload", () => {
+    const obsolete = unavailableObsolete("Read the replacement output.");
+    const alternatives: JSONSchema[] = [
+      { type: "number", default: 0 },
+      { type: "string" },
+    ];
+    for (const interned of [true, false]) {
+      it(`keeps the marker through direct and linked unions with interned ${interned}`, () => {
+        const union: JSONSchema = { anyOf: alternatives };
+        const shape: JSONSchema = {
+          type: "object",
+          properties: { direct: union, linked: union },
+        };
+        const schema = interned ? internSchema<JSONSchema>(shape) : shape;
+        const docs = {
+          [ROOT]: { direct: obsolete, linked: link("of:retired") },
+          "of:retired": obsolete,
+        };
+        const { result, reads, reached } = expectSameWalk(docs, schema);
+        const value = result as { direct: FabricValue; linked: FabricValue };
+        expect(value.direct).toBe(obsolete);
+        expect(value.linked).toBe(obsolete);
+        expect(reads).toContain("of:retired/value");
+        expect(reached.some((key) => key.endsWith("of:retired"))).toBe(true);
+      });
+    }
+
+    it("keeps markers in plain fields and array items within a matched option", () => {
+      const schema: JSONSchema = {
+        anyOf: [{
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              count: { type: "number" },
+              counts: { type: "array", items: { type: "number" } },
+            },
+          },
+        }, { type: "string" }],
+      };
+      const { result } = walk(
+        {
+          [ROOT]: [{ count: obsolete, counts: [1, obsolete] }],
+        },
+        schema,
+        { traverseCells: false },
+      );
+      const [row] = result as { count: FabricValue; counts: FabricValue[] }[];
+      expect(row.count).toBe(obsolete);
+      expect(row.counts[0]).toBe(1);
+      expect(row.counts[1]).toBe(obsolete);
+    });
+
+    it("returns the linked marker through oneOf until a payload decides the option", () => {
+      const schema: JSONSchema = { oneOf: alternatives };
+      const resultFor = (child: FabricValue) =>
+        walk({ [ROOT]: link("of:retired"), "of:retired": child }, schema)
+          .result;
+      expect(resultFor(obsolete)).toBe(obsolete);
+      expect(resultFor(2)).toBe(2);
     });
   });
 

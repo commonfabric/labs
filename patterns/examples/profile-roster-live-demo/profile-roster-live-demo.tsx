@@ -8,12 +8,14 @@ import {
   pattern,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   type VNode,
   wish,
   Writable,
 } from "commonfabric";
+import { optionalWishText } from "../../system/common-fabric/optional-wish-text.ts";
 
 /**
  * LIVE multi-user profile roster demo (CT-1648/CT-1650 end-to-end check).
@@ -119,8 +121,14 @@ export default pattern<ProfileRosterLiveInput, ProfileRosterLiveOutput>(
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
 
-    const myName = computed(() => profileNameWish.result ?? "");
-    const myProfile = profileWish.result;
+    const myName = optionalWishText({
+      response: profileNameWish.result,
+      errorCode: profileNameWish.errorCode,
+    });
+    // Select the wish's live reference; the roster stores the profile itself.
+    const myProfile = profileWish.errorCode === "no-match"
+      ? undefined
+      : resultOf(profileWish.result);
 
     const participants = roster.participants;
     const participantCount = participants.length;
@@ -144,14 +152,12 @@ export default pattern<ProfileRosterLiveInput, ProfileRosterLiveOutput>(
             <cf-vstack gap="1">
               <span style={headerLabel}>You</span>
               {
-                /* `#profile` is a wish RESULT (not the raw profile piece), so a
-                click would route to a non-piece id and fail to load. The self
-                badge is non-navigable (same convention as profile-home's self
-                badge); the participant badges below bind raw profile cells and
-                DO navigate. */
+                /* The self badge stays non-navigable, as in profile-home.
+                Participant badges below use the same live profile capability
+                and enable navigation. */
               }
               <cf-profile-badge
-                $profile={profileWish.result}
+                $profile={myProfile}
                 size="md"
                 noNavigate
               />

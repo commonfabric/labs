@@ -298,28 +298,22 @@ is not enough, because a reader can catch it — so the throw also records the
 refusal on the transaction, where it survives any `try`/`catch` in the body and
 any `await` in an async one.
 
-The runner checks after the body returns and treats a recorded refusal as an
-argument that did not resolve: an undefined result through the ordinary result
-path, **not** an action error and not logged as one. A refusal the body throws
-takes the same path whether it escapes synchronously or as the rejection of an
-async body. A run that could not proceed on the data available is a non-event.
-The reads it took stay registered, including the one that failed, so it runs
-again when the data changes and may then find it valid.
+The runner treats a recorded refusal like an argument that did not resolve,
+whether the body catches it, throws it, or returns a rejected promise. It is
+not an action error. The reads stay registered, including the one that
+refused, so the computation can recover.
 
-A refusal over an input that has arrived clears the node's previous result,
-since the input then holds nothing the computation can use
-([derived-state correction decision](../history/development/2026-09-14-derived-state-correction.md)).
-A refusal over an input still in transit does not: where the read that refused
-found a document this replica has never examined and the store has not reported
-absent, and the node already holds a result, the run writes nothing and runs
-again once that document's load settles, so a client starting cold never
-replaces a stored result with one read from data that had not arrived. The same
-holds for an argument that did not resolve because a document it reads is in
-transit. A document whose load has settled is no longer in transit, whether the
-load failed or ended without delivering it, as a load from a space that refuses
-this replica ends, so the run after that clears the result.
-[`speculation.md`](../specs/server-side-execution/speculation.md) §2 states the
-rule and the decision behind it.
+If the missing document is still loading, the run makes no output write.
+Another client keeps seeing the last committed result, and a result that has
+never been written remains absent. Once the load settles, even if no data
+arrived, the computation runs again. A confirmed absence or invalid value
+that fails the declared schema replaces a stale output with a native
+`schemaMismatch` error. A load that ends without delivering a document, including one the reader
+cannot access, does not keep the computation waiting. A later replica
+replacement may put a previously delivered input in transit again.
+A failed load produces a native `sync` error with its
+cause. See [the refusal rule](../specs/server-side-execution/speculation.md)
+and [read readiness](../specs/data-unavailability.md#syncing-versus-schema-mismatch).
 
 The view withdraws the record for a refusal it catches itself — the optional
 property, a property default, or an array-item substitute. It clears only

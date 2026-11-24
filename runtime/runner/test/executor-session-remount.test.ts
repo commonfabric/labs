@@ -408,6 +408,12 @@ describe("the session remount (profile-starvation fifth face)", () => {
 
   it("a serving session opened before the genesis ACL reads the space as its owner once the genesis lands, with no remount", async () => {
     const serving = servingManager();
+    const connectionStates: string[] = [];
+    const cancelConnectionState = serving.subscribeConnectionState(
+      homeSpace,
+      ({ status, epoch }) => connectionStates.push(`${status}:${epoch}`),
+    );
+    cleanups.push(() => Promise.resolve(cancelConnectionState()));
 
     // (1) Activation before genesis: the serving plane opens its session
     // on a space with no ACL at all. Admitted — a fresh space grants
@@ -431,6 +437,21 @@ describe("the session remount (profile-starvation fifth face)", () => {
     ).toBeUndefined();
     expect(materialized(serving, homeSpace, docId)).toBe("v1");
     expect(servingOpens(), "the session survived the genesis").toBe(opens);
+
+    // The same session serves a fresh address that the replica has not pulled,
+    // so this read reaches the wire rather than the watch tracker.
+    const minter = clientRuntime(homeSigner);
+    const again = await probeRead(
+      serving,
+      homeSpace,
+      mintProbeId(minter, homeSpace),
+    );
+    expect(again.error, "the bound session keeps serving").toBeUndefined();
+    // Binding the admitted session to its owner does not replace its connection.
+    expect(connectionStates).toEqual([
+      "idle:0",
+      "ready:1",
+    ]);
   });
 
   it("FAIL-CLOSED: the remount re-runs session.open, it does not decide it — an unauthorized principal is denied there and the read keeps failing, while the SAME trigger heals it the moment the ACL grants READ", async () => {

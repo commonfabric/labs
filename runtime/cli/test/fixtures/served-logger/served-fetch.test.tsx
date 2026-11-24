@@ -10,6 +10,7 @@ import {
   fetchJson,
   handler,
   pattern,
+  resultOf,
   TESTS,
   Writable,
 } from "commonfabric";
@@ -24,7 +25,7 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { action: point({ url }), event: { url: "https://example.test/v" } },
-      { assertion: assert(() => fetched.result?.v === 7) },
+      { assertion: assert(() => resultOf(fetched).v === 7) },
     ],
   };
 });

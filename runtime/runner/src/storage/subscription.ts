@@ -4,10 +4,31 @@ import type {
   IStorageNotificationCapability,
   IStorageSubscription,
   IStorageSubscriptionCapability,
+  MemorySpace,
   StorageNotification,
 } from "./interface.ts";
 
 export const create = () => new StorageNotificationRelay();
+
+/** Watches replica resets until canceled, including on subscribe-only managers. */
+export function observeStorageResets(
+  manager: IStorageNotificationCapability,
+  onReset: (space: MemorySpace) => void,
+): () => void {
+  let notify: typeof onReset | undefined = onReset;
+  const observer: IStorageNotification = {
+    next(notification) {
+      if (!notify) return { done: true };
+      if (notification.type === "reset") notify(notification.space);
+      return { done: false };
+    },
+  };
+  manager.subscribe(observer);
+  return () => {
+    notify = undefined;
+    manager.unsubscribe?.(observer);
+  };
+}
 
 /**
  * Storage subscription that can be used by consumers to subscribe to storage

@@ -1,3 +1,10 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
+import { selectUnavailableInput } from "../data-unavailability.ts";
 import type {
   VNode,
   WishErrorCode,
@@ -11,9 +18,11 @@ import {
   type DebugValueOptions,
   toCompactDebugString,
 } from "@commonfabric/data-model";
+
 import { favoriteListSchema } from "@commonfabric/home-schemas";
 import { type DID, isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { extractHashtags } from "../hashtags.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
@@ -35,7 +44,8 @@ import {
   UI,
 } from "../builder/types.ts";
 import { useCancelGroup } from "../cancel.ts";
-import type { Cell } from "../cell.ts";
+import { type Cell, isStream } from "../cell.ts";
+import { ContextualFlowControl } from "../cfc.ts";
 import { resolveLink, unlessCyclic } from "../link-resolution.ts";
 import {
   createSigilLinkFromParsedLink,
@@ -45,6 +55,7 @@ import {
 } from "../link-utils.ts";
 import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
 import { systemPatternSource } from "../pattern-source-scheme.ts";
+import { supersededOutputsOwed } from "../scheduler/superseded-output.ts";
 import {
   homeHasDefaultProfileSlot,
   orderProfileCandidates,
@@ -379,11 +390,16 @@ type BaseResolution = {
 };
 
 type SharedHashtagState = {
-  result?: Cell<unknown>;
+  result: Cell<unknown> | UnavailableVariant;
   candidates: Cell<unknown>[];
   error?: unknown;
   errorCode?: WishErrorCode;
   [UI]?: VNode | Cell<unknown>;
+};
+
+type PersistedWishState<T> = WishState<T> & {
+  /** Compatibility field for graphs compiled before result became async. */
+  error?: unknown;
 };
 
 type SharedHashtagResolver = {
@@ -1882,8 +1898,9 @@ function createSharedHashtagResolver(
     } catch (error) {
       if (error instanceof DocumentPending) return;
       const errorMessage = describeFailure(error);
+      const unavailable = unavailableError(new Error(errorMessage));
       stateCell.set({
-        result: undefined,
+        result: unavailable,
         candidates: [],
         error: errorMessage,
         errorCode: errorCodeOf(error),
@@ -2233,7 +2250,32 @@ function projectWishCellValue(
   schema: unknown,
 ): unknown {
   if (schema === undefined) return cell;
-  return cell.asSchema(schema as JSONSchema).getAsLink({ includeSchema: true });
+  const projected = cell.asSchema(schema as JSONSchema);
+  const value = cell.getRaw({ lastNode: "value", nonRecursive: true });
+  if (isUnavailable(value)) return value;
+  // An absent slot can still be addressed through a handle, including one
+  // used to initialize it. Only a requested value waits for contents.
+  if (
+    value === undefined && !isStream(projected) &&
+    ContextualFlowControl.declaredHandleKind(schema as JSONSchema) === undefined
+  ) return UNAVAILABLE_PENDING;
+  return projected.getAsLink({ includeSchema: true });
+}
+
+/**
+ * Adapt the legacy suggestion sidecar's optional result to Wish availability.
+ * Keep available values as cells so the outer Wish retains the same live link.
+ */
+export function projectSuggestionPatternResult(
+  resultCell: Cell<unknown>,
+): Cell<unknown> | UnavailableVariant {
+  const resolved = resultCell.resolveAsCell();
+  const value = resolved.getRaw({ lastNode: "value", nonRecursive: true });
+  return isUnavailable(value)
+    ? value
+    : value === undefined
+    ? UNAVAILABLE_PENDING
+    : resolved;
 }
 
 function createWishCandidatesCell(
@@ -2402,9 +2444,20 @@ export function wish(
   cause: Cell<any>[],
   parentCell: Cell<any>,
   runtime: Runtime,
+  _outputBinding?: NormalizedFullLink,
+  _awaitSync?: boolean,
+  publicationBinding?: NormalizedFullLink,
 ): RawBuiltinResult {
   let cancelled = false;
   const readiness = createDocumentReadiness(runtime, addCancel);
+  const heldPublications = new Map<
+    string,
+    { release: () => void; attempt?: object }
+  >();
+  addCancel(() => {
+    for (const hold of heldPublications.values()) hold.release();
+    heldPublications.clear();
+  });
   // Per-instance cached #now cell — prevents non-idempotent re-runs from
   // Date.now() producing a different value each time the sync action fires.
   let nowCell: Cell<unknown> | undefined;
@@ -2637,6 +2690,16 @@ export function wish(
       // error surface lands, and the surface still arrives on the doc's
       // ordinary change notification.
       void commitWishFailureUI(link, message, scopeIdentity)
+        .finally(async () => {
+          // A report can throw before the refused action finishes its
+          // re-runs. Keep its scoped instance coalesced until those settle,
+          // including when the reporting transaction never reached commit.
+          try {
+            await runtime.scheduler.idleWithPendingCommits();
+          } finally {
+            wishFailureUIInFlight.delete(inFlightKey);
+          }
+        })
         .catch((surfacingError) => {
           // The surfacing must never become a new unhandled failure itself
           // (e.g. a raw write refused on a doc that never materialized).
@@ -2644,9 +2707,6 @@ export function wish(
             `Can't report "${message}" in the surface it belongs to`,
             surfacingError,
           );
-        })
-        .finally(() => {
-          wishFailureUIInFlight.delete(inFlightKey);
         });
     });
   }
@@ -2746,7 +2806,7 @@ export function wish(
       // own bounded re-runs against this doc — then re-derive the error
       // state on a fresh transaction. This wait is why the chain must stay
       // untracked (see the launch site above).
-      await runtime.idle();
+      await runtime.scheduler.idleWithPendingCommits();
       return commitWishFailureUI(
         stateLink,
         message,
@@ -2858,6 +2918,30 @@ export function wish(
     }
 
     return slot.resultCell;
+  }
+
+  function sendSuggestionPatternState(
+    tx: IExtendedStorageTransaction,
+    ctx: WishContext,
+    input: {
+      situation: string;
+      context: Record<string, any>;
+      initialResults?: unknown;
+    },
+    outputScope: CellScope,
+    schema: unknown,
+  ): void {
+    const state = launchSuggestionPattern(ctx, input, tx).withTx(tx);
+    sendWishState(
+      tx,
+      {
+        result: projectSuggestionPatternResult(state.key("result")),
+        candidates: state.key("candidates"),
+        [UI]: state.key(UI),
+      },
+      outputScope,
+      schema,
+    );
   }
 
   // Renders an error message into a pattern result cell in its own committed
@@ -3337,14 +3421,45 @@ export function wish(
     const actionStartedAt = performance.now();
     let actionQueryKey: string | undefined;
     let usedSharedHashtagResolver = false;
+    const identity = tx.tx.scopeKeyIdentity;
+    const instance = publicationBinding &&
+      resolveScopeKey(
+        publicationBinding.scope,
+        identity ?? runtime.scopeKeyIdentity,
+      );
+    let waiting = false;
 
     try {
       tx.resetNarrowestReadScope();
+      const inputsWithTx = inputsCell.withTx(tx);
+      const rawTarget = inputsWithTx.getRaw();
+      const unavailableInput = selectUnavailableInput(rawTarget, {
+        runtime,
+        tx,
+        base: inputsCell,
+      });
+      if (unavailableInput !== undefined) {
+        const schema = rawTarget !== null &&
+            typeof rawTarget === "object" &&
+            !Array.isArray(rawTarget)
+          ? (rawTarget as { schema?: unknown }).schema
+          : undefined;
+        sendWishState(
+          tx,
+          {
+            result: unavailableInput,
+            candidates: [],
+            [UI]: undefined,
+          } satisfies WishState<any>,
+          wishOutputScope(schema, tx.getNarrowestReadScope(), false),
+          schema,
+        );
+        return;
+      }
       const targetValue = measureWishPhase(
         "input-get",
         undefined,
         () => {
-          const inputsWithTx = inputsCell.withTx(tx);
           return inputsWithTx.asSchema(TARGET_SCHEMA).get();
         },
       );
@@ -3372,12 +3487,12 @@ export function wish(
               sendWishState(
                 tx,
                 {
-                  result: undefined,
+                  result: unavailableError(errorMsg, "invalidInput"),
                   candidates: [],
                   error: errorMsg,
                   errorCode: "failed",
                   [UI]: errorUI(errorMsg),
-                } satisfies WishState<any>,
+                } satisfies PersistedWishState<any>,
                 outputScope,
                 schema,
               ),
@@ -3490,6 +3605,24 @@ export function wish(
               queryKey,
             );
 
+            const projectedFirstResult = projectWishCellValue(
+              uniqueResultCells[0],
+              schema,
+            );
+            if (isUnavailable(projectedFirstResult)) {
+              sendWishState(
+                tx,
+                {
+                  result: projectedFirstResult,
+                  candidates: [],
+                  [UI]: undefined,
+                },
+                outputScope,
+                schema,
+              );
+              return;
+            }
+
             // Unified shape: always return { result, candidates, [UI] }
             // For single result, use fast path (no picker needed)
             // For multiple results, launch suggestion pattern for picker
@@ -3531,10 +3664,7 @@ export function wish(
                   sendWishState(
                     tx,
                     {
-                      result: projectWishCellValue(
-                        uniqueResultCells[0],
-                        schema,
-                      ),
+                      result: projectedFirstResult,
                       candidates: candidatesCell,
                       [UI]: profilePickerUI(ctx),
                     },
@@ -3566,10 +3696,7 @@ export function wish(
                   sendWishState(
                     tx,
                     {
-                      result: projectWishCellValue(
-                        uniqueResultCells[0],
-                        schema,
-                      ),
+                      result: projectedFirstResult,
                       candidates: candidatesCell,
                       [UI]: resultUI,
                     },
@@ -3587,17 +3714,16 @@ export function wish(
                   "send-suggestion",
                   queryKey,
                   () =>
-                    sendResult(
+                    sendSuggestionPatternState(
                       tx,
-                      launchSuggestionPattern(
-                        ctx,
-                        {
-                          situation: query,
-                          context: context ?? {},
-                          initialResults: candidatesCell,
-                        },
-                        tx,
-                      ),
+                      ctx,
+                      {
+                        situation: query,
+                        context: context ?? {},
+                        initialResults: candidatesCell,
+                      },
+                      outputScope,
+                      schema,
                     ),
                 );
               } else {
@@ -3622,10 +3748,7 @@ export function wish(
                     sendWishState(
                       tx,
                       {
-                        result: projectWishCellValue(
-                          uniqueResultCells[0],
-                          schema,
-                        ),
+                        result: projectedFirstResult,
                         candidates: candidatesCell,
                         [UI]: resultUI,
                       },
@@ -3650,7 +3773,23 @@ export function wish(
               }
             }
           } catch (e) {
-            if (e instanceof DocumentPending) return;
+            if (e instanceof DocumentPending) {
+              if (publicationBinding && instance !== undefined) {
+                waiting = true;
+                let hold = heldPublications.get(instance);
+                if (!hold) {
+                  hold = {
+                    release: runtime.holdPublication(
+                      publicationBinding,
+                      identity,
+                    ),
+                  };
+                  heldPublications.set(instance, hold);
+                }
+                hold.attempt = undefined;
+              }
+              return;
+            }
             if (e instanceof NoHomeRootError) {
               measureWishPhase(
                 "send-no-home-root",
@@ -3681,12 +3820,12 @@ export function wish(
                 sendWishState(
                   tx,
                   {
-                    result: undefined,
+                    result: unavailableError(new Error(errorMsg)),
                     candidates: [],
                     error: errorMsg,
                     errorCode: errorCodeOf(e),
                     [UI]: ui,
-                  } satisfies WishState<any>,
+                  } satisfies PersistedWishState<any>,
                   wishOutputScope(
                     schema,
                     inputScope,
@@ -3705,7 +3844,7 @@ export function wish(
               sendWishState(
                 tx,
                 {
-                  result: undefined,
+                  result: UNAVAILABLE_PENDING,
                   candidates: [],
                   [UI]: undefined,
                 } satisfies WishState<any>,
@@ -3729,13 +3868,12 @@ export function wish(
             "send-suggestion",
             queryKey,
             () =>
-              sendResult(
+              sendSuggestionPatternState(
                 tx,
-                launchSuggestionPattern(
-                  suggestionCtx,
-                  { situation: query, context: context ?? {} },
-                  tx,
-                ),
+                suggestionCtx,
+                { situation: query, context: context ?? {} },
+                wishOutputScope(schema, inputScope, false),
+                schema,
               ),
           );
         }
@@ -3751,12 +3889,12 @@ export function wish(
             sendWishState(
               tx,
               {
-                result: undefined,
+                result: unavailableError(new Error(errorMsg)),
                 candidates: [],
                 error: errorMsg,
                 errorCode: "failed",
                 [UI]: errorUI(errorMsg),
-              } satisfies WishState<any>,
+              } satisfies PersistedWishState<any>,
               inputScope,
               undefined,
             ),
@@ -3764,6 +3902,41 @@ export function wish(
         return;
       }
     } finally {
+      if (!waiting && instance !== undefined) {
+        const hold = heldPublications.get(instance);
+        if (hold) {
+          hold.attempt = tx;
+          const release = () => {
+            if (
+              hold.attempt !== tx || heldPublications.get(instance) !== hold
+            ) return;
+            heldPublications.delete(instance);
+            hold.release();
+          };
+          tx.addCommitCallback((committed, outcome) => {
+            // Keep the absence held through a retry or a withdrawn serving
+            // wave. A terminal outcome or a landed publication ends the wait.
+            if (outcome.error) {
+              if (isSurfacableWishCommitFailure(outcome.error)) release();
+              return;
+            }
+            const settlement = waveSettlementOf(committed) ??
+              waveSettlementOf(tx);
+            if (settlement) {
+              void settlement.then(async (verdict) => {
+                const dropped = verdict.error?.supersededOutputs ??
+                  verdict.ok?.supersededOutputs;
+                if (
+                  verdict.error?.waveWithdrawalCause === "wave-abandoned" ||
+                  verdict.error?.readDependencyWithdrawn ||
+                  (dropped && await supersededOutputsOwed(runtime, dropped))
+                ) return;
+                release();
+              });
+            } else release();
+          });
+        }
+      }
       if (!usedSharedHashtagResolver) {
         releaseCurrentSharedHashtagResolver();
       }

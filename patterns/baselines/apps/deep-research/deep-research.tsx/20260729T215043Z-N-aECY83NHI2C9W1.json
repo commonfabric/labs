@@ -1,0 +1,219 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "BuiltInLLMContent": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/BuiltInLLMContentPart"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "BuiltInLLMContentPart": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BuiltInLLMTextPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMImagePart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolCallPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolResultPart"
+          }
+        ]
+      },
+      "BuiltInLLMImagePart": {
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "image"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "image"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMMessage": {
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/BuiltInLLMContent"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "system",
+              "assistant",
+              "tool"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMTextPart": {
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolCallPart": {
+        "properties": {
+          "input": {
+            "additionalProperties": true,
+            "properties": {},
+            "type": "object"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-call"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "input"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolResultPart": {
+        "properties": {
+          "output": {
+            "anyOf": [
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "text"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "json"
+                    ],
+                    "type": "string"
+                  },
+                  "value": true
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-result"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "output"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "context": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "messages": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/BuiltInLLMMessage"
+        },
+        "type": "array"
+      },
+      "situation": {
+        "default": "What are the latest developments in AI agents?",
+        "type": "string"
+      }
+    },
+    "required": [
+      "situation"
+    ],
+    "type": "object"
+  },
+  "pattern": "deep-research.tsx",
+  "resultSchema": {
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "result": true
+    },
+    "required": [
+      "result",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

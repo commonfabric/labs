@@ -1,9 +1,13 @@
 import {
   computed,
   handler,
+  hasError,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -36,8 +40,8 @@ import type {
  * someone else's profile — there is no profile input to point elsewhere.
  *
  * Presentation is deliberately minimal and theme-token compliant: a
- * `<cf-profile-badge variant="hero">` bound to the REAL live profile cell (the
- * blessed identity idiom — bind the cell, not a snapshot) plus a bio paragraph.
+ * `<cf-profile-badge variant="hero">` bound to a reactive view of the live
+ * profile plus a bio paragraph.
  * Pinned elements / "Pin a piece" developer chrome are HIDDEN in this v1 (it is
  * a presentation of upstream-owned data, not a second source of truth).
  *
@@ -136,10 +140,23 @@ export type ProfileEmbedOutput = {
 };
 
 export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
-  // Resolve the viewer's own profile. `result` is undefined at zero profiles or
-  // while resolution is pending; `[UI]` is the wish's fallback surface (the
-  // trusted create surface when empty). We render `result ?? fallback`.
+  // Resolve the viewer's own profile. `[UI]` is the trusted create surface on
+  // a completed missing-profile error; pending rendering is handled by the
+  // renderer's normal continuity behavior.
   const profileWish = wish<ProfileResult>({ query: "#profile" });
+  const {
+    name: profileName,
+    bio: profileBio,
+    setName: setProfileName,
+    setPicture: setProfilePicture,
+    setBio: setProfileBio,
+  } = resultOf(profileWish.result);
+  const hasProfile = computed(() => {
+    const state = profileWish.result;
+    return !(
+      hasError(state) || isPending(state) || isSyncing(state)
+    );
+  });
 
   // Transient local drafts backing the amend inputs. Not a second source of
   // truth — seeded from the live values on entering edit mode, cleared/written
@@ -149,22 +166,15 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
   // View toggle: presentation by default, amend form when the owner opts in.
   const editing = new Writable<boolean>(false).for("editing");
 
-  const hasProfile = computed(() => profileWish.result !== undefined);
   const isEditing = computed(() => editing.get() === true);
-  const showEditForm = computed(() =>
-    profileWish.result !== undefined && editing.get() === true
-  );
-  const showPresentation = computed(() =>
-    profileWish.result !== undefined && editing.get() !== true
-  );
+  const showEditForm = computed(() => hasProfile && editing.get());
+  const showPresentation = computed(() => hasProfile && !editing.get());
 
-  const bio = computed(() => trimmed(profileWish.result?.bio as string));
-  const hasBio = computed(() =>
-    trimmed(profileWish.result?.bio as string).length > 0
-  );
+  const bio = computed(() => trimmed(profileBio as string));
+  const hasBio = computed(() => trimmed(profileBio as string).length > 0);
 
   const displayName = computed(() => {
-    const name = trimmed(profileWish.result?.name as string);
+    const name = trimmed(profileName as string);
     return name.length > 0 ? name : "Profile";
   });
 
@@ -176,8 +186,9 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
       <cf-screen data-ui-pattern="ProfileEmbed">
         <cf-vstack gap="4" style={{ padding: "16px", maxWidth: "560px" }}>
           {
-            /* No profile yet (or pending): render the wish fallback — the
-              trusted create surface at zero profiles. `result ?? fallback`. */
+            /* No profile yet: render the wish fallback — the trusted create
+              surface at zero profiles. Pending keeps the renderer's previous
+              complete output. */
           }
           {ifElse(
             hasProfile,
@@ -188,8 +199,8 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
           )}
 
           {
-            /* Clean presentation: hero badge bound to the REAL live profile cell
-              (the wish result) + bio. Elements / "Pin a piece" chrome hidden. */
+            /* Clean presentation: hero badge bound to the reactive profile view
+              plus bio. Elements / "Pin a piece" chrome hidden. */
           }
           {ifElse(
             showPresentation,
@@ -197,7 +208,7 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
               <cf-profile-badge
                 id="profile-embed-badge"
                 variant="hero"
-                $profile={profileWish.result}
+                $profile={resultOf(profileWish.result)}
                 size="xl"
                 noNavigate
               />
@@ -225,8 +236,8 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
                     editing,
                     nameDraft,
                     bioDraft,
-                    currentName: profileWish.result?.name,
-                    currentBio: profileWish.result?.bio,
+                    currentName: profileName,
+                    currentBio: profileBio,
                   })}
                 >
                   Edit profile
@@ -251,7 +262,7 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
                     size="sm"
                     onClick={saveName({
                       draft: nameDraft,
-                      setName: profileWish.result?.setName,
+                      setName: setProfileName,
                     })}
                   >
                     Save name
@@ -263,7 +274,7 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
                 <label>Picture</label>
                 <cf-avatar-input
                   oncf-change={savePicture({
-                    setPicture: profileWish.result?.setPicture,
+                    setPicture: setProfilePicture,
                   })}
                 />
               </cf-vstack>
@@ -280,7 +291,7 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
                     size="sm"
                     onClick={saveBio({
                       draft: bioDraft,
-                      setBio: profileWish.result?.setBio,
+                      setBio: setProfileBio,
                     })}
                   >
                     Save bio

@@ -241,6 +241,14 @@ describe("fetch-program-served-lifecycle", () => {
         userUrl.withTx(tx).set(sessionUrl as unknown as string);
       } else userUrl.withTx(tx).set(url);
       input.withTx(tx).key("url").set(userUrl as unknown as string);
+      // These cases stage request ownership directly, after cache readiness.
+      // Cold-cache publication is exercised by the fetched-program pattern.
+      const cache = runtime.getCellFromLink({
+        ...runtime.getCell(space, { fetchProgram: { cache: [parent] } })
+          .getAsNormalizedFullLink(),
+        scope,
+      });
+      if (cache.withTx(tx).getRaw() === undefined) cache.withTx(tx).setRaw({});
       await commit(tx);
     }
 
@@ -324,11 +332,34 @@ describe("fetch-program-served-lifecycle", () => {
       effectBatches,
       accepted,
       publications,
+      stop() {
+        for (const cancel of cancels) cancel();
+      },
       get resultCells() {
         return resultCells;
       },
     };
   }
+
+  it("keeps a recreated node's claim after the stopped node is accepted late", async () => {
+    const old = fixture();
+    await old.seed(aliceOne, "user");
+    await commit(old.stage(aliceOne, true, true));
+    old.stop();
+    await old.dispatches[0]();
+    await runtime.settled();
+    expect(old.cacheState(aliceOne, "user")).toBe("idle");
+
+    const replacement = fixture();
+    await commit(replacement.stage(aliceOne));
+    expect(replacement.cacheState(aliceOne, "user")).toBe("fetching");
+    for (const callback of old.accepted) callback();
+    await runtime.settled();
+    expect(replacement.cacheState(aliceOne, "user")).toBe("fetching");
+    replacement.stop();
+    await runtime.settled();
+    expect(replacement.cacheState(aliceOne, "user")).toBe("idle");
+  });
 
   it("releases an accepted claim stopped before dispatch", async () => {
     const f = fixture();
@@ -340,7 +371,7 @@ describe("fetch-program-served-lifecycle", () => {
       "fetch",
       () => Promise.reject(new Error("Unexpected HTTP dispatch")),
     );
-    f.cancels[0]();
+    f.stop();
     await runtime.settled();
     expect(f.cacheState(aliceOne, "user")).toBe("idle");
     expect(f.dispatches).toHaveLength(1);
@@ -361,7 +392,7 @@ describe("fetch-program-served-lifecycle", () => {
     old.getCfcState().outbox[0].abandon?.(new Error("older actor refused"));
     await runtime.settled();
     expect(f.read(f.binding, bobOne)?.selected).toBe("session");
-    f.cancels[0]();
+    f.stop();
     await runtime.settled();
   });
 
@@ -377,7 +408,7 @@ describe("fetch-program-served-lifecycle", () => {
     expect(f.read(f.binding, bobOne)?.selected).toBe("session");
     expect(f.cacheState(aliceOne, "user")).toBe("fetching");
     expect(f.cacheState(bobOne, "session")).toBe("fetching");
-    f.cancels[0]();
+    f.stop();
     await runtime.settled();
     expect(f.cacheState(aliceOne, "user")).toBe("idle");
     expect(f.cacheState(bobOne, "session")).toBe("idle");
@@ -397,7 +428,7 @@ describe("fetch-program-served-lifecycle", () => {
     expect(f.read(f.binding, aliceTwo)?.selected).toBe("user");
     expect(f.cacheState(aliceOne, "user")).toBe("fetching");
     expect(f.stage(aliceOne).getCfcState().outbox).toHaveLength(0);
-    f.cancels[0]();
+    f.stop();
     await runtime.settled();
     expect(f.cacheState(aliceOne, "user")).toBe("idle");
   });
@@ -425,7 +456,7 @@ describe("fetch-program-served-lifecycle", () => {
     await runtime.settled();
     expect(network.calls).toHaveLength(1);
     expect(f.cacheState(aliceOne, "user")).toBe("success");
-    f.cancels[0]();
+    f.stop();
   });
 
   it("releases an accepted claim when its release check skips dispatch", async () => {
@@ -462,7 +493,7 @@ describe("fetch-program-served-lifecycle", () => {
     expect(network.calls).toHaveLength(0);
     expect(f.cacheState(aliceOne, "user")).toBe("idle");
     using edits = spy(runtime, "edit");
-    f.cancels[0]();
+    f.stop();
     expect(edits.calls).toHaveLength(0);
   });
 
@@ -525,10 +556,10 @@ describe("fetch-program-served-lifecycle", () => {
         expect(network.calls).toHaveLength(1);
         expect(f.cacheState(aliceOne, "user")).toBe("success");
         using edits = spy(runtime, "edit");
-        f.cancels[0]();
+        f.stop();
         expect(edits.calls).toHaveLength(0);
       } finally {
-        f.cancels[0]();
+        f.stop();
         await runtime.settled();
       }
     });
@@ -551,7 +582,7 @@ describe("fetch-program-served-lifecycle", () => {
       expect(network.calls).toHaveLength(0);
       expect(f.cacheState(aliceOne, "user")).toBe("idle");
       using edits = spy(runtime, "edit");
-      f.cancels[0]();
+      f.stop();
       expect(edits.calls).toHaveLength(0);
     });
   }
@@ -612,14 +643,14 @@ describe("fetch-program-served-lifecycle", () => {
           rejected.length === 2 ? "idle" : "success",
         );
         using edits = spy(runtime, "edit");
-        f.cancels[0]();
+        f.stop();
         expect(edits.calls).toHaveLength(0);
       } finally {
         gate.resolve();
         outbox.close();
         await outbox.settle();
         runtime.asyncWorkObserver = observer;
-        f.cancels[0]();
+        f.stop();
         await runtime.settled();
       }
     });
@@ -678,14 +709,14 @@ describe("fetch-program-served-lifecycle", () => {
         );
         expect(outbox.inflightCount).toBe(0);
         using edits = spy(runtime, "edit");
-        f.cancels[0]();
+        f.stop();
         expect(edits.calls).toHaveLength(0);
       } finally {
         for (const refusal of refusals) refusal.restore();
         outbox.close();
         await outbox.settle();
         runtime.asyncWorkObserver = observer;
-        f.cancels[0]();
+        f.stop();
         await runtime.settled();
       }
     });
@@ -752,13 +783,13 @@ describe("fetch-program-served-lifecycle", () => {
       expect(f.cacheState(aliceTwo, "user")).toBe("success");
       expect(outbox.inflightCount).toBe(0);
       using edits = spy(runtime, "edit");
-      f.cancels[0]();
+      f.stop();
       expect(edits.calls).toHaveLength(0);
     } finally {
       outbox.close();
       await outbox.settle();
       runtime.asyncWorkObserver = observer;
-      f.cancels[0]();
+      f.stop();
       await runtime.settled();
     }
   });
@@ -807,7 +838,7 @@ describe("fetch-program-served-lifecycle", () => {
       expect(f.read(f.binding, aliceOne)?.selected).toBe("user");
       expect(f.publications).toHaveLength(withdraw ? 3 : 2);
       expect(f.read(f.resultCells.pending, aliceOne)).toBe(!withdraw);
-      f.cancels[0]();
+      f.stop();
       await runtime.settled();
     });
   }
@@ -827,7 +858,7 @@ describe("fetch-program-served-lifecycle", () => {
     await runtime.settled();
     expect(f.read(f.binding, bobOne)?.selected).toBe("session");
     expect(f.publications).toHaveLength(3);
-    f.cancels[0]();
+    f.stop();
     await runtime.settled();
   });
 
@@ -857,7 +888,7 @@ describe("fetch-program-served-lifecycle", () => {
     await runtime.settled();
     expect(f.read(f.binding, bobOne)?.selected).toBe("session");
     expect(f.publications).toHaveLength(3);
-    f.cancels[0]();
+    f.stop();
     await runtime.settled();
   });
 
@@ -871,7 +902,7 @@ describe("fetch-program-served-lifecycle", () => {
     old.getCfcState().outbox[0].abandon?.(new Error("older request refused"));
     await runtime.settled();
     expect(f.read(f.binding, aliceOne)?.selected).toBe("user");
-    f.cancels[0]();
+    f.stop();
     await runtime.settled();
   });
 
@@ -889,7 +920,7 @@ describe("fetch-program-served-lifecycle", () => {
     expect(f.cacheState(aliceOne, "user")).toBe("success");
     for (const callback of f.accepted) callback();
     using edits = spy(runtime, "edit");
-    f.cancels[0]();
+    f.stop();
     expect(edits.calls).toHaveLength(0);
   });
 
@@ -904,14 +935,14 @@ describe("fetch-program-served-lifecycle", () => {
     expect(f.publications).toHaveLength(announcements);
     expect(f.read(f.binding, aliceOne)).toBeUndefined();
     expect(f.cacheState(aliceOne, "user")).toBe("error");
-    f.cancels[0]();
+    f.stop();
   });
 
   it("does not restore a refused binding after graph teardown", async () => {
     const f = fixture();
     await f.seed(aliceOne, "user");
     const old = f.stage(aliceOne);
-    f.cancels[0]();
+    f.stop();
     const announcements = f.publications.length;
     using edits = spy(runtime, "edit");
     old.getCfcState().outbox[0].abandon?.(new Error("stopped request"));
@@ -946,7 +977,7 @@ describe("fetch-program-served-lifecycle", () => {
         using _stamp = stub(runtime, "stampServerRun", () => {
           throw new Error("teardown unavailable");
         });
-        f.cancels[0]();
+        f.stop();
         release.resolve();
         await runtime.settled();
         expect(f.cacheState(aliceOne, "user")).toBe("fetching");
@@ -959,7 +990,7 @@ describe("fetch-program-served-lifecycle", () => {
   it("stages nothing for a run after graph teardown", async () => {
     const f = fixture();
     await f.seed(aliceOne, "user");
-    f.cancels[0]();
+    f.stop();
     const announcements = f.publications.length;
     const tx = f.stage(aliceOne);
     expect(tx.getCfcState().outbox).toHaveLength(0);
@@ -986,7 +1017,7 @@ describe("fetch-program-served-lifecycle", () => {
       expect(f.cacheState(aliceOne, "user")).toBe("success");
     } finally {
       response.resolve(new Response("cleanup"));
-      f.cancels[0]();
+      f.stop();
       await runtime.settled();
     }
   });
@@ -1045,7 +1076,7 @@ describe("fetch-program-served-lifecycle", () => {
     await issued.promise;
     // Stopping releases the claim in a transaction of its own; the spy
     // counts only what the failed resolution opens after it.
-    f.cancels[0]();
+    f.stop();
     using edits = spy(runtime, "edit");
     response.reject(new Error("program network failure"));
     await dispatched;

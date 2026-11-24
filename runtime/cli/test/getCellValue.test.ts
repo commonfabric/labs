@@ -18,15 +18,15 @@ const PROGRAM: RuntimeProgram = {
   files: [{
     name: "/main.tsx",
     contents: `
-import { computed, pattern, SqliteDb, sqliteQuery } from "commonfabric";
+import { computed, isPending, pattern, resultOf, SqliteDb, sqliteQuery } from "commonfabric";
 
 export default pattern<{ db: SqliteDb }>(({ db }) => {
   const query = sqliteQuery.asScope("session")<{ body: string }>({
     db,
     sql: "SELECT body FROM notes ORDER BY id",
   });
-  const rows = computed(() => query.result ?? []);
-  return { rows, rowCount: computed(() => rows.length), pending: query.pending };
+  const rows = computed(() => resultOf(query).rows);
+  return { rows, rowCount: computed(() => rows.length), pending: computed(() => isPending(query)) };
 });
 `,
   }],

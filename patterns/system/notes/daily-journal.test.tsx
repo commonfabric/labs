@@ -16,6 +16,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -74,9 +75,10 @@ const ROLLUP = {
 };
 
 export default pattern(() => {
-  const registrations = wish<{ testPieceRegistrationCount: number }>({
+  const registrationsWish = wish<{ testPieceRegistrationCount: number }>({
     query: "#default",
-  }).result!;
+  });
+  const registrations = resultOf(registrationsWish.result);
 
   const template = new Writable("");
   const journal = DailyJournal({

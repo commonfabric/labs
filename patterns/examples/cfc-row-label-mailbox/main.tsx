@@ -31,9 +31,11 @@ import {
   computed,
   Default,
   handler,
+  hasError,
   NAME,
   pattern,
   PerSession,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
   Stream,
@@ -187,9 +189,13 @@ export default pattern<MailboxInput, MailboxOutput>(
       { reactOn: db },
     );
 
-    const inboxRows = computed<InboxRow[]>(() => inbox.result ?? []);
-    const sliceRows = computed<MailRow[]>(() => aliceBobSlice.result ?? []);
-    const countError = computed<string>(() => String(mailCount.error ?? ""));
+    const inboxResult = resultOf(inbox);
+    const sliceResult = resultOf(aliceBobSlice);
+    const inboxRows = computed<InboxRow[]>(() => inboxResult.rows);
+    const sliceRows = computed<MailRow[]>(() => sliceResult.rows);
+    const countError = computed<string>(() =>
+      hasError(mailCount) ? mailCount.message : ""
+    );
 
     const seed = seedMail({ db });
 

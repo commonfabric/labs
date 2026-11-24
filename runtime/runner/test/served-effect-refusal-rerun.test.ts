@@ -12,6 +12,11 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { fabricAwareEqual } from "@commonfabric/data-model";
+import {
+  isUnavailable,
+  unavailableError,
+} from "@commonfabric/data-model/availability";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   addMockObjectResponse,
@@ -26,6 +31,7 @@ import type { Cell } from "../src/cell.ts";
 import { addCfcDenialListener } from "../src/cfc/denial-report.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
+import { snapshotQueryResult } from "../src/query-result-proxy.ts";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -112,8 +118,12 @@ const refusedMessage = (builtin: Builtin) =>
  */
 const RUN_BOUND = 3;
 
-/** An effect node's public state. */
+/** A comparison view of native outcomes and the retained legacy LLM tuple. */
 type NodeView = { pending?: boolean; result?: unknown; error?: unknown };
+
+/** Whether the builtin exposes its outcome directly rather than in a tuple. */
+const hasNativeResult = (builtin: Builtin): boolean =>
+  builtin.name !== "llm" && builtin.name !== "llmDialog";
 
 /** A running fixture: a serving host, Alice's client, and what they did. */
 type Fixture = {
@@ -136,7 +146,7 @@ type Fixture = {
   client: Runtime;
 
   /** Alice's view of the node's result, and her argument cell. */
-  fetched: Cell<NodeView>;
+  fetched: Cell<unknown>;
   argument: Cell<{ url: string; tag: string; messages: unknown[] }>;
 
   /** The owner's runtime, which writes the document the URL comes from. */
@@ -196,8 +206,8 @@ type Fixture = {
   ) => NodeView | undefined;
 
   /**
-   * The document and path the node's `error` field resolves to, read through
-   * Alice's client.
+   * The native outcome's document and path, or the legacy tuple's error
+   * field, read through Alice's client.
    */
   errorLink: () => Promise<NormalizedFullLink>;
 
@@ -411,7 +421,7 @@ export default pattern<
       "served-effect-rerun-input",
       pattern.argumentSchema,
     );
-    const result = client.getCell<{ fetched: NodeView }>(
+    const result = client.getCell<{ fetched: unknown }>(
       space,
       "served-effect-rerun-result",
       pattern.resultSchema,
@@ -488,20 +498,26 @@ export default pattern<
         undemanded = true;
       },
       servingView: (link, identity) =>
-        viewAs(servingRuntimes[0], link, identity),
+        viewAs(servingRuntimes[0], link, identity, builtin),
       errorLink: async () => {
-        const error = result.key("fetched").key("error").resolveAsCell();
+        const outcome = result.key("fetched");
+        const error =
+          (hasNativeResult(builtin) ? outcome : outcome.key("error"))
+            .resolveAsCell();
         await error.sync();
         return error.getAsNormalizedFullLink();
       },
       stored: (link, identity) => storedValue(engine, link, identity),
       freshView: async () => {
-        const fresh = openClient(alice).getCellFromLink<NodeView>(
+        const fresh = openClient(alice).getCellFromLink<unknown>(
           result.key("fetched").getAsNormalizedFullLink(),
         );
         await fresh.sync();
-        await fresh.key("error").resolveAsCell().sync();
-        return snapshot(fresh.get());
+        await fresh.resolveAsCell().sync();
+        if (!hasNativeResult(builtin)) {
+          await fresh.key("error").resolveAsCell().sync();
+        }
+        return snapshot(fresh.get(), builtin);
       },
       unstampedSealRefusals: () => host!.stats().unstampedSealRefusals,
     });
@@ -527,23 +543,35 @@ function viewAs(
   runtime: Runtime,
   link: NormalizedFullLink,
   identity: ScopeKeyIdentity | undefined,
+  builtin: Builtin,
 ): NodeView | undefined {
   const tx = runtime.edit();
   try {
     if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
-    return snapshot(runtime.getCellFromLink<NodeView>(link).withTx(tx).get());
+    return snapshot(runtime.getCellFromLink(link).withTx(tx).get(), builtin);
   } finally {
     tx.abort();
   }
 }
 
 /**
- * The node's fields, read out of a view while the transaction it reads
- * through is still open. Every field these cases set is a primitive.
+ * Detaches a node's outcome while its transaction is open. Native refusals
+ * must be branded general-error markers, not structural error-shaped values.
  */
-function snapshot(view: NodeView | undefined): NodeView | undefined {
+function snapshot(view: unknown, builtin: Builtin): NodeView | undefined {
   if (view === undefined) return undefined;
-  const { pending, result, error } = view;
+  if (hasNativeResult(builtin)) {
+    if (isUnavailable(view)) {
+      if (view.reason === "pending" || view.reason === "syncing") {
+        return { pending: true };
+      }
+      expect(view.reason).toBe("error");
+      expect(view.errorKind).toBe("general");
+      return { pending: false, error: view.rawMessage };
+    }
+    return { pending: false, result: snapshotQueryResult(view) };
+  }
+  const { pending, result, error } = view as NodeView;
   return {
     ...(pending !== undefined ? { pending } : {}),
     ...(result !== undefined ? { result } : {}),
@@ -650,7 +678,14 @@ async function expectRefusedEnding(
       ),
     ).toMatchObject(ending);
     expect(await f.freshView()).toMatchObject(ending);
-    expect(f.stored(errorLink, requester)).toBe(refusedMessage(builtin));
+    expect(
+      fabricAwareEqual(
+        f.stored(errorLink, requester),
+        hasNativeResult(builtin)
+          ? unavailableError(refusedMessage(builtin))
+          : refusedMessage(builtin),
+      ),
+    ).toBe(true);
     if (scope === "user") {
       // Where the ending lands without the requester's identity.
       expect(
@@ -712,7 +747,7 @@ describe("served-effect-refusal-rerun", () => {
         ).toMatchObject(answer);
         expect(await f.freshView()).toMatchObject(answer);
         expect(f.stored(await f.errorLink(), f.client.scopeKeyIdentity))
-          .toBeUndefined();
+          .toBe("the response");
         expect(f.unstampedSealRefusals()).toBe(0);
       });
     });
@@ -998,10 +1033,10 @@ describe("served-effect-refusal-rerun", () => {
     }, async (f) => {
       await f.settle();
       expect(f.requests()).toBe(1);
-      await waitForCellValue<NodeView>(
+      await waitForCellValue<unknown>(
         f.client,
         f.fetched,
-        (view) => view?.pending === false && view.result === "the response",
+        (view) => view === "the response",
       );
       const errorLink = await f.errorLink();
       const fetchedLink = f.fetched.getAsNormalizedFullLink();
@@ -1021,7 +1056,12 @@ describe("served-effect-refusal-rerun", () => {
         pending: false,
         error: refusedMessage(fetchText),
       });
-      expect(f.stored(errorLink, requester)).toBe(refusedMessage(fetchText));
+      expect(
+        fabricAwareEqual(
+          f.stored(errorLink, requester),
+          unavailableError(refusedMessage(fetchText)),
+        ),
+      ).toBe(true);
     });
   });
 });

@@ -317,7 +317,7 @@ form.
 | `FabricEpochDay` | `EpochDay@1` | `bigint` |
 | `FabricEpochNsec` | `EpochNsec@1` | `bigint` |
 | `FabricKeyPair` | `KeyPair@1` | `{ algorithm: string, publicKey: ArrayBuffer, privateKey: ArrayBuffer }`, or `{ publicKey: CryptoKey, privateKey: CryptoKey }` |
-| `FabricUnavailable` | `Unavailable@1` | `{ reason }`, or for reason `error` `{ reason, errorKind }` or `{ reason, errorKind, message }` |
+| `FabricUnavailable` | `Unavailable@1` | `{ reason }`; for `obsolete`, also `{ reason, message }`; for `error`, `{ reason, errorKind }` or `{ reason, errorKind, message }` |
 | `symbol` | `Symbol@1` | `string` (the registry key) |
 
 The `tag` of a `Hash@1` state is the hash's algorithm tag, which is in the
@@ -574,7 +574,7 @@ a peer can send one on purpose — and reading it as absent would silently answe
 a question the wire did ask.
 
 `Unavailable@1` is the codec this reaches, on its two optional fields. An absent
-`errorKind` is the state of a transient reason and an absent `message` that of
-an error with no stored message; `{ reason: "error", errorKind: undefined }`
+`errorKind` is the state of a non-error reason and an absent `message` that of
+an error with no stored message or obsolete output with no guidance; `{ reason: "error", errorKind: undefined }`
 and `{ reason: "error", errorKind: "sync", message: undefined }` are refused,
 each being a field that is present and not a string.

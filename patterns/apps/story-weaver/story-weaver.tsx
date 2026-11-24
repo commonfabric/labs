@@ -22,17 +22,23 @@ import {
   Default,
   FS,
   generateObject,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
+  type ReadonlyCell,
+  resultOf,
   type Stream,
   UI,
   type VNode,
   Writable,
 } from "commonfabric";
 import {
-  answers,
   boardView,
+  type CardPin,
   clampBranch,
   type GenerationResult,
   IDEAS_SYSTEM,
@@ -44,12 +50,14 @@ import {
   pinsLostByBranch,
   pinsLostByRemovingLevel,
   type Spindle,
+  type SpindleView,
   storyMarkdown,
   suggestedLevel,
   SUMMARY_SYSTEM,
   type SummaryResult,
   type SynopsisIdeasResult,
   withBranch,
+  withCardPin,
   withExtraPrompt,
   withLastLevelRemoved,
   withPinned,
@@ -67,6 +75,36 @@ export type { Level, Spindle } from "./story-logic.ts";
 // `normalizeSchemaForProvider` does not add it), so with no model named every
 // request failed with HTTP 400.
 const MODEL = "anthropic:claude-haiku-4-5" as const;
+
+type RequestCard = SpindleView & { summaries: ReadonlyCell<string>[] };
+
+/** Each map child owns one request. Reordering cards keeps the child; a
+ * different prompt gets a new one, even when its path stays the same. */
+function requestBoard(
+  levels: readonly Level[],
+  synopsis: string,
+  spindles: readonly Spindle[],
+) {
+  return boardView(levels, synopsis, spindles).map((level) => ({
+    ...level,
+    spindles: level.spindles.map((spindle) =>
+      Writable.for<RequestCard>({
+        card: spindle.path,
+        prompt: spindle.activePrompt,
+      }).set({
+        ...spindle,
+        summaries: spindle.summaryPrompt
+          ? [
+            Writable.for<string>({
+              summary: spindle.path,
+              prompt: spindle.summaryPrompt,
+            }).set(spindle.summaryPrompt),
+          ]
+          : [],
+      })
+    ),
+  }));
+}
 
 const DEFAULT_LEVELS = [
   {
@@ -362,10 +400,10 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
     const newLevelPrompt = new Writable.perSession<string>("");
 
     const board = computed(() =>
-      boardView(levels.get(), synopsis.get(), spindles.get())
+      requestBoard(levels.get(), synopsis.get(), spindles.get())
     );
     const boardPathList = computed(() =>
-      board.map((level) => level.spindles.map((s) => s.path))
+      board.map((level) => level.spindles.map((s) => s.key("path").get()))
     );
 
     const started = computed(() => synopsis.get().trim() !== "");
@@ -397,7 +435,20 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
       model: MODEL,
       prompt: computed(() => ideasPrompt(ideasAttempt.get())),
     });
-    const ideaList = computed(() => ideas.result?.ideas ?? []);
+    const ideaView = computed(() => {
+      const empty: SynopsisIdeasResult["ideas"] = [];
+      if (isPending(ideas) || isSyncing(ideas)) {
+        return { pending: true, error: "", list: empty };
+      }
+      if (hasError(ideas) || isObsolete(ideas)) {
+        return {
+          pending: false,
+          error: ideas.message || "Story ideas are unavailable.",
+          list: empty,
+        };
+      }
+      return { pending: false, error: "", list: resultOf(ideas).ideas };
+    });
     const inspire = action(() => {
       ideasAttempt.set(ideasAttempt.get() + 1);
       ideasOpen.set(true);
@@ -427,6 +478,15 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
     const respin = action((event: { path: string }) =>
       spindles.set(withRespin(spindles.get(), event.path))
     );
+    const pinAnswer = action((event: CardPin) => {
+      const next = withCardPin(
+        levels.get(),
+        synopsis.get(),
+        spindles.get(),
+        event,
+      );
+      if (next) spindles.set(next);
+    });
     const generate = action((event: { path: string }) =>
       spindles.set(withRequested(spindles.get(), event.path))
     );
@@ -618,20 +678,20 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
               <div style={{ fontWeight: "600", color: "#8b5cf6" }}>
                 ✨ Story ideas
               </div>
-              {ideas.pending
+              {ideaView.pending
                 ? (
                   <div style={styles.row}>
                     <cf-loader size="sm" showElapsed /> Generating ideas...
                   </div>
                 )
-                : ideas.error
+                : ideaView.error
                 ? (
                   <div style={styles.hint}>
-                    Couldn't get ideas: {ideas.error}
+                    Couldn't get ideas: {ideaView.error}
                   </div>
                 )
                 : null}
-              {ideaList.map((idea) => (
+              {ideaView.list.map((idea) => (
                 <button
                   type="button"
                   onClick={() => chooseIdea.send({ synopsis: idea.synopsis })}
@@ -770,7 +830,8 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
           )
           : null}
 
-        {level.spindles.map((spindle) => {
+        {level.spindles.map((card) => {
+          const spindle = computed(() => card.get());
           const generation = generateObject<GenerationResult>({
             system: OPTIONS_SYSTEM,
             model: MODEL,
@@ -778,43 +839,33 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
             maxTokens: 12000,
             prompt: spindle.activePrompt,
           });
-          const summary = generateObject<SummaryResult>({
-            system: SUMMARY_SYSTEM,
-            model: MODEL,
-            prompt: spindle.summaryPrompt,
+          const answer = computed(() => {
+            const empty: GenerationResult["options"] = [];
+            if (isPending(generation) || isSyncing(generation)) {
+              return { waiting: true, failed: "", options: empty };
+            }
+            if (hasError(generation) || isObsolete(generation)) {
+              return {
+                waiting: false,
+                failed: generation.message || "Story options are unavailable.",
+                options: empty,
+              };
+            }
+            return {
+              waiting: false,
+              failed: "",
+              options: resultOf(generation).options,
+            };
           });
-          // The cards follow list position, not path: pinning or unpinning an
-          // earlier parent shifts every later spindle to another card, and the
-          // card's request (and its result) catches up a moment after its new
-          // path and label do. Until it has, the result on hand answers some
-          // other spindle's prompt, and a Pin click would file that spindle's
-          // text under this path. A result counts only when the request it
-          // answers is this spindle's prompt.
-          const answered = computed(() =>
-            answers(generation.messages, spindle.activePrompt)
-          );
-          const waiting = computed(() =>
-            generation.pending || (!generation.error && !answered)
-          );
-          const failed = computed(() =>
-            answered && !generation.pending ? generation.error ?? "" : ""
-          );
-          const summaryText = computed(() =>
-            answers(summary.messages, spindle.summaryPrompt) &&
-              !summary.pending
-              ? summary.result?.summary ?? ""
-              : ""
-          );
           const options = computed(() =>
-            (answered ? generation.result?.options ?? [] : [])
-              .map((o, index) => ({
-                index,
-                text: o?.content ?? "",
-                pinned: spindle.pinned === index &&
-                  spindle.pinnedText === o?.content,
-                dimmed: spindle.pinnedText !== "" &&
-                  spindle.pinnedText !== o?.content,
-              }))
+            answer.options.map((o, index) => ({
+              index,
+              text: o?.content ?? "",
+              pinned: spindle.pinned === index &&
+                spindle.pinnedText === o?.content,
+              dimmed: spindle.pinnedText !== "" &&
+                spindle.pinnedText !== o?.content,
+            }))
               .filter((o) => o.text !== "")
           );
           // The pin is not among the options on show: they wait for a click,
@@ -926,17 +977,17 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                       </button>
                     </div>
                   )
-                  : waiting
+                  : answer.waiting
                   ? (
                     <div style={styles.centered}>
                       <cf-loader size="lg" showElapsed />
                       <div>Generating options...</div>
                     </div>
                   )
-                  : failed
+                  : answer.failed
                   ? (
                     <div style={styles.warning}>
-                      Couldn't generate options: {failed}
+                      Couldn't generate options: {answer.failed}
                     </div>
                   )
                   : (
@@ -952,8 +1003,10 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                             <button
                               type="button"
                               onClick={() =>
-                                pin.send({
+                                pinAnswer.send({
                                   path: spindle.path,
+                                  prompt: spindle.activePrompt,
+                                  unpin: option.pinned,
                                   option: option.index,
                                   text: option.text,
                                 })}
@@ -985,8 +1038,10 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                         <button
                           type="button"
                           onClick={() =>
-                            pin.send({
+                            pinAnswer.send({
                               path: spindle.path,
+                              prompt: spindle.activePrompt,
+                              unpin: true,
                               option: spindle.pinned,
                               text: spindle.pinnedText,
                             })}
@@ -1000,15 +1055,27 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                   )
                   : null}
 
-                {spindle.pinnedText
-                  ? (
+                {spindle.summaries.map((request) => {
+                  const summary = generateObject<SummaryResult>({
+                    system: SUMMARY_SYSTEM,
+                    model: MODEL,
+                    prompt: computed(() => request.get()),
+                  });
+                  const text = computed(() => {
+                    if (isPending(summary) || isSyncing(summary)) {
+                      return " Summarizing...";
+                    }
+                    if (
+                      hasError(summary) || isObsolete(summary)
+                    ) return summary.message || "Summary unavailable.";
+                    return resultOf(summary).summary;
+                  });
+                  return (
                     <div style={styles.summary}>
-                      <strong>Summary:</strong>
-                      {summaryText ||
-                        (summary.error ? "" : " Summarizing...")}
+                      <strong>Summary:</strong> {text}
                     </div>
-                  )
-                  : null}
+                  );
+                })}
 
                 <details>
                   <summary style={{ fontSize: "12px", color: MUTED }}>

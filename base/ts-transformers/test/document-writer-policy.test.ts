@@ -13,7 +13,7 @@ import type { TransformationDiagnostic } from "../src/mod.ts";
 import { transformFiles, transformSource } from "./utils.ts";
 
 const PRELUDE = `/// <cts-enable />
-import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy, cell, computed, handler, pattern, schema as schemaOf, toSchema, wish } from "commonfabric";
+import { Cfc, CurrentPrincipal, Default, RepresentsCurrentUser, UI, Writable, WriteAuthorizedBy, cell, computed, handler, pattern, resultOf, schema as schemaOf, toSchema, wish } from "commonfabric";
 type Schema = ReturnType<typeof toSchema>;
 const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
 type Owned<T, B> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, B>, { ownerPrincipal: CurrentPrincipal }>>;
@@ -1282,7 +1282,8 @@ export default pattern<{ initial: string }>(({ initial }) => {
         `type ProfileOut = { bio: Owned<string, typeof setName> };
 export default pattern<{}>(() => {
   const profileWish = wish<ProfileOut>({ query: "#profile" });
-  const bio = computed(() => profileWish.result!.bio);
+  const profile = resultOf(profileWish.result);
+  const bio = computed(() => profile.bio);
   return { bio };
 });`,
       );
@@ -1290,16 +1291,25 @@ export default pattern<{}>(() => {
       expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
       const [input, output] = callSchemas(result.root, "lift");
       expect(holdsPrincipalClaims(output)).toBe(false);
-      // The input reaches `ProfileOut`'s declaration, which names the writer.
+      expect(output).toEqual({ type: "string" });
+      // The capture reads the policy from the wished document.
       expect(input).toMatchObject({
-        $defs: {
-          ProfileOut: {
+        properties: {
+          profileWish: {
             properties: {
-              bio: {
-                ifc: {
-                  ownerPrincipal: { __ctCurrentPrincipal: true },
-                  writeAuthorizedBy: {
-                    __ctWriterIdentityOf: { path: ["setName"] },
+              result: {
+                properties: {
+                  bio: {
+                    ifc: {
+                      addIntegrity: [{
+                        kind: "represents-principal",
+                        subject: { __ctCurrentPrincipal: true },
+                      }],
+                      ownerPrincipal: { __ctCurrentPrincipal: true },
+                      writeAuthorizedBy: {
+                        __ctWriterIdentityOf: { path: ["setName"] },
+                      },
+                    },
                   },
                 },
               },
@@ -1341,10 +1351,11 @@ export default pattern<{ value: Owned<string, typeof setName> }>(({ value }) => 
 interface Found { box: Box<${POLICY}>; list: Box<${POLICY}>[] }
 export default pattern<{}>(() => {
   const found = wish<Found>({ query: "#found" });
-  const value = computed(() => found.result?.box.value);
+  const usable = resultOf(found.result);
+  const value = computed(() => usable.box.value);
   return {
     value,
-    [UI]: <div>{found.result?.list.map((item) => <span>{item.value}</span>)}</div>,
+    [UI]: <div>{usable.list.map((item) => <span>{item.value}</span>)}</div>,
   };
 });`);
 

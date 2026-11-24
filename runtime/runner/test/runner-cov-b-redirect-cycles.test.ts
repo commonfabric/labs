@@ -200,6 +200,7 @@ describe("runner redirect cycles", () => {
     );
     await runtime.idle();
 
+    expect(received).toEqual([{ n: 1 }]);
     expect(loggedWith("Unable to resolve scheduler read redirect"))
       .toBeGreaterThan(0);
   });

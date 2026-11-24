@@ -16,6 +16,7 @@ import type {
 } from "@commonfabric/memory/v2";
 
 import { sqliteDatabase } from "../../src/builtins/sqlite-builtins.ts";
+import { sqliteQueryStateNodeFactory } from "../../src/builtins/sqlite/query-node.ts";
 import { SQLITE_ROW_SALT } from "../../src/builtins/sqlite/row-identity.ts";
 import { type Cell, hostValueOf } from "../../src/cell.ts";
 import { Runtime, type RuntimeOptions } from "../../src/runtime.ts";
@@ -168,7 +169,7 @@ describe({
     ): Promise<QueryState> => {
       const { commonfabric: cf } = createTrustedBuilder(runtime);
       const p = cf.pattern(() =>
-        cf.sqliteQuery.asScope("session")(
+        sqliteQueryStateNodeFactory.asScope("session")(
           // deno-lint-ignore no-explicit-any
           { db, reactOn: db, ...inputs } as any,
         )
@@ -362,7 +363,7 @@ describe({
       inputs.set({ sql: "SELECT id FROM notes" });
       const p = cf.pattern<{ sql: string }>(({ sql }) =>
         // deno-lint-ignore no-explicit-any
-        cf.sqliteQuery({ db, sql, reactOn: db } as any)
+        sqliteQueryStateNodeFactory({ db, sql, reactOn: db } as any)
       );
       const result = runtime.run(
         tx,

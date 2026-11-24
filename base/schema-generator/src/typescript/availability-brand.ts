@@ -1,0 +1,43 @@
+/** Nominal recognition of Common Fabric availability types during schema generation. */
+
+import ts from "typescript";
+import { isCommonFabricSymbol } from "./common-fabric-symbols.ts";
+
+const AVAILABILITY_TYPE_NAMES: ReadonlySet<string> = new Set([
+  "FabricUnavailable",
+  "FabricUnavailableBase",
+  "IsPending",
+  "IsSyncing",
+  "IsObsolete",
+  "HasError",
+  "HasSchemaMismatch",
+]);
+
+/** Recognizes the canonical unavailable primitive and its narrowed aliases. */
+export function isCommonFabricAvailabilityType(
+  type: ts.Type,
+  typeNode: ts.TypeNode | undefined,
+): boolean {
+  if (
+    typeNode && ts.isTypeReferenceNode(typeNode) &&
+    isSyntheticAvailabilityTypeReference(typeNode)
+  ) return true;
+  if (
+    [type.aliasSymbol, type.getSymbol()].some((symbol) =>
+      symbol !== undefined && AVAILABILITY_TYPE_NAMES.has(symbol.getName()) &&
+      isCommonFabricSymbol(symbol)
+    )
+  ) return true;
+  return type.isIntersection() &&
+    type.types.some((part) => isCommonFabricAvailabilityType(part, undefined));
+}
+
+/** Recognizes an availability type reference emitted by the transformer. */
+export function isSyntheticAvailabilityTypeReference(
+  node: ts.TypeReferenceNode,
+): boolean {
+  return ts.isQualifiedName(node.typeName) &&
+    ts.isIdentifier(node.typeName.left) &&
+    node.typeName.left.text === "__cfHelpers" &&
+    AVAILABILITY_TYPE_NAMES.has(node.typeName.right.text);
+}

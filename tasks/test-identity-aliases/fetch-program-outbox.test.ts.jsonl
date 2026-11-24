@@ -1,0 +1,2 @@
+{"date":"2026-10-06","from":{"k":"unit","s":"runner","n":"fetch-program outbox mechanism > publishes schema mismatch for a locally invalid URL"},"to":{"k":"unit","s":"runner","n":"fetch-program outbox mechanism > publishes invalid input for a locally absent URL"}}
+{"date":"2026-10-06","from":{"k":"unit","s":"runner","n":"fetch-program outbox mechanism > settles an absent cross-space program URL as schema mismatch"},"to":{"k":"unit","s":"runner","n":"fetch-program outbox mechanism > settles an absent cross-space program URL as invalid input"}}

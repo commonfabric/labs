@@ -10,6 +10,7 @@ import {
   isWalkableObjectNotArray,
   toIndentedDebugString,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import {
@@ -130,6 +131,7 @@ import {
   linkResolutionProbe,
   reactivityLogFromActivities,
 } from "./storage/reactivity-log.ts";
+import { readAvailabilityValue } from "./storage/read-availability.ts";
 import { resolve } from "./storage/transaction/attestation.ts";
 import {
   recordTraverseInvocation,
@@ -496,13 +498,13 @@ function isPlainTypeSchema(schema: JSONSchemaObj, type: string): boolean {
 }
 
 /**
- * Whether `value` satisfies a plain-schema plan's primitive `type`: the type
- * `value` has, or `"number"` for a `bigint`, which is an integer and so a
- * number under schemaTypeMatchesValueType's subtype rule.
+ * Whether a plain-schema plan keeps `value` at a position of primitive
+ * `type`. An unavailable value stands in for a payload of any type.
  */
 function matchesPlainType(value: unknown, type: PlainPrimitiveType): boolean {
   const valueType = getPlainJsonType(value);
-  return valueType === type || (type === "number" && valueType === "integer");
+  return valueType === type || (type === "number" && valueType === "integer") ||
+    isUnavailable(value);
 }
 
 /**
@@ -742,6 +744,7 @@ function preparedBranchAdmits(
   actualType: JSONSchemaTypes | null,
   valueIsRecord: boolean,
 ): boolean {
+  if (isUnavailable(value)) return true;
   const { types, required } = branch;
   if (
     types !== undefined && actualType !== null &&
@@ -3277,6 +3280,16 @@ function resolvePath(
 
   try {
     while (true) {
+      if (!context.referenceOnly && isUnavailable(curDoc.value)) {
+        tx.read(curDoc.address, READ_FOR_SCHEDULING);
+        return [{
+          ...curDoc,
+          address: {
+            ...curDoc.address,
+            path: ["value", ...curDoc.address.path.slice(1), ...remaining],
+          },
+        }, selector];
+      }
       if (!followLink && isSigilLink(curDoc.value)) {
         // We've only done a nonRecursive read on curDoc, so promote that
         tx.read(curDoc.address, READ_FOR_SCHEDULING);
@@ -3748,18 +3761,15 @@ function followPointerOnce(
   // for scheduling. We'll have to tag it later.
   // We use a nonRecursive read, since we may not need everything at the target.
   if (readStatsActive) recordLinkResolution(tx);
-  const { ok: valueEntry, error } = tx.read(
-    target,
-    context.referenceOnly
-      ? {
-        ...READ_NON_RECURSIVE,
-        meta: Object.freeze({
-          ...READ_NON_RECURSIVE.meta,
-          ...linkResolutionProbe,
-        }),
-      }
-      : READ_NON_RECURSIVE,
-  );
+  const { ok: valueEntry, error } = context.referenceOnly
+    ? tx.read(target, {
+      ...READ_NON_RECURSIVE,
+      meta: Object.freeze({
+        ...READ_NON_RECURSIVE.meta,
+        ...linkResolutionProbe,
+      }),
+    })
+    : readAvailabilityValue(tx, target, READ_NON_RECURSIVE);
 
   if (error !== undefined) {
     // If we had an unexpected error, or didn't find the doc at all, return.
@@ -5989,7 +5999,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
       );
       return { ok: this.objectCreator.createObject(newLink, doc.value) };
     }
-    if (doc.value === undefined) {
+    if (isUnavailable(doc.value)) {
+      // Availability markers are control-flow leaves, not user containers.
+      // They must survive projection through any declared result schema so
+      // consumers can propagate or inspect the exact unavailable reason.
+      return { ok: doc.value };
+    } else if (doc.value === undefined) {
       // If we have a default, annotate it and return it
       // Otherwise, return undefined
       const defaultValue = this.#applyDefault(doc, resolved);
@@ -6477,6 +6492,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
       if (matches.length === 1) {
         return { ok: matches[0] };
       }
+      // A marker stands in for the payload, so the matches say nothing about
+      // how many options the payload satisfies.
+      const unavailable = matches.find(isUnavailable);
+      if (unavailable !== undefined) return { ok: unavailable };
       logger.info(
         "traverse",
         () => [
@@ -6604,6 +6623,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         ? { ok: doc.value }
         : fail(TRAVERSE_FAILURES.invalidType);
     }
+    if (isUnavailable(doc.value)) return { ok: doc.value };
 
     if (plan.kind === "array") {
       const itemPlan = plan.items;
@@ -8094,6 +8114,7 @@ export function canBranchMatch(
     if (typeof resolved === "boolean") return resolved;
     else if (resolved === undefined) return true; // we'll properly complain later
   }
+  if (isUnavailable(value)) return true;
 
   // Type mismatch check — only safe for non-link primitive values and
   // plain record objects / arrays

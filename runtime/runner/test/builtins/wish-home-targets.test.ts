@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { WishParams } from "@commonfabric/api";
+import { hasError, isPending } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -12,6 +13,15 @@ const userIdentity = await Identity.fromPassphrase("wish home targets user");
 const patternSpace = await Identity.fromPassphrase("wish home targets space");
 
 type WishState = { result?: unknown; error?: string; errorCode?: string };
+
+/** Requires the native failure to carry the same diagnostic as the Wish state. */
+function expectNativeError(value: unknown, message: string): void {
+  expect(hasError(value)).toBe(true);
+  if (hasError(value)) {
+    expect(value.errorKind).toBe("general");
+    expect(value.rawMessage).toBe(message);
+  }
+}
 
 describe("wish-home-targets", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -72,6 +82,51 @@ describe("wish-home-targets", () => {
     return result.key("result").get();
   }
 
+  it("refreshes an absent journal when it is written without advancing time", async () => {
+    await seedHome({});
+    const setup = runtime.edit();
+    const consumer = pattern(() => ({
+      found: wish({ query: "#journal" }, {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { narrative: { type: "string" } },
+          required: ["narrative"],
+        },
+      }),
+    }));
+    const result = runtime.run(
+      setup,
+      consumer,
+      {},
+      runtime.getCell(
+        patternSpace.did(),
+        "journal freshness",
+        undefined,
+        setup,
+      ),
+    );
+    expect((await setup.commit().settled).error).toBeUndefined();
+    const outcome = result.key("found").key("result");
+    const cancel = outcome.sink(() => {});
+    try {
+      await result.pull();
+      await runtime.settled();
+      expect(isPending(outcome.get())).toBe(true);
+
+      const before = Date.now();
+      const write = runtime.edit();
+      runtime.getHomeSpaceCell(write).key("defaultPattern").key("journal")
+        .set([{ narrative: "Arrived" }]);
+      expect((await write.commit().settled).error).toBeUndefined();
+      await runtime.settled();
+      expect(Date.now()).toBe(before);
+      expect(outcome.key(0).key("narrative").get()).toBe("Arrived");
+    } finally {
+      cancel();
+    }
+  });
+
   describe("without a requesting identity", () => {
     // A serving runtime whose run carries no demanding principal has no Home
     // to read, and says so rather than reading the service's own. Each case
@@ -93,7 +148,10 @@ describe("wish-home-targets", () => {
         expect(resolved?.error).toBe(
           `User identity DID not available for ${query}`,
         );
-        expect(resolved?.result).toBeUndefined();
+        expectNativeError(
+          resolved?.result,
+          `User identity DID not available for ${query}`,
+        );
       });
     }
 
@@ -116,7 +174,10 @@ describe("wish-home-targets", () => {
         'User identity DID not available to search favorites for "#tagged"',
       );
       expect(resolved?.errorCode).toBe("failed");
-      expect(resolved?.result).toBeUndefined();
+      expectNativeError(
+        resolved?.result,
+        'User identity DID not available to search favorites for "#tagged"',
+      );
     });
   });
 

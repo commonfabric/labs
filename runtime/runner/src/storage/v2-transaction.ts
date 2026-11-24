@@ -121,6 +121,7 @@ import {
   isDurableReadTx,
   isInternalVerifierRead,
   isMutableTransactionReadAllowed,
+  isReadIgnoredForCommit,
   isReadIgnoredForScheduling,
   isReadMarkedAsAttemptedWrite,
   isServedDerivationTx,
@@ -2343,15 +2344,13 @@ export class V2StorageTransaction implements IStorageTransaction {
       ? currentDocument(doc)
       : documentAtEpoch(doc, this.#readEpoch);
     const readMeta = options?.meta ?? EMPTY_META;
-    // In a UI-input blind-leaf-write tx (a scalar `$value` overwrite), every read
-    // is recorded for CFC/scheduling but carries no value-equality commit
-    // precondition: tag each activity with `ignoreReadForCommit` (so buildReads
-    // downgrades it to a nonRecursive entity-root existence read instead of a
-    // leaf-value precondition) and skip marking the doc `validated` (so the client
-    // validate()/claim() pass skips it too). The mode is scoped to the user
-    // `set()` call only — CFC boundary-commit reads run after the tx is unmarked
-    // and keep their preconditions.
-    const skipCommitPrecondition = isUiInputBlindWriteTx(this);
+    // A read can explicitly opt out of value-equality commit validation. The
+    // UI-input blind-leaf-write mode applies that opt-out to every read issued
+    // while a scalar `$value` overwrite is being built. Either route keeps the
+    // read recorded for CFC/scheduling, tags it for buildReads to omit, and
+    // skips marking the doc `validated` so validate()/claim() omits it too.
+    const skipCommitPrecondition = isUiInputBlindWriteTx(this) ||
+      isReadIgnoredForCommit(readMeta);
 
     if (!inline) {
       const space = address.space;
@@ -2445,8 +2444,9 @@ export class V2StorageTransaction implements IStorageTransaction {
     // CFC prepare's own reads. In-window reads keep the transaction's
     // ordinary view (they are machinery reads the commit set drops via
     // `ignoreReadForCommit`), value-consuming reads keep their overlay
-    // view and the ruled §6 refusal, and every other transaction is
-    // byte-identical to before. CFC prepare consults the transaction's
+    // view and the ruled §6 refusal. An internal-verifier read explicitly
+    // marked `ignoreReadForCommit` also keeps the ordinary transaction view,
+    // even outside a blind-write transaction. CFC prepare consults the transaction's
     // own writes through its write set (`writeValueForTarget`) before
     // falling back to this read, so serving replica state here loses
     // nothing the verifier needs. Served fresh and cache-bypassed: the
@@ -2646,7 +2646,8 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (readStatsActive) recordDocumentRead(this, doc);
 
     const readMeta = options?.meta ?? EMPTY_META;
-    const skipCommitPrecondition = isUiInputBlindWriteTx(this);
+    const skipCommitPrecondition = isUiInputBlindWriteTx(this) ||
+      isReadIgnoredForCommit(readMeta);
     const activityMeta = skipCommitPrecondition
       ? Object.freeze({ ...readMeta, ...ignoreReadForCommit })
       : readMeta;

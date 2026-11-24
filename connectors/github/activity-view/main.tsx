@@ -3,9 +3,13 @@ import {
   Default,
   fetchJson,
   generateText,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   type OpaqueCell,
   pattern,
+  resultOf,
   UI,
   type VNode,
   Writable,
@@ -198,10 +202,11 @@ function shortOid(value: string | null): string {
 export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   const activeTab = new Writable.perSession<SyncedTab>("pull-requests");
 
+  const hasIndex = computed(() => state.pullRequestIndex !== undefined);
   const parsed = computed(() => parseUrl(state.repoUrl.get()));
   const fallbackApiUrl = computed(() => {
     // Empty URL and prompt inputs keep both network-backed built-ins idle.
-    if (state.pullRequestIndex !== undefined) return "";
+    if (hasIndex) return "";
     const { owner, repo } = parsed;
     if (owner && repo) {
       return `https://api.github.com/repos/${owner}/${repo}/commits`;
@@ -209,14 +214,12 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
     return "";
   });
 
-  // The result is absent while the URL is empty or the request is pending,
-  // and typing it as optional lets the computations below run meanwhile.
   const commitsData = fetchJson<CommitResponse | undefined>({
     url: fallbackApiUrl,
   });
-  const commits = commitsData.result;
   const fallbackPrompt = computed(() => {
-    const commitList = commits ?? [];
+    if (!fallbackApiUrl || hasError(commitsData)) return "";
+    const commitList = resultOf(commitsData) ?? [];
     if (commitList.length === 0) return "";
     const messages = commitList
       .slice(0, 10)
@@ -289,8 +292,8 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   );
   const recentPullRequests = computed(() => indexedPullRequests.slice(0, 12));
   const pieceName = computed(() =>
-    state.pullRequestIndex
-      ? `GitHub pull requests: ${state.pullRequestIndex.viewer}`
+    hasIndex
+      ? `GitHub pull requests: ${state.pullRequestIndex?.viewer}`
       : `GitHub Activity: ${repoName}`
   );
 
@@ -646,24 +649,46 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
                 />
               </div>
 
-              {summary.pending
-                ? (
-                  <div style="margin-bottom: 16px;">
-                    <cf-loader showElapsed /> Generating summary...
-                  </div>
-                )
-                : summary.result
-                ? (
-                  <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
-                    <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
-                      Activity Summary
-                    </h3>
-                    <p style="margin: 0; line-height: 1.5;">{summary.result}</p>
-                  </div>
-                )
-                : null}
+              {computed(() => {
+                if (!fallbackPrompt) return null;
+                if (hasError(summary)) {
+                  return (
+                    <p role="alert">
+                      Could not summarize commits: {summary.message}
+                    </p>
+                  );
+                }
+                if (isPending(summary) || isSyncing(summary)) {
+                  return (
+                    <div style="margin-bottom: 16px;">
+                      <cf-loader showElapsed /> Generating summary...
+                    </div>
+                  );
+                }
+                const text = resultOf(summary);
+                return text
+                  ? (
+                    <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
+                      <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
+                        Activity Summary
+                      </h3>
+                      <p style="margin: 0; line-height: 1.5;">{text}</p>
+                    </div>
+                  )
+                  : null;
+              })}
 
-              {computed(() => renderGithubCommits(commits))}
+              {computed(() => {
+                if (!fallbackApiUrl) return renderGithubCommits(undefined);
+                if (hasError(commitsData)) {
+                  return (
+                    <p role="alert">
+                      Could not load commits: {commitsData.message}
+                    </p>
+                  );
+                }
+                return renderGithubCommits(resultOf(commitsData));
+              })}
             </div>
           )}
       </>

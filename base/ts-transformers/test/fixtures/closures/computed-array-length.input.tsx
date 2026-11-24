@@ -8,7 +8,7 @@
  * value it receives. The array itself reaches only the `.map()`.
  */
 
-import { computed, NAME, pattern, UI, wish } from "commonfabric";
+import { computed, NAME, pattern, resultOf, UI, wish } from "commonfabric";
 
 interface Piece {
   id: string;
@@ -22,7 +22,8 @@ interface Piece {
 // Context: the capture is the `length` member, so the lift's input schema is
 //   an object holding `length`, not the array the member is read from.
 export default pattern(() => {
-  const { pieceRegistry } = wish<{ pieceRegistry: Piece[] }>({ query: "/" }).result!;
+  const piecesWish = wish<{ pieceRegistry: Piece[] }>({ query: "/" });
+  const { pieceRegistry } = resultOf(piecesWish.result);
 
   return {
     [NAME]: computed(() => `Pieces (${pieceRegistry.length})`),

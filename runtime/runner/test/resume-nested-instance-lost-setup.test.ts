@@ -31,14 +31,15 @@ const PROGRAM: RuntimeProgram = {
     {
       name: "/main.tsx",
       contents: [
-        "import { computed, fetchText, pattern } from 'commonfabric';",
+        "import { byRef, computed, type FetchState, pattern } from 'commonfabric';",
         "",
         "type Named = { name: string };",
         "type Item = { ref: Named };",
-        "type Fetched = { pending: boolean; result?: string; error?: unknown };",
+        "type Fetched = FetchState<string>;",
         "type Art = { state: string; fetched: Fetched };",
         "",
         "export const art = pattern<{ prompt: string }, Art>(({ prompt }) => {",
+        "  const fetchText = byRef<{ url: string }, Fetched>('fetchText');",
         "  const url = computed(() => (prompt.length > 0 ? '' : ''));",
         "  const fetched = fetchText({ url });",
         "  const state = computed(() => fetched.pending ? 'pending' : 'idle');",

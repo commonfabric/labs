@@ -16,6 +16,7 @@ import {
   resetMockMode,
 } from "@commonfabric/llm";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import type { AsyncResult } from "commonfabric";
 
 import type { Cell } from "../src/cell.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
@@ -39,19 +40,8 @@ const space = spaceSigner.did() as MemorySpace;
 const ownerSpace = owner.did() as MemorySpace;
 const url = "https://example.test/served-watching";
 
-/** An effect node's public state. */
-type NodeView = { pending?: boolean; result?: unknown; error?: unknown };
-
-/** The node's fields, read out of a view while its transaction is open. */
-function snapshot(view: NodeView | undefined): NodeView | undefined {
-  if (view === undefined) return undefined;
-  const { pending, result, error } = view;
-  return {
-    ...(pending !== undefined ? { pending } : {}),
-    ...(result !== undefined ? { result } : {}),
-    ...(error !== undefined ? { error } : {}),
-  };
-}
+/** An effect node's direct public outcome. */
+type NodeView = AsyncResult<string>;
 
 /** A served builtin the cases run, and the inputs it is given. */
 type Builtin = {
@@ -254,10 +244,10 @@ export default pattern<{ url: Writable<string> }, { fetched: any }>(
       result.key("fetched").getAsNormalizedFullLink(),
     );
     await fresh.sync();
-    await fresh.key("result").resolveAsCell().sync();
+    await fresh.resolveAsCell().sync();
     return {
-      watching: snapshot(result.key("fetched").get()),
-      fresh: snapshot(fresh.get()),
+      watching: result.key("fetched").get(),
+      fresh: fresh.get(),
       standing: client.speculationOverlay?.entryCount(space) ?? 0,
     };
   } finally {
@@ -286,7 +276,7 @@ async function awaitServedResult(
 ): Promise<void> {
   const replica = client.storageManager.open(space).replica;
   await awaitReplica(client.storageManager, () => {
-    const link = node.key("result").resolveAsCell().getAsNormalizedFullLink();
+    const link = node.resolveAsCell().getAsNormalizedFullLink();
     let stored: unknown = Engine.read(engine, {
       id: link.id as never,
       scope: "space",
@@ -308,21 +298,20 @@ describe("served-effect-watching-client", () => {
   for (const builtin of [fetchTextBuiltin, generateTextBuiltin]) {
     describe(`${builtin.name}`, () => {
       const last = builtin.inputs.at(-1)!;
-      const served = { pending: false, result: builtin.answer(last) };
+      const served = builtin.answer(last);
 
       for (const first of ["plain", "refused"] as const) {
         it(`shows a watching client the served result after the node's input changes from a ${first} one`, async () => {
           const { watching, fresh } = await runWatched(builtin, first);
 
-          expect(fresh).toMatchObject(served);
-          expect(watching).toMatchObject(served);
-          expect(watching?.error).toBeUndefined();
+          expect(fresh).toBe(served);
+          expect(watching).toBe(served);
         });
 
         it(`leaves none of a watching client's speculations standing once the input that follows a ${first} one is served`, async () => {
           const { fresh, standing } = await runWatched(builtin, first);
 
-          expect(fresh).toMatchObject(served);
+          expect(fresh).toBe(served);
           expect(standing).toBe(0);
         });
       }

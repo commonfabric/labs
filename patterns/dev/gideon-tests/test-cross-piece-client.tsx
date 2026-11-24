@@ -25,8 +25,10 @@ import {
   computed,
   Default,
   handler,
+  hasError,
   NAME,
   pattern,
+  resultOf,
   Stream,
   toIndentedDebugString,
   UI,
@@ -97,7 +99,9 @@ export default pattern<Input, Output>(
     });
 
     // Access the result from the wish (WishState has a result property)
-    const serverPiece = wishResult.result;
+    const serverPiece = computed(() =>
+      hasError(wishResult.result) ? undefined : resultOf(wishResult.result)
+    );
 
     return {
       [NAME]: "Cross-Piece Test Client",
@@ -167,7 +171,7 @@ export default pattern<Input, Output>(
                       marginTop: "8px",
                     }}
                   >
-                    <cf-render $cell={wishResult.result} />
+                    <cf-render $cell={serverPiece} />
                   </div>
                 </div>
               )

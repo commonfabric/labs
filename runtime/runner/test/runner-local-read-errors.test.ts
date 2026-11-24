@@ -44,7 +44,9 @@ describe("runner-local-read-errors", () => {
         await runtime.editWithRetry((tx) => input.withTx(tx).set(41));
         const bodyError = new Error("body failed");
         let failBody = false;
+        let bodyEntered = false;
         const compute = (argument: { value: number }) => {
+          bodyEntered = true;
           if (failBody) throw bodyError;
           try {
             return argument.value + 1;
@@ -92,6 +94,7 @@ describe("runner-local-read-errors", () => {
           (action) => "module" in action,
         ) as Action;
         expect(action).toBeDefined();
+        bodyEntered = false;
         failBody = failure === "body" || failure === "output";
         const unavailableId = failure === "output"
           ? output.getAsNormalizedFullLink().id
@@ -99,7 +102,12 @@ describe("runner-local-read-errors", () => {
         const tx = runtime.edit();
         restrictToLocalReads(
           tx.tx,
-          () => (address) => failure === "body" || address.id !== unavailableId,
+          () => (address) =>
+            failure === "body" ||
+            // The replacement case must reach the body before its input read
+            // is refused; otherwise preflight, not the catch, ends the action.
+            failure === "replaced-input" && !bodyEntered ||
+            address.id !== unavailableId,
         );
         using errors = stub(console, "error");
         try {

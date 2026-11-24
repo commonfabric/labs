@@ -2,6 +2,7 @@ import {
   action,
   assert,
   pattern,
+  resultOf,
   type Stream,
   TESTS,
   wish,
@@ -13,17 +14,22 @@ interface RegisteredPiece {
 }
 
 export default pattern(() => {
-  const pieceRegistry = wish<Writable<RegisteredPiece[]>>({
+  const pieceRegistryRequest = wish<Writable<RegisteredPiece[]>>({
     query: "#pieceRegistry",
-  }).result!;
-  const addPiece = wish<Stream<{ piece?: Writable<RegisteredPiece> }>>({
+  });
+  const pieceRegistry = resultOf(pieceRegistryRequest.result);
+  const addPieceRequest = wish<
+    Stream<{ piece?: Writable<RegisteredPiece> }>
+  >({
     query: "#default",
     path: ["addPiece"],
-  }).result!;
-  const registrationCount = wish<Writable<number>>({
+  });
+  const addPiece = resultOf(addPieceRequest.result);
+  const registrationCountRequest = wish<Writable<number>>({
     query: "#default",
     path: ["testPieceRegistrationCount"],
-  }).result!;
+  });
+  const registrationCount = resultOf(registrationCountRequest.result);
   const piece = new Writable<RegisteredPiece>({
     title: "Registered through addPiece",
   });

@@ -3,6 +3,7 @@ import {
   computed,
   NAME,
   pattern,
+  type ReadonlyCell,
   Stream,
   type UIRenderable,
   type VNode,
@@ -18,7 +19,8 @@ export interface RouteContext {
 
 interface Route {
   path: string;
-  pattern: UIRenderable;
+  /** The route's view identity, resolved only when this route is selected. */
+  pattern: ReadonlyCell<UIRenderable>;
 }
 
 interface RouterInput {

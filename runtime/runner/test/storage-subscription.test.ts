@@ -7,6 +7,7 @@ import type {
 } from "../src/storage/interface.ts";
 import {
   create,
+  observeStorageResets,
   StorageNotificationRelay,
 } from "../src/storage/subscription.ts";
 
@@ -27,6 +28,21 @@ function recorder(): IStorageNotification & { seen: StorageNotification[] } {
 }
 
 describe("StorageNotificationRelay", () => {
+  it("drops a canceled reset observer on a manager with only subscribe", () => {
+    const relay = new StorageNotificationRelay();
+    const seen: MemorySpace[] = [];
+    const cancel = observeStorageResets({
+      subscribe: (observer) => relay.subscribe(observer),
+    }, (space) => seen.push(space));
+
+    relay.next(reset());
+    assertEquals(seen, [SPACE]);
+    cancel();
+    relay.next(reset());
+    assertEquals(seen, [SPACE]);
+    assertEquals(relay.hasSubscribers(), false);
+  });
+
   it("broadcasts to every subscriber", () => {
     const relay = new StorageNotificationRelay();
     const a = recorder();

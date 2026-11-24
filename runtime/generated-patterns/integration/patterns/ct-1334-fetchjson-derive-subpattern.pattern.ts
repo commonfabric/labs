@@ -1,4 +1,11 @@
-import { computed, fetchJson, pattern } from "commonfabric";
+import {
+  computed,
+  fetchJson,
+  hasError,
+  isPending,
+  pattern,
+  resultOf,
+} from "commonfabric";
 
 // CT-1334: Sub-pattern combining fetchJson() with a computed() projection that
 // captures a pattern parameter in a template literal.
@@ -8,10 +15,11 @@ import { computed, fetchJson, pattern } from "commonfabric";
 // explicit input so the projection receives the resolved value.
 //
 // NOTE on the explicit fetchJson<T>: this test asserts the *materialized*
-// contact names, so `page.result` must carry a concrete schema. With no type
-// arg, the only inference site (`result?: T`) is absent, so TS
+// contact names, so `resultOf(page)` must carry a concrete schema. With no type
+// arg, there is no inference site, so TS
 // infers `T = unknown`; the transformer then emits the computed's input schema
-// for `page.result` as `{ type: "unknown" }`. A `{type:"unknown"}` field does
+// for the `resultOf(page)` capture as `{ type: "unknown" }`. A
+// `{type:"unknown"}` field does
 // not schema-materialize across the computed capture boundary at runtime
 // (runner traverse.ts returns it as `undefined`), so the body would read
 // `pageResult === undefined` and `pending` would stay `true` forever.
@@ -48,23 +56,18 @@ const FetchPage = pattern<
     options,
   });
 
-  const pageResultRef = page.result;
-  const pageErrorRef = page.error;
-  const pagePendingRef = page.pending;
+  const pageResultRef = resultOf(page);
+  const pageStateRef = page;
 
   return computed(() => {
-    const pageResult: any = pageResultRef;
-    const pageError: any = pageErrorRef;
-    const pagePending: boolean = pagePendingRef;
-    if (pagePending || !pageResult) {
+    const pageResult = pageResultRef;
+    if (isPending(pageStateRef)) {
       return { contacts: [] as string[], pending: true };
     }
-    if (pageError) {
+    if (hasError(pageStateRef)) {
       return { contacts: [] as string[], pending: false };
     }
-    const contacts = (pageResult.connections || []).map(
-      (c: any) => c.name as string,
-    );
+    const contacts = pageResult.connections.map((contact) => contact.name);
     return { contacts, pending: false };
   });
 });

@@ -13,9 +13,12 @@ import {
   type Cell,
   computed,
   handler,
+  hasError,
+  isObsolete,
   NAME,
   pattern,
   type PerSession,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -502,6 +505,12 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>((
     query: "#profile",
   });
   const profileNameWish = wish<string>({ query: "#profileName" });
+  const nameStatus = computed(() => {
+    const name = profileNameWish.result;
+    return hasError(name) || isObsolete(name)
+      ? name.message || "This profile name is no longer served."
+      : "";
+  });
   return BattleshipLobbyCore({
     gameName,
     player1,
@@ -510,9 +519,25 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>((
     gameState,
     myName,
     myPlayerNumber,
-    profile: profileWish.result,
-    profileName: profileNameWish.result,
-    profileUI: profileWish[UI],
+    profile: hasError(profileWish.result)
+      ? undefined
+      : resultOf(profileWish.result),
+    profileName:
+      hasError(profileNameWish.result) || isObsolete(profileNameWish.result)
+        ? undefined
+        : resultOf(profileNameWish.result),
+    profileUI: (
+      <cf-fragment>
+        {profileWish[UI]}
+        {nameStatus
+          ? (
+            <span role="status">
+              {nameStatus}
+            </span>
+          )
+          : null}
+      </cf-fragment>
+    ),
   });
 });
 

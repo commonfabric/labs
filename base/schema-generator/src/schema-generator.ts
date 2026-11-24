@@ -67,6 +67,7 @@ import {
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
 import { unionNodeMembersInOrder } from "./typescript/source-order.ts";
+import { isSyntheticAvailabilityTypeReference } from "./typescript/availability-brand.ts";
 import { resolveWriterBinding } from "./typescript/writer-binding.ts";
 import {
   cutsExpansion,
@@ -3903,8 +3904,15 @@ export class SchemaGenerator {
         ),
       }
       : labelPosition(schema);
+    const node = context.typeNode ?? context.hintsNode;
+    const scope = node &&
+      context.schemaHints?.get(node)?.availabilityCaptureScope;
+    const scoped = scope !== undefined && !context.declaresNoScope &&
+        !context.labelsOnly && typeof labeled !== "boolean"
+      ? { ...labeled, scope }
+      : labeled;
     const hint = getUiContractHint(context);
-    return hint ? attachUiContract(labeled, hint) : labeled;
+    return hint ? attachUiContract(scoped, hint) : scoped;
   }
 
   /**
@@ -4486,6 +4494,10 @@ export class SchemaGenerator {
     // Resolve by name from source scope as a fallback (e.g., PieceEntry in
     // Cell<PieceEntry[]>).
     if (ts.isTypeReferenceNode(typeNode)) {
+      if (isSyntheticAvailabilityTypeReference(typeNode)) {
+        return { type: "FabricUnavailable" };
+      }
+
       // A non-generic alias declaring a default-library alias that holds a
       // wrapper the checker erases around `any` is read as that alias is
       // (`#containerHoldingWrapperErasedByAny()`), inside the definition its
@@ -4500,6 +4512,29 @@ export class SchemaGenerator {
         : undefined;
       if (container && !ts.isTupleTypeNode(container)) {
         return this.#analyzeTypeNodeStructure(container, checker, context);
+      }
+
+      // Transformer-created qualified references such as
+      // `__cfHelpers.HasError` have no symbol in the authored Program, but the
+      // transformer records their real semantic Type in typeRegistry. Consult
+      // that channel before syntactic wrapper/scope recovery. Otherwise the
+      // checker reports `any`, this branch falls through to `true`, and a
+      // synthetic `T | __cfHelpers.HasError` schema collapses to `true`.
+      const originalTypeNode = ts.getOriginalNode(typeNode);
+      const registeredType = typeRegistry?.get(typeNode) ??
+        (originalTypeNode !== typeNode
+          ? typeRegistry?.get(originalTypeNode)
+          : undefined);
+      if (
+        registeredType &&
+        (registeredType.flags & ts.TypeFlags.Any) === 0
+      ) {
+        return this.formatChildType(
+          registeredType,
+          context,
+          typeNode,
+          context.instantiatedAs,
+        );
       }
       if (detectWrapperViaNode(typeNode, checker)) {
         const wrapperType = typeRegistry?.get(typeNode) ??

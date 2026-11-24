@@ -32,28 +32,33 @@ export default pattern(() => {
   // Two people who share the name "Ben" are two cells.
   const firstBen = Writable.of<StandInProfile>({ name: "Ben" });
   const secondBen = Writable.of<StandInProfile>({ name: "Ben" });
+  const missingProfile = new Writable<StandInProfile>();
   const firstBenSends = sendMessage({
     messages,
     draft,
     profile: firstBen,
+    profileAvailable: true,
     name: " Ben ",
   });
   const secondBenSends = sendMessage({
     messages,
     draft,
     profile: secondBen,
+    profileAvailable: true,
     name: "Ben",
   });
   const namelessSends = sendMessage({
     messages,
     draft,
     profile: firstBen,
+    profileAvailable: true,
     name: "   ",
   });
   const profilelessSends = sendMessage({
     messages,
     draft,
-    profile: undefined,
+    profile: missingProfile,
+    profileAvailable: false,
     name: "Ben",
   });
 

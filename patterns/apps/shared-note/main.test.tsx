@@ -470,11 +470,13 @@ export default pattern(() => {
       detail: { id: listed(comments.get())[0].id },
     })
   );
-  const assert_highlight_selects_its_comment = assert(() =>
-    highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
-      listed(comments.get())[0].id &&
-    actionsFollow(note[UI], "Needs a date")
-  );
+  const assert_highlight_selects_its_comment = assert(() => {
+    const first = listed(comments.get())[0];
+    return first !== undefined &&
+      highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
+        first.id &&
+      actionsFollow(note[UI], "Needs a date");
+  });
   const action_type_reply = action(() =>
     setBound(
       findNodeByProp(actionsOf(note[UI]), "aria-label", "Reply"),

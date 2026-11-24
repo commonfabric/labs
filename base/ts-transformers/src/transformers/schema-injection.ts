@@ -65,6 +65,11 @@ import {
   isStructuralReactiveFactoryExpression,
 } from "./structural-reactive-factory.ts";
 import {
+  collectExplicitAvailabilityGuardCaptures,
+  createUnavailableInputPolicyOptions,
+  mapGuardCapturesToCallbackInput,
+} from "../availability/captures.ts";
+import {
   applyShrinkAndWrap,
   type CapabilitySummaryApplicationMode,
   containsAnyOrUnknownTypeNode,
@@ -1754,7 +1759,9 @@ function resolveInjectableSchemaType(
  * @returns CallExpression for toSchema() with TypeRegistry entry transferred
  */
 function createSchemaCallWithRegistryTransfer(
-  context: Pick<TransformationContext, "factory" | "cfHelpers" | "sourceFile">,
+  context:
+    & Pick<TransformationContext, "factory" | "cfHelpers" | "sourceFile">
+    & Partial<Pick<TransformationContext, "lookupAvailabilityVariantType">>,
   typeNode: ts.TypeNode,
   checker: ts.TypeChecker,
   typeRegistry?: TypeRegistry,
@@ -1764,6 +1771,11 @@ function createSchemaCallWithRegistryTransfer(
     typeNode,
     checker,
     context.factory,
+    typeRegistry,
+  );
+  registerAvailabilityVariantTypeNodes(
+    emittedTypeNode,
+    context,
     typeRegistry,
   );
   const schemaCall = createToSchemaCall(context, emittedTypeNode, options);
@@ -1781,6 +1793,42 @@ function createSchemaCallWithRegistryTransfer(
   }
 
   return schemaCall;
+}
+
+const AVAILABILITY_VARIANT_TYPE_NAMES = new Set([
+  "IsPending",
+  "HasError",
+  "IsSyncing",
+  "IsObsolete",
+  "HasSchemaMismatch",
+]);
+
+function registerAvailabilityVariantTypeNodes(
+  root: ts.TypeNode,
+  context: Partial<
+    Pick<TransformationContext, "lookupAvailabilityVariantType">
+  >,
+  typeRegistry?: TypeRegistry,
+): void {
+  if (!typeRegistry) return;
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isTypeReferenceNode(node) &&
+      ts.isQualifiedName(node.typeName) &&
+      ts.isIdentifier(node.typeName.left) &&
+      node.typeName.left.text === "__cfHelpers"
+    ) {
+      const name = node.typeName.right.text;
+      if (AVAILABILITY_VARIANT_TYPE_NAMES.has(name)) {
+        const type = context.lookupAvailabilityVariantType?.(name);
+        if (type) {
+          typeRegistry.set(node, type);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
 }
 
 function applyIdentityArrayItemSchemaHints(
@@ -2102,6 +2150,7 @@ function visitInjectedDualSchemaBuilderCall(
   transformation: ts.TransformationContext,
   checker: ts.TypeChecker,
   typeRegistry: TypeRegistry,
+  schedulerOptions?: ts.ObjectLiteralExpression,
 ): ts.Node {
   const updated = prependSchemaArguments(
     context,
@@ -2112,6 +2161,7 @@ function visitInjectedDualSchemaBuilderCall(
     resultTypeValue,
     typeRegistry,
     checker,
+    schedulerOptions,
   );
   registerInjectedCallResultType(
     node,
@@ -2128,6 +2178,18 @@ function visitInjectedDualSchemaBuilderCall(
   // callback is visited.
   context.markSchemaInjected(updated);
   return ts.visitEachChild(updated, visit, transformation);
+}
+
+function availabilitySchedulerOptionsForCallback(
+  callback: ts.ArrowFunction | ts.FunctionExpression | undefined,
+  context: TransformationContext,
+): ts.ObjectLiteralExpression | undefined {
+  if (!callback) return undefined;
+  const entries = mapGuardCapturesToCallbackInput(
+    collectExplicitAvailabilityGuardCaptures(callback.body, context),
+    callback,
+  );
+  return createUnavailableInputPolicyOptions(entries, context.factory);
 }
 
 function createRegisteredWidenedSchemaCall(
@@ -3263,6 +3325,7 @@ function prependSchemaArguments(
   resultType: ts.Type | undefined,
   typeRegistry: TypeRegistry,
   checker: ts.TypeChecker,
+  schedulerOptions?: ts.ObjectLiteralExpression,
 ): ts.CallExpression {
   const argSchemaCall = createSchemaCallWithRegistryTransfer(
     context,
@@ -3297,6 +3360,9 @@ function prependSchemaArguments(
   if (innerLiftCall) {
     const [innerCallback, ...trailingInnerArgs] = innerLiftCall.arguments;
     const calleeArgs = innerCallback ? [innerCallback] : [];
+    const trailingOptions = trailingInnerArgs.length > 0
+      ? trailingInnerArgs
+      : (schedulerOptions ? [schedulerOptions] : []);
     // No-input case: a single empty object literal `{}` as the outer input
     // means a genuinely zero-capture computation (computed-origin). By this
     // stage ClosureTransformer has already reified any captures into the
@@ -3357,7 +3423,7 @@ function prependSchemaArguments(
       context.factory.createCallExpression(
         innerLiftCall.expression,
         innerLiftCall.typeArguments,
-        [...calleeArgs, argSchemaCall, resSchemaCall, ...trailingInnerArgs],
+        [...calleeArgs, argSchemaCall, resSchemaCall, ...trailingOptions],
       ),
       innerLiftCall,
     );
@@ -3378,7 +3444,12 @@ function prependSchemaArguments(
     context.factory.createCallExpression(
       node.expression,
       undefined,
-      [...node.arguments, argSchemaCall, resSchemaCall],
+      [
+        ...node.arguments,
+        argSchemaCall,
+        resSchemaCall,
+        ...(schedulerOptions ? [schedulerOptions] : []),
+      ],
     ),
     node,
   );
@@ -4558,6 +4629,10 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             transformation,
             checker,
             typeRegistry,
+            availabilitySchedulerOptionsForCallback(
+              liftAppliedArgs?.callback,
+              context,
+            ),
           );
         }
 
@@ -4630,6 +4705,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             transformation,
             checker,
             typeRegistry,
+            availabilitySchedulerOptionsForCallback(callback, context),
           );
         }
       }
@@ -4653,7 +4729,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             // synthetic wrapper resolves to `any`, so the re-shrink needed the
             // pre-shrink type fed back. Skip it — keep the already-injected
             // input, mark the node, and only descend into the callback body.
-            // Authored `lift(toSchema<T>(), fn)` has a real-source T (pos >= 0)
+            // Authored `lift(fn, toSchema<T>())` has a real-source T (pos >= 0)
             // that the checker resolves, so it falls through to the normal path.
             //
             // This is layered with the top-of-visit `nodeLinks.schemaInjected`
@@ -4668,7 +4744,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               context.markSchemaInjected(node);
               return ts.visitEachChild(node, visit, transformation);
             }
-            // Authored `lift(toSchema<T>(), fn)`: T is a real-source TypeNode
+            // Authored `lift(fn, toSchema<T>())`: T is a real-source TypeNode
             // the checker resolves (the synthetic-wrapper re-entry case is
             // handled by the skip above).
             const argumentTypeValue = getTypeFromTypeNodeWithFallback(
@@ -4743,6 +4819,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             transformation,
             checker,
             typeRegistry,
+            availabilitySchedulerOptionsForCallback(liftCallback, context),
           );
         }
 
@@ -4781,6 +4858,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             transformation,
             checker,
             typeRegistry,
+            availabilitySchedulerOptionsForCallback(liftCallback, context),
           );
         }
 
@@ -4818,6 +4896,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             transformation,
             checker,
             typeRegistry,
+            availabilitySchedulerOptionsForCallback(callback, context),
           );
         }
       }
@@ -4998,6 +5077,77 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         }
       }
 
+      if (callKind?.kind === "llm-dialog") {
+        const factory = transformation.factory;
+        const typeArgs = node.typeArguments;
+        const args = node.arguments;
+
+        // An authored resultSchema remains the source of truth. Calls without
+        // a result type and without this property are control-only dialogs and
+        // deliberately receive no presented-result channel.
+        if (args.length > 0 && ts.isObjectLiteralExpression(args[0]!)) {
+          const props = args[0].properties;
+          if (
+            props.some((property) =>
+              property.name && ts.isIdentifier(property.name) &&
+              property.name.text === "resultSchema"
+            )
+          ) {
+            return ts.visitEachChild(node, visit, transformation);
+          }
+        }
+
+        const resolved = resolveInjectableSchemaType(
+          typeArgs?.[0],
+          checker,
+          sourceFile,
+          factory,
+          typeRegistry,
+          context.options.state,
+          () => undefined,
+        );
+        const schemaCall = createRegisteredSchemaCallFromResolvedType(
+          context,
+          resolved,
+          checker,
+          typeRegistry,
+        );
+
+        if (schemaCall) {
+          let newOptions: ts.Expression;
+          if (args.length > 0 && ts.isObjectLiteralExpression(args[0]!)) {
+            newOptions = factory.createObjectLiteralExpression(
+              [
+                factory.createPropertyAssignment("resultSchema", schemaCall),
+                ...args[0].properties,
+              ],
+              true,
+            );
+          } else if (args.length > 0) {
+            newOptions = factory.createObjectLiteralExpression(
+              [
+                factory.createPropertyAssignment("resultSchema", schemaCall),
+                factory.createSpreadAssignment(args[0]!),
+              ],
+              true,
+            );
+          } else {
+            newOptions = factory.createObjectLiteralExpression(
+              [factory.createPropertyAssignment("resultSchema", schemaCall)],
+              true,
+            );
+          }
+
+          const updated = factory.createCallExpression(
+            node.expression,
+            node.typeArguments,
+            [newOptions, ...args.slice(1)],
+          );
+          context.markSchemaInjected(updated);
+          return ts.visitEachChild(updated, visit, transformation);
+        }
+      }
+
       if (callKind?.kind === "generate-object") {
         const factory = transformation.factory;
         const typeArgs = node.typeArguments;
@@ -5082,10 +5232,10 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
 
       // sqliteQuery<Row>({ db, sql, ... }) - lowers the Row type argument to an
       // injected `rowSchema` property (mirrors generate-object's `schema`). The
-      // runtime builtin composes `result.items = rowSchema`, so a consumer's
-      // schema carries `asCell` for Cell<> Row fields and `*_cf_link` result
-      // columns rehydrate to live Cells (see
-      // docs/specs/sqlite-builtin/plans/sqlite-query-row-lowering.md).
+      // runtime builtin applies it to the successful value's `rows` array, so
+      // a consumer of `resultOf(query).rows` carries `asCell` for Cell<> Row
+      // fields and `*_cf_link` result columns rehydrate to live Cells (see
+      // docs/specs/sqlite-builtin/01-api.md).
       if (
         callKind?.kind === "runtime-call" &&
         callKind.exportName === "sqliteQuery"
@@ -5274,6 +5424,148 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               return ts.visitEachChild(updated, visit, transformation);
             }
           }
+        }
+      }
+
+      // streamData<T>({ url, ... }) validates every decoded event against T.
+      // Like fetchJson, the typed event schema is injected into the request.
+      if (
+        callKind?.kind === "runtime-call" &&
+        callKind.exportName === "streamData"
+      ) {
+        const factory = transformation.factory;
+        const typeArgs = node.typeArguments;
+        const args = node.arguments;
+
+        if (!typeArgs || typeArgs.length !== 1) {
+          context.reportDiagnostic({
+            severity: "error",
+            type: "stream-data:missing-type-argument",
+            message: "streamData requires an explicit event type, e.g. " +
+              "streamData<MyEvent>({ url }).",
+            node,
+          });
+          return ts.visitEachChild(node, visit, transformation);
+        }
+
+        const paramsArg = args[0];
+        const hasExplicitSchema = paramsArg &&
+          ts.isObjectLiteralExpression(paramsArg) &&
+          paramsArg.properties.some(
+            (property) =>
+              property.name && ts.isIdentifier(property.name) &&
+              property.name.text === "schema",
+          );
+
+        if (!hasExplicitSchema) {
+          const resolved = resolveInjectableSchemaType(
+            typeArgs[0],
+            checker,
+            sourceFile,
+            factory,
+            typeRegistry,
+            context.options.state,
+            () => undefined,
+          );
+          const schemaCall = createRegisteredSchemaCallFromResolvedType(
+            context,
+            resolved,
+            checker,
+            typeRegistry,
+          );
+
+          if (schemaCall) {
+            const schemaProperty = factory.createPropertyAssignment(
+              "schema",
+              schemaCall,
+            );
+            let newParams: ts.Expression;
+            if (paramsArg && ts.isObjectLiteralExpression(paramsArg)) {
+              newParams = factory.createObjectLiteralExpression(
+                [schemaProperty, ...paramsArg.properties],
+                true,
+              );
+            } else if (paramsArg) {
+              newParams = factory.createObjectLiteralExpression(
+                [schemaProperty, factory.createSpreadAssignment(paramsArg)],
+                true,
+              );
+            } else {
+              newParams = factory.createObjectLiteralExpression(
+                [schemaProperty],
+                true,
+              );
+            }
+
+            const updated = factory.createCallExpression(
+              node.expression,
+              node.typeArguments,
+              [newParams, ...args.slice(1)],
+            );
+            context.markSchemaInjected(updated);
+            return ts.visitEachChild(updated, visit, transformation);
+          }
+        }
+      }
+
+      // latestComplete(value) retains a stateful snapshot through one schema
+      // that represents the call's recursively usable return type. Lower the
+      // public one-argument form to the raw built-in's hidden input record.
+      if (
+        callKind?.kind === "runtime-call" &&
+        callKind.exportName === "latestComplete"
+      ) {
+        const factory = transformation.factory;
+        const value = node.arguments[0];
+        if (!value) {
+          return ts.visitEachChild(node, visit, transformation);
+        }
+
+        const resolved = resolveInjectableSchemaType(
+          undefined,
+          checker,
+          sourceFile,
+          factory,
+          typeRegistry,
+          context.options.state,
+          () => checker.getTypeAtLocation(node),
+        );
+        if (
+          isUnresolvedSchemaType(resolved.type) ||
+          isAnyOrUnknownType(resolved.type)
+        ) {
+          context.reportDiagnostic({
+            severity: "error",
+            type: "latest-complete:unresolved-type",
+            message:
+              "latestComplete requires a concrete complete-value type so " +
+              "the transformer can generate its snapshot schema.",
+            node,
+          });
+          return ts.visitEachChild(node, visit, transformation);
+        }
+        const schemaCall = createRegisteredSchemaCallFromResolvedType(
+          context,
+          resolved,
+          checker,
+          typeRegistry,
+        );
+        if (schemaCall) {
+          const updated = factory.createCallExpression(
+            node.expression,
+            node.typeArguments,
+            [
+              factory.createObjectLiteralExpression(
+                [
+                  factory.createPropertyAssignment("value", value),
+                  factory.createPropertyAssignment("schema", schemaCall),
+                ],
+                true,
+              ),
+            ],
+          );
+          context.markSchemaInjected(updated);
+          return ts.visitEachChild(updated, visit, transformation);
         }
       }
 

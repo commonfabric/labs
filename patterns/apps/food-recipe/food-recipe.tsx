@@ -23,11 +23,16 @@ import {
   FS,
   generateObject,
   handler,
+  hasError,
   type ImageData,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   navigateTo,
   pattern,
   type PerSpace,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -372,15 +377,36 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
         return request ? extractionParts(request.text, request.images) : [];
       }),
     });
-    const extraction = computed((): RecipeExtraction | null =>
-      extractRequest.get() && extractLlm.result
-        ? fromWire(extractLlm.result as Partial<RecipeExtractionWire>)
-        : null
+    const extractionState = computed(
+      (): {
+        proposal: RecipeExtraction | null;
+        pending: boolean;
+        error: string;
+      } => {
+        if (!extractRequest.get()) {
+          return { proposal: null, pending: false, error: "" };
+        }
+        if (isPending(extractLlm) || isSyncing(extractLlm)) {
+          return { proposal: null, pending: true, error: "" };
+        }
+        if (hasError(extractLlm) || isObsolete(extractLlm)) {
+          return {
+            proposal: null,
+            pending: false,
+            error: extractLlm.message ||
+              "The recipe extraction output was retired.",
+          };
+        }
+        return {
+          proposal: fromWire(resultOf(extractLlm)),
+          pending: false,
+          error: "",
+        };
+      },
     );
-    const extracting = computed(() => !!extractLlm.pending);
-    const extractError = computed(() =>
-      extractRequest.get() && extractLlm.error ? String(extractLlm.error) : ""
-    );
+    const extraction = extractionState.proposal;
+    const extracting = extractionState.pending;
+    const extractError = extractionState.error;
     const canExtract = computed(() =>
       !extracting && (notes.get().trim() !== "" || imageCount > 0)
     );
@@ -481,13 +507,32 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
       system: TIMING_SYSTEM,
       prompt: timingRequest,
     });
-    const timingSuggestions = computed((): TimingSuggestions | null =>
-      timingRequest.get() && timingLlm.result ? timingLlm.result : null
+    const timingSuggestionsState = computed(
+      (): {
+        proposal: TimingSuggestions | null;
+        pending: boolean;
+        error: string;
+      } => {
+        if (!timingRequest.get()) {
+          return { proposal: null, pending: false, error: "" };
+        }
+        if (isPending(timingLlm) || isSyncing(timingLlm)) {
+          return { proposal: null, pending: true, error: "" };
+        }
+        if (hasError(timingLlm) || isObsolete(timingLlm)) {
+          return {
+            proposal: null,
+            pending: false,
+            error: timingLlm.message ||
+              "The timing suggestions output was retired.",
+          };
+        }
+        return { proposal: resultOf(timingLlm), pending: false, error: "" };
+      },
     );
-    const suggestingTiming = computed(() => !!timingLlm.pending);
-    const timingError = computed(() =>
-      timingRequest.get() && timingLlm.error ? String(timingLlm.error) : ""
-    );
+    const timingSuggestions = timingSuggestionsState.proposal;
+    const suggestingTiming = timingSuggestionsState.pending;
+    const timingError = timingSuggestionsState.error;
     const timingChanges = computed(() =>
       timingReview(stepGroups.get(), timingSuggestions)
     );

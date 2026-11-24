@@ -1,0 +1,1 @@
+{"date":"2026-11-18","from":{"k":"unit","s":"runner","n":"compile-and-run > an incomplete program > keeps the previous outputs while a program has no files"},"to":{"k":"unit","s":"runner","n":"compile-and-run > an incomplete program > reports invalid input instead of a previous compilation failure when a program has no files"}}

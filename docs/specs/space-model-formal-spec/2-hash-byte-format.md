@@ -523,6 +523,9 @@ default message the class supplies when none is stored is not part of that
 record, and a stored message is, whatever its text. Section 7.20 works an
 example.
 
+Obsolete guidance is included as the state's `message` field; an empty string
+and absence hash differently.
+
 ### 4.19 Cycles
 
 ```

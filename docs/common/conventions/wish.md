@@ -1,4 +1,4 @@
-<!-- @reviewed 2026-02-06 wish-result-shape -->
+<!-- @reviewed 2026-07-14 wish-async-result -->
 
 # wish()
 
@@ -20,25 +20,42 @@ const wishResult = wish<{ content: string }>({ query: "#note" });
 
 `wish()` returns a `WishState<T>` with the following properties:
 
-| Property     | Type    | Description                                                                                                                                             |
-|--------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `result`     | `T`     | The resolved piece (auto-confirmed or user-selected)                                                                                                    |
-| `candidates` | `T[]`   | All matching pieces                                                                                                                                     |
-| `[UI]?`      | `VNode` | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece |
-| `error`      | `any`   | Error message if resolution failed                                                                                                                      |
-| `errorCode`  | `"no-match" \| "failed"` | Set with `error`: `"no-match"` when the wish confirmed nothing matches (a reader may offer to make one), `"failed"` when it could not look or read what it found. Treat an unknown code as `"failed"` |
+| Property     | Type             | Description                                                                                                                                             |
+|--------------|------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `result`     | `AsyncResult<T>` | The resolved piece (auto-confirmed or user-selected), or its unavailable state                                                                            |
+| `candidates` | `T[]`            | All matching pieces                                                                                                                                     |
+| `[UI]?`      | `VNode`          | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece          |
+| `errorCode` | `"no-match"` \| `"failed"` | Set on failure: `"no-match"` confirms nothing matches; `"failed"` means the wish could not look or read what it found. Treat an unknown code as `"failed"`. |
 
-Access the resolved piece via `wishResult.result`:
+Keep the result channel for guards and use `resultOf()` for the ordinary `T`
+view:
 
 ```tsx
 // Shown for illustration only.
 const wishResult = wish<{ content: string }>({ query: "#note" });
+const note = resultOf(wishResult.result);
 
 // Read a property from the resolved piece
-const text = wishResult.result.content;
+const text = note.content;
 
 // Render the resolved piece's own UI
-return { [UI]: <div>{wishResult.result}</div> };
+return { [UI]: <div>{note}</div> };
+```
+
+The common case does not inspect availability. Nodes which consume `note` wait
+while the wish is pending and propagate errors automatically. A surface which
+handles failure explicitly guards the original channel:
+
+```tsx
+// Shown for illustration only.
+const noteWish = wish<Note>({ query: "#note" });
+const note = resultOf(noteWish.result);
+
+return {
+  [UI]: hasError(noteWish.result)
+    ? <div>{noteWish.result.message}</div>
+    : <NoteCard note={note} />,
+};
 ```
 
 ### Results wait for loading documents
@@ -46,7 +63,15 @@ return { [UI]: <div>{wishResult.result}</div> };
 Wish waits for the backing documents of its discovery collections and candidates
 before selecting a result. This loading behavior applies to every hashtag Wish.
 Pending document loads leave any existing state untouched; a cold Wish with no
-existing state publishes none until loading settles. A favorite, mentionable, or
+existing state publishes none until loading settles. This describes producer
+publication, not a successful `undefined` result: consumers of the required
+result channel remain unavailable until it resolves. Wish does not write a
+fresh `UNAVAILABLE_PENDING` for every backing-document load. Explicit native
+pending states also occur, for example, when a query input is unavailable or a
+headless freeform query awaits resolution. Use `isPending(wishResult.result)`
+when explicitly handling the pending reason; do not infer readiness from an
+empty candidate list or assume a load always replaces a retained result.
+A favorite, mentionable, or
 profile element whose piece document is confirmed absent is excluded from
 matches; its entry remains in the discovery collection. Failed favorite,
 mentionable, and profile element loads are skipped when another readable match
@@ -69,6 +94,12 @@ on "nothing there", such as offering to create the missing thing, checks
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
 values.
+
+A well-known target requested as a Cell handle can name a confirmed-absent
+slot. For example, a writable `#journal` handle can initialize a Home's missing
+journal. Absence of contents does not make that handle pending. A request for
+the value still waits for contents, and an explicit unavailable marker at the
+target remains unavailable even when a handle was requested.
 
 ### Single match auto-confirms
 
@@ -242,8 +273,8 @@ for `wish({ query: "#profile" })`:
 
 - **0 profiles:** the trusted profile-create surface (same input as the home
   Profile tab). Submitting a name creates the viewer's first profile and leaves
-  the current view in place; the wish reacts once the link exists. `.result` is
-  `undefined` and `error` is set, with `errorCode: "no-match"`, until the first
+  the current view in place; the wish reacts once the link exists. `.result`
+  carries an error availability value, with `errorCode: "no-match"`, until the first
   profile exists. The roster counts as empty when the home lists none of the
   user's own profiles, or only retired ones (a retired entry whose document is
   absent included).
@@ -367,12 +398,9 @@ reactive constructs:
 export default pattern<Input>(({ enableSearch }) => {
   // ✅ Call wish() once at pattern level
   const searchPiece = wish<SearchOutput>({ query: "#search" });
+  const search = resultOf(searchPiece.result);
 
-  // Use computed() to conditionally process the result
-  const searchData = computed(() => {
-    if (!enableSearch) return null;
-    return searchPiece.result?.data;
-  });
+  const searchData = enableSearch ? search.data : null;
 
   return { searchData, [UI]: <div>{searchData}</div> };
 });
@@ -380,6 +408,10 @@ export default pattern<Input>(({ enableSearch }) => {
 
 This ensures the wish is established once. Conditional logic belongs in how you
 *use* the result, not in whether you *create* the wish.
+
+The pattern-body conditional selects the result branch, so a disabled search
+does not depend on the Wish result becoming usable. A `computed()` that captures the projected result
+has that availability dependency even if its callback contains a disabled branch.
 
 ## Built-in Targets
 
@@ -450,12 +482,13 @@ routed to the suggestion picker.
 // any other runtime opening the same piece, reads the original capture. It
 // never updates; use it for created-at stamps, never as a clock.
 const createdAt = wish<number>({ query: "#now" });
+const createdAtValue = resultOf(createdAt.result);
 
 // Reactive: updates every 60 seconds, re-triggering downstream computed()s.
 const now = wish<number>({ query: "#now/60" });
+const nowValue = resultOf(now.result);
 const timeAgo = computed(() => {
-  if (now.result == null || createdAt.result == null) return "";
-  const ms = now.result - createdAt.result;
+  const ms = nowValue - createdAtValue;
   return `${Math.floor(ms / 60000)} minutes ago`;
 });
 ```
@@ -488,12 +521,11 @@ memoized repeat:
 // is read in reactive code — the tick is a cell, and the fetch is a reactive
 // builtin, so the graph still quiesces between windows.
 const tick = wish<number>({ query: "#now/300" });
+const tickValue = resultOf(tick.result);
 const feed = fetchJson<{ items: string[] }>({
-  url: computed(() =>
-    tick.result == null ? "" : `/api/my-feed?window=${tick.result}`
-  ),
+  url: computed(() => `/api/my-feed?window=${tickValue}`),
 });
-const items = computed(() => feed.result?.items ?? []);
+const items = computed(() => resultOf(feed).items);
 ```
 
 This stays inside the timing model: reactive fetch settlement is observed in a
@@ -522,7 +554,8 @@ To add new pieces to the space, wish for the `addPiece` handler as a `Stream`:
 const defaultApp = wish<{ addPiece: Stream<{ piece: MentionablePiece }> }>({
   query: "#default",
 });
-defaultApp.result.addPiece.send({ piece: newPiece });
+const { addPiece } = resultOf(defaultApp.result);
+addPiece.send({ piece: newPiece });
 ```
 
 Do **not** wish for `pieceRegistry` as a `Writable` — see

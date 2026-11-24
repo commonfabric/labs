@@ -20,8 +20,7 @@ const alice = await Identity.fromPassphrase("sqlite host alice");
 const bob = await Identity.fromPassphrase("sqlite host bob");
 const space = owner.did() as MemorySpace;
 type QueryView = {
-  pending?: boolean;
-  result?: { body: string }[];
+  rows?: { body: string }[];
   error?: unknown;
 };
 type ClientView = { runtime: Runtime; result: Cell<{ query: QueryView }> };
@@ -179,8 +178,7 @@ export default pattern<{ sql: ${scoped} }, { query: any }>(({ sql }) => {
         waitForCellValue<QueryView>(
           view.runtime,
           view.result.key("query"),
-          (state) =>
-            state?.pending === false && state.result?.[0]?.body === body,
+          (state) => state?.rows?.[0]?.body === body,
         ),
       close,
     };

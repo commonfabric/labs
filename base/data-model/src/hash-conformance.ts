@@ -591,6 +591,29 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
 
   // Unavailable data.
   {
+    name: "obsolete output with no guidance",
+    section: SECTION_UNAVAILABLE,
+    spec: "12 24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31 11 " +
+      "24 06 72 65 61 73 6F 6E 24 08 6F 62 73 6F 6C 65 74 65 00",
+    make: () => new FabricUnavailable("obsolete"),
+  },
+  {
+    name: "obsolete output with empty guidance",
+    section: SECTION_UNAVAILABLE,
+    spec: "12 24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31 11 " +
+      "24 07 6D 65 73 73 61 67 65 24 00 " +
+      "24 06 72 65 61 73 6F 6E 24 08 6F 62 73 6F 6C 65 74 65 00",
+    make: () => new FabricUnavailable("obsolete", null, ""),
+  },
+  {
+    name: "obsolete output with guidance",
+    section: SECTION_UNAVAILABLE,
+    spec: "12 24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31 11 " +
+      "24 07 6D 65 73 73 61 67 65 24 03 6E 65 77 " +
+      "24 06 72 65 61 73 6F 6E 24 08 6F 62 73 6F 6C 65 74 65 00",
+    make: () => new FabricUnavailable("obsolete", null, "new"),
+  },
+  {
     name: "unavailable with an error kind and a message",
     section: SECTION_UNAVAILABLE,
     spec: "12  24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31  11  " +

@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema, SchemaPathSelector } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
+import { UNAVAILABLE_PENDING } from "@commonfabric/data-model/availability";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import {
@@ -205,6 +206,19 @@ describe("graph-query", () => {
 
   describe("GraphQueryWalk", () => {
     describe("visit()", () => {
+      it("tracks a child query while an unavailable ancestor stands in for it", () => {
+        const { manager, schemaTracker, walk } = walkOver(
+          new Map([
+            [keyFor("of:root"), UNAVAILABLE_PENDING],
+          ]),
+        );
+        walk.visit(documentFor(manager, "of:root"), {
+          path: ["value", "files", "length"],
+          schema: { type: "number" },
+        });
+        expect(trackedKeys(schemaTracker)).toEqual([keyFor("of:root")]);
+      });
+
       it("records the visited document under its tracker key", () => {
         const documents = new Map<string, FabricValue>([
           [keyFor("of:root"), { title: "Glazed" }],

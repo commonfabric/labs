@@ -11,6 +11,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -25,9 +26,10 @@ import SuggestionHistory, {
 type Favorite = { cell: Writable<unknown>; userTags: string[] };
 
 export default pattern(() => {
-  const defaultApp = wish<Writable<{ favorites?: Favorite[] }>>({
+  const defaultAppWish = wish<Writable<{ favorites?: Favorite[] }>>({
     query: "#default",
-  }).result!;
+  });
+  const defaultApp = resultOf(defaultAppWish.result);
 
   const picnic = new Writable<{ [NAME]?: string }>({ [NAME]: "Picnic plan" });
   const salad = new Writable<{ [NAME]?: string }>({ [NAME]: "Salad recipe" });
@@ -65,6 +67,9 @@ export default pattern(() => {
 
   const stored = new Writable<unknown[]>([]);
   const history = SuggestionHistory({});
+  const assert_absent_history_is_empty = assert(() =>
+    history.entries.length === 0
+  );
 
   const action_favorite_history = action(() => {
     stored.set([
@@ -112,6 +117,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { assertion: assert_absent_history_is_empty },
       { action: action_favorite_history },
       { assertion: assert_reads_history_entries },
       { assertion: assert_view_shows_entries },

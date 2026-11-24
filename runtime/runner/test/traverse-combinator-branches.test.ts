@@ -10,6 +10,13 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+  unavailableMismatch,
+  unavailableObsolete,
+} from "@commonfabric/data-model/availability";
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
@@ -109,6 +116,29 @@ describe("traverse-combinator-branches", () => {
   });
 
   describe("oneOf", () => {
+    for (
+      const marker of [
+        UNAVAILABLE_PENDING,
+        UNAVAILABLE_SYNCING,
+        unavailableError("request failed"),
+        unavailableMismatch("invalid request shape"),
+        unavailableObsolete("Use the new output"),
+      ]
+    ) {
+      it(`preserves ${marker.reason} across multiple ordinary alternatives`, () => {
+        const schema: JSONSchema = {
+          oneOf: [{ type: "string" }, { type: "number" }],
+        };
+        expect(traverse(marker, schema).ok).toBe(marker);
+        expect(traverse("ready", schema)).toEqual({ ok: "ready" });
+        expect(traverse(3, schema)).toEqual({ ok: 3 });
+        expect(traverse(marker, { oneOf: [false, false] }).error).toBeDefined();
+        expect(traverse(marker, { allOf: [{ type: "string" }, false] }).error)
+          .toBeDefined();
+        expect(traverse(marker, false).error).toBeDefined();
+      });
+    }
+
     it("skips a `false` branch and matches by the others", () => {
       const schema = (): JSONSchema => ({ oneOf: [false, { type: "number" }] });
       expect(traverse(5, schema())).toEqual({ ok: 5 });

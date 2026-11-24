@@ -18,12 +18,15 @@ import {
   FS,
   generateText,
   handler,
+  hasError,
+  isPending,
   lift,
   NAME,
   navigateTo,
   pattern,
   patternTool,
   type PatternToolResult,
+  resultOf,
   SELF,
   type Stream,
   TILE_UI,
@@ -48,7 +51,7 @@ export { NotePiece };
 
 /**
  * The bare id embedded in wiki-link text (`[[Name (<id>)]]`). Mirrors
- * mentionIdFromCellId in runtime/ui (not importable from a pattern): `of:`
+ * mentionIdFromCellId in packages/ui (not importable from a pattern): `of:`
  * strips — the renderer (note-md) re-adds it — and `computed:` is REJECTED,
  * because the bare embed format cannot carry the scheme and the scheme is
  * part of the identity (a computed cell's bare hash names its of: sibling).
@@ -117,13 +120,25 @@ export interface NoteOutput extends NotePiece {
   stopEditingTitle: Stream<void>;
 }
 
+export type BacklinkCreateEvent = {
+  detail: {
+    piece: Writable<MentionablePiece>;
+    navigate: boolean;
+  };
+};
+
+/** The backlink event binding installed on every note editor. */
+export const backlinkCreateProps = (
+  stream: Stream<BacklinkCreateEvent>,
+): { "onbacklink-create": Stream<BacklinkCreateEvent> } => ({
+  "onbacklink-create": stream,
+});
+
 // ===== Module-scope handlers (reused with different bindings) =====
 
-// Used in cf-code-editor - binds mentionable and pieceRegistry. The editor
-// stays where the person is typing, so its `navigate` is always false and the
-// new piece only joins the mentionables.
-const handleNewBacklink = handler<
-  { detail: { piece: Writable<MentionablePiece> } },
+/** Registers a backlink created by the editor. */
+export const handleNewBacklink = handler<
+  BacklinkCreateEvent,
   {
     mentionable: Writable<MentionablePiece[]>;
     pieceRegistry: Writable<MinimalPiece[]>;
@@ -131,6 +146,7 @@ const handleNewBacklink = handler<
 >(({ detail }, { mentionable, pieceRegistry }) => {
   // Register the piece so it appears in default-app.
   pieceRegistry.push(detail.piece);
+  if (detail.navigate) return navigateTo(detail.piece);
   mentionable.push(detail.piece);
 });
 
@@ -169,15 +185,16 @@ export const translatePattern = pattern<
   { language: string; content: string },
   string | undefined
 >(({ language, content }) => {
-  const genResult = generateText({
+  const translationRequest = generateText({
     system: computed(() => `Translate the content to ${language}.`),
     prompt: computed(() => `<to_translate>${content}</to_translate>`),
   });
+  const translation = resultOf(translationRequest);
 
   return computed(() => {
-    if (genResult.pending !== false) return undefined;
-    if (genResult.result == null) return "Error occurred";
-    return genResult.result;
+    if (isPending(translationRequest)) return undefined;
+    if (hasError(translationRequest)) return "Error occurred";
+    return translation;
   });
 });
 
@@ -227,16 +244,24 @@ const Note = pattern<NoteInput, NoteOutput>(
 
     // Notebooks and "All Notes" from wish scope (must be before actions that reference them)
     const notebooks = notebookWish.candidates;
-    const allNotesPiece = allNotesWish.result;
+    const allNotesPiece = hasError(allNotesWish.result)
+      ? undefined
+      : resultOf(allNotesWish.result);
 
     // The registry is writable for creating notes and backlinks.
-    const pieceRegistry = wish<Writable<MinimalPiece[]>>({
+    const pieceRegistryWish = wish<Writable<MinimalPiece[]>>({
       query: "#pieceRegistry",
       headless: true,
-    }).result!;
-    const mentionable = wish<MentionablePiece[] | Default<[]>>(
+    });
+    const pieceRegistry: Writable<MinimalPiece[]> = resultOf(
+      pieceRegistryWish.result,
+    );
+    const mentionableWish = wish<MentionablePiece[] | Default<[]>>(
       { query: "#mentionable", headless: true },
-    ).result;
+    );
+    const mentionable = hasError(mentionableWish.result)
+      ? []
+      : resultOf(mentionableWish.result);
     const mentioned = new Writable<MentionablePiece[]>([]);
 
     // UI state
@@ -245,6 +270,11 @@ const Note = pattern<NoteInput, NoteOutput>(
 
     // Backlinks - populated by backlinks-index.tsx
     const backlinks = new Writable<MentionablePiece[]>([]);
+
+    const createBacklink = handleNewBacklink({
+      mentionable,
+      pieceRegistry,
+    });
 
     // Summary - truncated content for search indexing
     const summary = computed(() => {
@@ -531,15 +561,12 @@ const Note = pattern<NoteInput, NoteOutput>(
     const editorUI = (
       <cf-code-editor
         $value={content}
-        $mentionable={mentionable!}
+        $mentionable={mentionable}
         $mentioned={mentioned}
         $references={references!}
         $pattern={patternJson}
         onbacklink-click={handlePieceLinkClick}
-        onbacklink-create={handleNewBacklink({
-          mentionable: mentionable!,
-          pieceRegistry,
-        })}
+        {...backlinkCreateProps(createBacklink)}
         language="text/markdown"
         mode="prose"
         wordWrap

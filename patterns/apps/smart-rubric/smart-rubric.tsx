@@ -43,9 +43,14 @@ import {
   Default,
   FS,
   generateObject,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -814,31 +819,45 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
       system: quickAddSubmittedSystem,
       prompt: quickAddSubmitted,
     });
-    const quickAddPreview = computed(() =>
-      quickAddSubmitted.get().trim() === ""
-        ? EMPTY_PREVIEW
-        : previewFromResponse(extraction.result, dimensions.get())
-    );
-    const quickAddStatus = computed((): QuickAddStatus =>
-      quickAddSubmitted.get().trim() === ""
-        ? "idle"
-        : extraction.pending
-        ? "pending"
-        : extraction.error
-        ? "error"
-        : quickAddPreview.ready
-        ? "ready"
-        // An answer that arrived but names no option is a failure too, so
-        // the spinner never waits on it.
-        : extraction.result
-        ? "error"
-        : "pending"
-    );
-    const quickAddError = computed(() =>
-      extraction.error
-        ? String(extraction.error)
-        : "The answer did not name an option."
-    );
+    const quickAdd = computed((): {
+      status: QuickAddStatus;
+      preview: QuickAddPreview;
+      error: string;
+    } => {
+      if (quickAddSubmitted.get().trim() === "") {
+        return { status: "idle", preview: EMPTY_PREVIEW, error: "" };
+      }
+      if (isPending(extraction) || isSyncing(extraction)) {
+        return { status: "pending", preview: EMPTY_PREVIEW, error: "" };
+      }
+      if (hasError(extraction)) {
+        return {
+          status: "error",
+          preview: EMPTY_PREVIEW,
+          error: extraction.message || "The Quick Add request failed.",
+        };
+      }
+      if (isObsolete(extraction)) {
+        return {
+          status: "error",
+          preview: EMPTY_PREVIEW,
+          error: extraction.message ||
+            "This Quick Add proposal is no longer available.",
+        };
+      }
+      const preview = previewFromResponse(
+        resultOf(extraction),
+        dimensions.get(),
+      );
+      return {
+        status: preview.ready ? "ready" : "error",
+        preview,
+        error: preview.ready ? "" : "The answer did not name an option.",
+      };
+    });
+    const quickAddPreview = quickAdd.preview;
+    const quickAddStatus = quickAdd.status;
+    const quickAddError = quickAdd.error;
 
     const analyzeQuickAdd = action(() => {
       const description = quickAddPrompt.get().trim();

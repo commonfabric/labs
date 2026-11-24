@@ -6,8 +6,17 @@
 // can import it without a cycle (08-open-questions #24).
 
 import { createNodeFactory } from "../../builder/module.ts";
+
+/** @internal Legacy raw query-state factory for persisted compiled graphs. */
+// deno-lint-ignore no-explicit-any
+export const sqliteQueryStateNodeFactory = createNodeFactory<any, any>({
+  type: "ref",
+  implementation: "sqliteQuery",
+});
+
+/** Direct structured-result factory used by newly compiled graphs. */
 // deno-lint-ignore no-explicit-any
 export const sqliteQueryNodeFactory = createNodeFactory<any, any>({
   type: "ref",
-  implementation: "sqliteQuery",
+  implementation: "sqliteQueryResult",
 });

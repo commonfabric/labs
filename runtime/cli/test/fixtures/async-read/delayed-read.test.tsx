@@ -5,7 +5,14 @@
  * before reading again.
  */
 
-import { assert, computed, fetchJson, pattern, TESTS } from "commonfabric";
+import {
+  assert,
+  computed,
+  fetchJson,
+  pattern,
+  resultOf,
+  TESTS,
+} from "commonfabric";
 
 export const fetchMocks = [
   {
@@ -18,8 +25,8 @@ export const fetchMocks = [
 
 export default pattern(() => {
   const url = computed(() => "https://example.test/api/slow");
-  const fetched = fetchJson<{ v: number }>({ url });
-  const result_is_7 = assert(() => fetched.result?.v === 7);
+  const fetched = resultOf(fetchJson<{ v: number }>({ url }));
+  const result_is_7 = assert(() => fetched.v === 7);
   return {
     [TESTS]: [
       { assertion: result_is_7 },

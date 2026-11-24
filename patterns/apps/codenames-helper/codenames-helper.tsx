@@ -23,10 +23,15 @@ import {
   FS,
   generateObject,
   handler,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
   type PerUser,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -504,7 +509,13 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
       });
       const photoId = computed(() => photo?.id || photo?.url || "");
       const view = computed(() => {
-        const result = reading.result as PhotoReading | undefined;
+        const waiting = isPending(reading) || isSyncing(reading);
+        const error = hasError(reading)
+          ? reading.message || "The photo analysis failed."
+          : isObsolete(reading)
+          ? reading.message || "This photo reading is no longer available."
+          : "";
+        const result = waiting || error ? undefined : resultOf(reading);
         const status = photoStatus.get()[photo?.id || photo?.url || ""];
         const check = checkReading(result);
         return {
@@ -518,12 +529,9 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           errors: check.errors,
           warnings: check.warnings,
           notes: typeof result?.notes === "string" ? result.notes : "",
-          // Still reading until there is a result: `pending` can clear a
-          // moment before the result lands, and showing the reading then
-          // rendered "No reading yet" as an error whose row stayed behind,
-          // emptied, once the result's errors list came back empty (runtime
-          // problem: a mapped list shrinking to nothing left a stale row).
-          waiting: !reading.error && (reading.pending || !result),
+          result,
+          waiting,
+          error,
           canApply: check.errors.length === 0,
           applied: status === "applied",
           hidden: status === "discarded",
@@ -533,7 +541,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           })),
         };
       });
-      return { photoIndex, photoId, reading, view };
+      return { photoIndex, photoId, view };
     });
 
     // --- LLM: clue ideas ------------------------------------------------
@@ -543,13 +551,21 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
       system: CLUE_SYSTEM_PROMPT,
       prompt: computed(() => withRound(clueRequest.get(), clueRound.get())),
     });
-    const clues = computed((): ClueIdea[] =>
-      cluesFrom(
-        clueIdeas.result as Partial<ClueSuggestions> | undefined,
-        cards,
-        myTeam.get(),
-      )
-    );
+    const clues = computed(() => {
+      const waiting = isPending(clueIdeas) || isSyncing(clueIdeas);
+      const error = hasError(clueIdeas)
+        ? clueIdeas.message || "The clue request failed."
+        : isObsolete(clueIdeas)
+        ? clueIdeas.message || "These clue suggestions are no longer available."
+        : "";
+      return {
+        waiting,
+        error,
+        ideas: waiting || error
+          ? [] as ClueIdea[]
+          : cluesFrom(resultOf(clueIdeas), cards, myTeam.get()),
+      };
+    });
     const hasRequest = computed(() => clueRequest.get() !== "");
     const cluesStale = computed(() =>
       clueRequest.get() !== "" &&
@@ -607,7 +623,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           variant="secondary"
           oncf-change={addPhotos}
         />
-        {readings.map(({ photoIndex, photoId, reading, view }) =>
+        {readings.map(({ photoIndex, photoId, view }) =>
           view.hidden ? null : view.applied
             ? (
               <div style={styles.hint}>
@@ -623,10 +639,10 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
                       Reading photo {photoIndex + 1}...
                     </div>
                   )
-                  : reading.error
+                  : view.error
                   ? (
                     <div style={styles.error}>
-                      Photo {photoIndex + 1} could not be read: {reading.error}
+                      Photo {photoIndex + 1} could not be read: {view.error}
                     </div>
                   )
                   : (
@@ -653,11 +669,14 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
                     type="button"
                     style={styles.primary}
                     disabled={!view.canApply}
-                    onClick={() =>
-                      applyPhotoReading.send({
-                        reading: reading.result as PhotoReading,
-                        photoId,
-                      })}
+                    onClick={() => {
+                      if (view.canApply && view.result) {
+                        applyPhotoReading.send({
+                          reading: view.result,
+                          photoId,
+                        });
+                      }
+                    }}
                   >
                     Apply to board
                   </button>
@@ -704,20 +723,20 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           )
           : null}
         {hasRequest
-          ? (clueIdeas.pending
+          ? (clues.waiting
             ? (
               <div style={styles.row}>
                 <cf-loader showElapsed></cf-loader>
                 Thinking of clues...
               </div>
             )
-            : clueIdeas.error
-            ? <div style={styles.error}>No clues: {clueIdeas.error}</div>
+            : clues.error
+            ? <div style={styles.error}>No clues: {clues.error}</div>
             : (
               <div
                 style={{ display: "flex", flexDirection: "column", gap: "8px" }}
               >
-                {clues.map((clue) => (
+                {clues.ideas.map((clue) => (
                   <div style={styles.clueCard}>
                     <div style={styles.clueWord}>
                       {clue.clue} ({clue.number})

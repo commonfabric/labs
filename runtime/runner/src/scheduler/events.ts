@@ -53,6 +53,7 @@ import type {
 import { ReplicaLoadFailureError } from "../storage/interface.ts";
 import {
   localReadFailure,
+  localReadsReady,
   releaseLocalReadBasis,
   validateLocalReadBasis,
 } from "../storage/local-read-policy.ts";
@@ -103,6 +104,7 @@ import {
   type Action,
   type EventHandler,
   type EventPreflightTraceContext,
+  type HandlerInputReadiness,
   type LoadingReadWithdrawal,
   LT1_LATE_SEAL_REFUSED,
   type PieceStartWake,
@@ -323,11 +325,16 @@ function createGuardedDispatcher(
       event,
     );
   };
+  dispatcher.inputReadiness = (tx, event) =>
+    selectEventImplementation(dispatcher, tx)?.inputReadiness?.(tx, event) ??
+      { ready: true };
   return dispatcher;
 }
 
 /** The actor used by both selection probes and the eventual stamped dispatch. */
-function eventScopeIdentity(event: QueuedEvent): ScopeKeyIdentity | undefined {
+export function eventScopeIdentity(
+  event: QueuedEvent,
+): ScopeKeyIdentity | undefined {
   const firedAt = event.served?.firedAt;
   if (firedAt !== undefined) {
     return {
@@ -466,6 +473,11 @@ export function isHeadEventParked(
 
 export interface EventDependencyPreflightResult {
   shouldSkipEvent: boolean;
+  shouldParkForInputs?: boolean;
+  inputUnavailableReason?: Exclude<
+    HandlerInputReadiness,
+    { ready: true }
+  >["reason"];
   deps: ReactivityLog;
   invalidDeps: Set<Action>;
   hasInvalidDependencies: boolean;
@@ -1501,6 +1513,12 @@ export interface SchedulerEventExecutionState {
     withdrawal?: LoadingReadWithdrawal,
   ) => void;
   readonly isHeadEventLoadParked: (event: QueuedEvent) => boolean;
+  readonly isEventWaitingForInput: (event: QueuedEvent) => boolean;
+  readonly parkEventUntilInputChanges: (
+    event: QueuedEvent,
+    deps: ReactivityLog,
+  ) => void;
+  readonly clearEventInputWait: (event: QueuedEvent) => void;
   readonly nodes: NodeRegistry;
   readonly pending: Set<Action>;
   readonly eventPreflightTelemetryEnabled: boolean;
@@ -1631,6 +1649,8 @@ export function preflightQueuedEventDependencies(state: {
   let scheduleMs = 0;
   let shouldSkipEvent = false;
 
+  let inputReadiness: HandlerInputReadiness = { ready: true };
+
   // Get the handler's dependencies (read-only, just capturing what will be read)
   const depTx = state.runtime.edit();
   let failureReported = false;
@@ -1671,6 +1691,8 @@ export function preflightQueuedEventDependencies(state: {
       queuedEvent.preflightImplementation = implementation;
       if (implementation !== undefined) {
         state.runtime.scheduler.prepareViewAction(depTx, implementation);
+        inputReadiness = implementation.inputReadiness?.(depTx, eventValue) ??
+          { ready: true };
         implementation.populateDependencies?.(depTx, eventValue);
       }
     } catch (error) {
@@ -1851,6 +1873,11 @@ export function preflightQueuedEventDependencies(state: {
 
     return {
       shouldSkipEvent,
+      shouldParkForInputs: !inputReadiness.ready &&
+        (inputReadiness.reason === "pending" ||
+          inputReadiness.reason === "syncing"),
+      ...(!inputReadiness.ready &&
+        { inputUnavailableReason: inputReadiness.reason }),
       deps,
       invalidDeps,
       hasInvalidDependencies,
@@ -2185,6 +2212,8 @@ export async function processPullQueuedEventDuringExecute(
   if (state.isHeadEventLoadParked(queuedEvent)) {
     return;
   }
+  if (state.isEventWaitingForInput(queuedEvent)) return;
+  state.clearEventInputWait(queuedEvent);
 
   // The head holds its slot while an earlier multi-space commit hands its
   // later spaces' writes to their replicas; the hand-over queues a fresh tick.
@@ -2234,7 +2263,7 @@ export async function processPullQueuedEventDuringExecute(
   }
 
   let shouldSkipEvent = false;
-  if (handler.populateDependencies) {
+  if (handler.populateDependencies || handler.inputReadiness) {
     // Snapshot generations that were already in flight before preflight reads
     // can kick their own fire-and-forget loads. A later generation that existed
     // here is a genuine concurrent refresh and must re-park; one first created
@@ -2314,6 +2343,8 @@ export async function processPullQueuedEventDuringExecute(
         dirtyDependencyCount: preflight.invalidDeps.size,
         hasDirtyDependencies: preflight.hasInvalidDependencies,
         skipped: shouldSkipEvent,
+        queueDepth: state.eventQueue.length,
+        inputUnavailableReason: preflight.inputUnavailableReason,
         populateMs: preflight.populateMs,
         txToLogMs: preflight.txToLogMs,
         depCommitMs: preflight.depCommitMs,
@@ -2323,6 +2354,10 @@ export async function processPullQueuedEventDuringExecute(
           preflight.preflightStats,
         ),
       });
+    }
+    if (!shouldSkipEvent && preflight.shouldParkForInputs) {
+      state.parkEventUntilInputChanges(queuedEvent, preflight.deps);
+      shouldSkipEvent = true;
     }
   }
 
@@ -2361,6 +2396,10 @@ export async function processPullQueuedEventDuringExecute(
       state.getOriginLocalSeq(originTx, space),
     collectPendingLoadParkKeys: (event, log) =>
       state.collectPendingLoadParkKeys(event, log),
+    parkEventUntilInputChanges: (event, deps) =>
+      state.parkEventUntilInputChanges(event, deps),
+    clearEventInputWait: (event) => state.clearEventInputWait(event),
+    dropEvent: (event, reason) => state.dropEvent(event, reason),
     unawaitedLoadKeys: (event, keys) => state.unawaitedLoadKeys(event, keys),
     parkHeadEventForLoads: (event, keys, withdrawal) =>
       state.parkHeadEventForLoads(event, keys, withdrawal),
@@ -2419,6 +2458,12 @@ export async function dispatchQueuedEvent(state: {
     keys: readonly string[],
     withdrawal?: LoadingReadWithdrawal,
   ) => void;
+  readonly parkEventUntilInputChanges: (
+    event: QueuedEvent,
+    deps: ReactivityLog,
+  ) => void;
+  readonly clearEventInputWait: (event: QueuedEvent) => void;
+  readonly dropEvent: (event: QueuedEvent, reason: string) => void;
 }, queuedEvent: QueuedEvent): Promise<void> {
   const { action, handler, event: eventValue, retry, onCommit } = queuedEvent;
   // The head's presync covered this implementation (`holdHeadEventForPresync`),
@@ -2442,6 +2487,67 @@ export async function dispatchQueuedEvent(state: {
     state.eventQueue[0] !== queuedEvent
   ) {
     return;
+  }
+  // Presync crosses an asynchronous boundary, so availability is rechecked
+  // before consuming the FIFO slot. The same actor and selector govern it.
+  if (dispatchImplementation?.inputReadiness) {
+    const readTx = state.runtime.edit();
+    const parkLocalFailure = (): boolean => {
+      const failure = validateLocalReadBasis(readTx);
+      if (failure === undefined) return false;
+      const log = txToReactivityLog(readTx);
+      state.parkEventUntilInputChanges(queuedEvent, {
+        ...log,
+        reads: [...log.reads, failure.address],
+        writes: [],
+      });
+      if (localReadsReady(readTx)) {
+        state.clearEventInputWait(queuedEvent);
+        state.queueExecution();
+      }
+      releaseLocalReadBasis(readTx);
+      return true;
+    };
+    try {
+      readTx.setReadOnly?.("scheduler.inputReadiness()");
+      const identity = eventScopeIdentity(queuedEvent);
+      if (identity !== undefined) readTx.tx.scopeKeyIdentity = identity;
+      const selected = selectEventImplementation(handler, readTx);
+      if (selected !== dispatchImplementation) {
+        state.queueExecution();
+        return;
+      }
+      state.runtime.scheduler.prepareViewAction(readTx, selected);
+      const readiness = selected.inputReadiness?.(readTx, eventValue);
+      if (parkLocalFailure()) return;
+      if (
+        readiness?.ready === false &&
+        (readiness.reason === "pending" || readiness.reason === "syncing")
+      ) {
+        state.parkEventUntilInputChanges(
+          queuedEvent,
+          txToReactivityLog(readTx),
+        );
+        return;
+      }
+    } catch (error) {
+      if (localReadFailure(readTx) !== undefined && parkLocalFailure()) return;
+      try {
+        state.handleError(
+          error instanceof Error ? error : new Error(String(error)),
+          action,
+        );
+      } finally {
+        state.dropEvent(
+          queuedEvent,
+          "Event dropped: post-presync input readiness failed",
+        );
+      }
+      return;
+    } finally {
+      readTx.clearReadOnly?.();
+      if (readTx.status().status === "ready") readTx.abort();
+    }
   }
   state.eventQueue.shift();
 
@@ -3180,6 +3286,26 @@ export async function dispatchQueuedEvent(state: {
               withheld ? notRunMessage : `handler did not run: ${reason}`,
             ),
           );
+        }
+        if (tx.dispatchedHandlerNotRun.terminal === true) {
+          if (served !== undefined) {
+            reportServedEventFailure(served, {
+              kind: "dropped",
+              message: notRunMessage,
+            });
+            runFinalCommitCallback();
+            tx.abandonStagedWork(eventAbandonError(notRunMessage));
+          } else {
+            finalizeFailure(
+              new EventHandlerNotRunError({
+                handlerId,
+                reason,
+                attempts: 1,
+                elapsedMs: 0,
+              }),
+            );
+          }
+          return;
         }
         if (served !== undefined) {
           // Mark/effects atomicity (events.md §4, RULED 2026-08-27 — the

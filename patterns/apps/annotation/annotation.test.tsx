@@ -9,7 +9,16 @@
  * field, the target picker with its search, and the blocker picker with its
  * search.
  */
-import { action, assert, NAME, pattern, TESTS, UI, wish } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  resultOf,
+  TESTS,
+  UI,
+  wish,
+} from "commonfabric";
 import type { Writable } from "commonfabric";
 import Annotation from "./annotation.tsx";
 import {
@@ -101,7 +110,8 @@ export default pattern(() => {
     isAnnotation: true,
     isHidden: false,
   });
-  const home = wish<Writable<HomeDefault>>({ query: "#default" }).result!;
+  const homeWish = wish<Writable<HomeDefault>>({ query: "#default" });
+  const home = resultOf(homeWish.result);
 
   // ===== Initial state =====
 

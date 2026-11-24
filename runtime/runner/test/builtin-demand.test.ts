@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { LLMClient } from "@commonfabric/llm";
 import {
   addMockResponse,
@@ -12,7 +13,6 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { waitForLlmSettled } from "./support/llm-result.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("test builtin demand");
@@ -85,8 +85,12 @@ describe("builtin demand", () => {
       const result = start();
       await tx.commit().settled;
       await runtime.settled();
-      const settled = await waitForLlmSettled<string>(runtime, result);
-      expect(settled.result).toBe("answered");
+      const settled = await waitForCellValue<string>(
+        runtime,
+        result,
+        (value) => value === "answered",
+      );
+      expect(settled).toBe("answered");
       expect(requests).toBe(1);
     });
   });

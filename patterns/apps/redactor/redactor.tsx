@@ -27,8 +27,15 @@ import {
   Default,
   generateText,
   handler,
+  hasError,
+  ifElse,
+  isObsolete,
+  isPending,
+  isSyncing,
+  lift,
   NAME,
   pattern,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -156,12 +163,19 @@ const copyInto = handler<
   to.set(from);
 });
 
+// The private draft has no stored default. Its text projections can render
+// before the first focus writes the textarea's initial value.
+const draftText = lift(({ draft }: { draft?: string }) => draft ?? "");
+
 const Redactor = pattern<RedactorInput, RedactorOutput>(
   ({ vaultEntries, draft, modelPrompt, pastedReply }) => {
     const vault = PIIVault({ entries: vaultEntries });
     const showVault = new Writable.perSession(false);
 
-    const input = { draft, vault: vaultEntries };
+    const input = {
+      draft: draftText({ draft }),
+      vault: vaultEntries,
+    };
     const redacted = redactDraft(input);
     const found = findInDraft(input);
     const substitutions = substitutionsFor(input);
@@ -186,11 +200,12 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
 
     const answer = generateText({ system: SYSTEM_PROMPT, prompt: modelPrompt });
 
-    const reply = computed(() =>
-      pastedReply.get().trim() !== ""
-        ? pastedReply.get()
-        : (answer.result ?? "") as string
-    );
+    const hasPasted = computed(() => pastedReply.get().trim() !== "");
+    const hasPrompt = computed(() => modelPrompt.get() !== "");
+    const modelReply = ifElse(hasPrompt, resultOf(answer), "");
+    const reply = ifElse(hasPasted, pastedReply.get(), modelReply);
+    const modelWaiting = computed(() => isPending(answer) || isSyncing(answer));
+    const modelFailed = computed(() => hasError(answer) || isObsolete(answer));
     // A pasted reply is restored with the current draft's key; a sent one
     // with the key captured when it was sent.
     const replyKey = computed((): Substitution[] =>
@@ -211,7 +226,6 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
     const vaultToggleLabel = computed(() =>
       `${showVault.get() ? "Hide" : "Show"} vault (${vault.entries.length})`
     );
-    const hasPasted = computed(() => pastedReply.get() !== "");
     const sentIsCurrent = computed(() =>
       modelPrompt.get() !== "" && modelPrompt.get() === redacted
     );
@@ -278,7 +292,18 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
                 <cf-heading level={4}>
                   3. The reply, with your details
                 </cf-heading>
-                {answer.pending ? <cf-loader showElapsed /> : null}
+                {!hasPasted && hasPrompt
+                  ? modelWaiting
+                    ? <cf-loader showElapsed />
+                    : modelFailed
+                    ? (
+                      <cf-label>
+                        The model reply is unavailable. You can paste a reply
+                        below.
+                      </cf-label>
+                    )
+                    : null
+                  : null}
                 {restored !== ""
                   ? <cf-markdown content={restored} />
                   : (

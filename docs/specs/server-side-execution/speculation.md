@@ -152,9 +152,9 @@ currency. The existing overlay and retirement rules below still apply.
   whether or not its type admits `undefined` — see the carve-outs
   below): it registers the dead-end doc's read (the
   dependency that re-triggers the run when the doc arrives) and the run
-  is disposed as a non-event — **output `undefined`, no action failure,
-  re-triggered when any of its reads so far change, exactly like a
-  regular call whose inputs were not ready.** Scope, precisely (#6179
+  produces **no output write while the input is in transit**. It is
+  re-triggered when the load settles or its reads change; a confirmed
+  refusal produces a native error as described below. Scope, precisely (#6179
   review, item 5b): the refusal is on the SCHEMA-aware lazy read path
   only — a SCHEMA-LESS read takes `validateAndTransform`'s
   query-result-proxy early-out before resolution and so never reaches
@@ -218,41 +218,29 @@ currency. The existing overlay and retirement rules below still apply.
      own echo of it persists (§4's arrival gate).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch
-     it) and produces an undefined result through the ordinary result
-     path — the same non-event disposal, re-triggering on the reads so far. A
+     it) and takes the same readiness-dependent disposition as a refusal
+     recorded on the transaction, re-triggering on the reads so far. A
      pattern body cannot yet MINT the error itself (it is
      runner-internal; a pattern-facing refusal export is a flagged API
      question with the owner), so the built coverage is the
      read-propagation path — the OW51 shape — with the deliberate
      body-throw awaiting that export.
 
-  **A run refused for an input in transit keeps a result its node
-  already holds (DECIDED 2026-11-19, narrowing the 2026-08-21 ruling's
-  "output `undefined`").** Where the read that refused found a document
-  still in transit to this replica, one it has never examined and the
-  store has not reported absent (`IStorageProvider.unexaminedAbsences()`
-  and `storeReportedAbsent()`), and the node's output already holds a
-  value, the disposal writes nothing: the output keeps that value. The
-  same holds for an argument that did not resolve because a document it
-  reads is in transit. Such a run runs again once the loads of those
-  documents have settled, whatever they find, since a document that
-  arrives absent changes nothing its reads could see. A document whose
-  load has settled is no longer in transit, whether the load failed or
-  ended without delivering it, as a load from a space that refuses this
-  replica ends (the store's ledger records no failure for one: the
-  document is absent for its reader), so the run after that clears the
-  result rather than asking for the load again. Everywhere else
-  the disposal is as above: a refusal over an input that has arrived
-  clears the result, as the [2026-09-14 derived-state correction
-  decision](../../history/development/2026-09-14-derived-state-correction.md)
-  requires, and a node whose output holds nothing takes the `undefined`
-  result. So a result derived from an input that had not arrived never
-  replaces one derived from inputs that had. The case this governs is a
-  client starting a piece cold: its first runs read inputs in spaces it
-  has not loaded yet, and each would otherwise commit `undefined` over
-  the stored result, blanking it for every client until the inputs
-  arrived and the run came again. — decided by @danfuzz, 2026-11-19;
-  @seefeldb, who made the 2026-08-21 ruling, is informed.
+  **A run refused for an input in transit makes no output write.** Local
+  readiness says what this replica knows, not what another replica should
+  store. An output that already holds a value keeps it; an output with no
+  revision stays unwritten. This holds for eager and lazy arguments. A
+  status-aware read of the missing input can report `Syncing` locally.
+  Once its load settles, the computation runs again even if the store had
+  nothing to deliver. A valid input produces the ordinary result, including
+  an authored `undefined` where the schema admits it. A confirmed absence
+  or wrong shape that fails the schema produces a native error of kind
+  `schemaMismatch`; a failed linked-document load produces a native error
+  of kind `sync` with its cause. Either diagnostic replaces a stale result.
+  When a space refuses this reader and its load completes without delivering
+  the document, the document is absent for that reader; the refused run does
+  not keep retrying. If a replacement replica needs a previously delivered
+  document again, it is in transit until that replica’s load settles.
 
   **The serving-side re-trigger, explicit (RULED 2026-08-21 — the
   option-3 ruling on the demand-closure fork):**
@@ -755,8 +743,9 @@ transaction shape, and a transaction outside the blind-write family —
 including its verifier reads — keeps naming every layer, unless it
 carries the durable-read mark below; `speculation-overlay.test.ts`
 pins the export, the scoping, the verify-durable consistency, the
-content-addressed exemption, and the durable-read mark on both a
-direct transaction and a piece start.
+content-addressed exemption, and the durable-read mark on a direct transaction
+and a piece start. `list-result-container-seed.test.ts` pins the same mark on a
+list result-container recovery seed.
 
 The echo a blind write lands over is the speculation of an event whose
 authoritative consequence commits later, and that consequence does not
@@ -764,7 +753,7 @@ land over the write in turn: serving-loop.md §3d supersedes every
 consequence write that a later write of the event's firing session
 overwrote.
 
-### The durable-read mark, and the piece start that needs it
+### The durable-read mark and the bookkeeping that needs it
 
 An authored transaction whose writes must reach the wire can read the
 durable replica view instead of the ordinary one. `markDurableReadTx`
@@ -774,9 +763,12 @@ transaction consumed and what it names stay the same set — the
 verify-durable and name-durable pairing again, one shape wider. A
 document still short of its authoritative value re-derives reactively
 once that value lands, which is the recovery path §6's refusal
-message names. The direct SQLite capability's exec carries the mark,
-an authored write with no reactive run around it, and so does the
-runner's piece start.
+message names. The direct SQLite capability's exec and the runner's piece
+start carry the mark. A `map` / `filter` / `flatMap` result-container recovery
+seed on a server-execution client also carries it: the seed is wire-bound
+bookkeeping, and its presence probe must not consume the coordinator's own
+speculative result.
+
 
 A host read that must not report this runtime's preview carries it
 too, on a read-only transaction: `readConfirmed()` and `readDurable()`

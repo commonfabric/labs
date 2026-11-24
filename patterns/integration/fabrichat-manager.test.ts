@@ -12,12 +12,14 @@ import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   type Cell,
   inSpaceRootCause,
   isCell,
   Runtime,
+  UI,
 } from "@commonfabric/runner";
 import {
   markRendererTrustedEvent,
@@ -42,6 +44,9 @@ const MANAGER_PATH = fromFileUrl(
   new URL("../system/fabrichat/manager.tsx", import.meta.url),
 );
 
+const PROFILE_PATH = fromFileUrl(
+  new URL("../system/profile-home/profile-home.tsx", import.meta.url),
+);
 // The patterns package, which the manager's imports reach across.
 const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
 
@@ -125,28 +130,41 @@ describe("fabrichat-manager", () => {
 
   // Starts the manager, and returns a way to send it an event and wait for
   // the event's effect.
-  const startManager = async () => {
-    // The manager's core, given a profile of its own: `#profile` resolves
-    // nothing here, and a manager starts no chat without one.
+  const startManager = async (resolveProfile = false) => {
+    // The core gets a profile directly; the default wrapper resolves its
+    // profile from the home roster the test controls.
     const program = {
       ...await resolveLocalProgram(
         (resolver) => runtime.harness.resolve(resolver),
         { main: MANAGER_PATH, root: PATTERNS },
       ),
-      mainExport: "FabriChatManagerCore",
+      ...(resolveProfile ? {} : { mainExport: "FabriChatManagerCore" }),
     };
     const tx = runtime.edit();
+    if (resolveProfile) {
+      runtime.getHomeSpaceCell(tx).key("defaultPattern").set({ profiles: [] });
+    }
     const pattern = await runtime.patternManager.compilePattern(program, {
       space: home,
       tx,
     });
-    const profile = runtime.getCell<{ name: string }>(
-      home,
+    const profileSpace = resolveProfile
+      ? (await Identity.fromPassphrase("fabrichat default manager profile"))
+        .did()
+      : home;
+    const profile = runtime.getCell<{
+      name: string;
+      initialNameApplied?: string;
+      avatar?: string;
+      bio?: string;
+      elements?: unknown[];
+    }>(
+      profileSpace,
       "profile",
       profileSchema,
       tx,
     );
-    profile.set({ name: "Tester" });
+    if (!resolveProfile) profile.set({ name: "Tester" });
     const resultCell = runtime.getCell<Record<string, unknown>>(
       home,
       RESULT_CAUSE,
@@ -157,7 +175,7 @@ describe("fabrichat-manager", () => {
       tx,
       // deno-lint-ignore no-explicit-any
       pattern as any,
-      { myProfile: profile, sessionProfile: profile },
+      resolveProfile ? {} : { myProfile: profile, sessionProfile: profile },
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
@@ -332,5 +350,107 @@ describe("fabrichat-manager", () => {
       [CAROL]: "OWNER",
       "*": "WRITE",
     });
+  });
+
+  it("creates a room after the default manager's missing profile becomes available", async () => {
+    const { manager, send, rooms, profile } = await startManager(true);
+    await send("createGroup", {
+      requestId: "missing-profile",
+      title: "Not created",
+      members: [],
+    });
+    expect(manager.key("requests").key("missing-profile").get()).toEqual({
+      status: "refused",
+      reason: "Starting a chat needs a profile.",
+    });
+    expect(rooms()).toHaveLength(0);
+    expect(manager.key("outgoingNotices").get()).toEqual([]);
+    const control = manager.key(UI).key("children").key(3)
+      .key("children").key(0).key("children").key(0);
+    expect(control.key("name").get()).toBe("cf-submit-input");
+    expect(control.key("props").key("inputId").get()).toBe(
+      "fabrichat-start-direct",
+    );
+    const disabled = control.key("props").key("disabled").asSchema<boolean>({
+      type: "boolean",
+    });
+    expect(disabled.get()).toBe(true);
+
+    const profileTx = runtime.edit();
+    const profileProgram = await resolveLocalProgram(
+      (resolver) => runtime.harness.resolve(resolver),
+      { main: PROFILE_PATH },
+    );
+    const profilePattern = await runtime.patternManager.compilePattern(
+      profileProgram,
+      { space: profile.getAsNormalizedFullLink().space, tx: profileTx },
+    );
+    runtime.run(profileTx, profilePattern, { initialName: "Tester" }, profile);
+    runtime.prepareTxForCommit(profileTx);
+    expect((await profileTx.commit().settled).error).toBeUndefined();
+    await profile.pull();
+    const tx = runtime.edit();
+    runtime.getHomeSpaceCell(tx).key("defaultPattern").set({
+      profiles: [profile],
+      defaultProfile: { profile },
+    });
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await waitForCellValue<boolean>(
+      runtime,
+      disabled,
+      (value) => value === false,
+    );
+
+    await send("createGroup", {
+      requestId: "recovered-profile",
+      title: "Recovered",
+      members: [],
+    });
+    await waitForCellValue<{ status: string }>(
+      runtime,
+      manager.key("requests").key("recovered-profile"),
+      (value) => value?.status === "done",
+    );
+    expect(rooms()).toHaveLength(1);
+    // Host reads follow the room beyond the index-read transaction.
+    const room: Cell<unknown> = rooms()[0].room.withTx();
+    expect(await runtime.start(room)).toBe(true);
+    await room.pull();
+    await waitForCellValue<boolean>(
+      runtime,
+      room.key("canSend").asSchema<boolean>({ type: "boolean" }),
+      (value) => value === true,
+    );
+    const sendTx = runtime.edit();
+    const messageEvent = {
+      type: "click",
+      requestId: "message-after-recovery",
+      target: { value: "Hello" },
+      provenance: reviewedActionProvenance("dom", {
+        surface: "ChatSendSurface",
+        action: "ChatSend",
+      }),
+    };
+    markRendererTrustedEvent(messageEvent);
+    room.withTx(sendTx).key("sendMessage").send(messageEvent);
+    runtime.prepareTxForCommit(sendTx);
+    expect((await sendTx.commit().settled).error).toBeUndefined();
+    await waitForCellValue<number>(
+      runtime,
+      room.key("messages").key("count").asSchema<number>({ type: "number" }),
+      (value) => value === 1,
+    );
+    const latest = await waitForCellValue<Cell<unknown>[]>(
+      runtime,
+      room.key("messages").key("latest").key("messages")
+        .asSchema<Cell<unknown>[]>({
+          type: "array",
+          items: { type: "unknown", asCell: ["cell"] },
+        }),
+      (value) => value?.length === 1,
+    );
+    const author = latest[0].withTx().key("authorProfile").resolveAsCell();
+    expect(author.equals(profile)).toBe(true);
   });
 });
