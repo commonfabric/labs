@@ -475,6 +475,18 @@ export async function publishedBoardSources(
   return published;
 }
 
+/**
+ * The id of the database an indexed collection's handle names, read from the
+ * handle as `cf cell get` prints it, or `undefined` for a value that is not a
+ * handle. Two boards' collections have different ids, so this is what tells
+ * a topic bound to one board from a topic bound to another.
+ */
+export function collectionIdOf(handle: unknown): string | undefined {
+  return isObjectNotArray(handle) && typeof handle.id === "string"
+    ? handle.id
+    : undefined;
+}
+
 /** What the target's current pattern declares and currently holds. */
 export interface RestoreTarget {
   /**
