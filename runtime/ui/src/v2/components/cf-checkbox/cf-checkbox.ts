@@ -1,7 +1,6 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createBooleanCellController } from "../../core/cell-controller.ts";
@@ -14,8 +13,6 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
  *
  * @attr {boolean|CellHandle<boolean>} checked - Whether the checkbox is checked (supports both plain boolean and CellHandle<boolean>)
  * @attr {boolean} disabled - Whether the checkbox is disabled
- * @attr {string} name - Name attribute for form submission
- * @attr {string} value - Value attribute for form submission
  * @attr {boolean} required - Whether the checkbox is required
  * @attr {boolean} indeterminate - Whether the checkbox is in indeterminate state
  *
@@ -24,7 +21,7 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
  * @fires cf-change - Fired on change with detail: { checked, indeterminate }
  *
  * @example
- * <cf-checkbox name="terms" checked>Accept terms</cf-checkbox>
+ * <cf-checkbox checked>Accept terms</cf-checkbox>
  *
  * @example
  * <!-- Reactive Cell binding -->
@@ -127,19 +124,6 @@ export class CFCheckbox extends BaseElement {
         display: none;
       }
 
-      /* Hidden native input for form compatibility */
-      .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
-        border-width: 0;
-      }
-
       /* Hover state */
       :host(:not([disabled]):hover) .checkbox:not(.checked):not(.indeterminate) {
         border-color: var(--primary, #0f172a);
@@ -165,16 +149,12 @@ export class CFCheckbox extends BaseElement {
       disabled: { type: Boolean, reflect: true },
       indeterminate: { type: Boolean, reflect: true },
       required: { type: Boolean, reflect: true },
-      name: { type: String },
-      value: { type: String },
     };
 
     declare checked: CellHandle<boolean> | boolean;
     declare disabled: boolean;
     declare indeterminate: boolean;
     declare required: boolean;
-    declare name: string;
-    declare value: string;
 
     private _checkedCellController = createBooleanCellController(this, {
       timing: {
@@ -214,8 +194,6 @@ export class CFCheckbox extends BaseElement {
       this.disabled = false;
       this.indeterminate = false;
       this.required = false;
-      this.name = "";
-      this.value = "on";
     }
 
     private getChecked(): boolean {
@@ -303,16 +281,6 @@ export class CFCheckbox extends BaseElement {
           <span class="checkmark" part="checkmark"></span>
         </div>
         <slot></slot>
-        <input
-          type="checkbox"
-          class="sr-only"
-          ?checked="${isChecked}"
-          ?disabled="${this.disabled}"
-          name="${ifDefined(this.name || undefined)}"
-          value="${this.value}"
-          tabindex="-1"
-          aria-hidden="true"
-        />
       `;
     }
 

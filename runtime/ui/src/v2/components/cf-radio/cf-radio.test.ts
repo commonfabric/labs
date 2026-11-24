@@ -28,9 +28,6 @@ async function radioWith(
 const circle = (element: CFRadio) =>
   element.shadowRoot!.querySelector(".radio")!;
 
-const hiddenInput = (element: CFRadio) =>
-  element.shadowRoot!.querySelector("input")!;
-
 function click(): MouseEvent {
   return new MouseEvent("click", { bubbles: true, cancelable: true });
 }
@@ -72,20 +69,18 @@ describe("CFRadio", () => {
   });
 
   describe("render()", () => {
-    it("shows an empty circle, and a hidden input with the radio's value", async () => {
+    it("shows an empty circle, with no native input of its own", async () => {
       const { element } = await radioWith({ value: "small" });
 
       expect([...circle(element).classList]).toEqual(["radio"]);
-      expect(hiddenInput(element).checked).toBe(false);
-      expect(hiddenInput(element).value).toBe("small");
-      expect(hiddenInput(element).hasAttribute("name")).toBe(false);
+      expect(element.getAttribute("aria-checked")).toBe("false");
+      expect(element.shadowRoot!.querySelector("input")).toBeNull();
     });
 
-    it("marks the circle and the hidden input checked and disabled", async () => {
+    it("marks the circle checked and disabled", async () => {
       const { element } = await radioWith({
         checked: true,
         disabled: true,
-        name: "size",
       });
 
       expect([...circle(element).classList]).toEqual([
@@ -93,9 +88,6 @@ describe("CFRadio", () => {
         "checked",
         "disabled",
       ]);
-      expect(hiddenInput(element).checked).toBe(true);
-      expect(hiddenInput(element).disabled).toBe(true);
-      expect(hiddenInput(element).name).toBe("size");
     });
 
     it("reports a change of state to assistive technology", async () => {

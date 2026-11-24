@@ -49,9 +49,6 @@ for (
           "checked",
         ),
       ).toBe(delivered);
-      expect(element.shadowRoot?.querySelector("input")?.checked).toBe(
-        delivered,
-      );
       expect(element.getAttribute("aria-checked")).toBe(String(delivered));
     } finally {
       element.remove();
@@ -74,11 +71,8 @@ Deno.test("cf-checkbox preserves mixed and disabled states across bound cell upd
     await element.updateComplete;
 
     const visual = element.shadowRoot?.querySelector(".checkbox");
-    const input = element.shadowRoot?.querySelector("input");
     expect(visual?.classList.contains("indeterminate")).toBe(true);
     expect(visual?.classList.contains("checked")).toBe(false);
-    expect(input?.checked).toBe(true);
-    expect(input?.disabled).toBe(true);
     expect(element.getAttribute("aria-checked")).toBe("mixed");
     expect(element.getAttribute("aria-disabled")).toBe("true");
     expect(element.tabIndex).toBe(-1);
@@ -89,7 +83,6 @@ Deno.test("cf-checkbox preserves mixed and disabled states across bound cell upd
 
     expect(visual?.classList.contains("indeterminate")).toBe(false);
     expect(visual?.classList.contains("checked")).toBe(true);
-    expect(input?.disabled).toBe(false);
     expect(element.getAttribute("aria-checked")).toBe("true");
     expect(element.getAttribute("aria-disabled")).toBe("false");
     expect(element.tabIndex).toBe(0);

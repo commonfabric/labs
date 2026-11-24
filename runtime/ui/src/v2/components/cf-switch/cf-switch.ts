@@ -1,7 +1,6 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
 import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
-import { ifDefined } from "lit/directives/if-defined.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createBooleanCellController } from "../../core/cell-controller.ts";
@@ -13,8 +12,6 @@ import { createBooleanCellController } from "../../core/cell-controller.ts";
  *
  * @attr {boolean|CellHandle<boolean>} checked - Whether the switch is checked/on (supports both plain boolean and CellHandle<boolean>)
  * @attr {boolean} disabled - Whether the switch is disabled
- * @attr {string} name - Name attribute for form submission
- * @attr {string} value - Value attribute for form submission (default: "on")
  *
  * @fires cf-change - Fired when switch state changes with detail: { checked }
  *
@@ -118,19 +115,6 @@ export class CFSwitch extends BaseElement {
       transform: translateX(var(--cf-switch-thumb-travel));
     }
 
-    /* Hidden native input for form compatibility */
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border-width: 0;
-    }
-
     /* Hover state */
     :host(:not([disabled]):hover) .switch:not(.checked) {
       background-color: var(--cf-switch-color-border, #e2e8f0);
@@ -154,14 +138,10 @@ export class CFSwitch extends BaseElement {
   static override properties = {
     checked: { type: Boolean, reflect: true },
     disabled: { type: Boolean, reflect: true },
-    name: { type: String },
-    value: { type: String },
   };
 
   declare checked: CellHandle<boolean> | boolean;
   declare disabled: boolean;
-  declare name: string;
-  declare value: string;
 
   private _checkedCellController = createBooleanCellController(this, {
     timing: {
@@ -177,8 +157,6 @@ export class CFSwitch extends BaseElement {
     super();
     this.checked = false;
     this.disabled = false;
-    this.name = "";
-    this.value = "on";
   }
 
   private getChecked(): boolean {
@@ -246,16 +224,6 @@ export class CFSwitch extends BaseElement {
       >
         <span class="thumb" part="thumb"></span>
       </div>
-      <input
-        type="checkbox"
-        class="sr-only"
-        ?checked="${isChecked}"
-        ?disabled="${this.disabled}"
-        name="${ifDefined(this.name || undefined)}"
-        value="${this.value}"
-        tabindex="-1"
-        aria-hidden="true"
-      />
     `;
   }
 

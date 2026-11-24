@@ -5,7 +5,7 @@
  *
  * @tag cf-radio-group
  *
- * @attribute {string} name - The name for all radio buttons in the group
+ * @attribute {string} name - The name of the radios the group renders from `items`
  * @attribute {string} value - The currently selected radio button value
  * @attribute {boolean} disabled - Whether all radio buttons in the group are disabled
  * @attribute {string} orientation - Layout orientation: "vertical" (default) or "horizontal"
@@ -44,7 +44,7 @@
  * />
  *
  * <!-- Using slotted cf-radio elements (for custom rendering) -->
- * <cf-radio-group name="size" value="medium">
+ * <cf-radio-group value="medium">
  *   <cf-radio value="small">Small</cf-radio>
  *   <cf-radio value="medium">Medium</cf-radio>
  *   <cf-radio value="large">Large</cf-radio>
@@ -57,7 +57,6 @@
  *   enabled radio while none is checked, and a second Tab leaves it
  * - The arrow keys move focus and selection to the next or previous enabled
  *   radio, wrapping at the ends
- * - Automatically assigns group name to child radios if not specified
  *
  * @methods
  * - getValue() - Get the currently selected radio value
@@ -239,14 +238,12 @@ export class CFRadioGroup extends BaseElement {
   };
 
   /**
-   * Brings the slotted radios in line with the group: names each one that has
-   * no name of its own, checks the one holding the group's value, and
-   * disables them all while the group is disabled.
+   * Brings the slotted radios in line with the group: checks the one holding
+   * the group's value, and disables them all while the group is disabled.
    */
   #syncRadios(): void {
     const currentValue = this.#getCurrentValue();
     for (const radio of this.querySelectorAll("cf-radio")) {
-      if (this.name && !radio.name) radio.name = this.name;
       radio.checked = areLinksSame(radio.value, currentValue);
       if (this.disabled && !radio.disabled) {
         radio.disabled = true;
