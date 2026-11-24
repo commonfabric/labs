@@ -6300,12 +6300,12 @@ export class SpaceServer implements TransactionSealDestination {
     // ONE changed-doc collection for the whole pass, opened BEFORE the
     // judgment and the pull below rather than per root inside it. A root the
     // judgment found a load starts no piece from is parked on what the store
-    // held when it was judged. The pull is what registers each root's watch, and a
-    // registered watch is what lets the traversal read from the replica
-    // instead of fetching, so between the two a root's reading is only as
-    // current as frame delivery has made it. The terminal arm's invalidation
-    // check has to test the span either reading was taken over, and that
-    // span starts here.
+    // held when it was judged. The pull is what registers each root's watch,
+    // and a registered watch is what lets the traversal read from the
+    // replica instead of fetching, so between the two a root's reading is
+    // only as current as frame delivery has made it. The terminal arm's
+    // invalidation check has to test the span either reading was taken over,
+    // and that span starts here.
     const changedDocs = new Map<string, number>();
     this.#structureLoadChangedDocs = changedDocs;
     // The roots the store can serve as they stand (serving-loop.md §1):
