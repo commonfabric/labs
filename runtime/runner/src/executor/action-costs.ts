@@ -4,9 +4,10 @@
  * and an author can read where that action is written and how often a change
  * to its inputs runs it again (docs/plans/slow-action-resilience.md, stage
  * 1). A host keeps one {@link ActionCostTable} over every space it serves,
- * fed from the scheduler's `scheduler.run.complete` marker, and reports it as
- * the `actions` block of the serving-loop counters; {@link mergeActionCosts}
- * combines the blocks of several hosts.
+ * fed from the scheduler's `scheduler.run.complete` marker, and reports every
+ * row it tracks as the `actions` block of the serving-loop counters;
+ * {@link mergeActionCosts} combines the blocks of several hosts and bounds the
+ * list once, for the whole process.
  *
  * A run is counted when it ends. A run that is still going, however long, is
  * in no row.
@@ -34,17 +35,17 @@ export type ServingActionCosts = ServingLoopStats["actions"];
 /** How many actions a host tracks at once. */
 export const ACTION_COSTS_TRACKED = 512;
 
-/** How many actions the counters list, of a host and of a process. */
+/** How many actions the counters of a process list. */
 export const ACTION_COSTS_LISTED = 50;
 
 /**
- * A run at least this long, in milliseconds, is logged, once for each row an
- * action holds.
+ * A run at least this long, in milliseconds, is logged, once for each action
+ * among the most recent {@link SLOW_ACTIONS_REMEMBERED} actions logged.
  */
 export const SLOW_ACTION_LOG_MS = 1000;
 
-/** A tracked action's cost, and whether its slow run has been logged. */
-type Row = ServingActionCost & { logged: boolean };
+/** How many logged actions a host remembers, so as not to log them again. */
+export const SLOW_ACTIONS_REMEMBERED = 4096;
 
 /**
  * The actions one host's serving runtimes have spent the most wall time on.
@@ -53,30 +54,24 @@ type Row = ServingActionCost & { logged: boolean };
  * takes a row while there is room. Once there is none, it takes the row of
  * the action with the least total time if it alone took longer than that
  * action's total, and otherwise is counted only in `droppedMs`, so an action
- * the table holds is never displaced by one that has cost less.
+ * the table holds is never displaced by one that has cost less. An action
+ * that loses its row and runs again starts a new one, from that run.
  */
 export class ActionCostTable {
   #tracked: number;
-  #listed: number;
-  #rows = new Map<string, Row>();
+  #rows = new Map<string, ServingActionCost>();
   #dropped = 0;
   #droppedMs = 0;
+  #logged = new Set<string>();
   #observed = new WeakSet<RuntimeTelemetry>();
 
   /**
-   * Constructs a table that tracks at most `tracked` actions and lists the
-   * `listed` most expensive of them.
+   * Constructs a table that tracks at most `tracked` actions.
    *
-   * @throws If either bound is not a positive integer.
+   * @throws If `tracked` is not a positive integer.
    */
-  constructor(
-    { tracked = ACTION_COSTS_TRACKED, listed = ACTION_COSTS_LISTED }: {
-      tracked?: number;
-      listed?: number;
-    } = {},
-  ) {
+  constructor({ tracked = ACTION_COSTS_TRACKED }: { tracked?: number } = {}) {
     this.#tracked = positiveInteger("tracked", tracked);
-    this.#listed = positiveInteger("listed", listed);
   }
 
   /**
@@ -102,7 +97,7 @@ export class ActionCostTable {
     if (row === undefined) {
       if (this.#rows.size >= this.#tracked && !this.#evictCheaperThan(ms)) {
         this.#droppedMs += ms;
-        this.#logSlowRun(space, run);
+        this.#logSlowRun(key, space, run);
         return;
       }
       row = {
@@ -121,7 +116,6 @@ export class ActionCostTable {
         totalMs: 0,
         longestMs: 0,
         lastMs: 0,
-        logged: false,
       };
       this.#rows.set(key, row);
     }
@@ -130,27 +124,23 @@ export class ActionCostTable {
     row.totalMs += ms;
     row.longestMs = Math.max(row.longestMs, ms);
     row.lastMs = ms;
-    if (!row.logged && ms >= SLOW_ACTION_LOG_MS) {
-      row.logged = true;
-      this.#logSlowRun(space, run);
-    }
+    this.#logSlowRun(key, space, run);
   }
 
   /**
-   * Returns the `listed` most expensive actions, most expensive first, with
-   * every other action and every run no row took counted in `dropped` and
-   * `droppedMs`. The result shares nothing with the table.
+   * Returns every tracked action, most expensive first, with the rows the
+   * table has given up counted in `dropped`, and their time and that of every
+   * run no row took in `droppedMs`. The list is not bounded below `tracked`:
+   * {@link mergeActionCosts} bounds it, once the rows of every host are
+   * together. The result shares nothing with the table.
    */
   costs(): ServingActionCosts {
-    const ranked = [...this.#rows.values()].sort(byTotalDescending);
-    const unlisted = ranked.slice(this.#listed);
     return {
-      entries: ranked.slice(0, this.#listed).map(
-        ({ logged: _logged, ...cost }) => cost,
-      ),
-      dropped: this.#dropped + unlisted.length,
-      droppedMs: this.#droppedMs +
-        unlisted.reduce((sum, row) => sum + row.totalMs, 0),
+      entries: [...this.#rows.values()].sort(byTotalDescending).map((row) => ({
+        ...row,
+      })),
+      dropped: this.#dropped,
+      droppedMs: this.#droppedMs,
     };
   }
 
@@ -160,7 +150,7 @@ export class ActionCostTable {
    * it removed one.
    */
   #evictCheaperThan(ms: number): boolean {
-    let cheapest: [string, Row] | undefined;
+    let cheapest: [string, ServingActionCost] | undefined;
     for (const entry of this.#rows) {
       if (cheapest === undefined || entry[1].totalMs < cheapest[1].totalMs) {
         cheapest = entry;
@@ -173,9 +163,19 @@ export class ActionCostTable {
     return true;
   }
 
-  /** Helper for `record()`, which logs `run` if it was slow. */
-  #logSlowRun(space: string, run: ActionRun): void {
-    if (run.durationMs < SLOW_ACTION_LOG_MS) return;
+  /**
+   * Helper for `record()`, which logs `run`, a run of the action `key` names,
+   * if it was slow and the action is not among those already logged.
+   */
+  #logSlowRun(key: string, space: string, run: ActionRun): void {
+    if (run.durationMs < SLOW_ACTION_LOG_MS || this.#logged.has(key)) return;
+    this.#logged.add(key);
+    // Insertion order is the order the actions were logged in, so the first
+    // is the one logged longest ago.
+    for (const oldest of this.#logged) {
+      if (this.#logged.size <= SLOW_ACTIONS_REMEMBERED) break;
+      this.#logged.delete(oldest);
+    }
     logger.warn("slow-action", () => [
       `action \`${run.actionId}\` of space \`${space}\` ran for ` +
       `${Math.round(run.durationMs)} ms` +

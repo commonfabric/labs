@@ -63,6 +63,7 @@ import {
   type ServingLoopCounters,
   type ServingLoopStats,
 } from "./stats.ts";
+import { mergeServingLoopStats } from "./stats-merge.ts";
 
 export type { LifecycleVerb } from "./space-server.ts";
 export type {
@@ -173,7 +174,10 @@ export type ExecutorHostOptions = {
    * `experimental: { serverExecution: true }`. `context` is what the
    * SpaceServer hands its factory (see SpaceServerOptions.createRuntime):
    * a factory that reads the home space before returning installs
-   * `context.storeReadThrough` on its storage manager first. */
+   * `context.storeReadThrough` on its storage manager first. The host counts
+   * the runtime's action runs toward its action costs from the moment the
+   * factory returns it, so a run the factory itself waits on is not
+   * counted. */
   createRuntime: (
     space: MemorySpace,
     context: RuntimeFactoryContext,
@@ -408,7 +412,11 @@ export class ExecutorHost {
         if (existing?.active) existing.noteCurrencyChanged();
       },
     });
-    registerServingLoopStatsProvider(() => this.stats());
+    // Merged as the worker pool merges its workers' counters, so the action
+    // costs the health route reads are bounded the same way here.
+    registerServingLoopStatsProvider(() =>
+      mergeServingLoopStats([this.stats()])
+    );
   }
 
   /** The failure-park backoff streak of each space that has one. */

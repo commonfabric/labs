@@ -888,7 +888,10 @@ export type ServingLoopStats = {
     /** The listed actions, most total wall time first. */
     entries: ServingActionCost[];
 
-    /** How many tracked actions are not listed. */
+    /**
+     * How many action rows are not listed: rows a host gave up for a costlier
+     * action, and rows past the list's bound.
+     */
     dropped: number;
 
     /** The wall time of the unlisted actions and of runs no row took. */
@@ -923,7 +926,10 @@ export type ServingActionCost = {
   /** How many of the action's runs have ended. */
   runs: number;
 
-  /** How many of those runs a change to the action's inputs caused. */
+  /**
+   * How many of those runs a change to the action's inputs caused, a retry of
+   * such a run included.
+   */
   inputRuns: number;
 
   /** The wall time of all those runs together. */

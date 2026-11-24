@@ -45,9 +45,8 @@ describe("action-costs", () => {
     describe("constructor()", () => {
       it("throws given a bound that is not a positive integer", () => {
         expect(() => new ActionCostTable({ tracked: 0 })).toThrow(RangeError);
-        expect(() => new ActionCostTable({ listed: 1.5 })).toThrow(RangeError);
-        expect(() => new ActionCostTable({ tracked: 1, listed: 1 })).not
-          .toThrow();
+        expect(() => new ActionCostTable({ tracked: 1.5 })).toThrow(RangeError);
+        expect(() => new ActionCostTable({ tracked: 1 })).not.toThrow();
       });
     });
 
@@ -140,10 +139,27 @@ describe("action-costs", () => {
           table.record("did:space", run("slow", SLOW_ACTION_LOG_MS * 2));
           const lines = logs.textsOf("slow-action");
           expect(lines).toHaveLength(1);
+          expect(lines[0]).not.toContain("`fast`");
           expect(lines[0]).toContain("`slow`");
           expect(lines[0]).toContain("`did:space`");
           expect(lines[0]).toContain("`of:board`");
           expect(lines[0]).toContain("`cf:module/abc/main.tsx:4:7`");
+        });
+
+        it("logs a slow action that holds no row once, however often it runs", () => {
+          using logs = captureLogs("action-costs");
+          const table = new ActionCostTable({ tracked: 1 });
+          table.record("did:space", run("costly", SLOW_ACTION_LOG_MS * 10));
+          table.record("did:space", run("slow", SLOW_ACTION_LOG_MS));
+          table.record("did:space", run("slow", SLOW_ACTION_LOG_MS));
+          expect(table.costs().entries.map((entry) => entry.action)).toEqual([
+            "costly",
+          ]);
+          expect(
+            logs.textsOf("slow-action").filter((line) =>
+              line.includes("`slow`")
+            ),
+          ).toHaveLength(1);
         });
       });
 
@@ -162,19 +178,15 @@ describe("action-costs", () => {
           ]);
         });
 
-        it("lists at most `listed` actions, counting the time of the rest in `droppedMs`", () => {
-          const table = new ActionCostTable({ listed: 2 });
-          table.record("did:space", run("a", 1));
-          table.record("did:space", run("b", 2));
-          table.record("did:space", run("c", 3));
-          table.record("did:space", run("d", 4));
+        it("returns every tracked action, past the bound the process lists", () => {
+          const table = new ActionCostTable();
+          for (let i = 0; i < ACTION_COSTS_LISTED + 1; i++) {
+            table.record("did:space", run(`a${i}`, i + 1));
+          }
           const costs = table.costs();
-          expect(costs.entries.map((entry) => entry.action)).toEqual([
-            "d",
-            "c",
-          ]);
-          expect(costs.dropped).toBe(2);
-          expect(costs.droppedMs).toBe(3);
+          expect(costs.entries).toHaveLength(ACTION_COSTS_LISTED + 1);
+          expect(costs.dropped).toBe(0);
+          expect(costs.droppedMs).toBe(0);
         });
 
         it("returns rows a later run does not change", () => {

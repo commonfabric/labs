@@ -197,8 +197,10 @@ export type RuntimeTelemetryMarker = {
 
   /**
    * Whether a change to one of the action's inputs caused this run, as
-   * opposed to its first run or a run that demand alone asked for. A marker
-   * that does not carry it reports a run no input change caused.
+   * opposed to its first run or a run that demand alone asked for. The retry
+   * of a run an input change caused, after its commit failed, is one too: the
+   * scheduler carries the change's causes into the retry. A marker that does
+   * not carry it reports a run no input change caused.
    */
   inputDriven?: boolean;
 
