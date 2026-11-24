@@ -120,6 +120,7 @@ export function serveFromPort(
     const runBeacon = init.runBeacon === undefined ? undefined : new RunBeacon(
       init.runBeacon,
       (identity) => plane.reportRunNamed(identity),
+      (runs) => plane.reportRunsForgotten(runs),
     );
     runBeacon?.countReads();
     const shared = init.compileCacheDir === undefined

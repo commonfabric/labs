@@ -17,10 +17,13 @@
  * The worker numbers an action the first time it runs it, and posts what the
  * number stands for once (`RunBeacon`'s `report`). A post per run would make
  * every run a message, and the watchdog takes any message from a worker for a
- * sign of life. A served handler's run for an event gets a number of its own,
- * posted as it starts, since the event is what the pool acts on when it ends
- * the worker. Only the outermost of runs started inside one another is marked:
- * it is the one that holds the thread.
+ * sign of life. Once the worker's realm has collected an action, it posts the
+ * action's number as forgotten (`RunBeacon`'s `forget`), so that what the pool
+ * keeps of the numbers is bounded by the actions the worker can still run. A
+ * served handler's run for an event gets a number of its own, posted as it
+ * starts, since the event is what the pool acts on when it ends the worker.
+ * Only the outermost of runs started inside one another is marked: it is the
+ * one that holds the thread.
  */
 
 import type { MemorySpace } from "../storage/interface.ts";
@@ -55,6 +58,15 @@ export type RunEvent = {
   /** The entry's arrival position, `0` for a seq-less entry. */
   readonly seq: number;
 };
+
+/**
+ * The key a record of `event` is kept under, which names its stream entry: two
+ * entries may carry one event id, on different streams or after the first is
+ * consequenced (events.md §4).
+ */
+export function runEventKey(event: RunEvent): string {
+  return JSON.stringify([event.sidecarId, event.seq, event.eventId]);
+}
 
 /** What a number on a beacon stands for, as the worker posts it. */
 export type RunIdentity = {
@@ -138,14 +150,25 @@ export function readRunBeacon(
  * The worker's side of a beacon, which every serving runtime of the worker
  * marks through a {@link SpaceRunBeacon} of its space. It numbers each action
  * once, and each served handler's run for an event, and posts what a number
- * stands for through `report` before the run's body starts.
+ * stands for through `report` before the run's body starts. The numbers of
+ * actions the realm has since collected go through `forget`, together, once
+ * per turn of the thread's event loop that collected any.
  */
 export class RunBeacon {
   readonly #slots: Int32Array;
   readonly #report: (identity: RunIdentity) => void;
+  readonly #forget: (runs: readonly number[]) => void;
 
   /** The numbers given to actions, by action. */
   readonly #numbers = new WeakMap<Action | EventHandler, number>();
+
+  /** What hears of each numbered action the realm collects, by its number. */
+  readonly #collected = new FinalizationRegistry<number>((run) =>
+    this.#noteCollected(run)
+  );
+
+  /** The numbers of collected actions not yet passed to `forget`. */
+  #forgotten: number[] = [];
 
   /** How many marked runs are on the thread's stack. */
   #depth = 0;
@@ -155,20 +178,24 @@ export class RunBeacon {
 
   /**
    * Constructs an instance which marks `buffer`, as a worker's init carries
-   * it, and posts what each number stands for through `report`.
+   * it, posts what each number stands for through `report`, and posts the
+   * numbers of collected actions through `forget`.
    */
   constructor(
     buffer: SharedArrayBuffer,
     report: (identity: RunIdentity) => void,
+    forget: (runs: readonly number[]) => void,
   ) {
     this.#slots = new Int32Array(buffer);
     this.#report = report;
+    this.#forget = forget;
   }
 
   /**
    * The start and end of a run's body as `forSpace()` marks them, which a
    * stand-in worker drives one at a time to hold a run open across a test's
-   * clock steps.
+   * clock steps, and the realm's collection of the action a number names,
+   * which a test reports in place of the garbage collector.
    */
   get accessForTestingOnly(): {
     enter(
@@ -178,11 +205,13 @@ export class RunBeacon {
       event?: RunEvent,
     ): void;
     leave(): void;
+    collected(run: number): void;
   } {
     return {
       enter: (space, action, actionId, event) =>
         this.#enter(space, action, actionId, event),
       leave: () => this.#leave(),
+      collected: (run) => this.#noteCollected(run),
     };
   }
 
@@ -229,7 +258,10 @@ export class RunBeacon {
     let run = event === undefined ? this.#numbers.get(action) : undefined;
     if (run === undefined) {
       run = ++this.#last;
-      if (event === undefined) this.#numbers.set(action, run);
+      if (event === undefined) {
+        this.#numbers.set(action, run);
+        this.#collected.register(action, run);
+      }
       const name = getSchedulerActionName(action);
       const piece = (action as Partial<TelemetryAnnotations>)
         .schedulerObservationIdentity?.pieceRootId;
@@ -252,5 +284,19 @@ export class RunBeacon {
   #leave(): void {
     if (this.#depth === 0 || --this.#depth > 0) return;
     Atomics.add(this.#slots, EPOCH, 1);
+  }
+
+  /**
+   * Helper for `#collected`, which keeps the number of an action the realm
+   * collected for the one `forget` of the turn's collections.
+   */
+  #noteCollected(run: number): void {
+    this.#forgotten.push(run);
+    if (this.#forgotten.length > 1) return;
+    queueMicrotask(() => {
+      const runs = this.#forgotten;
+      this.#forgotten = [];
+      this.#forget(runs);
+    });
   }
 }

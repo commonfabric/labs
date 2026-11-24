@@ -2126,6 +2126,26 @@ describe("stage F serving loop", () => {
     expect(host.stats().parkedRuntimes.held).toBe(0);
   });
 
+  it("drops the events failed for a deleted space when it refuses the space", async () => {
+    const engine = await server.engineForSpace(space);
+    writeDeletionTombstone(engine, space, spaceSigner.did());
+    host = newHost();
+    host.failEvent(
+      space,
+      {
+        sidecarId: "of:deleted-failed-sidecar",
+        eventId: "deleted-failed",
+        seq: 1,
+      },
+      "ended",
+    );
+    expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(true);
+
+    warmNotice(engine, "deleted-failed-warm");
+    await refused();
+    expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(false);
+  });
+
   it("ends a tenure for good on the host's notice that its space's access list became a deletion tombstone", async () => {
     onServingRuntime = () => Promise.resolve();
     host = newHost({ idleParkMs: 600_000 });

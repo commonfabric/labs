@@ -15,6 +15,7 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryServer from "@commonfabric/memory/v2/server";
 
+import { runEventKey } from "../../src/executor/run-beacon.ts";
 import {
   EVENT_PREQUEUE_STUCK_AFTER,
   type FailedEvents,
@@ -543,14 +544,12 @@ describe("SpaceServer", () => {
     await fixture.admitOne(0, "earlier");
     await fixture.admitOne(1, "failed");
     const reason = "injected: the handler held its worker's thread";
-    failedEvents.set("failed", {
-      event: {
-        sidecarId: sidecars[1],
-        eventId: "failed",
-        seq: fixture.entry("failed")!.seq!,
-      },
-      reason,
-    });
+    const event = {
+      sidecarId: sidecars[1],
+      eventId: "failed",
+      seq: fixture.entry("failed")!.seq!,
+    };
+    failedEvents.set(runEventKey(event), { event, reason });
     const queued: QueuedEvent["served"][] = [];
     {
       using _queue = stub(
@@ -577,6 +576,35 @@ describe("SpaceServer", () => {
       error: reason,
     });
     expect(fixture.stats.events.failedWithWorker).toBe(1);
+    expect(failedEvents.size).toBe(0);
+  });
+
+  it("writes the error of the one entry its pool failed where another stream's pending entry carries the same event id", async () => {
+    // Event ids are unique only among one stream's pending entries
+    // (events.md §4), so the record of a failed event names its entry, and
+    // the other entry's commit leaves it in place.
+
+    const failedEvents: FailedEvents = new Map();
+    const fixture = await openFixture(undefined, failedEvents);
+    const onStream = (index: number) =>
+      (Engine.read(fixture.engine, { id: sidecars[index] })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries?.find((entry) => entry.eventId === "shared");
+    await fixture.admitOne(0, "shared");
+    await fixture.admitOne(1, "shared");
+    const reason = "injected: the handler held its worker's thread";
+    const event = {
+      sidecarId: sidecars[1],
+      eventId: "shared",
+      seq: onStream(1)!.seq!,
+    };
+    failedEvents.set(runEventKey(event), { event, reason });
+    await fixture.drain();
+
+    expect(fixture.called).toEqual(["A"]);
+    expect(onStream(0)?.consequenced).toBe(true);
+    expect(onStream(0)?.error).toBeUndefined();
+    expect(onStream(1)).toMatchObject({ consequenced: true, error: reason });
     expect(failedEvents.size).toBe(0);
   });
 });

@@ -233,7 +233,7 @@ import {
   type WaveWriteAnnotation,
 } from "./wave.ts";
 import { servingLocalStore } from "./serving-context.ts";
-import type { RunEvent } from "./run-beacon.ts";
+import { type RunEvent, runEventKey } from "./run-beacon.ts";
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
@@ -559,7 +559,7 @@ export type RuntimeFactoryContext = {
 /**
  * A space's events whose handler's run held the thread of a serving worker
  * the pool ended (serving-loop.md §2, "The watchdog"), each with the reason
- * its consequence states, keyed by event id.
+ * its consequence states, keyed by its stream entry (`runEventKey()`).
  */
 export type FailedEvents = Map<
   string,
@@ -5291,12 +5291,11 @@ export class SpaceServer implements TransactionSealDestination {
           this.#sealEventConsequenceNotice(runtime, entry, streamEntry);
           continue;
         }
-        const failed = this.#options.failedEvents?.get(entry.eventId);
-        if (
-          failed !== undefined &&
-          failed.event.sidecarId === streamEntryAddress.sidecarId &&
-          failed.event.seq === streamEntryAddress.seq
-        ) {
+        const failedEvents = this.#options.failedEvents;
+        const failed = failedEvents === undefined || failedEvents.size === 0
+          ? undefined
+          : failedEvents.get(runEventKey(streamEntryAddress));
+        if (failed !== undefined) {
           // events.md §5: the handler's run held the thread of a worker the
           // pool ended, so the error is the event's consequence and the
           // handler does not run for it again. The error completes the event
@@ -9065,7 +9064,25 @@ export class SpaceServer implements TransactionSealDestination {
     for (const eventId of outcome.committedEventIds) {
       if (releasedBy(eventId)) this.#drainInFlight.delete(eventId);
       this.#requeueCatchUp.delete(eventId);
-      this.#options.failedEvents?.delete(eventId);
+    }
+    // A failed event's record goes once its own entry has its consequence.
+    // The outcome names events by id alone, which another stream's pending
+    // entry may carry too (events.md §4), so the store says which entry it
+    // was.
+    const failedEvents = this.#options.failedEvents;
+    if (failedEvents !== undefined && failedEvents.size > 0) {
+      const committed = new Set(outcome.committedEventIds);
+      for (const [key, { event }] of failedEvents) {
+        if (!committed.has(event.eventId)) continue;
+        const stored = this.#storedStreamEntry(
+          event.sidecarId,
+          event.eventId,
+          event.seq,
+        );
+        if (stored === undefined || stored.consequenced === true) {
+          failedEvents.delete(key);
+        }
+      }
     }
     for (const eventId of outcome.requeuedEventIds) {
       if (releasedBy(eventId)) this.#drainInFlight.delete(eventId);

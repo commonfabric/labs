@@ -1132,6 +1132,23 @@ describe("serving-worker-recovery", () => {
         expect(started.stats().workers.running).toEqual([]);
       });
 
+      it("forgets what a number stands for once the worker's realm has collected the action it named", async () => {
+        const started = start();
+        server.openSession(space, "session-1");
+        await clock.settle();
+        const [worker] = workers();
+        worker.startRun(space, "collected-derivation");
+        worker.endRun();
+        await clock.settle();
+        const placed = started.accessForTestingOnly.placements.get(space)!;
+        expect([...placed.runs.values()].map(({ action }) => action))
+          .toEqual(["collected-derivation"]);
+
+        worker.collected(1);
+        await clock.settle();
+        expect(placed.runs.size).toBe(0);
+      });
+
       it("names the run in the kill, and has the space's next worker write the error of the served handler's event before anything else for the space", async () => {
         using reported = stub(console, "error", () => {});
         start();

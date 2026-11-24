@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
@@ -33,12 +34,18 @@ const UNCOUNTED_TX = { tx: {} } as unknown as IExtendedStorageTransaction;
 describe("run-beacon", () => {
   let buffer: SharedArrayBuffer;
   let reported: RunIdentity[];
+  let forgotten: (readonly number[])[];
   let beacon: RunBeacon;
 
   beforeEach(() => {
     buffer = newRunBeaconBuffer();
     reported = [];
-    beacon = new RunBeacon(buffer, (identity) => reported.push(identity));
+    forgotten = [];
+    beacon = new RunBeacon(
+      buffer,
+      (identity) => reported.push(identity),
+      (runs) => forgotten.push(runs),
+    );
   });
 
   describe("readRunBeacon()", () => {
@@ -72,6 +79,49 @@ describe("run-beacon", () => {
   });
 
   describe("RunBeacon", () => {
+    describe("constructor()", () => {
+      it("passes `forget` the numbers of the actions the realm collected in one turn together, once the turn's code has run", async () => {
+        const { collected } = beacon.accessForTestingOnly;
+        collected(1);
+        collected(2);
+        expect(forgotten).toEqual([]);
+
+        await Promise.resolve();
+        collected(3);
+        await Promise.resolve();
+        expect(forgotten).toEqual([[1, 2], [3]]);
+      });
+
+      it("passes `forget` the number of an action once the garbage collector has collected the action", async () => {
+        // Collecting needs `--expose-gc`, which this package's test task does
+        // not give, so a helper marks a run of an action, lets the action go
+        // and collects it, in a process of its own.
+
+        const helper = new URL(
+          "../fixtures/run-beacon-collection.ts",
+          import.meta.url,
+        );
+        // Spawned by name, which the test task's `--allow-run=deno` grant
+        // resolves through PATH the same way.
+        const output = await new Deno.Command("deno", {
+          args: ["run", "-A", "--v8-flags=--expose-gc", fromFileUrl(helper)],
+          stdout: "piped",
+          stderr: "piped",
+        }).output();
+        const stdout = new TextDecoder().decode(output.stdout);
+        expect(
+          output.success,
+          `helper failed:\n${new TextDecoder().decode(output.stderr)}`,
+        ).toBe(true);
+        const lines = stdout.trim().split("\n");
+
+        expect(JSON.parse(lines[lines.length - 1])).toEqual({
+          named: [1],
+          forgotten: [1],
+        });
+      });
+    });
+
     describe("instance members", () => {
       describe("forSpace()", () => {
         it("marks the beacon with the run's number while its body runs, and returns what the body returns", () => {

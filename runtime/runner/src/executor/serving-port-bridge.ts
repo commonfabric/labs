@@ -101,6 +101,12 @@ export type ServingPortBridgeOptions = {
   onRunNamed?: (identity: RunIdentity) => void;
 
   /**
+   * Called with numbers on the worker's run beacon whose actions the worker's
+   * realm has collected.
+   */
+  onRunsForgotten?: (runs: readonly number[]) => void;
+
+  /**
    * Where the worker's `compiler.compile` requests run: the compile workers
    * the process shares. Absent, each such request fails as a failure of the
    * place it was to run.
@@ -538,6 +544,9 @@ export class ServingPortBridge {
     });
     endpoint.onNotice("worker.runNamed", (identity) => {
       this.#options.onRunNamed?.(identity);
+    });
+    endpoint.onNotice("worker.runsForgotten", ({ runs }) => {
+      this.#options.onRunsForgotten?.(runs);
     });
     endpoint.onNotice("host.occupancy", ({ occupancy }) => {
       this.#options.onOccupancy?.(occupancy);

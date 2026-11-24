@@ -806,17 +806,21 @@ the lease:
   event afresh for each run, and posts what a number stands for once, before
   the run's body starts: the space, the scheduler's id for the action (the key
   §7's `actions` lists it under), its module or pattern name and its piece
-  where known, and for a handler's run the event's stream entry. The post reaches the main
-  thread without the worker's thread yielding, so it arrives while the run
-  holds the thread, and a post per run, which would make every run a message
-  the watchdog counts, is not made. Each of the watchdog's checks reads the
+  where known, and for a handler's run the event's stream entry. The post
+  reaches the main thread without the worker's thread yielding, so it arrives
+  while the run holds the thread, and a post per run, which would make every
+  run a message the watchdog counts, is not made. Once the worker's realm has collected an
+  action, the worker posts its number as forgotten, with the others collected
+  in the same turn (`worker.runsForgotten`), and the pool drops what it kept
+  for it, so that what the pool keeps of a worker's numbers is bounded by the
+  actions the worker can still run. Each of the watchdog's checks reads the
   beacon (`Atomics.load`), reading `epoch` again after the run's number and
   discarding a reading whose `epoch` moved, since the run may have ended and
   another started while the slots were read. It counts the checks in a row
   that find the same odd `epoch`; `workers.running` reports that, with the
-  run's name, without
-  asking the worker (§7). Pattern code cannot reach the buffer:
-  `SharedArrayBuffer` and `Atomics` are withheld from pattern compartments.
+  run's name, without asking the worker (§7). Pattern code cannot reach the
+  buffer: `SharedArrayBuffer` and `Atomics` are withheld from pattern
+  compartments.
 - A kill names, in its log line, the run its worker's beacon showed. When
   that run is a served handler's run for an event, the event is failed and
   not run again: the pool hands it to the worker the space is placed on

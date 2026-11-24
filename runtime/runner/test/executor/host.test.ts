@@ -15,6 +15,7 @@ import {
   type HostOccupancy,
   type LifecycleVerb,
 } from "../../src/executor/host.ts";
+import { runEventKey } from "../../src/executor/run-beacon.ts";
 import { inServingContext } from "../../src/executor/serving-context.ts";
 import { servingRuntimeFactory } from "../../src/executor/serving-runtime.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
@@ -337,6 +338,38 @@ describe("ExecutorHost", () => {
         expect(ranOn[1]).toBe(ranOn[0]);
         expect(ranOn[2]).not.toBe(ranOn[0]);
         expect(host.spaceServer(space)).not.toBe(first);
+      } finally {
+        await close();
+      }
+    });
+  });
+
+  describe("failEvent()", () => {
+    /** The stream entry a served handler's run in these cases handled. */
+    const event = { sidecarId: "of:sidecar", eventId: "evt-held", seq: 2 };
+
+    it("keeps an event failed for a space with no tenure through a tenure that does not find it", async () => {
+      const { host, close } = newHost();
+      try {
+        host.failEvent(space, event, "ended");
+        await host.runLifecycleVerb(space, probeVerb("activate", []));
+        await host.spaceServer(space)!.park("test-park");
+
+        expect([...host.accessForTestingOnly.failedEvents.get(space)!.keys()])
+          .toEqual([runEventKey(event)]);
+      } finally {
+        await close();
+      }
+    });
+
+    it("keeps no map of a space's failed events once a tenure that holds an empty one ends", async () => {
+      const { host, close } = newHost();
+      try {
+        await host.runLifecycleVerb(space, probeVerb("activate", []));
+        expect(host.accessForTestingOnly.failedEvents.get(space)?.size).toBe(0);
+
+        await host.spaceServer(space)!.park("test-park");
+        expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(false);
       } finally {
         await close();
       }

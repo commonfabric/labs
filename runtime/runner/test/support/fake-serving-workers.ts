@@ -219,6 +219,7 @@ export class FakeServingWorker implements PortLike {
       this.#beacon = init.runBeacon === undefined ? undefined : new RunBeacon(
         init.runBeacon,
         (identity) => this.#host.notify("worker.runNamed", identity),
+        (runs) => this.#host.notify("worker.runsForgotten", { runs }),
       );
       return { lifetimeLock: undefined, heapSizeLimit };
     });
@@ -288,6 +289,11 @@ export class FakeServingWorker implements PortLike {
   /** Plays the end of the body `startRun()` started. */
   endRun(): void {
     this.#beacon?.accessForTestingOnly.leave();
+  }
+
+  /** Plays the worker's realm collecting the action that `run` names. */
+  collected(run: number): void {
+    this.#beacon?.accessForTestingOnly.collected(run);
   }
 
   /** The notices of one method the pool has sent, in order. */

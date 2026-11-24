@@ -863,6 +863,14 @@ export class ServingPlane {
     this.#endpoint.notify("worker.runNamed", identity);
   }
 
+  /**
+   * Posts numbers on the worker's run beacon whose actions the worker's realm
+   * has collected.
+   */
+  reportRunsForgotten(runs: readonly number[]): void {
+    this.#endpoint.notify("worker.runsForgotten", { runs });
+  }
+
   /** Posts the host's counters for the server's thread to keep. */
   reportStats(stats: ServingLoopStats): void {
     this.#endpoint.notify("host.stats", { stats });

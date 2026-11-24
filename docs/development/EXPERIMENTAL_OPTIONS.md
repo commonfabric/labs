@@ -2326,9 +2326,10 @@ the per-epic implementation notes).
   (default 60, at least 10). The watchdog checks every 10 seconds, so the kill
   comes at the first check at or past that many seconds of silence in a row:
   15 kills at 20. A kill of a worker in a served handler's run fails that
-  run's event rather than running it again (serving-loop.md §2, "The
-  watchdog"), so the setting is also how long one handler may hold its
-  worker's thread. The serving memory server tests build reads the first.
+  run's event rather than running it again, unless the worker the event is
+  handed to, or the process, ends before the error commits (serving-loop.md
+  §2, "The watchdog"), so the setting is also how long one handler may hold
+  its worker's thread. The serving memory server tests build reads the first.
   Where the workers' runtimes compile takes two more:
   `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
   holds for every serving runtime (default 1), and

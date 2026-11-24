@@ -36,6 +36,7 @@ import {
   readRunBeacon,
   type RunBeaconReading,
   type RunEvent,
+  runEventKey,
   type RunIdentity,
 } from "./run-beacon.ts";
 import { ServingPortBridge } from "./serving-port-bridge.ts";
@@ -329,8 +330,9 @@ type PoolWorker = {
 
   /**
    * What the numbers on the worker's beacon stand for, as the worker has
-   * posted them: each action it has run, and the last served handler's run
-   * for an event, which is the only such run the beacon can still show.
+   * posted them: each action it has run and its realm has not collected, and
+   * the last served handler's run for an event, which is the only such run
+   * the beacon can still show.
    */
   runs: Map<number, RunIdentity>;
 
@@ -514,7 +516,8 @@ export class ServingWorkerPool {
   readonly #heapStopped = new Set<string>();
 
   /**
-   * The events, by space and then by event id, whose handler's run held the
+   * The events, by space and then by stream entry (`runEventKey()`), whose
+   * handler's run held the
    * thread of a worker the pool ended, each with the reason its consequence
    * states. Each is handed to the worker the space is placed on next
    * (`#introduce()`), which writes the reason as the event's consequence.
@@ -1193,6 +1196,9 @@ export class ServingWorkerPool {
         onOccupancy: (occupancy) => this.#onOccupancy(started, occupancy),
         onHeartbeat: (heartbeat) => this.#onHeartbeat(started, heartbeat),
         onRunNamed: (identity) => this.#onRunNamed(started, identity),
+        onRunsForgotten: (runs) => {
+          for (const run of runs) started.runs.delete(run);
+        },
         ...(this.#options.moduleCompiler === undefined
           ? {}
           : { moduleCompiler: this.#options.moduleCompiler }),
@@ -1733,7 +1739,7 @@ export class ServingWorkerPool {
           `its limit (${message})`) +
         ", and is not run for this event again";
       const failed = this.#failedEvents.get(run.space) ?? new Map();
-      failed.set(failedEvent.eventId, { event: failedEvent, reason });
+      failed.set(runEventKey(failedEvent), { event: failedEvent, reason });
       this.#failedEvents.set(run.space, failed);
     }
     if (reading !== undefined) {

@@ -45,7 +45,7 @@ import {
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
 import { RoutedPlane, type RouteOptions } from "./routed-plane.ts";
-import type { RunEvent } from "./run-beacon.ts";
+import { type RunEvent, runEventKey } from "./run-beacon.ts";
 import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
@@ -428,11 +428,16 @@ export class ExecutorHost {
     );
   }
 
-  /** The failure-park backoff streak of each space that has one. */
+  /** The failure-park backoff streak of each space that has one, and the
+   * failed events of each space that keeps a map of them. */
   get accessForTestingOnly(): {
     readonly failureParkStreaks: ReadonlyMap<string, number>;
+    readonly failedEvents: ReadonlyMap<string, FailedEvents>;
   } {
-    return { failureParkStreaks: this.#failureParkStreaks };
+    return {
+      failureParkStreaks: this.#failureParkStreaks,
+      failedEvents: this.#failedEvents,
+    };
   }
 
   /** What this host holds now. A closed host is vacant. */
@@ -597,7 +602,7 @@ export class ExecutorHost {
    */
   failEvent(space: MemorySpace, event: RunEvent, reason: string): void {
     if (this.#closed) return;
-    this.#failedEventsOf(space).set(event.eventId, { event, reason });
+    this.#failedEventsOf(space).set(runEventKey(event), { event, reason });
   }
 
   /**
@@ -843,7 +848,8 @@ export class ExecutorHost {
   }
 
   /** Helper for `failEvent()` and the activation, which returns `space`'s
-   * failed events, as every tenure of the space shares them. */
+   * failed events, as every tenure of the space shares them. The end of a
+   * tenure drops a map left empty (`#endTenure()`). */
   #failedEventsOf(space: MemorySpace): FailedEvents {
     let failed = this.#failedEvents.get(space);
     if (failed === undefined) {
@@ -970,6 +976,7 @@ export class ExecutorHost {
           if (reason === SPACE_DELETED_PARK) {
             this.#failureParkStreaks.delete(space);
             this.#pendingNotices.delete(space);
+            this.#failedEvents.delete(space);
             this.#endTenure(space, server, true);
             return;
           }
@@ -1066,12 +1073,14 @@ export class ExecutorHost {
   /**
    * Helper for `#activateInner()`, which declines to activate `space`,
    * found deleted: whatever was buffered for its next tenure is dropped,
-   * since none comes, as are its failure streak and the runtime kept from
-   * its last idle park, and the attempt is reported refused.
+   * since none comes, as are its failure streak, the events failed for it,
+   * and the runtime kept from its last idle park, and the attempt is reported
+   * refused.
    */
   #refuseDeletedSpace(space: MemorySpace): void {
     this.#pendingNotices.delete(space);
     this.#failureParkStreaks.delete(space);
+    this.#failedEvents.delete(space);
     this.#discardParkedRuntime(space);
     this.#reportActivationSettled(space, "refused");
   }
@@ -1111,6 +1120,12 @@ export class ExecutorHost {
     servedWarm: boolean,
   ): void {
     if (this.#spaces.get(space) === server) this.#spaces.delete(space);
+    // Each tenure is handed the space's failed events, so the space keeps a
+    // map only while a tenure holds it or one is left for a later tenure to
+    // write.
+    if (!this.#spaces.has(space) && this.#failedEvents.get(space)?.size === 0) {
+      this.#failedEvents.delete(space);
+    }
     this.#quiescenceEpoch += 1;
     this.#noteOccupancy();
     if (servedWarm || server.warmNotices.length === 0) return;

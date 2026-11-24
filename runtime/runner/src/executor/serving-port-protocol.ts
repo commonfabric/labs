@@ -356,6 +356,13 @@ export type PlaneNotices = {
    */
   "worker.runNamed": RunIdentity;
 
+  /**
+   * Numbers on the worker's run beacon that no longer stand for anything: the
+   * worker's realm has collected the actions they named, so no run of them
+   * starts again.
+   */
+  "worker.runsForgotten": { runs: readonly number[] };
+
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
   "loopback.close": { transport: number };
   "host.stats": { stats: ServingLoopStats };

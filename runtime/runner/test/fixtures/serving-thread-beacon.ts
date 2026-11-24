@@ -16,8 +16,11 @@ port.addEventListener("message", (event: MessageEvent) => {
     beacon: SharedArrayBuffer;
     gate: SharedArrayBuffer;
   };
-  const marks = new RunBeacon(beacon, (identity) => port.postMessage(identity))
-    .forSpace("did:key:z6MkServingThreadBeacon" as MemorySpace);
+  const marks = new RunBeacon(
+    beacon,
+    (identity) => port.postMessage(identity),
+    () => {},
+  ).forSpace("did:key:z6MkServingThreadBeacon" as MemorySpace);
   marks.hold(() => {}, "held", () => {
     Atomics.wait(new Int32Array(gate), 0, 0);
   });

@@ -644,6 +644,18 @@ describe("serving-port-plane", () => {
     });
   });
 
+  describe("reportRunsForgotten()", () => {
+    it("posts the numbers on the worker's run beacon whose actions its realm collected", async () => {
+      const forgotten = Promise.withResolvers<unknown>();
+      bridge.onNotice(
+        "worker.runsForgotten",
+        (notice) => forgotten.resolve(notice),
+      );
+      plane.reportRunsForgotten([2, 5]);
+      expect(await forgotten.promise).toEqual({ runs: [2, 5] });
+    });
+  });
+
   describe("engineForSpace()", () => {
     it("opens the file the server's thread names once, and asks again after an open that failed", async () => {
       const path = await Deno.makeTempFile({ suffix: ".sqlite" });

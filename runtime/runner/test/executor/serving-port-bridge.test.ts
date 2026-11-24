@@ -77,12 +77,13 @@ describe("ServingPortBridge", () => {
   /**
    * Builds the bridge over a server whose store is at `store`, compiling for
    * its worker in `moduleCompiler` where one is given, and reporting what the
-   * worker names to `onRunNamed`.
+   * worker names to `onRunNamed` and what it forgets to `onRunsForgotten`.
    */
   const start = (
     store?: URL,
     moduleCompiler?: ModuleCompiler,
     onRunNamed?: ServingPortBridgeOptions["onRunNamed"],
+    onRunsForgotten?: ServingPortBridgeOptions["onRunsForgotten"],
   ) => {
     server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
@@ -93,6 +94,7 @@ describe("ServingPortBridge", () => {
       port: channel.port2,
       ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
       ...(onRunNamed === undefined ? {} : { onRunNamed }),
+      ...(onRunsForgotten === undefined ? {} : { onRunsForgotten }),
     });
   };
 
@@ -385,6 +387,14 @@ describe("ServingPortBridge", () => {
       worker.notify("worker.runNamed", identity);
       await worker.request("server.idle", null);
       expect(named).toEqual([identity]);
+    });
+
+    it("hands `onRunsForgotten` the numbers on the worker's run beacon whose actions its realm collected", async () => {
+      const forgotten: (readonly number[])[] = [];
+      start(undefined, undefined, undefined, (runs) => forgotten.push(runs));
+      worker.notify("worker.runsForgotten", { runs: [1, 4] });
+      await worker.request("server.idle", null);
+      expect(forgotten).toEqual([[1, 4]]);
     });
 
     it("logs a notice it has no handler for as a port fault, and keeps serving", async () => {
