@@ -11,7 +11,7 @@ import {
   hasText,
   sendMessage,
 } from "../../tools/test-support/vnode-helpers.ts";
-import ProfileAwareWriter, { handleSend } from "./profile-aware-writer.tsx";
+import ProfileAwareWriter, { handleSend } from "./main.tsx";
 
 export default pattern(() => {
   const writer = ProfileAwareWriter({});

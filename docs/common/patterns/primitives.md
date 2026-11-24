@@ -96,7 +96,7 @@ parent's cell, and the change syncs back to the parent automatically. Evidence:
   on a shared reactive cell, not a fresh cell.
 - [`composition.md`](./composition.md): "Both patterns receive the same `items`
   cell — changes sync automatically."
-- `patterns/examples/cf-render/cf-render.tsx`: the embedded `Counter` mutates
+- `patterns/examples/cf-render/main.tsx`: the embedded `Counter` mutates
   the parent's `state.value` via its own handler.
 
 Because of this, a primitive does **not** need the parent to pass in Streams or

@@ -72,7 +72,7 @@ describe("sx2 speculation (Phase 2 gates)", () => {
       "..",
       "examples",
       "counter",
-      "counter.tsx",
+      "main.tsx",
     );
     const program = await resolveLocalProgram(
       (resolver) => cc.runtime.harness.resolve(resolver),

@@ -4,7 +4,7 @@
  * projection of the same rows is refused, since the per-column "pii" label
  * does not.
  *
- * Run: deno task cf test patterns/examples/cfc-row-label-records/main.test.tsx
+ * Run: deno task cf test patterns/examples/cfc-row-label-records/cfc-row-label-records.test.tsx
  */
 import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import {
@@ -13,7 +13,7 @@ import {
   hasText,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Records from "./main.tsx";
+import Records from "./cfc-row-label-records.tsx";
 
 const diagnosisCount = (view: unknown): number =>
   countElements(findNodeById(view, "diagnosis-list"), "cf-label");

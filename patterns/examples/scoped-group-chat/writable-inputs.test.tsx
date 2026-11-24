@@ -2,7 +2,7 @@ import { action, assert, pattern, TESTS, Writable } from "commonfabric";
 import ScopedGroupChat, {
   type Conversation,
   type SelectedRoom,
-} from "./main-with-writable-inputs.tsx";
+} from "./writable-inputs/main.tsx";
 
 export default pattern(() => {
   const selectedRoom = new Writable<SelectedRoom>({});

@@ -65,13 +65,13 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "typescript",
     surveyRepository: "labs",
     surveyCommit: "a09656c3342bf3e34b68c5f754c25473acb0afef",
-    surveyPath: "patterns/examples/counter/counter.tsx",
+    surveyPath: "patterns/examples/counter/main.tsx",
     before: new URL("./typescript/before.tsx", import.meta.url),
     after: new URL("./typescript/after.tsx", import.meta.url),
     incomplete: new URL("./typescript/incomplete.fixture", import.meta.url),
     selection: {
       filenames: [
-        "patterns/examples/counter/counter.tsx",
+        "patterns/examples/counter/main.tsx",
         "src/runtime.ts",
         "scripts/check.mts",
         "scripts/check.cts",

@@ -84,7 +84,7 @@ describe("nested counter integration test", () => {
       "..",
       "examples",
       "nested-counter",
-      "nested-counter.tsx",
+      "main.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

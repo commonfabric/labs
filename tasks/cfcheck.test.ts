@@ -78,7 +78,7 @@ describe("cfcheck", () => {
     it("returns the repository's own corpus, relative to its root", async () => {
       const context = checkoutContext();
       const corpus = await context.corpus();
-      expect(corpus).toContain("patterns/examples/counter/counter.tsx");
+      expect(corpus).toContain("patterns/examples/counter/main.tsx");
       expect(corpus).not.toContain(
         "patterns/examples/counter/counter.test.tsx",
       );

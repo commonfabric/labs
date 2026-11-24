@@ -26,7 +26,7 @@ import {
   hasText,
   sendMessage,
 } from "../../tools/test-support/vnode-helpers.ts";
-import TodoList, { type TodoItem } from "./todo-list.tsx";
+import TodoList, { type TodoItem } from "./main.tsx";
 
 export default pattern(() => {
   // Instantiate the todo list pattern with default empty list
