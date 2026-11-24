@@ -48,7 +48,10 @@ import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
-import type { NormalizedFullLink } from "../link-types.ts";
+import {
+  areNormalizedLinksSame,
+  type NormalizedFullLink,
+} from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import {
   createSigilLinkFromParsedLink,
@@ -329,12 +332,12 @@ function databaseHandle(
  * The node minted the handle when it is the one the whole cause names for the
  * node's current inputs, or when, at `minted`'s scope, its value is a
  * database reference naming the handle itself and its `result` back-link
- * names `parentCell`. Any other link is refused, so a node never takes on a
- * database its piece was not given. The second test reads the running
- * principal's instance: where the first test does not name a user- or
- * session-scoped handle and the principal holds no instance of it, this
- * returns `undefined`, and the node runs on `minted` and points its output
- * spot there, for every principal.
+ * names `parentCell`, at the same path and scope. Any other link is refused,
+ * so a node never takes on a database its piece was not given. The second
+ * test reads the running principal's instance: where the first test does not
+ * name a user- or session-scoped handle and the principal holds no instance
+ * of it, this returns `undefined`, and the node runs on `minted` and points
+ * its output spot there, for every principal.
  */
 function earlierDatabaseHandle(
   runtime: Runtime,
@@ -367,9 +370,9 @@ function earlierDatabaseHandle(
   if (link.id === named.id) return held;
   const value = held.getRaw();
   const owner = getMetaLink(held, "result");
-  const parent = parentCell.getAsNormalizedFullLink();
   return isSqliteDbRef(value) && value.id === stripEntityUriScheme(link.id) &&
-      owner?.space === parent.space && owner.id === parent.id
+      owner !== undefined &&
+      areNormalizedLinksSame(owner, parentCell.getAsNormalizedFullLink())
     ? held
     : undefined;
 }

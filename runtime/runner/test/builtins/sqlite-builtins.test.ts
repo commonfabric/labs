@@ -314,6 +314,19 @@ describe({
         expect(handle.id).not.toBe(ownId(earlier));
       });
 
+      it("mints its own handle when the one the output spot links to names a place inside the piece's result", async () => {
+        const earlier = runtime.getCell(space, "earlier-handle");
+        await plant(
+          earlier,
+          { id: ownId(earlier), tables: { notes }, scope: "space" },
+          parent.key("elsewhere" as never) as Cell<unknown>,
+        );
+
+        const handle = await deriveAtSpot({ tables: { notes } });
+
+        expect(handle.id).not.toBe(ownId(earlier));
+      });
+
       it("runs on its own handle once that holds a value, whatever the output spot links to", async () => {
         const first = await deriveAtSpot({ tables: { notes } });
         const earlier = runtime.getCell(space, "earlier-handle");
