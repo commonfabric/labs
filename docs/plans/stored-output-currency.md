@@ -450,11 +450,10 @@ slice changed. So:
   reader at the slot's own key, any holder. A reader with no such holder
   reads a slot nothing answers for, and is stored marked.
 
-Two things this leaves as they are. A slot that is rewritten each time the
-set of viewers changes costs the returning viewer a start, because a start
-is what writes the slot for them: the index is then right about such a
-piece and no faster for it. And the false-clean check reads the instances at
-a slice's own key alone.
+One thing this leaves as it is. A slot that is rewritten each time the set
+of viewers changes costs the returning viewer a start, because a start is
+what writes the slot for them: the index is then right about such a piece
+and no faster for it.
 
 ## Checking it before relying on it
 
@@ -470,7 +469,42 @@ who holds no instance of its result document, so the write that makes one,
 by whoever instantiates the piece for them, counts as a changed input.
 Whether a piece had been clean is
 kept with its record, so a mark that lands before the next record is stored
-does not hide it. `skip` acts on the
+does not hide it.
+
+The instances a slice answers for are the ones it vouches for at its own key
+and the slots it decides at another. A slot is shared with the runs of other
+slices, any of which may write it as it decides, so a slot written again
+counts against a slice only where that slice's own run wrote it. Two things
+say so, and both are required:
+
+- **The store says who made each write.** Every write of a derivation is
+  stored with the identity its run acted as (protocol.md §1): nobody for a
+  run at the space, the user for a run at a user's key, the user and the
+  session for a run at a session's. Each revision of the slot above the
+  slice's row is to be attributed to a run at the slice's own key. A run
+  that writes what the slot already holds leaves no revision, so only a
+  write that changed the slot is asked about, and the store can name the
+  run of each of those.
+- **The record says the slot holds what the slice's run left.** The record
+  being stored is to name the slot as one the slice decides. One it names
+  as holding a later write, or does not name, is not counted.
+
+A row the last record stored as superseded answered for nothing, and is
+not checked; a row that answered for the slot and has the slot's head above
+it since is the one the check asks about. Where a revision of the slot above the slice's row is another
+slice's run's, or names no run, the slot is not counted either, whatever the
+slice's own run wrote after it: a piece's reads of its own outputs are not
+among the inputs the check compares, so the record cannot say whether that
+other write prompted the slice's. Two more cases the record cannot decide
+are not counted. A run acts as the narrowest scope it read, and is filed
+under the narrowest scope its node has read for that viewer in any run, so a
+run filed under a session's key that read nothing narrower than the user's
+this time is attributed to the user, and a slot it rewrote is not counted
+against the session's slice. And a slot rewritten by a run for a viewer the
+recording runtime holds no run for is checked against no slice, since a
+record names only the slices of the runs the runtime holds.
+
+`skip` acts on the
 judgment, and only under an epoch: a record is trusted across builds only by
 the epoch it names, so a serving loop asked to skip with no epoch named runs
 as `record` and logs a warning. A toolshed's epoch is

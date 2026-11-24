@@ -1068,6 +1068,38 @@ collection whose size the code fixes from one that grows with data. A spread
 that has to stay, such as one in a test that shows the overflow, sits under a
 `deno-lint-ignore` comment that says why.
 
+### `using` on a path that runs often
+
+V8 runs a function that declares `using` far slower than one with a `try`
+block: entering and leaving one `using` scope costs dozens of times as much as
+the same function written with `try` and `finally`. That is nothing for a
+function that opens a file, and a measurable share of the runner's time for one
+on its per-element read paths. In a function that runs per read, per element,
+or per call of another hot function, restore state in a `finally` block
+instead:
+
+```ts
+// Shown at module scope.
+
+let current: string | undefined;
+
+/** Runs `fn` with `scope` current, and restores the previous scope. */
+function withScope<T>(scope: string, fn: () => T): T {
+  const previous = current;
+  current = scope;
+  try {
+    return fn();
+  } finally {
+    current = previous;
+  }
+}
+```
+
+A scope that has to outlive the call that enters it, such as one a suspended
+traversal holds, is a `Disposable` its caller disposes. Make that an instance of
+a small class, which V8 creates several times faster than an object literal
+whose `[Symbol.dispose]` is an arrow function.
+
 ### Turning a file URL into a path
 
 Turn a file URL into a path with `fromFileUrl` from `@std/path`, as in

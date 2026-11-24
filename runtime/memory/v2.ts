@@ -809,9 +809,10 @@ export const identityOfScopeKey = (
  *   to prevent).
  * - ATTRIBUTION — `actingUser`/`actingSession`, the acting identity of the
  *   action RUN that produced the write (`action × instance`, never the
- *   action). Recorded, not read: no enforcement path consumes it today
- *   (protocol.md §1 — audit/forensics, and the anticipated signature
- *   graduation).
+ *   action). No enforcement path consumes it (protocol.md §1 —
+ *   audit/forensics, and the anticipated signature graduation). Its one
+ *   reader is the currency index's count of false cleans, which decides
+ *   nothing (serving-loop.md §3b).
  * - PRODUCER — `action`, the durable identity of the action whose run
  *   made the write, the one the run's basis rows are keyed by
  *   (serving-loop.md §3b). With the attribution it names the run, so a

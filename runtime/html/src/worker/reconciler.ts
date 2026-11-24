@@ -196,6 +196,10 @@ export const REMOTE_LOAD_PROPS: ReadonlyMap<string, ReadonlySet<string>> =
     ["cf-cfc-authorship", new Set(["avatar"])],
     ["cf-oauth", new Set(["auth"])],
     ["cf-profile-badge", new Set(["profile"])],
+    // A blob reference names the space whose host the image is fetched from,
+    // and the id the request's path carries.
+    ["cf-avatar", new Set(["blob"])],
+    ["cf-image", new Set(["blob"])],
     ["cf-render", new Set(["cell"])],
     ["cf-picker", new Set(["items"])],
     // The sandbox admits same-origin images, and a same-origin relay

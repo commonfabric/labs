@@ -1945,6 +1945,105 @@ const writePolicyInputIndexes = new WeakMap<
 >();
 
 /**
+ * The inputs of one document's list by the paths they name in that document,
+ * each with its position in the list.
+ */
+type WritePolicyInputPathNode = {
+  children: Map<string, WritePolicyInputPathNode>;
+  inputs: { position: number; input: WritePolicyInput }[];
+};
+
+/**
+ * The path index of each document's list that
+ * `writePolicyInputsForDocument()` built.
+ */
+const writePolicyInputPathIndexes = new WeakMap<
+  readonly WritePolicyInput[],
+  WritePolicyInputPathNode
+>();
+
+/**
+ * The write-policy inputs about `target`'s document that name a path in it at
+ * or above `path`, in the order they were recorded: an input whose target, or
+ * for a structural-provenance claim any of whose sources, is in the document
+ * at a concrete prefix of `path` (`concretePathHasPrefix`). Every other input
+ * of the document names no place that covers `path`, so a check that asks
+ * only about covering inputs reads these and decides as it would over all of
+ * `writePolicyInputsForDocument()`.
+ *
+ * A transaction that writes many slots of one document records an input for
+ * each, and a check at each slot that scanned them all would make the
+ * preparation quadratic in the slots written. The index is by path segment,
+ * so a query costs the length of `path` and the inputs it returns.
+ */
+const writePolicyInputsCoveringPath = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): readonly WritePolicyInput[] => {
+  const inputs = writePolicyInputsForDocument(tx, target);
+  if (inputs.length === 0) return inputs;
+  let root = writePolicyInputPathIndexes.get(inputs);
+  if (root === undefined) {
+    root = { children: new Map(), inputs: [] };
+    const key = cfcDocumentKey(target);
+    const add = (
+      address: CfcDocumentAddress & { path: readonly string[] },
+      position: number,
+      input: WritePolicyInput,
+    ) => {
+      if (cfcDocumentKey(address) !== key) return;
+      let node = root!;
+      for (const segment of address.path) {
+        let next = node.children.get(segment);
+        if (next === undefined) {
+          next = { children: new Map(), inputs: [] };
+          node.children.set(segment, next);
+        }
+        node = next;
+      }
+      // An input that names one path twice is listed there once.
+      if (node.inputs[node.inputs.length - 1]?.input !== input) {
+        node.inputs.push({ position, input });
+      }
+    };
+    inputs.forEach((input, position) => {
+      if ("target" in input && input.target !== undefined) {
+        add(input.target, position, input);
+      }
+      if (input.kind === "structural-provenance") {
+        for (const source of input.sources) add(source, position, input);
+      }
+    });
+    writePolicyInputPathIndexes.set(inputs, root);
+  }
+  const covering: { position: number; input: WritePolicyInput }[] = [];
+  let nodes = 0;
+  let node: WritePolicyInputPathNode | undefined = root;
+  for (let depth = 0; node !== undefined; depth++) {
+    if (node.inputs.length > 0) {
+      nodes++;
+      for (const entry of node.inputs) covering.push(entry);
+    }
+    if (depth === path.length) break;
+    node = node.children.get(path[depth]);
+  }
+  // One node's inputs are in recorded order already. Inputs from several
+  // nodes are put back in it, and an input that names two covering paths is
+  // returned once.
+  if (nodes > 1) covering.sort((a, b) => a.position - b.position);
+  const result: WritePolicyInput[] = [];
+  for (const { input } of covering) {
+    if (result[result.length - 1] !== input) result.push(input);
+  }
+  return result;
+};
+
+/**
  * Whether `path` lies at or under a capture or binding the runtime staged in
  * this transaction, with the slot still holding it. Staging writes nothing
  * the referenced value holds, so the integrity the receiving slot's schema
@@ -1962,7 +2061,7 @@ const pathHoldsStagedReference = (
 ): boolean => {
   const logicalPath = canonicalizeLogicalPath(path);
   const scope = normalizeCellScope(target.scope);
-  return writePolicyInputsForDocument(tx, target).some((input) =>
+  return writePolicyInputsCoveringPath(tx, target, logicalPath).some((input) =>
     input.kind === "initialization" &&
     (input.mode === "capture" || input.mode === "binding") &&
     tx.isRuntimeWritePolicyInput(input) &&
@@ -2098,10 +2197,18 @@ const pathHoldsUnattributedInitialization = (
     address.space === target.space && address.id === target.id &&
     normalizeCellScope(address.scope) === normalizeCellScope(target.scope) &&
     concretePathHasPrefix(logicalPath, canonicalizeLogicalPath(address.path));
-  const inputs = writePolicyInputsForDocument(tx, target);
+  // Every test below holds only of an input that covers the path, so each
+  // reads the covering inputs. Whether the transaction attributes what it
+  // initializes is a question about the document, and reads all of its
+  // inputs.
+  const covering = writePolicyInputsCoveringPath(tx, target, logicalPath);
   if (
-    !attributesInitializationAt(tx, target, inputs) &&
-    inputs.some((input) => {
+    !attributesInitializationAt(
+      tx,
+      target,
+      writePolicyInputsForDocument(tx, target),
+    ) &&
+    covering.some((input) => {
       if (input.kind === "structural-provenance") {
         if (!tx.isRuntimeWritePolicyInput(input)) return false;
         // A setup projection names the result field it projects and the
@@ -2130,7 +2237,7 @@ const pathHoldsUnattributedInitialization = (
     return true;
   }
   const unchangedTarget = { ...target, id: target.id as URI };
-  return inputs.some((input) =>
+  return covering.some((input) =>
     tx.isRuntimeWritePolicyInput(input) &&
     ((input.kind === "preserved-output" && covers(input.target) &&
       writePreservesRuntimeOutput(tx, unchangedTarget)) ||

@@ -286,8 +286,8 @@ CREATE TABLE IF NOT EXISTS "commit" (
   -- the action whose run made each write) and
   -- the eventIds the commit consequences (protocol.md §7: consequenceOf,
   -- derived only — bounded by the wave's input, never graph-scaled). JSON
-  -- arrays; NULL on every non-derived class. Attribution is recorded, not
-  -- read (protocol.md §1); the scopeKey half was CONSUMED at admission to
+  -- arrays; NULL on every non-derived class. Attribution decides nothing
+  -- (protocol.md §1); the scopeKey half was CONSUMED at admission to
   -- key scoped rows.
   annotations        JSON,
   consequence_of     JSON,

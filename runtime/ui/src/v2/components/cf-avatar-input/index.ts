@@ -8,6 +8,6 @@ export { CFAvatarInput };
 export type { CFAvatarInput as CFAvatarInputElement } from "./cf-avatar-input.ts";
 export {
   AVATAR_PIXELS,
-  avatarBytesFromImage,
+  avatarFromImage,
   NotAnImageError,
 } from "./cf-avatar-input.ts";
