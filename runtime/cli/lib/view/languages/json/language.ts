@@ -32,12 +32,15 @@ import {
 } from "./json.ts";
 
 /**
- * The evidence a `.cfg`, `.conf`, `.config`, or `.lock` file gives for JSON. TLC
- * configuration opens with a directive or a `\*` comment, an INI section
- * header opens with `[`, XML opens with `<`, and a lock record with no syntax
- * of its own is often empty, so only an opening brace selects JSON.
+ * Whether `text` opens a JSON object, which is the evidence a `.cfg`, `.conf`,
+ * `.config`, or `.lock` file gives for JSON. TLC configuration opens with a
+ * directive or a `\*` comment, an INI section header opens with `[`, XML opens
+ * with `<`, and a lock record with no syntax of its own is often empty, so only
+ * an opening brace selects JSON.
  */
-const JSON_SHAPED_CONFIGURATION = /^\s*\{/;
+function opensWithObject(text: string): boolean {
+  return /^\s*\{/.test(text);
+}
 
 export const jsonLanguage: Language = {
   id: "json",
@@ -60,10 +63,10 @@ export const jsonLanguage: Language = {
     interpreters: [],
     signatures: [],
     sharedExtensions: [
-      { extension: ".cfg", content: JSON_SHAPED_CONFIGURATION },
-      { extension: ".config", content: JSON_SHAPED_CONFIGURATION },
-      { extension: ".conf", content: JSON_SHAPED_CONFIGURATION },
-      { extension: ".lock", content: JSON_SHAPED_CONFIGURATION },
+      { extension: ".cfg", content: opensWithObject },
+      { extension: ".config", content: opensWithObject },
+      { extension: ".conf", content: opensWithObject },
+      { extension: ".lock", content: opensWithObject },
     ],
   },
 

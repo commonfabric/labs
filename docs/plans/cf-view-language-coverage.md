@@ -69,7 +69,8 @@ keys, and short prose files are plain text by name. Git, Docker, and Bazel
 ignore files have syntax highlighting that follows each tool's comments,
 negation, wildcards, and white space.
 Graphviz DOT has syntax highlighting and a structure tree of graphs, subgraphs,
-and the nodes that node statements declare.
+and the nodes that node statements declare. Comma-separated and tab-separated
+values and numeric `.dat` tables have syntax highlighting.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -92,8 +93,8 @@ Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
-and checksum files, Bazel rc files, Graphviz DOT, and Dockerfiles use focused
-scanners.
+and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, and delimited
+tables use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
@@ -102,8 +103,8 @@ JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
 makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes,
 Git configuration, XML, Org mode, directive configuration, ignore-file, Graphviz
-DOT, and diff support to honest handling of every textual syntax in the active
-`commonfabric` repositories.
+DOT, CSV, TSV, `.dat` table, and diff support to honest handling of every
+textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -1499,7 +1500,8 @@ passes direct-file and diff fixtures.
 - [ ] Add TeX and BibTeX.
 - [x] Add Org mode.
 - [ ] Add SQL.
-- [ ] Add CSV, TSV, numeric `.dat` tables, and structured JSON log records.
+- [x] Add CSV, TSV, and numeric `.dat` tables.
+- [ ] Add structured JSON log records.
 - [x] Add Graphviz DOT.
 - [ ] Add Handlebars and generic `.in` templates.
 - [x] Classify application-specific configuration when it has stable syntax.
@@ -1507,6 +1509,59 @@ passes direct-file and diff fixtures.
   as plain text.
 - [ ] Add Objective-C, jq, and AppleScript, which the November 2026 read found
   in Infra and Loom.
+
+Delimited tables are implemented ahead of the rest of this stage. A November
+13, 2026 read of the default branches in the local checkouts of the
+organization's repositories found 37 tables in 5 repositories: 23
+comma-separated files, of which 19 are in gVisor, 3 in Labs, and 1 in Resonant
+Computing; 4 tab-separated files in Loom; and 10 whitespace-separated `.dat`
+tables in Specs, which PGFPlots draws. The six months before the read hold 20
+path-change events on them: 3 on the comma-separated files, 4 on the
+tab-separated files, and 13 on the `.dat` tables.
+
+One focused scanner reads all three formats, with a dialect for each. A line is
+a record. An unquoted field that reads as a decimal number is colored as a
+number, any other field that holds more than white space as a string, and a
+separator as punctuation. `.csv` selects comma-separated values, read as RFC
+4180 defines them: a field that opens with `"` runs to the next quote that is
+not doubled, across commas and line breaks, so a live edit in a diff re-colors
+the whole file. `.tsv` selects tab-separated values, which have no quoting, and
+in which a line that starts with `#` is a comment, as Loom's census tables
+write. Spaces and tabs separate a `.dat` table's fields, and a line whose first
+character other than spaces and tabs is `#` is a comment, as gnuplot and
+PGFPlots read it, and so is one that starts with `%`, as PGFPlots reads it. A file carries no mark of whether its first record names the
+columns, so that record is colored like any other. No field is colored as a
+boolean, because `TRUE` is one of the surnames in Loom's census table. A table
+has no structure tree.
+
+`.dat` names data of every kind, so a `.dat` file is a table only when its first
+line other than blank lines and comments, or the next such line, is a row of two
+or more numbers; a single number is as likely to be a counter or a process
+identifier. A shared extension's evidence is a function of the source. The
+`.dat` evidence reads lines until it has seen two that are neither blank nor
+comments. The INI, directive configuration, YAML, and dotenv evidence skips blank and
+comment lines one at a time until the first other line, and then matches a
+regular expression starting at that line. None of them is one regular expression over the whole
+source: V8's regular expression engine records a step for each repetition it may
+have to undo, so a pattern that repeats once for each line or each number
+exhausts its stack on a few million of them.
+
+The scanner reconstructed each of the 37 files exactly and gave every character
+other than white space a token class. It was measured on 100 kilobytes of each
+format's surveyed source, and on 100-kilobyte inputs built to slow it: an
+unclosed quote, a single line of commas, a single line of numbers, a single line
+of tabs, tabs between fields of spaces, and rows of a thousand empty
+tab-separated fields. The machine's load average was above 150, so no scanner
+figure is a direct measurement. Each is an estimate: the properties scanner's recorded
+95th percentile multiplied by the largest ratio to a properties control run
+seen in six rounds. The largest estimates are 6.5 milliseconds for a full
+highlight, 6.4 for a document parse, and 6.2 for a re-color after one edit, all
+inside the maximums for a parser-backed language. On 100-kilobyte sources built
+to slow the `.dat` evidence, such as 100,000 blank lines before a line of text
+or a single row of 50,000 numbers, the evidence took at most 4 milliseconds at
+the median, measured directly at a load average near 200.
+
+Fixtures come from gVisor, Labs, Loom, and Specs.
 
 The November 13, 2026 read of the local checkouts of the organization's
 repositories listed every tracked file with the language `cf view` selects for

@@ -18,9 +18,11 @@ import {
   plainTextLines,
 } from "./plain-text.ts";
 
-/** Source whose first character other than white space does not open a JSON
- * object. */
-const NOT_JSON = /^(?!\s*\{)/;
+/** Whether the first character of `text` other than white space does not open
+ * a JSON object. */
+function opensWithoutObject(text: string): boolean {
+  return !/^\s*\{/.test(text);
+}
 
 export const plainTextLanguage: Language = {
   id: "plain-text",
@@ -69,8 +71,8 @@ export const plainTextLanguage: Language = {
     signatures: [],
     // Structured logs whose records are JSON objects use these extensions too.
     sharedExtensions: [
-      { extension: ".log", content: NOT_JSON },
-      { extension: ".stderr", content: NOT_JSON },
+      { extension: ".log", content: opensWithoutObject },
+      { extension: ".stderr", content: opensWithoutObject },
     ],
   },
 

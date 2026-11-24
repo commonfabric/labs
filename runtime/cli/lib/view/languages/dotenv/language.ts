@@ -2,6 +2,7 @@ import type { Language } from "../language.ts";
 import { utf8Decoder } from "../decoder.ts";
 import { remapStructure } from "../../diffremap.ts";
 import { createRecoloringHighlighter } from "../classes.ts";
+import { firstContentLineMatches } from "../evidence.ts";
 import { dotenvDocument, dotenvLines } from "./dotenv.ts";
 
 /** Source whose first line other than blank lines and comments sets a
@@ -9,8 +10,10 @@ import { dotenvDocument, dotenvLines } from "./dotenv.ts";
  * requires starts with a letter or an underscore and holds no punctuation
  * other than `.` and `-`, which is stricter than what the scanner colors as a
  * name. */
-const ASSIGNMENT_FIRST =
-  /^(?:[^\S\n]*(?:#[^\n]*)?\n)*[^\S\n]*(?:export[^\S\n]+)?[A-Za-z_][\w.-]*[^\S\n]*=/;
+const ASSIGNMENT_FIRST = firstContentLineMatches(
+  "#",
+  /[^\S\n]*(?:export[^\S\n]+)?[A-Za-z_][\w.-]*[^\S\n]*=/,
+);
 
 /**
  * The dotenv language for the pager, which covers the environment files that

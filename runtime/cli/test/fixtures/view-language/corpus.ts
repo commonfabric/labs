@@ -1396,6 +1396,96 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "root", className: "keyword" },
   },
   {
+    languageId: "csv",
+    surveyRepository: "gvisor",
+    surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
+    surveyPath: "website/performance/applications.csv",
+    before: new URL("./csv-gvisor/before.csv", import.meta.url),
+    after: new URL("./csv-gvisor/after.csv", import.meta.url),
+    incomplete: new URL("./csv-gvisor/incomplete.csv", import.meta.url),
+    selection: {
+      filenames: [
+        "website/performance/applications.csv",
+        "test/runtimes/exclude/java21.csv",
+        "data/manual-signatories.csv",
+        "docs/history/development/performance/RESULTS.CSV",
+      ],
+      aliases: ["csv"],
+    },
+    beforeEvidence: { text: "transfer_rate", className: "string" },
+    afterEvidence: { text: "transfer_rate", className: "string" },
+    incompleteEvidence: { text: "transfer_rate", className: "string" },
+  },
+  {
+    languageId: "csv",
+    surveyRepository: "labs",
+    surveyCommit: "da9c9b589c39254d29ff0a5069bf898fa3a973dd",
+    surveyPath:
+      "docs/history/development/performance/2026-09-14-loom-person-inbox-attempts.csv",
+    before: new URL("./csv-labs/before.csv", import.meta.url),
+    after: new URL("./csv-labs/after.csv", import.meta.url),
+    incomplete: new URL("./csv-labs/incomplete.csv", import.meta.url),
+    beforeEvidence: { text: "visible source counts", className: "string" },
+    afterEvidence: { text: "visible source counts", className: "string" },
+    incompleteEvidence: {
+      text: "visible source counts",
+      className: "string",
+    },
+  },
+  {
+    languageId: "tsv",
+    // A line of tab-separated fields that hold no space is also a row of a
+    // whitespace-separated `.dat` table, which colors its fields the same way.
+    // A YAML plain scalar colors each of its words as a string, as a table
+    // colors each field that is not a number. A Git attributes line starts
+    // with a pattern, which it colors as a string, as a table colors a
+    // field.
+    highlightingPeers: ["dat", "yaml", "gitattributes"],
+    surveyRepository: "loom",
+    surveyCommit: "3f94e7c902804bdf819a42e6af485c52af3e1a35",
+    surveyPath:
+      "tests/fixtures/canonical/people/name_frequencies/given_1990_male.tsv",
+    before: new URL("./tsv-loom/before.tsv", import.meta.url),
+    after: new URL("./tsv-loom/after.tsv", import.meta.url),
+    incomplete: new URL("./tsv-loom/incomplete.tsv", import.meta.url),
+    selection: {
+      filenames: [
+        "tests/fixtures/canonical/people/name_frequencies/given_1990_male.tsv",
+        "docs/development/archive/docs-reorg/map.tsv",
+      ],
+      aliases: ["tsv"],
+    },
+    beforeEvidence: { text: "JAMES", className: "string" },
+    afterEvidence: { text: "WILLIAM", className: "string" },
+    incompleteEvidence: { text: "JAMES", className: "string" },
+  },
+  {
+    languageId: "dat",
+    // A YAML plain scalar colors each of its words as a string, as a table
+    // colors each field that is not a number. A Go checksum line is
+    // whitespace-separated words, and Go's checksum language colors the
+    // first of them as a string, as a table colors a field. A dotenv line that
+    // names a variable without `=` colors the words after the name as strings.
+    highlightingPeers: ["yaml", "go-sum", "dotenv"],
+    surveyRepository: "specs",
+    surveyCommit: "c313c1e5e12afb4abf6dd245aef3167d5f9c6180",
+    surveyPath: "economical-model/theory/paper/cliff-baseline.dat",
+    before: new URL("./dat-specs/before.dat", import.meta.url),
+    after: new URL("./dat-specs/after.dat", import.meta.url),
+    incomplete: new URL("./dat-specs/incomplete.dat", import.meta.url),
+    selection: {
+      filenames: [
+        "economical-model/theory/paper/cliff-baseline.dat",
+        "economical-model/theory/paper/depth-scratch.dat",
+        "plots/RESULTS.DAT",
+      ],
+      aliases: ["dat"],
+    },
+    beforeEvidence: { text: "breadth_sd", className: "string" },
+    afterEvidence: { text: "breadth_sd", className: "string" },
+    incompleteEvidence: { text: "breadth_sd", className: "string" },
+  },
+  {
     languageId: "plain-text",
     surveyRepository: "raia",
     surveyCommit: "6b9cc95befe5f7cf0929eb569d9a1157e62d2374",
