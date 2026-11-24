@@ -38,6 +38,7 @@ import {
 import { getLogger } from "@commonfabric/logger";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
+import { ActionCostTable } from "./action-costs.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import {
   type ParkedRuntimeHandle,
@@ -62,6 +63,7 @@ import {
   type ServingLoopCounters,
   type ServingLoopStats,
 } from "./stats.ts";
+import { mergeServingLoopStats } from "./stats-merge.ts";
 
 export type { LifecycleVerb } from "./space-server.ts";
 export type {
@@ -172,7 +174,10 @@ export type ExecutorHostOptions = {
    * `experimental: { serverExecution: true }`. `context` is what the
    * SpaceServer hands its factory (see SpaceServerOptions.createRuntime):
    * a factory that reads the home space before returning installs
-   * `context.storeReadThrough` on its storage manager first. */
+   * `context.storeReadThrough` on its storage manager first. The host counts
+   * the runtime's action runs toward its action costs from the moment the
+   * factory returns it, so a run the factory itself waits on is not
+   * counted. */
   createRuntime: (
     space: MemorySpace,
     context: RuntimeFactoryContext,
@@ -313,6 +318,9 @@ export class ExecutorHost {
 
   readonly #stats: ServingLoopStats = emptyServingLoopStats();
 
+  /** What each action the serving runtimes ran has cost; see `actions`. */
+  readonly #actionCosts = new ActionCostTable();
+
   /** The routed plane, while the host has a route. */
   readonly #route: RoutedPlane | undefined;
 
@@ -404,7 +412,11 @@ export class ExecutorHost {
         if (existing?.active) existing.noteCurrencyChanged();
       },
     });
-    registerServingLoopStatsProvider(() => this.stats());
+    // Merged as the worker pool merges its workers' counters, so the action
+    // costs the health route reads are bounded the same way here.
+    registerServingLoopStatsProvider(() =>
+      mergeServingLoopStats([this.stats()])
+    );
   }
 
   /** The failure-park backoff streak of each space that has one. */
@@ -427,9 +439,9 @@ export class ExecutorHost {
     return this.#parkedRuntimes.size > 0 ? "parked" : "vacant";
   }
 
-  /** {@link stats} without the settle blocks, in its own deep copy: static
-   * counts merged with per-space state (activeSpaces and watermarkLag read
-   * the current SpaceServers). */
+  /** {@link stats} without the settle blocks and the action costs, in its
+   * own deep copy: static counts merged with per-space state (activeSpaces
+   * and watermarkLag read the current SpaceServers). */
   counters(): ServingLoopCounters {
     refreshDeliveryCheckpointStats(this.#stats);
     let watermarkLag = 0;
@@ -439,8 +451,12 @@ export class ExecutorHost {
       activeSpaces += 1;
       watermarkLag = Math.max(watermarkLag, server.watermarkLag);
     }
-    const { settle: _settle, settleAdvances: _settleAdvances, ...live } =
-      this.#stats;
+    const {
+      settle: _settle,
+      settleAdvances: _settleAdvances,
+      actions: _actions,
+      ...live
+    } = this.#stats;
     const counters = structuredClone(live);
     counters.parkedRuntimes.held = this.#parkedRuntimes.size;
     return { ...counters, activeSpaces, watermarkLag };
@@ -455,6 +471,7 @@ export class ExecutorHost {
       ...this.counters(),
       settle: structuredClone(this.#stats.settle),
       settleAdvances: structuredClone(this.#stats.settleAdvances),
+      actions: this.#actionCosts.costs(),
     };
   }
 
@@ -863,17 +880,18 @@ export class ExecutorHost {
         serviceIdentity: this.#options.serviceIdentity,
         // A runtime kept from the space's last idle park serves this tenure
         // when the store has not moved since; otherwise the factory builds
-        // one. Called once the tenure holds the lease.
-        createRuntime: (context) => {
-          const parked = this.#takeParkedRuntime(space, engine);
-          return parked !== undefined
-            ? Promise.resolve(parked)
-            : this.#options.createRuntime(space, {
+        // one. Called once the tenure holds the lease. Either way its action
+        // runs count toward the host's action costs.
+        createRuntime: async (context) => {
+          const handle = this.#takeParkedRuntime(space, engine) ??
+            await this.#options.createRuntime(space, {
               ...context,
               ...(this.#options.route === undefined
                 ? {}
                 : { route: this.#options.route }),
             });
+          this.#actionCosts.observe(space, handle.runtime.telemetry);
+          return handle;
         },
         retainParkedRuntime: (handle) => this.#retainParkedRuntime(handle),
         localSeqRef,

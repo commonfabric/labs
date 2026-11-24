@@ -1,0 +1,1 @@
+{"date":"2026-11-23","from":{"k":"unit","s":"runner","n":"own-write echo (live) > applies its own patch echo exactly once and does not re-notify"},"to":{"k":"unit","s":"runner","n":"own-write echo (live) > applies its own patch exactly once and does not re-notify when the frame leaves the document out"}}
