@@ -7,9 +7,10 @@ coverage.
 
 Coverage is read two ways as well. The repository-wide figure, measured by the
 full run on `main`, is a trend: the dashboard shows it and nothing fails on it.
-The measured-set gate on pull requests is the only coverage check that fails
-anything, and it compares one suite's tests over one workspace member's lines
-against what the same set measured on `main`.
+The measured-set gates are the only coverage check that fails anything. Each
+compares one suite's tests over one workspace member's lines against what the
+same set measured on `main`, and each is a test a pull request runs when its
+score earns it a place.
 
 ## Two kinds of code, two coverage mechanisms
 
@@ -34,6 +35,14 @@ but it does not enter the Deno V8 profile. Put reusable policy and state
 transitions in an ordinary source module and exercise them from a plain Deno
 unit test as well; keep the browser case for the boundary only a real DOM can
 prove.
+
+A component in `runtime/ui` does not need a browser to render. A plain Deno
+test that imports `runtime/ui/src/v2/test-utils/dom.ts` ahead of anything that
+loads Lit
+gets a happy-dom document, in which the component connects, renders into its
+shadow root, and answers events, and Deno's coverage records what it ran.
+`cf-toggle.test.ts` is the worked example. What happy-dom does not implement,
+such as layout and real focus, still takes the browser case.
 
 Do not name a source file so that its path ends in `test.ts` (or `test.tsx`,
 `test.js`, `test.mjs`, `test.jsx`). `deno coverage` takes those for test files
@@ -96,13 +105,13 @@ never names the script an absent one. A batch whose tests never ran writes no
 profile directory, so the lane converts nothing for it and writes no report for
 it. A profile directory that holds only empty
 files is converted, and its report is empty. What reads the reports decides what
-an absent or empty one means: the pull request coverage gate fails a measured
-set the change forced whose reports name no line of its member, as [Test
+an absent or empty one means: on a pull request, a coverage gate the plan chose
+fails where its set's reports name no line of its member, as [Test
 selection](test-selection.md) describes.
 
 ### Authored pattern code is measured by transformer instrumentation
 
-Patterns (the user programs under `packages/patterns`) are not loaded the way an
+Patterns (the user programs under `patterns`) are not loaded the way an
 ordinary module is. Each pattern is compiled through the Common Fabric
 transformer pipeline and then run inside a sandbox. Deno's V8 coverage never
 sees the authored pattern statements execute, so it cannot report which lines of
@@ -164,9 +173,9 @@ can take all three.
 The view is the first. A pattern's view helpers are ordinary functions, and
 nothing calls one until something reads `[UI]`. Reaching for a node is what
 builds the tree, so one assertion that walks to a node covers every helper the
-tree called on the way there. `packages/patterns/test/vnode-helpers.ts` holds
-the walk. Tie the assertion to something the file already claims rather than to
-a node's bare existence:
+tree called on the way there. `patterns/tools/test-support/vnode-helpers.ts`
+holds the walk. Tie the assertion to something the file already claims rather
+than to a node's bare existence:
 `hasText(findNodeById(instance[UI], "gallery-count"), "16 total examples")`
 states the rendered header against the count the same test asserts through
 `totalExamples`, so a gallery that computed its count and rendered nothing
@@ -182,7 +191,7 @@ drives has a body that runs in neither path, so it sits at zero on every run
 rather than moving between them. That is permanent debt rather than flap, and it
 costs one more action apiece to clear.
 
-`packages/patterns/cfc-spec-gallery/main.test.tsx` is the worked example. It
+`patterns/examples/cfc-spec-gallery/main.test.tsx` is the worked example. It
 reads its view, states its name and the four inputs it reports back out, and
 drives every stream the gallery exposes, which takes the file from 385 of its
 522 measured lines to all of them. Before that the integration path was the only
@@ -192,7 +201,7 @@ is what that cost the group on a run where that path's report went missing.
 
 `CF_PATTERN_COVERAGE_DIR` names the directory the `*.pattern-coverage.lcov`
 files are written to. The `cf test` command in
-`packages/cli/commands/test-command.ts` reads it directly. The browser
+`runtime/cli/commands/test-command.ts` reads it directly. The browser
 integration path does not run through `cf test`; there the integration harness
 reads the same variable to decide whether to turn worker coverage on and where to
 write the merged LCOV it pulls back from the browser (see "How the integration
@@ -201,27 +210,38 @@ suites collect authored-pattern coverage").
 ## How the two are scored
 
 `tasks/coverage-metrics.ts` scores LCOV reports. It walks the tracked source
-files under `packages` and `tasks` and counts, for each file, how many lines no
-test covered. The top-level `scripts` directory is left out. The same counting
-serves both readers:
+files under the package directories `LAYOUT.md` names and under `tasks`, and
+counts, for each file, how many lines no test covered. The top-level `scripts`
+directory is left out, and so is an iframe pattern's `guest.js`: that file is
+the bundle `deno bundle` writes from the `guest.ts` or `guest.tsx` beside it,
+and the metric counts the source instead. [Testing an iframe
+guest](#testing-an-iframe-guest) says how a test loads that source. A
+`deno-web-test.config.ts` is left out as well, because it is the
+configuration the browser test runner reads for a package's browser tests,
+not source those tests exercise. The same
+counting serves both readers:
 
 - **The repository-wide figure** merges every report the full run's lanes wrote
   and rolls the counts up into `coverage-debt: <group> uncovered lines` metrics,
-  for example `coverage-debt: packages/patterns uncovered lines`, and a
+  for example `coverage-debt: patterns uncovered lines`, and a
   `workspace` total. `Status` measures it on a push with
   `tasks/coverage-report.ts`, and it is a trend: nothing fails on it.
 - **A measured set's figure** reads only the reports that set's suite wrote for
   its member, and counts only that member's own source files. That is what the
   [measured-set gate](#the-measured-set-gate-and-accepting-debt) compares.
 
-Authored pattern files under `packages/patterns` are tracked source files, so
-their uncovered lines count toward `coverage-debt: packages/patterns`. Every
+Authored pattern files under `patterns` are tracked source files, so
+their uncovered lines count toward `coverage-debt: patterns`. Every
 authored-pattern coverage stream feeds this one metric: the `pattern-unit`
-suite's coverage (`TN:pattern-runtime`) and the integration suites' coverage
-(`TN:pattern-runtime-integration`) both join the merged report, and a line
-covered by either counts covered. Nothing in the accounting reads the test name
-— the two are kept distinct only so a reader of the merged report can tell what
-covered a line.
+suite's coverage (`TN:pattern-runtime`), the integration suites' coverage
+(`TN:pattern-runtime-integration`), and the multi-runtime harness's coverage
+(`TN:pattern-runtime-multi-runtime`) all join the merged report, and a line
+covered by any of them counts covered. The accounting reads the test name only
+to tell the instrumentation's records from those of Deno's coverage, which
+carry none; [A file both producers
+recorded](#a-file-both-producers-recorded) says why. It treats the
+instrumentation's streams alike. They carry different names so that a reader
+of a lane's reports can tell which path covered a line.
 
 One detail of the accounting is worth knowing when reasoning about pattern
 coverage. A file with no LCOV record has every tracked line counted as
@@ -229,18 +249,61 @@ uncovered, unless it compiles to no code at all or opts out of coverage — see 
 file that compiles to nothing is charged
 nothing](#a-file-that-compiles-to-nothing-is-charged-nothing) and [A file that
 opts out of coverage is charged
-nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A file with a
-record is scored against the lines that record names. For a file measured by
-Deno's V8 coverage that is every executable line; pattern instrumentation names
-only the statements it could instrument, so a pattern file's first record both
-covers real lines and drops the never-named lines out of the count.
+nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A record that
+names none of a file's lines says nothing about which of them ran, so it counts
+as no record. A file with a record is scored against the lines that record
+names. For a file measured by Deno's V8 coverage that is every executable line;
+pattern instrumentation names only the statements it could instrument, so the
+first record of a file only the instrumentation records both covers real lines
+and drops the never-named lines out of the count. A file Deno's coverage also
+records is scored against Deno's lines instead, as [A file both producers
+recorded](#a-file-both-producers-recorded) describes.
 
-Gaining a record can therefore only *lower* a file's count, since the record
-names a subset of the file's lines and the rest stop being counted. A figure
-whose file gains one moves down, and a measured set's baseline settles at a
-lower — and therefore stricter — bar rather than failing anything. The
-instrumented statements are also the only lines this mechanism can speak to: a
-line the instrumentation cannot reach is not a line a pattern test could cover.
+Gaining a first record can therefore only *lower* a file's count, since the
+record names a subset of the file's lines and the rest stop being counted. A
+figure whose file gains one moves down, and a measured set's baseline settles at
+a lower — and therefore stricter — bar rather than failing anything. A second
+producer's record can raise the count, since Deno's coverage names executable
+lines the instrumentation could not reach. The instrumented statements are also
+the only lines this mechanism can speak to: a line the instrumentation cannot
+reach is not a line a pattern test could cover.
+
+### A file both producers recorded
+
+A module that a Deno unit test imports and that a pattern also loads gets a
+record from each producer, and the two name different lines of the same
+statement. Deno's coverage names every line it counts as executable, run or
+not, but leaves out a line holding only the end of a statement begun on an
+earlier line, such as the closing `);` of a call written over three lines. The
+pattern instrumentation names every line a statement spans, each with a count
+taken from the statements that cover it.
+
+So for a file that a record from Deno's coverage names, the lines scored are
+the lines Deno's records name. Each of them is covered when a record from
+either producer shows a hit on it. A line that only the instrumentation names
+belongs to a statement whose first line Deno's coverage names, so that
+statement is charged, or not, on Deno's lines rather than a second time on its
+last line. `tasks/lcov.ts` holds the rule, which makes the repository-wide
+figure, the measured-set gate, and the combined report all apply it. It tells
+the producers' records apart by their `TN:` line: every record the
+instrumentation writes carries `pattern-runtime`, alone or followed by a hyphen
+and the name of the path that collected it, and Deno's records carry no test
+name. The type of the runner's `patternCoverageReportToLcov()` parameter
+admits no other name, and the reader refuses a record carrying one, since it
+cannot tell which lines that record's producer counts.
+
+Take a `throw new RangeError(...)` on lines 278 to 280 of a module, closing
+with `);` on line 280, which a Deno test runs and no pattern test reaches.
+Deno's record names lines 278 and 279 as hit. The instrumentation's names lines
+278, 279 and 280 with no hits. Lines 278 and 279 are covered, and line 280 is
+not scored. Had no test run the throw, lines 278 and 279 would both be charged.
+Had only a pattern test run it, the instrumentation's hits on lines 278 and 279
+would cover them.
+
+Deno's coverage also leaves out the lines that a `deno-coverage-ignore` comment,
+or a `deno-coverage-ignore-start` and `deno-coverage-ignore-stop` pair, opts
+out, so those lines are not scored for such a file either. A file that only the
+instrumentation recorded is scored against the lines the instrumentation names.
 
 ### A file that compiles to nothing is charged nothing
 
@@ -254,11 +317,18 @@ to report. No test can cover a line of it, so the metric charges it nothing.
 The metric tells the two apart by compiling each file it finds no record for,
 and charges it only when something comes out. `tasks/executable-source.ts` runs
 the file through the TypeScript compiler and reads the emitted JavaScript: a
-file that emits no statement, an `export {}` module marker aside, is charged
+file that emits no statement other than export declarations is charged
 nothing, and every other file is charged its full tracked-line count. Which
 constructs reach the output is the compiler's rule. An enum, a namespace holding
 a value, and an import kept for its side effects all emit code. A type-only
-import, a namespace holding only types, and a comment do not. The compile
+import, a namespace holding only types, and a comment do not. An export
+declaration does reach the output — `export * from "./a.ts"`,
+`export { b } from "./b.ts"`, or the `export {}` the compiler adds to keep an
+otherwise empty file a module — but it only binds names, and a module's
+evaluation runs no step for it. So a file that only re-exports other modules is
+charged nothing as well. The pattern instrumentation agrees: it skips export
+declarations, so a pattern test that loads such a file leaves no record of it.
+The compile
 happens when the report is scored, once per file the report leaves out. A file
 with a record never pays for it, because its record already says which of its
 lines ran.
@@ -299,6 +369,30 @@ test could pay its debt down, and the browser tests that do drive it report
 into nothing this metric reads. A file a Deno test could load is not such a
 file. Where its member carries a measured set, the measured-set gate is what
 holds it to its tests.
+
+### Testing an iframe guest
+
+An iframe pattern's guest (`guest.ts` or `guest.tsx`) runs in the browser, but
+a Deno test can load it as it is.
+`patterns/tools/test-support/iframe-guest.ts` loads the guest's `guest.html`
+into a simulated document, with any static assets the test supplies, installs
+that document's globals, evaluates a fresh instance of the guest module against
+it, and serves the guest the resources a test supplies through the host end of
+the real bridge: in-memory cells, presence rooms and SQLite databases. The test
+drives the document as a person would and reads back both the document and what
+the guest wrote. Deno's coverage records the guest module like any other, so
+the lines its tests run count as covered.
+`patterns/examples/iframe-cursor-canvas/guest.test.ts` is the worked example.
+
+A guest's writes cross the bridge, a message channel, before they reach a test's
+cells, so a check that the guest wrote nothing waits for the page's `settled()`
+first: checked straight after the event, it would pass whatever the guest did.
+Engines the simulated document lacks, such as Web Audio, a canvas's drawing
+context, or WebGL, are test doubles the test supplies through the page's
+`globals` and `patchProperty()`. The tests of
+`patterns/showcase/iframe-shared-tape-lab/` (Web Audio),
+`iframe-ring-loops/` (a drawing context) and `iframe-orbital-salvage-yard/`
+(WebGL) supply them.
 
 ### A local run under coverage runs every package
 
@@ -342,7 +436,7 @@ commits, and read the counts per line rather than per group.
 
 ### Diagnostics that fire on wall-clock time
 
-The slow-traverse report in `packages/runner/src/traverse.ts` was one of those
+The slow-traverse report in `runtime/runner/src/traverse.ts` was one of those
 instances. It logged a traversal's counters only when that traversal had taken
 more than 100 milliseconds of real time, so it ran on a loaded machine and did
 not run on an idle one. Thirty-nine lines moved with the load: the body of the
@@ -362,7 +456,7 @@ A test reaches the report by choosing the elapsed time. It can call the
 function directly with a time over the threshold, or it can pin the clock the
 timed path reads, which also proves that the path still reaches the
 diagnostic. The `SchemaObjectTraverser slow-traverse reporting` cases in
-`packages/runner/test/traverse.test.ts` are the worked example of the second.
+`runtime/runner/test/traverse.test.ts` are the worked example of the second.
 They replace `performance.now` — what `logger.timeStart` and `timeEnd` read —
 for the length of one traversal, and advance it from a store read, because
 `traverse()` is synchronous and a test cannot step a clock from outside a call
@@ -390,9 +484,9 @@ took the branch, so a call site of the form
 from one run to the next, and one line of movement moves a count exactly as
 thirty-nine did. Do not reason from what the `if` line itself reports either.
 That count is a projection of V8's block ranges onto lines: it differs between
-the one-line and the braced form of the same guard, and it changed between deno
-2.8.3 and the pinned 2.9.4, which now credits a braced guard's line with the
-condition's own count. See
+the one-line and the braced form of the same guard, and the attribution can
+change across Deno releases. A braced guard's line can receive the condition's
+own count even when its body never ran. See
 [deno coverage: one-line guard reported uncovered when its branch is not taken](deno-coverage-guard-line-artifact.md).
 
 ### Paths reached only when something happens twice
@@ -407,7 +501,7 @@ some runs and not on others.
 Write a test that produces the second occurrence itself rather than one that
 performs an operation and hopes the suite repeats it. The
 `records one violation for an action caught twice` case in
-`packages/runner/test/scheduler-pull-idempotency.test.ts` is the worked
+`runtime/runner/test/scheduler-pull-idempotency.test.ts` is the worked
 example. It reaches the deduplication guard in `runIdempotencyRecheck()` by
 running one action twice over an input it moves, and it distinguishes a
 deduplicated second detection from a single detection by having the action
@@ -434,23 +528,24 @@ constructs that value reaches the branch directly. `applyPatch()` is a pure
 function over a value tree: its `missing object key` rejection, which the
 client's pending-layer replay reaches when a `remove` names a key a winning
 writer already dropped, is one call over a base object without the key.
-`packages/memory/test/v2-patch-errors.test.ts` is the worked example, and it
+`runtime/memory/test/v2-patch-errors.test.ts` is the worked example, and it
 states one case per rejection the module raises rather than only the line that
 moved — a sibling branch in the same file is the next one to flap.
 [The investigation record](../history/development/coverage-flake-patch-remove-missing-key-2026-08-17.md)
 follows that line from a group-level `+2` down to the two integration hits that
 covered it in one run and not the next.
 
-What the second party holds need not be a write. A lease row another process
-owns puts a branch in the same position: the server executor's `activate()`
+What the second party holds need not be a write. A lease another holder has
+puts a branch in the same position: the server executor's `activate()`
 reports `lease-unavailable` and returns `false` only when the space's execution
 lease is already held, and the host arm that unregisters the refused space runs
 only behind that. Nothing in the suite asks for a rival holder, so both were
 reached when one case's park happened to chain a re-activation while the rival
-row it had installed for a different purpose still stood. The way out is the
-same one: a lease is a row, so a test writes the row and calls `activate()`. The
-cases are in `packages/runner/test/executor-space-server.test.ts` and
-`packages/runner/test/executor-serving-loop.test.ts`, and
+holder it had installed for a different purpose still stood. The way out is the
+same one: a lease is an entry in the memory server's map, so a test acquires it
+under another holder and calls `activate()`. The
+cases are in `runtime/runner/test/executor-space-server.test.ts` and
+`runtime/runner/test/executor-serving-loop.test.ts`, and
 [their investigation record](../history/development/coverage-flake-executor-contention-paths-2026-08-26.md)
 follows ten lines across three files from a group-level `+10` down to the two
 shards that reached them.
@@ -466,18 +561,20 @@ tear a runtime down while one was in flight.
 
 The list coordinators' resume-seed recovery was one of those. A coordinator
 resuming against a result container with no durable value pulls the container
-and seeds an empty array once the pull settles, and it warns when either the
-pull or the seed fails. One workspace shard on one `main` run reached the seed's
+and, for a filter or a flatMap, seeds an empty array once the pull settles, and
+it warns when either the pull or the seed fails. A map seeds nothing, since it
+writes its container only when a reconcile succeeds, and an absent one is a map
+that has failed. One workspace shard on one `main` run reached the seed's
 warning three times; no other artifact in that run or the next reached it at
 all.
 
 Reaching such a branch takes a failing operation, not a failing environment, so
 give the recovery its operation as a parameter.
 `seedResultContainerWhenPullSettles()` in
-`packages/runner/src/builtins/list-result-container-seed.ts` takes the runtime,
+`runtime/runner/src/builtins/list-result-container-seed.ts` takes the runtime,
 the container, a predicate saying whether the coordinator still holds it, the
 pull to wait on, and the logger to report through.
-`packages/runner/test/list-result-container-seed.test.ts` then hands it a pull
+`runtime/runner/test/list-result-container-seed.test.ts` then hands it a pull
 that rejects and a runtime whose commits are refused. Each failure case asserts
 the message key and the error carried with it, so a report that changed which
 failure it named fails rather than staying green on the line count.
@@ -503,7 +600,7 @@ The fetch builtins' completion writeback is the same shape with nothing to
 extract. `tryWriteResult()` already takes the runtime it commits through, and
 so does `startFetch()`, so a test that hands either one a runtime whose commits
 are refused reaches both the arm that carries the refusal back and the throw
-that converts it. `packages/runner/test/fetch-writeback.test.ts` states the
+that converts it. `runtime/runner/test/fetch-writeback.test.ts` states the
 function's three outcomes, because the two that do not write are distinct for
 the caller — inputs that moved mean the request was superseded and is done,
 while a refused commit means the claim is still pending and only this response
@@ -541,7 +638,7 @@ scheduling rather than named by any test.
 
 The server executor's wave withdrawal is one of those. When a foreign space's
 co-hosted engine cannot be resolved, `commitWave()` in
-`packages/runner/src/executor/wave.ts` walks the wave's contributions and
+`runtime/runner/src/executor/wave.ts` walks the wave's contributions and
 withdraws the ones that sealed into that space — an event handler requeues, a
 derivation drops — while everything else commits. Reaching the skip that lets
 everything else through takes a wave holding both a contribution that crossed
@@ -555,7 +652,7 @@ takes its space, lease and replica lookup as arguments and exposes
 `failForeignSpace()` as a method, so a test seals the contributions it wants,
 fails a space, and commits, with nothing else deciding what the wave holds. The
 `an unresolvable foreign space withdraws exactly its own crossings` case in
-`packages/runner/test/executor-wave.test.ts` puts one contribution of each kind
+`runtime/runner/test/executor-wave.test.ts` puts one contribution of each kind
 in the wave and asserts the disposition of each, so a version that withdrew the
 bystander with the crossings fails rather than staying green on the line count.
 State all the arms in the one case rather than only the arm that moved. The
@@ -595,9 +692,9 @@ throws. Prefer such a stand-in to a real reaped child even though one can be
 had, because it lets the case say which signal was sent, which a process that is
 already gone cannot show, and because it spawns nothing.
 `terminateChildProcess()` in
-`packages/connectors/agents/connector/src/child-process.ts` is that function,
+`connectors/agents/connector/src/child-process.ts` is that function,
 and the cases beside it in
-`packages/connectors/agents/connector/test/child-process.test.ts` assert that
+`connectors/agents/connector/test/child-process.test.ts` assert that
 the running child was sent `SIGTERM` and that the reaped one was asked at all,
 so a version that stopped sending it fails rather than staying green on the
 line count.
@@ -651,8 +748,8 @@ Any two adjacent callback arguments sit in this position. The pair that
 produced it here is a request's two endings — the work to start once the
 request commits, and the ending for a request refused before it starts — which
 is the shape of each `enqueuePostCommitLLMWork()` call in
-`packages/runner/src/builtins/llm.ts` and of the served compile path in
-`packages/runner/src/builtins/compile-and-run.ts`. Neither file is where the
+`runtime/runner/src/builtins/llm.ts` and of the served compile path in
+`runtime/runner/src/builtins/compile-and-run.ts`. Neither file is where the
 shape comes from, so a search for it goes by the call sites rather than by what
 they call.
 
@@ -698,7 +795,7 @@ any input tells the two versions apart.
 
 ### A branch only some of the corpus reaches
 
-`packages/ts-transformers` and `packages/schema-generator` move for a reason of
+`base/ts-transformers` and `base/schema-generator` move for a reason of
 their own: their unit suites never reach parts of the analyzer and the
 formatters. What reaches them is the pattern integration suites, compiling
 whatever the pattern corpus happens to contain, in whichever lane the pattern
@@ -711,8 +808,8 @@ from one run to the next.
 These take a unit test, not a pattern. Both packages have `*-flap-coverage`
 test files that build the type or the source they need and call the analyzer or
 the generator directly:
-`packages/ts-transformers/test/policy/capability-analysis-flap-coverage.test.ts`
-and `packages/schema-generator/test/schema-generator-flap-coverage.test.ts`.
+`base/ts-transformers/test/policy/capability-analysis-flap-coverage.test.ts`
+and `base/schema-generator/test/schema-generator-flap-coverage.test.ts`.
 Each case asserts what the branch produces — that a stream argument is
 recorded opaque while a writable argument is recorded read and written, that a
 numeric literal emits a number rather than the string the node carries — so a
@@ -772,41 +869,49 @@ saves, and `tasks/deno-setup-action.test.ts` holds it to that.
 ## The measured-set gate and accepting debt
 
 The only coverage check that fails anything is the measured-set gate, which
-`Status` runs on every pull request. [The test-selection
+`Status` judges on every run. [The test-selection
 guide](test-selection.md#the-coverage-gate) is how to operate it and read its
 output, and [the test-selection contract](../specs/test-selection.md#coverage)
 is what it promises. In brief:
 
-- A **measured set** is one suite's tests over one workspace member's lines. A
-  change that reaches a set, unless it reaches more than
-  `LOCAL_COVERAGE_MAX_SETS`, runs every one of its units with coverage on, and
-  the gate adds the lanes' reports for that set together and scores them over
-  the member's own tracked source, by the rules in [How the two are
-  scored](#how-the-two-are-scored).
+- A **measured set** is one suite's tests over one workspace member's lines, and
+  its **gate** is a test of its own, scored by what it has caught. A pull
+  request may run the gate of a set its change reaches, and runs it when the
+  score chooses it, as it would any test. Running the gate runs every one of the
+  set's units with coverage on, and the gate adds the lanes' reports for that
+  set together and scores them over the member's own tracked source, by the
+  rules in [How the two are scored](#how-the-two-are-scored). A gate the score
+  does not choose runs nothing, and its set is reported as not measured.
 - The **baseline** is what the same set measured at the newest `main` commit the
   branch contains. The full run on `main` writes each set's figure into the
   record store, the test-selection publisher carries the figures in the
   manifest, and the gate reads them from the manifest current at the commit
   under test. A set with no baseline the branch contains is reported rather than
   failed.
-- A **rise** above the baseline fails the pull request, unless its description
-  accepts it. Every line of the member that the set's tests newly cover lowers
-  the count, so where the new code cannot all be covered, tests for other
-  uncovered lines of the member bring the count back down.
+- A **rise** above the baseline fails the gate, unless the description accepts
+  it, and a failing gate fails the pull request where the change reaches its
+  set. Every line of the member that the set's tests newly cover lowers the
+  count, so where the new code cannot all be covered, tests for other uncovered
+  lines of the member bring the count back down.
+- Every run records each gate it judged, a rise no acceptance covers as a
+  failure, so that a gate's score reflects the rises it has found. The full run on `main` judges every
+  gate and fails for none of them. It compares each commit against its parent's
+  figure, read from the parent's own run once that run's `Status` has uploaded
+  it, and reads the description of the pull request it merged for acceptances.
 
 Accept a rise with a marker in the pull request's description, on a line of its
 own and flush against the left margin:
 
 ```text
-ACCEPT_COVERAGE_DEBT: packages/memory +12 lines
+ACCEPT_COVERAGE_DEBT: runtime/memory +12 lines
 ```
 
 The marker names a workspace member that some measured set scores, at whatever
-depth the workspace puts it — `packages/connectors/github/connector` as well as
-`packages/memory` — and accepts the rise for every measured set over that
+depth the workspace puts it — `connectors/github/connector` as well as
+`runtime/memory` — and accepts the rise for every measured set over that
 member. An acceptance naming anything but a member some measured set scores
 fails the gate, since nothing consults it. That covers a member with no measured
-set, a source group such as `packages/connectors` that holds members but is
+set, a source group such as `connectors` that holds members but is
 none, a package that is not there, and a misspelling of one that is. Each is
 refused rather than passed for an acceptance that had no effect. Two markers
 naming one member also fail, since the author meant one number and would be
@@ -851,7 +956,11 @@ reports' zero-hit lines across the files the branch changed. Point `DENO_DIR` at
 a new empty directory for each run, since each lane starts without V8's code
 cache. With your usual Deno cache directory, a module that a test runs in a
 subprocess reports its top-level lines as covered or not depending on whether
-something had run it before.
+something had run it before. A new directory also lacks the native libraries
+that FFI packages such as `@db/sqlite` fetch on first use, and a test that
+allows network access only to `127.0.0.1` cannot fetch them, so copy the
+`plug` directory from your usual Deno cache (the location `deno info` names)
+into each new one.
 
 Take both measurements from the same base. Rebasing between them straddles two
 trees and the delta stops meaning anything, so rebase first and measure after.
@@ -871,6 +980,40 @@ so the absolute numbers differ. The offset is constant between two runs of the
 same tests, which is what leaves the delta comparable when the totals are not. A
 measured set's figure is narrower still: only its own suite's tests, over only
 its member's files.
+
+To see which files a group's count comes from, add `--by-file`. The command then
+prints one line for each file with uncovered lines, largest count first. Files
+with equal counts are in path order, with paths compared character by character,
+so that capital letters come before lowercase ones. A line gives the file's
+uncovered line count, then `record` or `no-record`, then the file's
+repository-relative path. A `no-record` file is one the report has no record
+for, or only a record that names none of its lines. [How the two are
+scored](#how-the-two-are-scored) says what such a file is charged. The counts of
+a group's files add up to that group's total. `--under` limits the listing to
+the files at or below one repository-relative path, such as
+`--under=runtime/memory`. A path holding no tracked source file is an error.
+
+`--lcov` reads an LCOV file in place of `--profile-dir`. One such file is the
+[combined report](#a-combined-report-for-ides) of a `main` commit, which gives
+the per-file breakdown of the repository-wide figure. That report holds the
+coverage of whichever lanes' reports downloaded, since the download step carries
+on past a failure. When a lane's report is missing, the lines only that lane
+covered count as uncovered, and a file only that lane loaded is charged as a
+file with no record. Point `--root` at a checkout of the commit the report
+measured. The list of files, and the charge for a file the report has no record
+for, both come from that checkout.
+
+Whichever way the report is read, the command refuses one that has no line of
+any tracked source file the checkout holds. That is what a report of nothing
+looks like, and what a report read against the wrong root looks like.
+
+```bash
+gsutil cp gs://commontools-build-artifacts/workspace-artifacts/labs-<commit-sha>.lcov .
+deno run --allow-read --allow-write --allow-run --allow-env \
+  tasks/coverage-metrics.ts \
+  --lcov=labs-<commit-sha>.lcov --root="$(pwd)" \
+  --by-file --under=runtime/memory
+```
 
 ## Coverage figures in the record store
 
@@ -902,16 +1045,18 @@ Three things read them:
 
 - The test-selection publisher collects each measured set's figure as a
   coverage baseline, against the commit the record's context names, from the
-  objects it folds. It takes them from a push to `main` that the fork flag
-  does not mark, the same rule its fold uses for a run of the default branch,
-  and keeps one per set per commit, the later run's where two measured the
-  same commit. It carries the previous manifest's baselines forward and
+  objects it folds. It takes them from a run of the head of `main` that the
+  fork flag does not mark, the same rule its fold uses for a run of the
+  default branch, and keeps one per set per commit, the later run's where
+  two measured the same commit. It carries the previous manifest's baselines forward and
   drops any older than `LOCAL_COVERAGE_BASELINE_DAYS`.
   `tasks/test-selection/baselines.ts` is where that happens.
 - The dashboard's coverage debt tile
-  (`packages/dashboard/coverage-debt-history.ts`) takes the `workspace`
-  figure of one `main` run a day, the newest of the day's runs that has one
-  and was not measured on a cold compile cache, and charts the run of them.
+  (`dashboard/coverage-debt-history.ts`) takes the `workspace`
+  figure of one `main` run attempt a day, the newest of the day's attempts
+  that has one, was not measured on a cold compile cache, and passed, and
+  charts the run of them. The record store does not say whether an attempt
+  passed, so the tile asks GitHub.
 - The report a `main` run posts on the pull request behind it
   (`tasks/post-main-report.ts`) reads the figures out of the newest coverage
   artifact of the run and of the run before it, and compares the two. A run
@@ -929,9 +1074,13 @@ changed, so a trend that took a cold run's figure beside a warm one's would show
 a drop the next warm run takes back.
 
 The pattern-integration process owns one shared cache in
-`packages/patterns/integration/pieces-controller.ts`. Its controller helper and
-the capability-gate controller both inject that cache into every runtime they
-create. A custom runtime in this suite must do the same. Setting
+`patterns/integration/pieces-controller.ts`. Its controller helper, the
+capability-gate controller, and the serving loop the multi-runtime harness hosts
+on the test's thread all inject that cache into every runtime they create. A
+custom runtime in this suite must do the same. A serving loop that
+`SERVER_EXECUTION_WORKER` puts in workers cannot, since a worker takes no
+closure: each worker's runtimes share a cache that worker builds for itself,
+which holds only what that worker compiled. Setting
 `CF_COMPILE_CACHE_FILE` only tells the test-support cache where to persist its
 bytes; a runtime uses those bytes only when it receives the cache through its
 `moduleByteCache` option.
@@ -964,12 +1113,17 @@ that file to the build-artifacts bucket next to the release tarball. The point
 is to give someone working in an IDE a single file that shows coverage for the
 whole repository, instead of one fragment per lane.
 
-Two things happen during the merge. The source paths in each fragment are
-absolute paths rooted at whichever runner produced them, so they are rewritten
-to repository-relative paths that an IDE can map onto a local checkout. Records
-for the same source file are then combined into one, with the per-line hit
-counts added together, so a file exercised by several lanes is reported once
-with its combined coverage.
+Each lane writes its fragments with repository-relative source paths, rewriting
+the absolute paths `deno coverage` and the pattern instrumentation record once
+it has finished converting. The fragments therefore map onto any checkout: the
+`Status` job, which reads them from a different directory than the one the lane
+ran from, and an IDE with a local checkout. The merge combines the records for
+the same source file into one, with the per-line hit counts added together, so a
+file exercised by several lanes is reported once with its combined coverage. It
+keeps the lines the metric scores, by the rule in [A file both producers
+recorded](#a-file-both-producers-recorded), so the combined report scores the
+same as the lanes' reports it came from. A merged record that took in one of
+Deno's carries no test name, since the lines it names are Deno's.
 
 The merged file carries line coverage only. LCOV identifies a function by its
 name, and `deno coverage --lcov` can emit several functions with the same name
@@ -989,11 +1143,11 @@ gsutil cp gs://commontools-build-artifacts/workspace-artifacts/labs-<commit-sha>
 A run that collects coverage has each lane measure the suites it runs. The full
 run on `main` measures every suite, both server-execution arms of each included,
 because the baselines and the repository-wide trend both come out of it. A pull
-request measures only the members of the measured sets its coverage gate scores,
-and runs everything else with coverage off, since a profile no set is scored
-from is time spent on something nothing reads. The lane hands a measured batch a
-coverage directory of its suite's own. A suite whose runner is `deno test` over
-files writes one directory under it per workspace member, so that what one
+request measures only the members of the measured sets whose gates its plan
+chose, and runs everything else with coverage off, since a profile no gate
+judges is time spent on something nothing reads. The lane hands a measured batch
+a coverage directory of its suite's own. A suite whose runner is `deno test`
+over files writes one directory under it per workspace member, so that what one
 member's tests reached is converted on its own. `pattern-unit` and
 `pattern-reload` write one directory named for the suite.
 
@@ -1015,10 +1169,10 @@ directory, and these three suites write their LCOV there. The lane's upload
 carries it to the repository-wide figure. A pull request's lanes collect no
 authored-pattern coverage, because no measured set is scored from it.
 
-The pattern unit suite runs each `packages/patterns/**/*.test.tsx` file through
+The pattern unit suite runs each `patterns/**/*.test.tsx` file through
 `cf test` in-process. The two integration suites run browser-driven `deno test`
 files against a running Toolshed server. Both kinds of authored-pattern coverage
-feed the same `coverage-debt: packages/patterns` figure.
+feed the same `coverage-debt: patterns` figure.
 
 The pattern integration suite runs in two server-execution arms, and only the
 arm with the flag off collects authored-pattern coverage. The instrumentation
@@ -1041,10 +1195,11 @@ them into runs of neighbors of about a fifth of the list each, never across a
 program root, and hands each run to a `cf test --compile-only` process, five at
 a time; each compiles its files' programs and runs nothing. Files that sit
 together share most of their modules, so each run compiles those once, and the
-test processes that follow, five at a time, all start from a full cache. A
-`cf test` process seeds from the file only as it starts, so without that pass
-the processes started together on a cold cache each compile the modules they
-share. The compile-only process writes no coverage, since nothing ran.
+test processes that follow, one at a time, start from a full cache. A `cf test`
+process seeds from the file as it starts, so the time recorded for a file does
+not include compiling its program, unless the run holding that file failed to
+compile, in which case its own process compiles it. The compile-only process
+writes no coverage, since nothing ran.
 
 The persistent cell cache stores each module's span list as one JSON string.
 This keeps reporting metadata in one value instead of expanding every span
@@ -1097,6 +1252,13 @@ rendered its UI. Once it instruments, the test passes in 7 seconds.
 
 A new browser-driven suite that creates its pieces some other way should expect
 the same trap.
+
+An integration test with no browser at all, whose pattern code runs only in
+runtimes it constructs itself, collects the same way: it hands each runtime
+`patternCoverageCollector()` as its `patternCoverage` option. No page dump
+writes that collector out, so the test calls `writeProcessPatternCoverage()`
+once it has disposed its runtimes. `patterns/integration/fabrifile-store.test.ts`
+is the worked example.
 
 Getting the hits back out crosses two boundaries: the worker's and the browser's.
 `PatternCoverageCollector.toData()` and `ingest()` give the spans and hit counts a
@@ -1153,7 +1315,7 @@ hits and no spans is not one of those — that is exactly what a realm that
 warm-loaded somebody else's instrumented bytes reports, and those hits key
 against the spans the compiling realm registered.
 
-Integration coverage counts toward the `coverage-debt: packages/patterns` figure
+Integration coverage counts toward the `coverage-debt: patterns` figure
 exactly like unit coverage, which means a broad end-to-end flow that runs a line
 without asserting on it lowers the debt. That trade is deliberate. Crediting
 integration coverage only in a separate, never-gated number would score whatever
@@ -1168,9 +1330,10 @@ A span's file name is whatever the realm that compiled it called the module, and
 that arrives in two shapes. A pattern the controller resolved off disk is named
 relative to the patterns root (`/lunch-poll/main.tsx`), because that is the root
 the resolver was given. A pattern the worker fetched over HTTP is named by its URL
-pathname (`/api/patterns/system/default-app.tsx`), because Toolshed's pattern
-identity is computed over pathname-prefixed names. Stripping the route prefix maps
-the second shape onto the first, and both then resolve against the patterns root.
+pathname (`/api/patterns/system/default-app/default-app.tsx`), because
+Toolshed's pattern identity is computed over pathname-prefixed names. Stripping
+the route prefix maps the second shape onto the first, and both then resolve
+against the patterns root.
 
 That rename runs when the report is written rather than as each realm reports,
 because the realms do not all arrive the same way: the browser dumps are ingested,
@@ -1182,12 +1345,6 @@ record matches nothing and drops its coverage without complaining, which looks
 exactly like a pattern nobody tested. Writing one warns.
 
 ## Known limitations and possible future work
-
-- Only the browser-driven suites contribute. A pattern exercised solely through
-  the headless multi-runtime harness (`multi-runtime-harness.ts`), whose sessions
-  are Deno workers rather than pages, has nowhere for the teardown dump to run and
-  contributes nothing. Those sessions could write their own LCOV directly — they
-  are Deno realms with a filesystem — which is the natural way to extend this.
 
 - Integration coverage is not a reason to skip a unit test. A unit test can cover
   a handler body too (see the handler bullet above) and can assert on what the

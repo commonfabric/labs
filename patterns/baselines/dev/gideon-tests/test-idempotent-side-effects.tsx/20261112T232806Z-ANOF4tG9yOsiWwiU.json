@@ -1,0 +1,80 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "rerunCount": {
+        "default": 0,
+        "type": "number"
+      },
+      "triggerCount": {
+        "default": 0,
+        "type": "number"
+      }
+    },
+    "required": [
+      "triggerCount",
+      "rerunCount"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/gideon-tests/test-idempotent-side-effects.tsx",
+  "resultSchema": {
+    "$defs": {
+      "KeyedEntry": {
+        "properties": {
+          "trigger": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "trigger"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "idempotentData": {
+        "additionalProperties": {
+          "$ref": "#/$defs/KeyedEntry"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "idempotentRunCount": {
+        "description": "How many writes the idempotent computed made: one per distinct trigger.",
+        "type": "number"
+      },
+      "nonIdempotentData": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "nonIdempotentRunCount": {
+        "type": "number"
+      },
+      "rerunCount": {
+        "type": "number"
+      },
+      "triggerCount": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "triggerCount",
+      "rerunCount",
+      "nonIdempotentRunCount",
+      "nonIdempotentData",
+      "idempotentData",
+      "idempotentRunCount",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -52,10 +52,10 @@
  * doc is still a finding.
  *
  *   deno task pattern-vintage                                  # replay; fail on a stranded fixture
- *   deno task pattern-vintage --only topics/topics.test.tsx    # replay matching fixtures alone
- *   deno task pattern-vintage --update topics/topics.test.tsx  # first pinned fixture
+ *   deno task pattern-vintage --only apps/topics/topics.test.tsx    # replay matching fixtures alone
+ *   deno task pattern-vintage --update apps/topics/topics.test.tsx  # first pinned fixture
  *   deno task pattern-vintage --capture-changed                # capture a generation where due
- *   deno task pattern-vintage --pin topics/topics.test.tsx     # promote the newest generation
+ *   deno task pattern-vintage --pin apps/topics/topics.test.tsx     # promote the newest generation
  *
  * `--only` takes one value per flag and may be repeated. It restricts the
  * replay to the fixtures whose repository-relative path contains one of the
@@ -114,7 +114,7 @@
  * That discipline is enforced HERE, in what the command will do, and otherwise
  * rests on review — deliberately, and unlike Tier 1, whose baselines have a
  * mechanical checker (`tasks/check-baselines-append-only.ts`). There is no
- * equivalent gate over `packages/piece/test/vintages/`, so a deleted fixture is
+ * equivalent gate over `runtime/piece/test/vintages/`, so a deleted fixture is
  * caught by a human reading the diff and nothing else. Recapturing one is
  * therefore a decision to make out loud, not a routine step.
  *
@@ -124,20 +124,11 @@
  * (`pattern-vintage-run.test.ts`).
  */
 
-import { fromFileUrl } from "@std/path/from-file-url";
 import { Identity } from "@commonfabric/identity";
+import { type CommandOutput, emit } from "./command-output.ts";
+import { judgeBreakRegistries } from "./pattern-break-registry-guards.ts";
+import { REPO_ROOT } from "./pattern-files.ts";
 import {
-  DEFAULT_APP_PATTERN_SOURCE,
-  HOME_PATTERN_SOURCE,
-} from "../packages/piece/src/system-pattern-url.ts";
-import {
-  deriveRequiredPatternKeys,
-  recordExistsUnder,
-  reportBreakRegistryFindings,
-} from "./pattern-break-registry-guards.ts";
-import {
-  armVerdictGuard,
-  type CommandOutput,
   describeCaptureOutcome,
   describePinOutcome,
   isClean,
@@ -160,14 +151,13 @@ import {
   captureMissing,
   type GateRoots,
   pinNewestGeneration,
+  type Progress,
   replayAll,
 } from "./pattern-vintage-run.ts";
-import { ACCEPTED_STATE_DROPS } from "./pattern-vintage-accepted-drops.ts";
-
-const REPO_ROOT = fromFileUrl(new URL("..", import.meta.url)).replace(
-  /\/$/,
-  "",
-);
+import {
+  ACCEPTED_STATE_DROPS,
+  type AcceptedStateDrop,
+} from "./pattern-vintage-accepted-drops.ts";
 
 /**
  * One fixed identity for every capture and replay.
@@ -181,44 +171,63 @@ const REPO_ROOT = fromFileUrl(new URL("..", import.meta.url)).replace(
  */
 const FIXTURE_SIGNER = await Identity.fromPassphrase("pattern vintage fixture");
 
-/**
- * Print what a command decided to say and exit with the code it chose.
- *
- * `never` rather than `void`, and the annotation is doing real work even
- * though `Deno.exit` already guarantees it — but the work is HERE, not at the
- * call sites. Measured: changing it to `void` produces no call-site error at
- * all, because no `emit` call has code after it inside its own block, so
- * `never` has no control flow to narrow. What it does catch is a future `emit`
- * that can return: adding a bare `return;` to this body is a compile error on
- * the spot. That is the thing that would otherwise let a command fall through
- * into the plain gate below.
- */
-function emit(shown: CommandOutput): never {
-  if (shown.out !== undefined) console.log(shown.out);
-  if (shown.err !== undefined) console.error(shown.err);
-  Deno.exit(shown.code);
+/** The tree this checkout holds, replayed under the fixture signer. */
+const ROOTS: GateRoots = {
+  // Absolute, so the task behaves the same whatever directory it is invoked
+  // from — the workspace runner does not run it from the repo root.
+  repoRoot: REPO_ROOT,
+  patternsRoot: `${REPO_ROOT}/patterns`,
+  vintagesRoot: `${REPO_ROOT}/${VINTAGES_DIR}`,
+  signer: FIXTURE_SIGNER,
+};
+
+/** Where `runPatternVintage()` reads its facts from, where not this tree. */
+export interface VintageGateOptions {
+  roots?: GateRoots;
+
+  /** The patterns that auto-update, which the required set is derived from. */
+  systemPatternUrls?: readonly string[];
+
+  /**
+   * The removals the replay forgives and the tree is audited against. The
+   * registries judged ahead of any replay are the shipped ones whatever this
+   * holds.
+   */
+  acceptedDrops?: readonly AcceptedStateDrop[];
+
+  /** Whether the replay writes one record per fixture into the run's spool. */
+  recordResults?: boolean;
+
+  /** Receives a line as each replay or capture step of the run begins. */
+  progress?: Progress;
 }
 
-async function main() {
-  const roots: GateRoots = {
-    // Absolute, so the task behaves the same whatever directory it is invoked
-    // from — the workspace runner does not run it from the repo root.
-    repoRoot: REPO_ROOT,
-    patternsRoot: `${REPO_ROOT}/packages/patterns`,
-    vintagesRoot: `${REPO_ROOT}/${VINTAGES_DIR}`,
-    signer: FIXTURE_SIGNER,
-  };
+/**
+ * Run the gate, or the writing command `args` names, and say what it decided.
+ */
+export async function runPatternVintage(
+  args: readonly string[],
+  options: VintageGateOptions = {},
+): Promise<CommandOutput> {
+  const {
+    roots = ROOTS,
+    systemPatternUrls,
+    acceptedDrops = ACCEPTED_STATE_DROPS,
+    recordResults = false,
+    progress,
+  } = options;
+  const { repoRoot } = roots;
 
   // Before anything else: a flag this task does not know is a MISTAKE, not a
   // no-op. Unhandled, it falls through to the plain gate and exits 0 having
   // answered a question nobody asked.
-  const unknown = unknownFlags(Deno.args);
-  if (unknown.length > 0) emit({ err: reportUnknownFlags(unknown), code: 1 });
+  const unknown = unknownFlags(args);
+  if (unknown.length > 0) return { err: reportUnknownFlags(unknown), code: 1 };
 
   // The fixtures this run replays. A lane passes one exact fixture path per
   // `--only`, and a person may pass part of a path.
-  const scope = replayScope(Deno.args);
-  if ("error" in scope) emit({ err: scope.error, code: 1 });
+  const scope = replayScope(args);
+  if ("error" in scope) return { err: scope.error, code: 1 };
   const { only, whole } = scope;
 
   // The required set comes from the runtime's OWN constants, so the gate
@@ -229,17 +238,11 @@ async function main() {
   // are both ordinary authoring slips, and whichever runs first is the one
   // reported — so the flag, which decides what this invocation even does, is
   // answered before the registries are judged. Still ahead of every replay.
-  const required = deriveRequiredPatternKeys(
-    [HOME_PATTERN_SOURCE, DEFAULT_APP_PATTERN_SOURCE],
-  );
-  if ("error" in required) emit({ err: required.error, code: 1 });
-  const registryReport = reportBreakRegistryFindings({
-    requiredPatternKeys: required.keys,
-    recordExists: recordExistsUnder(REPO_ROOT),
-  });
-  if (registryReport !== undefined) emit({ err: registryReport, code: 1 });
+  const required = judgeBreakRegistries({ systemPatternUrls });
+  if ("error" in required) return { err: required.error, code: 1 };
 
-  if (Deno.args.includes("--update")) {
+  const named = args.filter((arg) => !arg.startsWith("--"));
+  if (args.includes("--update")) {
     // A capture NAMES the test to run. There is no default set, and deriving
     // one is not possible in the case that would need it: the seed list only
     // ever did work when a fixture was MISSING, and nothing on disk knows
@@ -252,47 +255,50 @@ async function main() {
     // The guidance moved to where someone actually needs it —
     // `reportUncovered`, which fires exactly when a required pattern has no
     // fixture and can now name the test where one is known.
-    const named = Deno.args.filter((arg) => !arg.startsWith("--"));
     if (named.length === 0) {
-      console.error(reportUpdateNeedsATestKey());
-      Deno.exit(1);
+      return { err: reportUpdateNeedsATestKey(), code: 1 };
     }
     const { captured, problems } = await captureMissing(
       roots,
       named,
       new Date(),
+      progress,
     );
-    if (captured.length === 0 && problems.length === 0) {
-      console.log(`Already pinned: ${named.join(", ")}.`);
-    }
-    for (const path of captured) {
-      console.log(`  + ${relativeToRepo(path, REPO_ROOT)}`);
-    }
+    const out = captured.length === 0 && problems.length === 0
+      ? [`Already pinned: ${named.join(", ")}.`]
+      : captured.map((path) => `  + ${relativeToRepo(path, repoRoot)}`);
     if (problems.length > 0) {
-      console.error(`\n${problems.length} vintage(s) could not be captured:`);
-      for (const problem of problems) console.error(problem);
-      Deno.exit(1);
+      return {
+        ...(out.length > 0 ? { out: out.join("\n") } : {}),
+        err: [
+          `\n${problems.length} vintage(s) could not be captured:`,
+          ...problems,
+        ].join("\n"),
+        code: 1,
+      };
     }
-    return;
+    return { out: out.join("\n"), code: 0 };
   }
 
-  if (Deno.args.includes("--pin")) {
-    emit(describePinOutcome(
-      await pinNewestGeneration(
-        roots,
-        Deno.args.filter((arg) => !arg.startsWith("--")),
-      ),
-      REPO_ROOT,
-    ));
+  if (args.includes("--pin")) {
+    return describePinOutcome(
+      await pinNewestGeneration(roots, named),
+      repoRoot,
+    );
   }
 
-  const replay = await replayAll(roots, { recordResults: true, only });
+  const replay = await replayAll(roots, {
+    recordResults,
+    only,
+    acceptedDrops,
+    progress,
+  });
 
-  if (Deno.args.includes("--capture-changed")) {
-    emit(describeCaptureOutcome(
-      await captureChangedGenerations(roots, replay, new Date()),
-      REPO_ROOT,
-    ));
+  if (args.includes("--capture-changed")) {
+    return describeCaptureOutcome(
+      await captureChangedGenerations(roots, replay, new Date(), progress),
+      repoRoot,
+    );
   }
 
   // Coverage is judged against the SAME list that was replayed. A second walk
@@ -302,31 +308,33 @@ async function main() {
     whole,
     [...required.keys],
     replay,
-    ACCEPTED_STATE_DROPS,
+    acceptedDrops,
   );
 
+  const out: string[] = [];
+  const err: string[] = [];
   if (uncovered.length > 0) {
-    console.error(reportUncovered(
+    err.push(reportUncovered(
       uncovered,
       replay.coveredBy,
       new Set(replay.failures.map((failure) => failure.testKey)),
     ));
   }
-  if (replay.replayed === 0) console.error(`\n${reportEmptyReplay(only)}`);
+  if (replay.replayed === 0) err.push(`\n${reportEmptyReplay(only)}`);
   if (replay.failures.length > 0) {
-    console.error(`\n${reportFailures(replay.failures)}`);
+    err.push(`\n${reportFailures(replay.failures)}`);
   }
 
   if (replay.capturesSuperseded.length > 0) {
-    console.log(`\n${reportCapturesSuperseded(replay.capturesSuperseded)}`);
+    out.push(`\n${reportCapturesSuperseded(replay.capturesSuperseded)}`);
   }
 
   if (replay.dropsApplied.size > 0) {
-    console.log(`\n${reportDropsApplied(replay.dropsApplied)}`);
+    out.push(`\n${reportDropsApplied(replay.dropsApplied)}`);
   }
 
   if (staleDrops.length > 0) {
-    console.error(
+    err.push(
       `\n${staleDrops.length} accepted removal path(s) in ` +
         `tasks/pattern-vintage-accepted-drops.ts forgive nothing: ` +
         `${staleDrops.join(", ")}. No replayed vintage holds them, so the ` +
@@ -334,7 +342,7 @@ async function main() {
     );
   }
   if (unjudgeableDrops.length > 0) {
-    console.error(
+    err.push(
       `\n${unjudgeableDrops.length} accepted removal(s) in ` +
         `tasks/pattern-vintage-accepted-drops.ts name a pattern no fixture ` +
         `records: ${unjudgeableDrops.join(", ")}. An exemption nothing can ` +
@@ -348,24 +356,21 @@ async function main() {
   // the auto-updater fires on the same condition. But a run with no candidates,
   // or none that today's source could be applied to, examined no update targets
   // at all — the shape that has read as success three separate times here.
-  if (
-    !isClean(replay.failures, uncovered, replay) || staleDrops.length > 0 ||
-    unjudgeableDrops.length > 0
-  ) {
-    Deno.exit(1);
-  }
-  console.log(reportReplaySummary(replay));
+  const failed = !isClean(replay.failures, uncovered, replay) ||
+    staleDrops.length > 0 || unjudgeableDrops.length > 0;
+  if (!failed) out.push(reportReplaySummary(replay));
+  return {
+    ...(out.length > 0 ? { out: out.join("\n") } : {}),
+    ...(err.length > 0 ? { err: err.join("\n") } : {}),
+    code: failed ? 1 : 0,
+  };
 }
 
 if (import.meta.main) {
-  // Reaching a verdict is part of passing. Measured: a pattern that does not
-  // compile, and a truncated fixture, both leave `harness.resolve()`'s promise
-  // pending forever while the real error surfaces as a rejection nobody
-  // awaits — so `main` never returns, the event loop drains, and the process
-  // would exit 0 having replayed nothing and printed nothing.
-  armVerdictGuard(globalThis, Deno.exit);
-  await main();
-  // Only the clean path gets here; every other exit is `Deno.exit(1)` above.
-  // Exiting explicitly is what keeps the guard from firing on a success.
-  Deno.exit(0);
+  emit(
+    await runPatternVintage(Deno.args, {
+      recordResults: true,
+      progress: (line) => console.error(line),
+    }),
+  );
 }

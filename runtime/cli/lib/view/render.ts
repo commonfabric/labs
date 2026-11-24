@@ -1,0 +1,2427 @@
+/**
+ * Pure renderer: maps a {@link Document} plus the current {@link ViewState} to
+ * an array of terminal rows (ANSI strings). Holds no terminal state and writes
+ * nothing — the pager owns I/O — which keeps every frame snapshot testable.
+ *
+ * Composition is cell-based: each visible content row is built as an array of
+ * (char, style) cells so overlays layer with a clear precedence
+ * (search match > node selection > schema/closure region tint > token color),
+ * then run-length encoded into ANSI. Horizontal scrolling, the line-number
+ * gutter and the structure guide bar are all column maths over that grid.
+ */
+
+import { diffContentRowCount, maxPagerTop, maxTop } from "./actions.ts";
+import {
+  cpLen,
+  ESCAPE_SPLIT,
+  paint,
+  RESET,
+  stripAnsi,
+  type Style,
+  term,
+} from "./ansi.ts";
+import { BLAME_WIDTH, blameLabel, type BlameLine } from "./blame.ts";
+import type { Document, Line, StructureNode, ViewMode } from "./model.ts";
+import {
+  type DisplayCell,
+  displayColumnOf,
+  displayLine,
+  type DisplayMode,
+  displayWidth,
+  drawnCharacters,
+  showControls,
+  shownCells,
+  truncate,
+} from "./display.ts";
+import { overlaySpanStyle, spanStyle } from "./highlight.ts";
+import { firstShown } from "./lineedit.ts";
+import { charColumns, columns, graphemes, visibleWidth } from "./width.ts";
+import { SPINNER } from "./tasklog.ts";
+import { lineBg, styleFor, ui } from "./theme.ts";
+import {
+  buildWrapPlan,
+  fitViewLayout,
+  type WrapDecoration,
+  type WrapMode,
+  type WrappedRow,
+  wrappedRowAt,
+  wrappedRowForPosition,
+  type WrapPlan,
+} from "./wrap.ts";
+
+/** Maximum columns used by the Ctrl-L label and its diff-edge marker. */
+export const DIFF_MARGIN_WIDTH = 3;
+
+/** Downward-pointing fleuron end marks for wide, compact, and narrow areas. */
+const END_MARK_ROWS = {
+  wide: ["☙   ❦   ❧", "☙   ❧", "❦"],
+  compact: ["☙ ❦ ❧", "☙ ❧", "❦"],
+  narrow: ["❦"],
+} as const;
+
+function endMarkRows(width: number, availableRows: number): readonly string[] {
+  if (availableRows >= 3 && width >= 9) return END_MARK_ROWS.wide;
+  if (availableRows >= 3 && width >= 5) return END_MARK_ROWS.compact;
+  if (availableRows >= 2 && width >= 9) return END_MARK_ROWS.wide.slice(1);
+  if (availableRows >= 2 && width >= 5) return END_MARK_ROWS.compact.slice(1);
+  if (width >= 9) return [END_MARK_ROWS.wide[0]];
+  if (width >= 5) return [END_MARK_ROWS.compact[0]];
+  return END_MARK_ROWS.narrow;
+}
+
+export type DiffAnnotationKind =
+  | "expandUp"
+  | "expandDown"
+  | "diffMetadata";
+
+export interface DiffAnnotation {
+  /** Folded logical line carrying the annotation. */
+  readonly line: number;
+
+  readonly kind: DiffAnnotationKind;
+}
+
+/** Wrapped source widths reserved by one diff annotation. */
+export function diffAnnotationDecoration(
+  kind: DiffAnnotationKind,
+  width: number,
+  labelMetadata = true,
+): WrapDecoration {
+  const available = Math.max(0, width - 1);
+  return {
+    firstWidth: Math.min(
+      kind === "diffMetadata" && labelMetadata ? 3 : 1,
+      available,
+    ),
+    firstContinuationWidth: Math.min(
+      kind === "expandDown" ? 3 : kind === "expandUp" ? 0 : 1,
+      available,
+    ),
+    continuationWidth: Math.min(
+      kind === "expandUp" ? 0 : 1,
+      available,
+    ),
+  };
+}
+
+/** Whole-diff added and removed line totals. */
+export interface DiffTotals {
+  readonly adds: number;
+  readonly dels: number;
+}
+
+/** One right-edge annotation cell: its glyph, and its style when it differs
+ * from the wrap-marker style. */
+interface SuffixCell {
+  readonly ch: string;
+  readonly style?: Style;
+}
+
+function plainSuffix(text: string): SuffixCell[] {
+  return [...text].map((ch) => ({ ch }));
+}
+
+/** The two segments of the corner label for the whole-diff totals, e.g.
+ * `+345 ` and `−12`: the added count and the removed count. */
+function diffTotalsSegments(totals: DiffTotals): [string, string] {
+  return [`+${totals.adds} `, `−${totals.dels}`];
+}
+
+/** The corner label's cells: the added count in the addition color, the
+ * removed count in the removal color. */
+function diffTotalsCells(totals: DiffTotals): SuffixCell[] {
+  const [add, del] = diffTotalsSegments(totals);
+  return [
+    ...[...add].map((ch) => ({ ch, style: styleFor("diffAdd") })),
+    ...[...del].map((ch) => ({ ch, style: styleFor("diffDel") })),
+  ];
+}
+
+/** Columns the whole-diff totals label occupies. */
+export function diffTotalsWidth(totals: DiffTotals): number {
+  const [add, del] = diffTotalsSegments(totals);
+  return cpLen(add) + cpLen(del);
+}
+
+/** Wrapped source widths reserved by the totals label on the first line,
+ * layered over any annotation decoration that line already carries. */
+export function diffTotalsDecoration(
+  labelWidth: number,
+  width: number,
+  annotation?: WrapDecoration,
+): WrapDecoration {
+  const available = Math.max(0, width - 1);
+  return {
+    firstWidth: Math.min(
+      (annotation?.firstWidth ?? 0) + labelWidth,
+      available,
+    ),
+    firstContinuationWidth: annotation?.firstContinuationWidth ??
+      annotation?.continuationWidth ?? 0,
+    continuationWidth: annotation?.continuationWidth ?? 0,
+  };
+}
+
+/** The metadata line that carries the Ctrl-L label in this wrapped layout. */
+export function labeledDiffMetadataLine(
+  lines: readonly Line[],
+  mode: DisplayMode,
+  width: number,
+  annotations: readonly DiffAnnotation[],
+  totalsWidth = 0,
+): number | null {
+  const metadata = annotations.find((annotation) =>
+    annotation.kind === "diffMetadata"
+  );
+  if (!metadata) return null;
+  const downward = annotations.find((annotation) =>
+    annotation.kind === "expandDown"
+  );
+  if (!downward || metadata.line !== downward.line + 1) return metadata.line;
+  const line = lines[downward.line];
+  if (!line) return metadata.line;
+  const decoration = diffAnnotationDecoration("expandDown", width);
+  const firstWidth = downward.line === 0 && totalsWidth > 0
+    ? diffTotalsDecoration(totalsWidth, width, decoration).firstWidth
+    : decoration.firstWidth;
+  return displayWidth(line, mode) > Math.max(1, width) - firstWidth
+    ? null
+    : metadata.line;
+}
+
+/** A key suggestion for the status line: the key (already capitalised for
+ * display, e.g. `Q`, `^X^S`, `WASD`) and what it does. Drawn Turbo-Pascal style,
+ * the key highlighted and the label plain. */
+export interface KeyHint {
+  readonly key: string;
+  readonly label: string;
+}
+
+export interface ViewState {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  color: boolean;
+
+  /** Whether the source is a diff. */
+  isDiff?: boolean;
+
+  showLineNumbers: boolean;
+
+  /** How long logical lines continue on later screen rows. */
+  wrapMode: WrapMode;
+
+  /** A precomputed wrapping layout for `doc`, when the session has one. */
+  wrapPlan?: WrapPlan | null;
+
+  /** The number to show in the gutter on each display row, or null there for a
+   * blank gutter. Absent → the legacy 1-based display-row number. Only consulted
+   * when `showLineNumbers` is set. */
+  lineNumbers?: readonly (number | null)[] | null;
+
+  /** The blame column: the attribution it shows on each display line in view,
+   * or null there for none, and the time its ages are measured to, in
+   * milliseconds since the epoch. Null or absent when the column is hidden. */
+  blame?: {
+    readonly lines: readonly (BlameLine | null)[];
+    readonly now: number;
+  } | null;
+
+  /** How the non-printable characters in the content are shown. */
+  displayMode: DisplayMode;
+
+  /** The selected structure node (WASD navigation), or null. */
+  selected: StructureNode | null;
+
+  /** Visible search matches, display-ordered; null when no active search. */
+  matches: readonly Match[] | null;
+
+  /** Index into `matches` of the focused match. */
+  currentMatch: number;
+
+  /** Transient status text (e.g. "Pattern not found"). */
+  message: string;
+
+  /** Command/search input line, e.g. "/token"; null in normal mode. */
+  inputLine: string | null;
+
+  overlay: OverlayState | null;
+
+  /** A modal prompt drawn as a centered Turbo Vision dialog (the save, revert and
+   * amend confirmations). Covers the content like an overlay; the two never
+   * coexist. */
+  dialog?: DialogState | null;
+
+  /** The text cursor, in document coordinates (line + source column, in code
+   * points), when edit mode has it visible. The pager positions the real
+   * terminal cursor. */
+  cursor?: { line: number; col: number } | null;
+
+  /** Edit-mode key hints, shown on the status line in place of the navigation
+   * help while the text cursor is active. */
+  editHint?: readonly KeyHint[] | null;
+
+  /** Whether Ctrl-L can reveal more context here (a diff), so the navigation
+   * help advertises it. */
+  canExpand?: boolean;
+
+  /** Whether this pager can draw diff annotations. */
+  expandMargin?: boolean;
+
+  /** Per-line annotations drawn against the right edge. */
+  diffAnnotations?: readonly DiffAnnotation[];
+
+  /** Whole-diff added/removed totals, drawn at the top right corner of the
+   * first line. */
+  diffTotals?: DiffTotals | null;
+
+  /** Absolute display row of the diff edge the next Ctrl-L will expand. */
+  expandRow?: number | null;
+
+  /** Whether the marked edge expands upward. False means downward. */
+  expandUp?: boolean | null;
+
+  /** Absolute display rows occupied by metadata adjacent to the expansion edge. */
+  diffMetadataRows?: readonly number[];
+
+  /** Whether the view is editable, so the navigation help advertises `e`. */
+  canEdit?: boolean;
+
+  /** Whether this source offers an alternate rendered representation. */
+  canRender?: boolean;
+
+  /** The representation currently shown. */
+  viewMode?: ViewMode;
+
+  /** Whether the content holds non-printable characters, so the navigation help
+   * advertises the display-mode key `c`. */
+  hasNonPrintables?: boolean;
+
+  /** Lines shown just above the status/prompt bar (e.g. the list of files an
+   * edited diff would save), overwriting the bottom content rows. */
+  notice?: readonly string[] | null;
+
+  /** The file currently in view — the diff file or source under the viewport, or
+   * the file being edited — shown on the right of the status bar. Null when
+   * there is none (a bare pipe). */
+  currentFile?: string | null;
+
+  /** How much of the source left to color in the background has been parsed,
+   * from 0 to 1, and how far its spinner has turned, shown on the status bar.
+   * Null or absent when nothing is left. */
+  highlighting?: { readonly fraction: number; readonly frame: number } | null;
+}
+
+/** The line-number gutter width: 0 when off, else wide enough for the largest
+ * number it shows (in "file" mode a diff line's file number can exceed the
+ * number of lines the diff spans). */
+function gutterWidth(doc: Document, view: ViewState): number {
+  if (!view.showLineNumbers) return 0;
+  const max = view.lineNumbers
+    ? view.lineNumbers.reduce<number>((m, n) => n !== null && n > m ? n : m, 0)
+    : doc.lines.length;
+  return Math.max(4, String(Math.max(1, max)).length + 1);
+}
+
+/** The width of the blame column at the right of a `width`-column screen: its
+ * full width when it is `shown` and leaves at least as much for the rest of the
+ * row, else zero. */
+export function blameColumnWidth(width: number, shown: boolean): number {
+  return shown && width >= 2 * BLAME_WIDTH ? BLAME_WIDTH : 0;
+}
+
+/** Layout widths the content area is laid out with, for cursor placement. */
+function layout(
+  doc: Document,
+  view: ViewState,
+): {
+  gutterWidth: number;
+  guideWidth: number;
+  contentWidth: number;
+  blameWidth: number;
+} {
+  const blameWidth = blameColumnWidth(view.width, !!view.blame);
+  const fitted = fitViewLayout(
+    view.width - blameWidth,
+    gutterWidth(doc, view),
+    view.selected ? 1 : 0,
+    view.expandMargin ? DIFF_MARGIN_WIDTH : 0,
+    view.wrapMode !== "off",
+  );
+  return {
+    gutterWidth: fitted.gutterWidth,
+    guideWidth: fitted.guideWidth,
+    contentWidth: fitted.contentWidth + fitted.marginWidth,
+    blameWidth,
+  };
+}
+
+/**
+ * 1-based terminal (row, col) for the text cursor: the one in a dialog's
+ * focused input line while a dialog is up, and otherwise the one in the
+ * content. Null when there is no cursor, it is scrolled off screen, or an
+ * overlay covers the content. Mirrors the layout `renderFrame` uses, including
+ * a wrapped continuation's screen row and display-column offset.
+ */
+export function cursorScreenPos(
+  doc: Document,
+  view: ViewState,
+): { row: number; col: number } | null {
+  if (view.dialog) return dialogCursorPos(view, view.dialog);
+  if (!view.cursor || view.overlay) return null;
+  const { line, col } = view.cursor;
+  if (line < 0 || line >= doc.lines.length) return null;
+  const { gutterWidth, guideWidth, contentWidth } = layout(doc, view);
+  const displayCol = displayColumnOf(doc.lines[line], view.displayMode, col);
+  let screenLine = line;
+  let contentCol = displayCol - view.left;
+  if (view.wrapMode !== "off") {
+    const plan = view.wrapPlan ??
+      buildWrapPlan(
+        doc.lines,
+        view.displayMode,
+        contentWidth,
+        new Map(),
+        view.wrapMode,
+      );
+    const row = wrappedRowForPosition(plan, line, displayCol);
+    screenLine = row?.row ?? plan.firstRow[line];
+    contentCol = (row?.indentWidth ?? 0) + displayCol - (row?.offset ?? 0);
+  }
+  const contentHeight = view.height - 1;
+  const r = screenLine - view.top;
+  if (r < 0 || r >= contentHeight) return null;
+  if (contentCol < 0 || contentCol >= contentWidth) return null;
+  return { row: r + 1, col: gutterWidth + guideWidth + contentCol + 1 };
+}
+
+export interface Match {
+  readonly line: number;
+  readonly start: number;
+  readonly end: number;
+}
+
+export interface OverlayState {
+  readonly title: string;
+  readonly lines: readonly Line[];
+  readonly scroll: number;
+  readonly footer: string;
+
+  /** Index into `lines` of the selected (highlighted) reference, if any. */
+  readonly selectedLine?: number;
+
+  /** The overlay shows source code, so it is drawn as a blue editor window
+   * rather than a gray dialog. */
+  readonly sourceView?: boolean;
+}
+
+/** A push-button in a modal dialog. Its {@link kind} sets where the Tab focus
+ * starts ("default") and which button Esc activates ("cancel"); its first letter
+ * matching {@link hotkey} is drawn highlighted and activates it directly. A
+ * lowercase hotkey answers its letter typed in either case; an uppercase one
+ * answers only the uppercase letter. */
+export interface DialogButton {
+  readonly label: string;
+  readonly hotkey: string;
+  readonly kind?: "default" | "cancel" | "normal";
+}
+
+/** A centered modal prompt: a title, one or more body lines, and a button row. */
+export interface DialogState {
+  readonly title: string;
+  readonly body: readonly string[];
+  readonly buttons: readonly DialogButton[];
+
+  /** Whether the body is program output, which starts at the left margin
+   * rather than being centered. */
+  readonly output?: boolean;
+
+  /** How the pieces of each of the body's rows are drawn, by row. A piece
+   * no span covers is drawn plain. */
+  readonly spans?: readonly (readonly DialogSpan[])[];
+
+  /** The width the box gives the body, in columns, when that is fixed rather
+   * than fitted to the body's lines. */
+  readonly width?: number;
+
+  /** Index of the focused button — the one Space and Enter activate, drawn
+   * highlighted. When absent, the default button (if any) is highlighted. */
+  readonly focus?: number;
+
+  /** Index of a button drawn mid-press: shifted one column right with its
+   * shadow hidden, for the brief animation after it is activated. */
+  readonly pushed?: number;
+
+  /** Controls drawn under the body, each after a blank row. Tab visits them
+   * before the buttons. */
+  readonly fields?: readonly DialogField[];
+
+  /** Index of the focused field, or -1 when none is. */
+  readonly fieldFocus?: number;
+}
+
+/** How a piece of a dialog's row is drawn: plain, as the dialog's text is;
+ * bright, as the viewer's own words in the task dialog are; as a name those
+ * words interpolate; or as the spinner of a step that is running, or the mark
+ * of one that is done or that ended without being done. */
+export type DialogTone =
+  | "plain"
+  | "bright"
+  | "name"
+  | "busy"
+  | "done"
+  | "failed";
+
+/** The part of a row of text from code point `from` up to code point `to`,
+ * drawn as `tone` says, and linking to `url` when there is one. */
+export interface DialogSpan {
+  readonly from: number;
+  readonly to: number;
+  readonly tone: DialogTone;
+  readonly url?: string;
+}
+
+/** Returns the web addresses in `text`, each of which ends before
+ * punctuation that ends a clause or a sentence. */
+export function webAddresses(text: string): IterableIterator<RegExpExecArray> {
+  return text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"…]/g);
+}
+
+/** A check box, drawn as Turbo Vision draws one: `[X]` when it is checked
+ * and `[ ]` when it is not, then its label, whose first letter matching
+ * {@link hotkey} is drawn highlighted. */
+export interface DialogCheckBox {
+  readonly kind: "checkBox";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly checked: boolean;
+}
+
+/** A field that one line of text is typed into, under a label whose first
+ * letter matching {@link hotkey} is drawn highlighted. The field shows
+ * `value` from the character at `scroll`, moved on as far as it takes to
+ * show the cursor, and an arrow at either end says the text runs on past
+ * it. Selected text is drawn highlighted. */
+export interface DialogInputLine {
+  readonly kind: "inputLine";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly value: string;
+
+  /** How many characters precede the cursor. */
+  readonly cursor: number;
+
+  readonly scroll: number;
+
+  /** Whether the whole of `value` is selected. */
+  readonly selected: boolean;
+}
+
+/** One of a set of radio buttons: a label whose first letter matching
+ * {@link hotkey} is drawn highlighted. */
+export interface DialogRadioButton {
+  readonly label: string;
+  readonly hotkey: string;
+}
+
+/** A set of radio buttons, drawn as Turbo Vision draws them: under a label
+ * whose first letter matching {@link hotkey} is drawn highlighted, a row for
+ * each button, with `(•)` before the selected button and `( )` before each
+ * other. */
+export interface DialogRadioButtons {
+  readonly kind: "radioButtons";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly buttons: readonly DialogRadioButton[];
+
+  /** The index in {@link buttons} of the selected button. */
+  readonly selected: number;
+}
+
+/** A control in a dialog other than a button. */
+export type DialogField = DialogCheckBox | DialogInputLine | DialogRadioButtons;
+
+interface Cell {
+  ch: string;
+  style: Style;
+
+  /** The address the cell links to, if any. */
+  link?: string;
+}
+
+const EMPTY_STYLE: Style = {};
+
+interface LineMatches {
+  readonly matches: readonly Match[];
+  readonly from: number;
+  readonly to: number;
+  readonly currentIndex: number;
+  blockPrefixMaxEnd?: Float64Array;
+}
+
+type MarginMarker =
+  | "expandUp"
+  | "expandDown"
+  | "diffMetadata"
+  | "diffEnd"
+  | null;
+
+function marginAnnotation(marker: MarginMarker, width: number): string {
+  if (marker === null) return "";
+  const text = marker === "expandUp"
+    ? "◥"
+    : marker === "expandDown"
+    ? "◢"
+    : "█";
+  return clipAnnotation(text, width);
+}
+
+/** Keep at least one source cell when an annotation meets a narrow view. */
+function clipAnnotation(text: string, width: number): string {
+  const capacity = Math.max(0, width - 1);
+  return capacity === 0 ? "" : [...text].slice(-capacity).join("");
+}
+
+function clipConnectorAnnotation(text: string, width: number): string {
+  const capacity = Math.max(0, width);
+  return capacity === 0 ? "" : [...text].slice(-capacity).join("");
+}
+
+/** Keep at least one source cell when a styled suffix meets a narrow view. */
+function clipSuffixCells(
+  cells: readonly SuffixCell[],
+  width: number,
+): SuffixCell[] {
+  const capacity = Math.max(0, width - 1);
+  return capacity === 0 ? [] : cells.slice(-capacity);
+}
+
+const MATCH_BLOCK_SIZE = 64;
+
+/** The contiguous slice of document-ordered matches on one visible line. */
+function matchesOnLine(
+  view: ViewState,
+  line: number,
+): LineMatches | null {
+  const matches = view.matches;
+  if (!matches || matches.length === 0) return null;
+  let lo = 0;
+  let hi = matches.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (matches[mid].line < line) lo = mid + 1;
+    else hi = mid;
+  }
+  const from = lo;
+  if (matches[from]?.line !== line) return null;
+  hi = matches.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (matches[mid].line <= line) lo = mid + 1;
+    else hi = mid;
+  }
+  const to = lo;
+  const currentIndex = view.currentMatch >= from && view.currentMatch < to
+    ? view.currentMatch
+    : -1;
+  return { matches, from, to, currentIndex };
+}
+
+/** Render a complete frame: exactly `view.height` rows. */
+export function renderFrame(doc: Document, view: ViewState): string[] {
+  const rows: string[] = [];
+  const contentHeight = view.height - 1;
+  const {
+    gutterWidth: gw,
+    guideWidth,
+    contentWidth,
+    blameWidth,
+  } = layout(doc, view);
+  const annotations = new Map(
+    (view.diffAnnotations ?? []).map((annotation) => [
+      annotation.line,
+      annotation.kind,
+    ]),
+  );
+  const totalsCells = view.diffTotals ? diffTotalsCells(view.diffTotals) : [];
+  const metadataLabelLine = view.wrapMode !== "off"
+    ? labeledDiffMetadataLine(
+      doc.lines,
+      view.displayMode,
+      contentWidth,
+      view.diffAnnotations ?? [],
+      totalsCells.length,
+    )
+    : view.diffAnnotations?.find((annotation) =>
+      annotation.kind === "diffMetadata"
+    )?.line ?? null;
+  const decorations = new Map<number, WrapDecoration>();
+  for (const [line, kind] of annotations) {
+    decorations.set(
+      line,
+      diffAnnotationDecoration(
+        kind,
+        contentWidth,
+        kind !== "diffMetadata" || line === metadataLabelLine,
+      ),
+    );
+  }
+  if (totalsCells.length > 0) {
+    decorations.set(
+      0,
+      diffTotalsDecoration(
+        totalsCells.length,
+        contentWidth,
+        decorations.get(0),
+      ),
+    );
+  }
+  const wrapPlan = view.wrapMode !== "off"
+    ? view.wrapPlan ??
+      buildWrapPlan(
+        doc.lines,
+        view.displayMode,
+        contentWidth,
+        decorations,
+        view.wrapMode,
+      )
+    : null;
+  const documentRowCount = wrapPlan?.rowCount ?? doc.lines.length;
+  const hasTrailingEmptyLine = view.isDiff === true &&
+    doc.lines.at(-1)?.text.length === 0;
+  const diffEndRow = diffContentRowCount(
+    documentRowCount,
+    hasTrailingEmptyLine,
+  );
+  const lastDiffLine = doc.lines.length - (hasTrailingEmptyLine ? 2 : 1);
+  const finalTriangleRow = annotations.get(lastDiffLine) === "expandDown"
+    ? wrapPlan?.firstRow[lastDiffLine] ?? lastDiffLine
+    : null;
+  const hasDiffEndConnector = view.isDiff === true &&
+    view.expandMargin === true &&
+    finalTriangleRow !== null;
+  const labelDiffEnd = finalTriangleRow !== null &&
+    finalTriangleRow + 1 === diffEndRow;
+  const diffEndSuffix = (width: number) =>
+    clipConnectorAnnotation(labelDiffEnd ? "^L█" : "█", width);
+  let endMarkStart = diffEndRow + (hasDiffEndConnector ? 1 : 0);
+  const availableEndRows = contentHeight - Math.max(0, endMarkStart - view.top);
+  const showEndMark = view.isDiff === true && !view.cursor;
+  // End-mark rows span the screen up to the blame column.
+  const endWidth = Math.max(1, view.width - blameWidth);
+  let endRows = showEndMark ? endMarkRows(endWidth, availableEndRows) : [];
+  if (
+    showEndMark && hasDiffEndConnector && availableEndRows <= 0 &&
+    diffEndRow >= view.top && diffEndRow < view.top + contentHeight
+  ) {
+    endMarkStart = diffEndRow;
+    endRows = END_MARK_ROWS.narrow;
+  }
+  let displayedLine = -1;
+  let displayedCells: readonly DisplayCell[] | undefined;
+  let displayedSelection: SelectionSpan | null = null;
+  let displayedMatches: LineMatches | null = null;
+  let blameStartLine = -1;
+
+  for (let r = 0; r < contentHeight; r++) {
+    const rowIdx = view.top + r;
+    const endMark = endRows[rowIdx - endMarkStart] ?? null;
+    if (endMark !== null) {
+      const suffix = plainSuffix(
+        hasDiffEndConnector && rowIdx === diffEndRow
+          ? diffEndSuffix(endWidth)
+          : "",
+      );
+      rows.push(
+        composeContent(
+          undefined,
+          view,
+          0,
+          endWidth,
+          endWidth,
+          endWidth,
+          0,
+          false,
+          null,
+          undefined,
+          null,
+          endMark,
+          suffix,
+        ) + blameCell(null, 0, false, blameWidth, view.color),
+      );
+      continue;
+    }
+    const wrappedRow: WrappedRow | undefined = wrapPlan
+      ? wrappedRowAt(wrapPlan, rowIdx)
+      : undefined;
+    const lineIdx = wrappedRow?.line ?? rowIdx;
+    const firstOfLine = !wrapPlan || wrappedRow === undefined ||
+      wrapPlan.firstRow[wrappedRow.line] === rowIdx;
+    if (lineIdx < doc.lines.length && lineIdx !== displayedLine) {
+      displayedLine = lineIdx;
+      const line = doc.lines[displayedLine];
+      displayedCells = line ? displayLine(line, view.displayMode) : undefined;
+      displayedSelection = selectionSpan(view, displayedLine, line);
+      displayedMatches = view.color ? matchesOnLine(view, displayedLine) : null;
+    } else if (lineIdx >= doc.lines.length) {
+      displayedCells = undefined;
+      displayedSelection = null;
+      displayedMatches = null;
+    }
+    // A line's blame label goes on the first of its rows on screen, unless the
+    // line above it is on screen and comes from the same commit, so each run of
+    // lines from one commit is labeled once.
+    const startsOnScreen = firstOfLine || r === 0;
+    const labelsBlame = startsOnScreen &&
+      !(blameStartLine === lineIdx - 1 &&
+        view.blame?.lines[lineIdx - 1]?.commit ===
+          view.blame?.lines[lineIdx]?.commit);
+    if (startsOnScreen) blameStartLine = lineIdx;
+    const annotation = annotations.get(lineIdx);
+    const labelsWrappedExpansion = annotation === "expandDown" &&
+      wrapPlan !== null &&
+      wrappedRow !== undefined &&
+      rowIdx === wrapPlan.firstRow[lineIdx] + 1;
+    // Row 0 reserves the leading cells of its suffix for the totals label, so
+    // the plain block marker only marks a width reserved beyond the label.
+    const reservedTotals = rowIdx === 0 ? totalsCells.length : 0;
+    const marginMarker: MarginMarker = firstOfLine && annotation
+      ? annotation
+      : wrappedRow && wrappedRow.suffixWidth > reservedTotals
+      ? "diffMetadata"
+      : hasDiffEndConnector && rowIdx === diffEndRow
+      ? "diffEnd"
+      : null;
+    const annotationSuffix = firstOfLine && annotation === "diffMetadata" &&
+        lineIdx === metadataLabelLine
+      ? clipAnnotation("^L█", contentWidth)
+      : labelsWrappedExpansion
+      ? clipAnnotation("^L█", contentWidth)
+      : hasDiffEndConnector && rowIdx === diffEndRow
+      ? diffEndSuffix(contentWidth)
+      : marginAnnotation(marginMarker, contentWidth);
+    const suffix = reservedTotals > 0
+      ? clipSuffixCells(
+        [...totalsCells, ...plainSuffix(annotationSuffix)],
+        contentWidth,
+      )
+      : plainSuffix(annotationSuffix);
+    const sourceWidth = wrappedRow?.sourceWidth ??
+      Math.max(1, contentWidth - suffix.length);
+    rows.push(
+      renderContentRow(
+        doc,
+        view,
+        lineIdx,
+        wrappedRow?.offset ?? view.left,
+        sourceWidth,
+        wrappedRow?.sourceEnd ?? Number.POSITIVE_INFINITY,
+        wrappedRow?.indentWidth ?? 0,
+        wrappedRow?.wrapMarker ?? false,
+        displayedCells,
+        displayedSelection,
+        displayedMatches,
+        firstOfLine,
+        gw,
+        guideWidth,
+        contentWidth,
+        wrapPlan,
+        suffix,
+      ) + blameCell(view.blame, lineIdx, labelsBlame, blameWidth, view.color),
+    );
+  }
+  rows.push(renderStatus(doc, view, wrapPlan));
+
+  if (view.notice && view.notice.length > 0) {
+    const start = Math.max(0, contentHeight - view.notice.length);
+    for (let i = 0; start + i < contentHeight; i++) {
+      rows[start + i] = paintIf(
+        padTo(view.notice[i] ?? "", view.width),
+        ui.noticeBar,
+        view.color,
+      );
+    }
+  }
+
+  if (view.overlay) applyOverlay(rows, view, view.overlay);
+  if (view.dialog) applyDialog(rows, view, view.dialog);
+  return rows;
+}
+
+function renderContentRow(
+  doc: Document,
+  view: ViewState,
+  lineIdx: number,
+  offset: number,
+  sourceWidth: number,
+  sourceEnd: number,
+  indentWidth: number,
+  wrapMarker: boolean,
+  display: readonly DisplayCell[] | undefined,
+  selection: SelectionSpan | null,
+  matches: LineMatches | null,
+  firstOfLine: boolean,
+  gutterWidth: number,
+  guideWidth: number,
+  contentWidth: number,
+  wrapPlan: WrapPlan | null,
+  suffix: readonly SuffixCell[],
+): string {
+  const line: Line | undefined = doc.lines[lineIdx];
+  const inSelRange = !!view.selected &&
+    lineIdx >= view.selected.startLine && lineIdx <= view.selected.endLine;
+
+  let gutter = "";
+  if (gutterWidth > 0) {
+    const num = !firstOfLine
+      ? null
+      : view.lineNumbers
+      ? view.lineNumbers[lineIdx] ?? null
+      : (line ? lineIdx + 1 : null);
+    const label = num !== null ? String(num) : "";
+    const style = inSelRange ? ui.lineNumberCurrent : ui.lineNumber;
+    gutter = paintIf(label.padStart(gutterWidth - 1) + " ", style, view.color);
+  }
+
+  let guide = "";
+  if (guideWidth > 0) {
+    // guideWidth > 0 only when view.selected is set (see guideWidth above).
+    guide = paintIf(
+      view.wrapMode !== "off"
+        ? wrappedGuideChar(
+          view.selected!,
+          lineIdx,
+          line,
+          offset,
+          wrapPlan!,
+          selection,
+          display,
+        )
+        : guideChar(view.selected!, lineIdx),
+      ui.guide,
+      view.color,
+    );
+  }
+
+  const content = composeContent(
+    line,
+    view,
+    offset,
+    contentWidth,
+    sourceWidth,
+    sourceEnd,
+    indentWidth,
+    wrapMarker,
+    selection,
+    display,
+    matches,
+    null,
+    suffix,
+  );
+  return gutter + guide + content;
+}
+
+/** A `width`-column cell of the `blame` column for a row showing display
+ * line `lineIdx`, carrying the line's label when `labeled`. */
+function blameCell(
+  blame: ViewState["blame"],
+  lineIdx: number,
+  labeled: boolean,
+  width: number,
+  color: boolean,
+): string {
+  if (width === 0) return "";
+  const line = blame?.lines[lineIdx];
+  const label = blame && line && labeled
+    ? truncate(showControls(blameLabel(line, blame.now)), width - 1, true)
+    : "";
+  // The label's alignment padding stays outside its link.
+  const text = label.trimStart();
+  const linked = color && line?.url && text
+    ? " ".repeat(label.length - text.length) + term.hyperlink(line.url, text)
+    : label;
+  return paintIf(" " + padTo(linked, width - 1), ui.lineNumber, color);
+}
+
+function guideChar(
+  selected: StructureNode,
+  lineIdx: number,
+): string {
+  if (lineIdx < selected.startLine || lineIdx > selected.endLine) return " ";
+  if (selected.startLine === selected.endLine) return "▶";
+  if (lineIdx === selected.startLine) return "╭";
+  if (lineIdx === selected.endLine) return "╰";
+  return "│";
+}
+
+/** Guide character for a selected node on one wrapped continuation row. */
+function wrappedGuideChar(
+  selected: StructureNode,
+  lineIdx: number,
+  line: Line | undefined,
+  offset: number,
+  plan: WrapPlan,
+  span: SelectionSpan | null,
+  display: readonly DisplayCell[] | undefined,
+): string {
+  if (lineIdx < selected.startLine || lineIdx > selected.endLine || !line) {
+    return " ";
+  }
+  const bounds = selectionRowBounds(
+    span,
+    display ?? [],
+    plan,
+    lineIdx,
+  );
+  if (offset < bounds.first || offset > bounds.last) return " ";
+  const first = lineIdx === selected.startLine && offset === bounds.first;
+  const last = lineIdx === selected.endLine && offset === bounds.last;
+  if (first && last) return "▶";
+  if (first) return "╭";
+  if (last) return "╰";
+  return "│";
+}
+
+function selectionRowBounds(
+  span: SelectionSpan | null,
+  display: readonly DisplayCell[],
+  plan: WrapPlan,
+  line: number,
+): { first: number; last: number } {
+  if (display.length === 0) return { first: 0, last: 0 };
+  const lo = span ? displayIndexAtOrAfter(display, span.lo) : 0;
+  const hi = span ? displayIndexAtOrAfter(display, span.hi) : display.length;
+  const firstCell = Math.min(lo, display.length - 1);
+  const lastCell = Math.max(firstCell, hi - 1);
+  return {
+    first: wrappedRowForPosition(plan, line, firstCell)?.offset ?? 0,
+    last: wrappedRowForPosition(plan, line, lastCell)?.offset ?? 0,
+  };
+}
+
+function displayIndexAtOrAfter(
+  display: readonly DisplayCell[],
+  sourceCol: number,
+): number {
+  let lo = 0;
+  let hi = display.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (display[mid].col < sourceCol) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+interface SelectionSpan {
+  lo: number;
+  hi: number;
+  bg: Style;
+}
+
+/**
+ * Column range to tint for the selected node on `lineIdx`, or null. Covers only
+ * the node's actual extent — its character span on this line, extended over
+ * leading indentation and trailing whitespace but not the rest of the line.
+ */
+function selectionSpan(
+  view: ViewState,
+  lineIdx: number,
+  line: Line | undefined,
+): SelectionSpan | null {
+  const sel = view.selected;
+  if (!sel) return null;
+  if (lineIdx < sel.startLine || lineIdx > sel.endLine) return null;
+  const text = line ? line.text : "";
+  const lineLen = cpLen(text);
+  let lo = lineIdx === sel.startLine ? sel.startCol : 0;
+  let hi = lineIdx === sel.endLine ? sel.endCol : lineLen;
+  lo = Math.max(0, Math.min(lo, lineLen));
+  hi = Math.max(0, Math.min(hi, lineLen));
+  if (lo > 0 && codePointRangeIsWhitespace(text, 0, lo)) lo = 0;
+  if (hi < lineLen && codePointRangeIsWhitespace(text, hi, lineLen)) {
+    hi = lineLen;
+  }
+  if (hi <= lo) return null;
+  const bg: Style = sel.kind === "schema"
+    ? { bg: ui.schemaRegionBg }
+    : sel.kind === "closure"
+    ? { bg: ui.closureRegionBg }
+    : { bg: ui.selectionBg };
+  return { lo, hi, bg };
+}
+
+function codePointRangeIsWhitespace(
+  text: string,
+  from: number,
+  to: number,
+): boolean {
+  let col = 0;
+  for (const codePoint of text) {
+    if (col >= to) break;
+    if (col >= from && codePoint.trim() !== "") return false;
+    col++;
+  }
+  return true;
+}
+
+function composeContent(
+  line: Line | undefined,
+  view: ViewState,
+  offset: number,
+  width: number,
+  sourceWidth: number,
+  sourceEnd: number,
+  indentWidth: number,
+  showWrapMarker: boolean,
+  sel: SelectionSpan | null,
+  display: readonly DisplayCell[] | undefined,
+  lineMatches: LineMatches | null,
+  endMark: string | null,
+  suffix: readonly SuffixCell[],
+): string {
+  const { color } = view;
+  // Every content cell sits on the blue editor background; a diff line carries a
+  // full-row add/removed tint instead. Syntax colors paint on top, and the
+  // selection background still wins inside its range.
+  const rowBg: Style = color
+    ? { bg: line?.bg ? lineBg(line.bg) : ui.editorBg }
+    : EMPTY_STYLE;
+  const cells: Cell[] = new Array(width);
+  for (let i = 0; i < cells.length; i++) {
+    cells[i] = { ch: " ", style: rowBg };
+  }
+  // A row whose one character is wider than its text draws the character
+  // over the marker's column instead of the marker.
+  const overMarker = showWrapMarker && display !== undefined &&
+    Math.min(display.length, sourceEnd) > offset + sourceWidth;
+  if (line && display) {
+    // The display list may hold fewer cells than the line has code points —
+    // ANSI sequences are hidden and runs of control codes collapse — so cells
+    // are placed by their position in this list, not by their source column.
+    // Each cell still knows the source column it stands for, which is what the
+    // selection and search ranges are stated in.
+    // A cell is in a match or the selection when any source column it
+    // stands for is.
+    const styleCell = (dc: DisplayCell): Style => {
+      if (!color) return EMPTY_STYLE;
+      for (let col = dc.col; lineMatches && col < dc.sourceEnd; col++) {
+        const hit = matchStyle(lineMatches, col);
+        if (hit) return hit;
+      }
+      const base = mergeBg(dc.ansi ?? dc.syntax, rowBg);
+      const inSel = sel !== null &&
+        dc.sourceEnd > sel.lo && dc.col < sel.hi;
+      return inSel ? mergeBg(base, sel.bg) : base;
+    };
+    const end = Math.min(
+      display.length,
+      sourceEnd,
+      offset + sourceWidth + (overMarker ? 1 : 0),
+    );
+    placeDisplayCells(cells, indentWidth, display, offset, end, styleCell);
+  }
+
+  if (showWrapMarker && !overMarker) {
+    cells[indentWidth + sourceWidth] = {
+      ch: "\\",
+      style: color ? mergeBg(ui.wrapMarker, rowBg) : EMPTY_STYLE,
+    };
+  }
+  if (endMark !== null) {
+    const ornament = [...endMark];
+    const centeredStart = Math.floor((width - ornament.length) / 2);
+    const suffixStart = cells.length - suffix.length;
+    const start = centeredStart + ornament.length <= suffixStart
+      ? centeredStart
+      : Math.floor((suffixStart - ornament.length) / 2);
+    if (start >= 0) {
+      for (let i = 0; i < ornament.length; i++) {
+        cells[start + i] = {
+          ch: ornament[i],
+          style: color ? mergeBg(ui.endMark, rowBg) : EMPTY_STYLE,
+        };
+      }
+    }
+  }
+  if (suffix.length > 0) {
+    const start = cells.length - suffix.length;
+    for (let i = 0; i < suffix.length; i++) {
+      cells[start + i] = {
+        ch: suffix[i].ch,
+        style: color
+          ? mergeBg(suffix[i].style ?? ui.wrapMarker, rowBg)
+          : EMPTY_STYLE,
+      };
+    }
+  }
+
+  return cellsToAnsi(cells, color);
+}
+
+/** Write the cells of `display` from `from` to `to` in `cells` from column
+ * `at`, each in `style(cell)`, leaving blank the columns of a wide character
+ * that either end cuts. */
+function placeDisplayCells(
+  cells: Cell[],
+  at: number,
+  display: readonly DisplayCell[],
+  from: number,
+  to: number,
+  style: (cell: DisplayCell) => Style,
+): void {
+  for (let d = from; d < to; d++) {
+    let first = d;
+    while (first > from && display[first].ch === "") first--;
+    let end = d + 1;
+    while (display[end]?.ch === "") end++;
+    const cut = display[first].ch === "" || end > to;
+    cells[at + d - from] = {
+      ch: cut ? " " : display[d].ch,
+      style: style(display[d]),
+    };
+  }
+}
+
+/** The search-match style for a cell at source column `col`, or null when the
+ * column is in no match. The focused match wins over an ordinary one. */
+function matchStyle(
+  line: LineMatches,
+  col: number,
+): Style | null {
+  const { matches, from, to, currentIndex } = line;
+  const current = matches[currentIndex];
+  if (current && col >= current.start && col < current.end) {
+    return ui.searchCurrent;
+  }
+  let lo = from;
+  let hi = to;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (matches[mid].start <= col) lo = mid + 1;
+    else hi = mid;
+  }
+  const candidate = lo - 1;
+  if (candidate < from) return null;
+  const relative = candidate - from;
+  const block = Math.floor(relative / MATCH_BLOCK_SIZE);
+  const blockStart = from + block * MATCH_BLOCK_SIZE;
+  for (let i = candidate; i >= blockStart; i--) {
+    if (col < matches[i].end) return ui.searchMatch;
+  }
+  if (block === 0) return null;
+  const prefix = line.blockPrefixMaxEnd ??= matchBlockPrefix(line);
+  return prefix[block - 1] > col ? ui.searchMatch : null;
+}
+
+/** Largest match end through each fixed-size block of one logical line. */
+function matchBlockPrefix(line: LineMatches): Float64Array {
+  const { matches, from, to } = line;
+  const blocks = Math.ceil((to - from) / MATCH_BLOCK_SIZE);
+  const prefix = new Float64Array(blocks);
+  let maxEnd = -Infinity;
+  for (let i = from; i < to; i++) {
+    maxEnd = Math.max(maxEnd, matches[i].end);
+    const relative = i - from;
+    if (
+      relative % MATCH_BLOCK_SIZE === MATCH_BLOCK_SIZE - 1 || i === to - 1
+    ) {
+      prefix[Math.floor(relative / MATCH_BLOCK_SIZE)] = maxEnd;
+    }
+  }
+  return prefix;
+}
+
+function renderStatus(
+  doc: Document,
+  view: ViewState,
+  wrapPlan: WrapPlan | null,
+): string {
+  if (view.inputLine !== null) {
+    return view.color
+      ? paint(padTo(view.inputLine, view.width), ui.statusBar)
+      : padTo(view.inputLine, view.width);
+  }
+  const hasTrailingEmptyDiffRow = view.isDiff === true && !view.cursor &&
+    doc.lines.at(-1)?.text.length === 0;
+  const total = diffContentRowCount(
+    doc.lines.length,
+    hasTrailingEmptyDiffRow,
+  );
+  const rowCount = diffContentRowCount(
+    wrapPlan?.rowCount ?? doc.lines.length,
+    hasTrailingEmptyDiffRow,
+  );
+  const lastRow = Math.min(
+    Math.max(0, rowCount - 1),
+    view.top + view.height - 2,
+  );
+  const first = total === 0
+    ? 0
+    : wrapPlan
+    ? (wrappedRowAt(wrapPlan, view.top)?.line ?? 0) + 1
+    : Math.min(total, view.top + 1);
+  const last = total === 0
+    ? 0
+    : wrapPlan
+    ? (wrappedRowAt(wrapPlan, lastRow)?.line ?? 0) + 1
+    : Math.min(total, lastRow + 1);
+  const pct = rowCount <= 1
+    ? 100
+    : Math.round((view.top / (rowCount - 1)) * 100);
+  const endTop = view.cursor || view.isDiff !== true
+    ? maxTop(rowCount, view.height)
+    : maxPagerTop(rowCount, view.height);
+  const atEnd = view.top >= endTop;
+
+  // The left of the bar is either a message / selected-node label (plain text)
+  // or a row of key hints (keys highlighted, Turbo Pascal style).
+  let hints: readonly KeyHint[] | null = null;
+  let text = "";
+  if (view.dialog) {
+    // A modal prompt owns every key, so the bar shows its buttons rather than
+    // the navigation hints, which are inert while the dialog is up.
+    hints = view.dialog.buttons.map((b) => ({
+      key: b.hotkey.toUpperCase(),
+      label: b.label,
+    }));
+  } else if (view.message) {
+    text = showControls(view.message);
+  } else if (view.editHint) {
+    hints = view.editHint;
+  } else if (view.selected) {
+    text = `${kindGlyph(view.selected.kind)} ${view.selected.label}`;
+  } else {
+    hints = browseHints(view);
+  }
+
+  const pos = view.matches && view.matches.length > 0
+    ? `match ${view.currentMatch + 1}/${view.matches.length}  ${
+      lineInfo(first, last, total, pct, atEnd)
+    }`
+    : lineInfo(first, last, total, pct, atEnd);
+
+  // The right of the bar carries the current file (bold) then the position; the
+  // file is capped so it never crowds out the position or the left hints.
+  const fileMax = Math.max(
+    8,
+    Math.floor(view.width / 2) - visibleWidth(pos) - 2,
+  );
+  const file = view.currentFile
+    ? truncate(showControls(view.currentFile), fileMax, false)
+    : "";
+  const placePlain = file ? `${file}  ${pos}` : pos;
+
+  // The left is truncated to whatever space the right leaves it. Key hints
+  // leave room for highlighting progress, with its label if they can, as long
+  // as the first two still fit.
+  const leftBudget = Math.max(0, view.width - visibleWidth(placePlain) - 2);
+  const firstHints = hints ? visibleWidth(hintsPlain(hints.slice(0, 2))) : 0;
+  const gaugeRoom = HIGHLIGHT_GAUGE_WIDTH + 4;
+  const hintBudget = !view.highlighting || !hints
+    ? leftBudget
+    : [gaugeRoom + HIGHLIGHT_LABEL.length, gaugeRoom, 0]
+      .map((room) => leftBudget - room)
+      .find((budget) => budget >= firstHints) ?? leftBudget;
+  const leftHints = hints ? fitHints(hints, hintBudget) : null;
+  const leftPlain = leftHints
+    ? hintsPlain(leftHints)
+    : truncate(text, leftBudget, true);
+  const leftW = visibleWidth(leftPlain);
+
+  // Highlighting progress goes before the file, in the space the rest leaves,
+  // without its label when only the gauge fits.
+  const progress = view.highlighting
+    ? highlightingProgress(
+      view.highlighting,
+      view.width - leftW - visibleWidth(placePlain) - 4,
+    )
+    : null;
+  const rightPlain = progress
+    ? `${progress.spinner} ${progress.label}${progress.filled}${progress.empty}  ${placePlain}`
+    : placePlain;
+  const rightW = visibleWidth(rightPlain);
+
+  if (!view.color) {
+    return padTo(`${leftPlain}  ${rightPlain}`, view.width);
+  }
+  const leftAnsi = leftHints
+    ? hintsAnsi(leftHints)
+    : linkAddresses(text, leftPlain, (part) => paint(part, ui.statusBar));
+  const rightAnsi = (progress
+    ? paint(`${progress.spinner} `, ui.statusBusy) +
+      paint(progress.label, ui.statusBar) +
+      paint(progress.filled, ui.statusBusy) +
+      paint(progress.empty, ui.statusDim) + paint("  ", ui.statusBar)
+    : "") +
+    (file ? paint(file, ui.statusFile) + paint("  ", ui.statusBar) : "") +
+    paint(pos, ui.statusBar);
+  const space = Math.max(1, view.width - leftW - rightW);
+  const line = leftAnsi + paint(" ".repeat(space), ui.statusBar) + rightAnsi;
+  const pad = view.width - (leftW + space + rightW);
+  return pad > 0 ? line + paint(" ".repeat(pad), ui.statusBar) : line;
+}
+
+/** Columns of the status bar's highlighting gauge. */
+const HIGHLIGHT_GAUGE_WIDTH = 10;
+
+/** The label of the status bar's highlighting progress. */
+const HIGHLIGHT_LABEL = "Highlighting ";
+
+/**
+ * The parts of the status bar's highlighting progress that fit in `room`
+ * columns: a spinner, a label when it fits too, and a gauge whose filled cells
+ * show the fraction of the source parsed. Null when not even the spinner and
+ * the gauge fit.
+ */
+function highlightingProgress(
+  highlighting: NonNullable<ViewState["highlighting"]>,
+  room: number,
+): { spinner: string; label: string; filled: string; empty: string } | null {
+  const width = 2 + HIGHLIGHT_GAUGE_WIDTH;
+  if (room < width) return null;
+  const filled = Math.min(
+    HIGHLIGHT_GAUGE_WIDTH,
+    Math.floor(highlighting.fraction * HIGHLIGHT_GAUGE_WIDTH),
+  );
+  return {
+    spinner: SPINNER[highlighting.frame % SPINNER.length],
+    label: room >= width + HIGHLIGHT_LABEL.length ? HIGHLIGHT_LABEL : "",
+    filled: "█".repeat(filled),
+    empty: "░".repeat(HIGHLIGHT_GAUGE_WIDTH - filled),
+  };
+}
+
+/**
+ * Returns `shown`, the start of `text` that fits, painted with `paintText`,
+ * with each web address in it made a link to the whole address in `text`.
+ */
+function linkAddresses(
+  text: string,
+  shown: string,
+  paintText: (part: string) => string,
+): string {
+  const kept = shown === text ? text.length : shown.length - 1;
+  let out = "";
+  let at = 0;
+  for (const match of webAddresses(text)) {
+    if (match.index >= kept) break;
+    const end = Math.min(match.index + match[0].length, kept);
+    out += paintText(shown.slice(at, match.index)) +
+      term.hyperlink(match[0], paintText(shown.slice(match.index, end)));
+    at = end;
+  }
+  return out + paintText(shown.slice(at));
+}
+
+/** Keep the leading key hints that fit within `budget` visible columns. */
+function fitHints(
+  hints: readonly KeyHint[],
+  budget: number,
+): readonly KeyHint[] {
+  const out: KeyHint[] = [];
+  for (const h of hints) {
+    if (visibleWidth(hintsPlain([...out, h])) > budget) break;
+    out.push(h);
+  }
+  return out;
+}
+
+/** The default browsing key hints, in priority order (most important first) so
+ * that {@link fitHints} drops the least important when the bar runs short of
+ * room. The conditional keys appear only where they would do something. */
+function browseHints(view: ViewState): KeyHint[] {
+  const hints: KeyHint[] = [
+    { key: "?", label: "Help" },
+    { key: "Q", label: "Quit" },
+    { key: "/", label: "Search" },
+    { key: "WASD", label: "Tree" },
+  ];
+  if (view.canExpand) hints.push({ key: "^L", label: "Expand" });
+  if (view.canRender) {
+    hints.push({
+      key: "V",
+      label: view.viewMode === "rendered" ? "Source" : "Rendered",
+    });
+  }
+  if (view.canEdit) hints.push({ key: "e", label: "Edit" });
+  if (view.hasNonPrintables) hints.push({ key: "c", label: "Chars" });
+  const wrapLabel = view.wrapMode === "off"
+    ? "Hard wrap"
+    : view.wrapMode === "hard"
+    ? "Word wrap"
+    : "Unwrap";
+  hints.push({ key: "\\", label: wrapLabel });
+  hints.push({ key: "#", label: "Lines" });
+  return hints;
+}
+
+/** `key label  key label …` as plain text, for the monochrome bar and widths. */
+function hintsPlain(hints: readonly KeyHint[]): string {
+  return hints.map((h) => `${h.key} ${h.label}`).join("  ");
+}
+
+/** The same, colored: each key highlighted, the labels plain, on the bar bg. */
+function hintsAnsi(hints: readonly KeyHint[]): string {
+  let out = "";
+  hints.forEach((h, i) => {
+    out += paint(h.key, ui.statusKey);
+    out += paint(
+      ` ${h.label}${i < hints.length - 1 ? "  " : ""}`,
+      ui.statusBar,
+    );
+  });
+  return out;
+}
+
+function lineInfo(
+  first: number,
+  last: number,
+  total: number,
+  pct: number,
+  atEnd: boolean,
+): string {
+  const where = atEnd ? "END" : `${pct}%`;
+  return `${first}-${last}/${total}  ${where}`;
+}
+
+//
+// Overlay (info card / definition peek)
+//
+
+export interface OverlayBox {
+  x: number;
+  y: number;
+  boxW: number;
+  boxH: number;
+  innerW: number;
+  innerH: number;
+}
+
+/** Geometry of the centered overlay box for the given terminal size. The box is
+ * clamped to fit inside the terminal, so on a terminal too small to hold the box
+ * the dimensions collapse to the terminal size rather than going negative. Inner
+ * dimensions never go below 0, which keeps {@link applyOverlay}'s repeat/slice
+ * maths safe. A box narrower or shorter than the 2-cell border chrome cannot be
+ * drawn; `applyOverlay` checks for that. */
+export function overlayBox(width: number, height: number): OverlayBox {
+  const boxW = Math.max(
+    0,
+    Math.min(width - 4, Math.max(40, Math.floor(width * 0.8))),
+  );
+  const boxH = Math.max(
+    0,
+    Math.min(height - 4, Math.max(6, Math.floor(height * 0.7))),
+  );
+  return {
+    x: Math.max(0, Math.floor((width - boxW) / 2)),
+    y: Math.max(0, Math.floor((height - boxH) / 2)),
+    boxW,
+    boxH,
+    innerW: Math.max(0, boxW - 2),
+    innerH: Math.max(0, boxH - 2),
+  };
+}
+
+/**
+ * Returns the index of the overlay line drawn at the zero-based screen cell
+ * `x`, `y` while the overlay is scrolled to line `scroll`, or null when that
+ * cell is not inside the overlay's border.
+ */
+export function overlayLineAt(
+  view: Pick<ViewState, "width" | "height">,
+  scroll: number,
+  x: number,
+  y: number,
+): number | null {
+  const box = overlayBox(view.width, view.height);
+  const row = y - box.y - 1;
+  const col = x - box.x - 1;
+  if (row < 0 || row >= box.innerH || col < 0 || col >= box.innerW) {
+    return null;
+  }
+  return scroll + row;
+}
+
+function applyOverlay(
+  rows: string[],
+  view: ViewState,
+  overlay: OverlayState,
+): void {
+  const { x, y, boxW, boxH, innerW, innerH } = overlayBox(
+    view.width,
+    view.height,
+  );
+  // A terminal smaller than the 2-cell border chrome leaves no room to draw the
+  // box; show the underlying content rather than indexing rows out of range.
+  if (boxW < 2 || boxH < 2) return;
+
+  // An overlay showing source code is a blue editor window; everything else is
+  // a gray dialog. The border carries the same background as the body, so the
+  // panel reads as one solid block rather than a frame over the content behind.
+  const source = !!overlay.sourceView;
+  const panelBg = source ? ui.editorBg : ui.overlayBg;
+  const styler = source ? spanStyle : overlaySpanStyle;
+  const border = view.color
+    ? { ...(source ? ui.overlaySourceBorder : ui.overlayBorder), bg: panelBg }
+    : EMPTY_STYLE;
+  const bg: Style = { bg: panelBg };
+  const selBg: Style = { bg: ui.overlayHighlightBg };
+
+  // Double-line frame, after the Turbo Pascal window border.
+  const top = `╔${truncCenter(` ${overlay.title} `, boxW - 2, "═")}╗`;
+  const bottom = `╚${truncCenter(` ${overlay.footer} `, boxW - 2, "═")}╝`;
+  rows[y] = overlayRow(rows[y], x, paintIf(top, border, view.color));
+  rows[y + boxH - 1] = overlayRow(
+    rows[y + boxH - 1],
+    x,
+    paintIf(bottom, border, view.color),
+  );
+
+  for (let i = 0; i < innerH; i++) {
+    const lineIdx = overlay.scroll + i;
+    const srcLine = overlay.lines[lineIdx];
+    const rowBg = lineIdx === overlay.selectedLine ? selBg : bg;
+    const cells: Cell[] = new Array(innerW);
+    for (let c = 0; c < innerW; c++) cells[c] = { ch: " ", style: rowBg };
+    if (srcLine) {
+      const display = displayLine(srcLine, view.displayMode, styler);
+      // One blank column of margin sits inside each border, so content is drawn
+      // into cells[1 … innerW-2].
+      placeDisplayCells(
+        cells,
+        1,
+        display,
+        0,
+        Math.min(display.length, innerW - 2),
+        (dc) => view.color ? mergeBg(dc.ansi ?? dc.syntax, rowBg) : rowBg,
+      );
+    }
+    const body = cellsToAnsi(cells, view.color);
+    const rowText = paintIf("║", border, view.color) + body +
+      paintIf("║", border, view.color);
+    rows[y + 1 + i] = overlayRow(rows[y + 1 + i], x, rowText);
+  }
+
+  if (view.color) castShadow(rows, view, x, y, boxW, boxH);
+}
+
+/** The Turbo Pascal drop shadow: the content two columns to the right of the box
+ * (from one row below its top) and one row below it (offset two columns in) is
+ * repainted dark, so the dialog appears to float above the screen. */
+function castShadow(
+  rows: string[],
+  view: ViewState,
+  x: number,
+  y: number,
+  boxW: number,
+  boxH: number,
+): void {
+  for (let r = y + 1; r <= y + boxH; r++) {
+    darkenSpan(rows, view, r, x + boxW, 2);
+  }
+  darkenSpan(rows, view, y + boxH, x + 2, boxW);
+}
+
+/** Repaint `count` cells at visible column `from` of row `r` in the shadow
+ * color, keeping whatever characters were there. Clamped to the row and the
+ * terminal width so the fixed row width is preserved. */
+function darkenSpan(
+  rows: string[],
+  view: ViewState,
+  r: number,
+  from: number,
+  count: number,
+): void {
+  if (r < 0 || r >= rows.length || from < 0) return;
+  const n = Math.min(count, view.width - from);
+  if (n <= 0) return;
+  const shown = stripAnsi(sliceVisible(rows[r], from, from + n));
+  const chars = shown + " ".repeat(n - columns(shown));
+  rows[r] = overlayRow(rows[r], from, paint(chars, ui.overlayShadow));
+}
+
+//
+// Modal dialog (save / revert / amend prompt)
+//
+
+/** Blank columns between adjacent buttons in a dialog's button row. */
+const BUTTON_GAP = 3;
+
+/** Blank columns of margin inside each side border of a dialog, between the
+ * border and the widest line of content. */
+const DIALOG_HMARGIN = 2;
+
+/** The drawn face of a button: its label with one space of padding each side. */
+function faceText(b: DialogButton): string {
+  return ` ${b.label} `;
+}
+
+function faceWidth(b: DialogButton): number {
+  return shownCells(faceText(b)).length;
+}
+
+/** The face plus the one column of right-hand shadow it casts. */
+function slotWidth(b: DialogButton): number {
+  return faceWidth(b) + 1;
+}
+
+/** Width of the whole button row: every button slot plus the gaps between. */
+function buttonsWidth(buttons: readonly DialogButton[]): number {
+  if (buttons.length === 0) return 0;
+  return buttons.reduce((w, b) => w + slotWidth(b), 0) +
+    BUTTON_GAP * (buttons.length - 1);
+}
+
+export interface DialogBox {
+  x: number;
+  y: number;
+  boxW: number;
+  boxH: number;
+  innerW: number;
+  innerH: number;
+}
+
+/** Geometry of the centered dialog box, sized to its content (title, body and
+ * button row) or to the body's fixed width, and clamped to leave two cells for
+ * the drop shadow. */
+export function dialogBox(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+): DialogBox {
+  const titleW = shownCells(dialog.title).length + 4; // the padding and fill
+  const bodyW = dialog.width ??
+    [...dialog.body, ...(dialog.fields ?? []).flatMap(fieldTexts)].reduce(
+      (m, l) => Math.max(m, shownCells(l).length),
+      0,
+    );
+  const btnW = buttonsWidth(dialog.buttons);
+  const contentW = Math.max(titleW, bodyW, btnW);
+  // The margin columns each side, then the two borders.
+  // Inner rows: a blank under the title, the body and fields, a blank, the
+  // buttons, and the buttons' shadow.
+  const boxW = Math.max(
+    0,
+    Math.min(contentW + 2 * DIALOG_HMARGIN + 2, view.width - 2),
+  );
+  const boxH = Math.max(
+    0,
+    Math.min(contentRows(dialog) + 6, view.height - 1),
+  );
+  return {
+    x: Math.max(0, Math.floor((view.width - boxW) / 2)),
+    y: Math.max(0, Math.floor((view.height - boxH) / 2)),
+    boxW,
+    boxH,
+    innerW: Math.max(0, boxW - 2),
+    innerH: Math.max(0, boxH - 2),
+  };
+}
+
+/** The top border of a dialog: the title centered in the width and filled with
+ * the double rule. */
+function titleBar(title: string, width: number): string {
+  return truncCenter(` ${title} `, width, "═");
+}
+
+/** The first `width` of `chars`, the cells of some text, with a wide
+ * character that would be cut in two left blank. */
+function clip(chars: readonly string[], width: number): string[] {
+  const out = chars.slice(0, Math.max(0, width));
+  let k = out.length;
+  while (k > 0 && chars[k] === "") out[--k] = " ";
+  return out;
+}
+
+/** The cells of each character of an input line's value. */
+function inputChars(field: DialogInputLine): string[][] {
+  return drawnCharacters(field.value).map(shownCells);
+}
+
+interface ButtonPos {
+  b: DialogButton;
+  start: number;
+  faceW: number;
+}
+
+/** Left-to-right positions of the buttons, as a block centered in `innerW`. */
+function layoutButtons(
+  buttons: readonly DialogButton[],
+  innerW: number,
+): ButtonPos[] {
+  let cx = Math.max(1, Math.floor((innerW - buttonsWidth(buttons)) / 2));
+  const out: ButtonPos[] = [];
+  for (const b of buttons) {
+    const faceW = faceWidth(b);
+    out.push({ b, start: cx, faceW });
+    cx += faceW + 1 + BUTTON_GAP;
+  }
+  return out;
+}
+
+/**
+ * Returns the inner row of a dialog box of `innerH` rows that the buttons are
+ * drawn on, or -1 when the box is too short to show them below the body, or
+ * below the body and fields of a dialog without fields to scroll.
+ */
+function buttonRowOf(dialog: DialogState, innerH: number): number {
+  const row = innerH - 2; // the buttons' shadow takes the last row
+  const above = dialog.fields?.length
+    ? dialog.body.length
+    : contentRows(dialog);
+  return row > above ? row : -1;
+}
+
+/** The text of the rows of a field that set how wide it is: a check box's
+ * mark and label, an input line's label, or the label of a set of radio
+ * buttons and each button's mark and label. */
+function fieldTexts(field: DialogField): string[] {
+  if (field.kind === "checkBox") return [`[X] ${field.label}`];
+  if (field.kind === "inputLine") return [field.label];
+  return [field.label, ...field.buttons.map((b) => `(•) ${b.label}`)];
+}
+
+/** The rows a field takes: a check box's one, an input line's label and the
+ * line under it, or the label of a set of radio buttons and a row for each
+ * button. */
+function fieldHeight(field: DialogField): number {
+  if (field.kind === "checkBox") return 1;
+  if (field.kind === "inputLine") return 2;
+  return 1 + field.buttons.length;
+}
+
+/**
+ * Returns the inner row of a dialog box that each of its fields starts on.
+ * One blank row sits under the title, and another before each field that
+ * follows the body or another field.
+ */
+function fieldRows(dialog: DialogState): number[] {
+  const rows: number[] = [];
+  let row = 1 + dialog.body.length;
+  for (const field of dialog.fields ?? []) {
+    if (row > 1) row++;
+    rows.push(row);
+    row += fieldHeight(field);
+  }
+  return rows;
+}
+
+/** How many rows the body and fields of a dialog take together. */
+function contentRows(dialog: DialogState): number {
+  const fields = dialog.fields ?? [];
+  const last = fields.length - 1;
+  const start = fieldRows(dialog)[last];
+  return start === undefined
+    ? dialog.body.length
+    : start + fieldHeight(fields[last]) - 1;
+}
+
+/**
+ * Returns the first character of `field`'s value that its line shows when
+ * it is `width` columns wide, the cursor showing in the columns between the
+ * arrows.
+ */
+function inputLineStart(field: DialogInputLine, width: number): number {
+  return firstShown(
+    field.scroll,
+    field.cursor,
+    width - 2,
+    drawnCharacters(field.value),
+  );
+}
+
+/**
+ * Returns where in the box of `dialog` each field is drawn, as the box's
+ * inner row it starts on, or null for a field the box is too short to show
+ * whole between its body and its buttons. When the fields do not all fit,
+ * they scroll up as far as it takes to show the focused one.
+ */
+function shownFieldRows(
+  dialog: DialogState,
+  innerH: number,
+): Array<number | null> {
+  const buttonRow = buttonRowOf(dialog, innerH);
+  const bottom = buttonRow < 0 ? innerH : buttonRow;
+  const fields = dialog.fields ?? [];
+  const rows = fieldRows(dialog);
+  const focus = dialog.fieldFocus ?? -1;
+  const focused = fields[focus];
+  const scroll = focused === undefined
+    ? 0
+    : Math.max(0, rows[focus] + fieldHeight(focused) - bottom);
+  return rows.map((row, i) =>
+    row - scroll > dialog.body.length &&
+      row - scroll + fieldHeight(fields[i]) <= bottom
+      ? row - scroll
+      : null
+  );
+}
+
+/**
+ * Returns the 1-based terminal row and column of the cursor in a dialog's
+ * focused input line, or null when no input line is focused or the box is
+ * too small to show it.
+ */
+function dialogCursorPos(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+): { row: number; col: number } | null {
+  const index = dialog.fieldFocus ?? -1;
+  const field = dialog.fields?.[index];
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  const width = box.innerW - 2 * DIALOG_HMARGIN;
+  if (field?.kind !== "inputLine" || row == null || width < 3) return null;
+  const shown = inputChars(field)
+    .slice(inputLineStart(field, width), field.cursor).flat().length;
+  const col = DIALOG_HMARGIN + 1 + shown;
+  return { row: box.y + row + 3, col: box.x + col + 2 };
+}
+
+/**
+ * Returns the index of the control drawn at the zero-based screen cell `x`,
+ * `y`, counting the fields first and then the buttons, or -1 when none is
+ * drawn there. A button counts at rest or pushed one column right, and a
+ * field anywhere on its rows.
+ */
+export function dialogControlAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  x: number,
+  y: number,
+): number {
+  const box = dialogBox(view, dialog);
+  const row = y - box.y - 1;
+  const col = x - box.x - 1;
+  if (box.boxW < 2 || col < 0 || col >= box.innerW) return -1;
+  const fields = dialog.fields ?? [];
+  const field = shownFieldRows(dialog, box.innerH).findIndex((start, i) =>
+    start !== null && row >= start && row < start + fieldHeight(fields[i])
+  );
+  const buttonRow = buttonRowOf(dialog, box.innerH);
+  if (field >= 0) return field;
+  if (buttonRow < 0 || row !== buttonRow) return -1;
+  const button = layoutButtons(dialog.buttons, box.innerW).findIndex((
+    { start, faceW },
+  ) => col >= start && col <= start + faceW);
+  return button < 0 ? -1 : fields.length + button;
+}
+
+/** Returns how many columns an input line of `dialog` shows, between the
+ * arrows at its ends. */
+export function inputLineColumns(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+): number {
+  return Math.max(1, dialogBox(view, dialog).innerW - 2 * DIALOG_HMARGIN - 2);
+}
+
+/**
+ * Returns the index of the character of input line `index` of `dialog` drawn
+ * at the zero-based screen cell `x`, `y`, which is where a click there puts
+ * the cursor: the start of the text left of it, and its end right of it. Returns
+ * null when `y` is not the row the line is drawn on, and throws when field
+ * `index` is not an input line.
+ */
+export function inputLineIndexAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  index: number,
+  x: number,
+  y: number,
+): number | null {
+  const field = dialog.fields?.[index];
+  if (field?.kind !== "inputLine") {
+    throw new Error(`field ${index} of the dialog is not an input line`);
+  }
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  if (row == null || y !== box.y + 1 + row + 1) return null;
+  const width = inputLineColumns(view, dialog);
+  const column = Math.min(x - box.x - 1 - DIALOG_HMARGIN - 1, width - 1);
+  const chars = inputChars(field);
+  let at = inputLineStart(field, width + 2);
+  for (let used = 0; at < chars.length; at++) {
+    used += chars[at].length;
+    if (used > column) break;
+  }
+  return at;
+}
+
+/**
+ * Returns the index of the radio button of field `index` of `dialog` drawn at
+ * the zero-based screen cell `x`, `y`, or null when none is drawn there, as on
+ * the row of the buttons' label. Throws when field `index` is not a set of
+ * radio buttons.
+ */
+export function radioButtonAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  index: number,
+  x: number,
+  y: number,
+): number | null {
+  const field = dialog.fields?.[index];
+  if (field?.kind !== "radioButtons") {
+    throw new Error(
+      `field ${index} of the dialog is not a set of radio buttons`,
+    );
+  }
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  const button = row == null ? -1 : y - box.y - 1 - row - 1;
+  const col = x - box.x - 1;
+  return button >= 0 && button < field.buttons.length && col >= 0 &&
+      col < box.innerW
+    ? button
+    : null;
+}
+
+/** The index in `chars`, the cells of a label, of the highlighted shortcut
+ * letter, its first that matches `hotkey` in either case, or -1 when none
+ * does. */
+function hotkeyIndex(chars: readonly string[], hotkey: string): number {
+  const hk = hotkey.toLowerCase();
+  return chars.findIndex((c) => c.toLowerCase() === hk);
+}
+
+/** The face index of the highlighted shortcut letter, or -1 if the hotkey does
+ * not appear in the label. Offset by one for the leading pad space. */
+function hotkeyFaceIndex(b: DialogButton): number {
+  const idx = hotkeyIndex(shownCells(b.label), b.hotkey);
+  return idx < 0 ? -1 : idx + 1;
+}
+
+/** The style of each tone a piece of a dialog's row can be drawn in. */
+const DIALOG_TONES: Readonly<Record<DialogTone, Style>> = {
+  plain: ui.dialogText,
+  bright: ui.dialogEmphasis,
+  name: ui.dialogName,
+  busy: ui.dialogBusy,
+  done: ui.dialogDone,
+  failed: ui.dialogFailed,
+};
+
+function applyDialog(
+  rows: string[],
+  view: ViewState,
+  dialog: DialogState,
+): void {
+  const { x, y, boxW, boxH, innerW, innerH } = dialogBox(view, dialog);
+  if (boxW < 2 || boxH < 2) return;
+
+  const border = view.color
+    ? { ...ui.overlayBorder, bg: ui.overlayBg }
+    : EMPTY_STYLE;
+  const panelBg: Style = { bg: ui.overlayBg };
+  const textStyle = view.color ? mergeBg(ui.dialogText, panelBg) : panelBg;
+  const toneStyle = (tone: DialogTone) =>
+    view.color ? mergeBg(DIALOG_TONES[tone], panelBg) : panelBg;
+
+  const top = `╔${titleBar(dialog.title, boxW - 2)}╗`;
+  const bottom = `╚${"═".repeat(Math.max(0, boxW - 2))}╝`;
+  rows[y] = overlayRow(rows[y], x, paintIf(top, border, view.color));
+  rows[y + boxH - 1] = overlayRow(
+    rows[y + boxH - 1],
+    x,
+    paintIf(bottom, border, view.color),
+  );
+
+  const layout = layoutButtons(dialog.buttons, innerW);
+  const buttonRow = buttonRowOf(dialog, innerH);
+  // The focused button is drawn highlighted; without an explicit focus, the
+  // default button is. A pushed button is drawn mid-press.
+  const focusIdx = dialog.focus ??
+    dialog.buttons.findIndex((b) => b.kind === "default");
+  const pushedIdx = dialog.pushed ?? -1;
+  const starts = shownFieldRows(dialog, innerH);
+  for (let i = 0; i < innerH; i++) {
+    const cells: Cell[] = new Array(innerW);
+    for (let c = 0; c < innerW; c++) cells[c] = { ch: " ", style: panelBg };
+    const bodyIdx = i - 1; // one blank row sits under the title
+    const fieldIdx = starts.findLastIndex((start) =>
+      start !== null && start <= i
+    );
+    const field = dialog.fields?.[fieldIdx];
+    const fieldRow = i - (starts[fieldIdx] ?? 0);
+    if (bodyIdx >= 0 && bodyIdx < dialog.body.length) {
+      placeText(
+        cells,
+        dialog.body[bodyIdx],
+        textStyle,
+        dialog.output,
+        dialog.spans?.[bodyIdx],
+        toneStyle,
+      );
+    } else if (field && fieldRow < fieldHeight(field)) {
+      placeField(
+        cells,
+        field,
+        fieldRow,
+        fieldIdx === dialog.fieldFocus,
+        view.color,
+        textStyle,
+      );
+    } else if (i === buttonRow) {
+      placeButtonFaces(cells, layout, view.color, panelBg, focusIdx, pushedIdx);
+    } else if (buttonRow >= 0 && i === buttonRow + 1 && view.color) {
+      placeButtonShadows(cells, layout, panelBg, pushedIdx);
+    }
+    const rowText = paintIf("║", border, view.color) +
+      cellsToAnsi(cells, view.color) + paintIf("║", border, view.color);
+    rows[y + 1 + i] = overlayRow(rows[y + 1 + i], x, rowText);
+  }
+
+  if (view.color) castShadow(rows, view, x, y, boxW, boxH);
+}
+
+/** Write `chars`, the cells of some text, in `cells` from column `from`,
+ * the one at index `j` in `style(j)`, clipped to end before column `end`. */
+function putCells(
+  cells: Cell[],
+  from: number,
+  end: number,
+  chars: readonly string[],
+  style: (j: number) => Style,
+): void {
+  clip(chars, end - from).forEach((ch, j) => {
+    cells[from + j] = { ch, style: style(j) };
+  });
+}
+
+/** Write `text` in `cells`, centered or starting after the dialog's margin,
+ * and clipped to leave one blank column inside each edge, in `style` but for
+ * the pieces `spans` cover, which are drawn in the style `toneStyle` gives
+ * their tone, with their links. */
+function placeText(
+  cells: Cell[],
+  text: string,
+  style: Style,
+  leftAligned = false,
+  spans: readonly DialogSpan[] = [],
+  toneStyle: (tone: DialogTone) => Style = () => style,
+): void {
+  const innerW = cells.length;
+  const chars = shownCells(text);
+  const start = leftAligned
+    ? DIALOG_HMARGIN
+    : 1 + Math.max(0, Math.floor((innerW - 2 - chars.length) / 2));
+  // Each cell is drawn as the span covering the code point of `text` it
+  // draws says, and links where it does.
+  const covering: Array<DialogSpan | undefined> = [];
+  let at = 0;
+  for (const char of drawnCharacters(text)) {
+    const span = spans.find(({ from, to }) => from <= at && at < to);
+    for (const _ of shownCells(char)) covering.push(span);
+    at += cpLen(char);
+  }
+  putCells(cells, start, innerW - 1, chars, (j) => {
+    const span = covering[j];
+    return span === undefined ? style : toneStyle(span.tone);
+  });
+  covering.forEach((span, j) => {
+    const cell = start + j;
+    if (span?.url !== undefined && cell >= 1 && cell < innerW - 1) {
+      cells[cell] = { ...cells[cell], link: span.url };
+    }
+  });
+}
+
+/**
+ * Draws row `row` of `field` in `cells`, after the dialog's margin: a check
+ * box's mark and label, an input line's label and then its line, or the label
+ * of a set of radio buttons and then each button's mark and label. The
+ * focused check box is drawn highlighted, as are the label of the focused
+ * input line and the label and selected button of the focused set of radio
+ * buttons.
+ */
+function placeField(
+  cells: Cell[],
+  field: DialogField,
+  row: number,
+  focused: boolean,
+  color: boolean,
+  textStyle: Style,
+): void {
+  const width = cells.length - 2 * DIALOG_HMARGIN;
+  const put = (
+    at: number,
+    chars: readonly string[],
+    style: (j: number) => Style,
+  ) =>
+    putCells(
+      cells,
+      DIALOG_HMARGIN + at,
+      DIALOG_HMARGIN + width,
+      chars,
+      (j) => color ? style(j) : EMPTY_STYLE,
+    );
+  const label = (
+    from: number,
+    text: string,
+    hotkey: string,
+    highlighted = focused,
+  ) => {
+    const style = highlighted ? ui.fieldFocus : textStyle;
+    const keyStyle = { ...ui.fieldKey, bg: style.bg ?? textStyle.bg };
+    const chars = shownCells(text);
+    const key = hotkeyIndex(chars, hotkey);
+    put(from, chars, (j) => j === key ? keyStyle : style);
+  };
+  const mark = (
+    open: string,
+    on: string,
+    close: string,
+    highlighted: boolean,
+  ) =>
+    put(
+      0,
+      [open, on, close, " "],
+      () => highlighted ? ui.fieldFocus : textStyle,
+    );
+  if (field.kind === "checkBox") {
+    mark("[", field.checked ? "X" : " ", "]", focused);
+    label(4, field.label, field.hotkey);
+    return;
+  }
+  if (row === 0) {
+    label(0, field.label, field.hotkey);
+    return;
+  }
+  if (field.kind === "radioButtons") {
+    const button = field.buttons[row - 1];
+    const selected = row - 1 === field.selected;
+    mark("(", selected ? "•" : " ", ")", focused && selected);
+    label(4, button.label, button.hotkey, focused && selected);
+    return;
+  }
+  const start = inputLineStart(field, width);
+  const shown = inputChars(field).slice(start).flat();
+  put(0, [..." ".repeat(Math.max(0, width))], () => ui.inputLine);
+  if (start > 0) put(0, ["◄"], () => ui.inputArrow);
+  const valueStyle = field.selected ? ui.inputSelection : ui.inputLine;
+  put(1, clip(shown, width - 2), () => valueStyle);
+  if (shown.length > width - 2) put(width - 1, ["►"], () => ui.inputArrow);
+}
+
+function placeButtonFaces(
+  cells: Cell[],
+  layout: ButtonPos[],
+  color: boolean,
+  panelBg: Style,
+  focus: number,
+  pushed: number,
+): void {
+  layout.forEach(({ b, start, faceW }, idx) => {
+    const chars = shownCells(faceText(b));
+    const face = !color
+      ? panelBg
+      : idx === focus
+      ? ui.buttonDefault
+      : ui.button;
+    const keyStyle = color ? ui.buttonKey : panelBg;
+    const hk = hotkeyFaceIndex(b);
+    // A pressed button slides one column right, into the space its shadow held.
+    const shift = idx === pushed ? 1 : 0;
+    putCells(
+      cells,
+      start + shift,
+      cells.length,
+      chars,
+      (j) => j === hk ? keyStyle : face,
+    );
+    const rightShadow = start + faceW;
+    if (
+      color && idx !== pushed && rightShadow >= 0 && rightShadow < cells.length
+    ) {
+      // A lower half-block in the column beside the face, matching the band
+      // beneath, so the shadow reads as a thin edge along the bottom.
+      cells[rightShadow] = {
+        ch: "▄",
+        style: mergeBg(ui.buttonShadow, panelBg),
+      };
+    }
+  });
+}
+
+/** The buttons' drop shadow row: an upper half-block band under each face,
+ * shifted one column right so it lines up with the right-hand shadow. */
+function placeButtonShadows(
+  cells: Cell[],
+  layout: ButtonPos[],
+  panelBg: Style,
+  pushed: number,
+): void {
+  const style = mergeBg(ui.buttonShadow, panelBg);
+  layout.forEach(({ start, faceW }, idx) => {
+    if (idx === pushed) return; // a pressed button casts no shadow
+    for (let k = 0; k < faceW; k++) {
+      const col = start + 1 + k;
+      if (col >= 0 && col < cells.length) {
+        cells[col] = { ch: "▀", style };
+      }
+    }
+  });
+}
+
+/** Splice `insert` into `base` starting at visible column `x`. */
+function overlayRow(base: string, x: number, insert: string): string {
+  const left = sliceVisible(base, 0, x);
+  const insertW = columns(stripAnsi(insert));
+  const right = sliceVisible(base, x + insertW, Number.MAX_SAFE_INTEGER);
+  return left + RESET + insert + RESET + right;
+}
+
+//
+// Cell / style helpers
+//
+
+function cellsToAnsi(cells: Cell[], color: boolean): string {
+  if (!color) return cells.map((c) => c.ch).join("");
+  let out = "";
+  let curKey: string | null = null;
+  let curOpen = "";
+  let curLink: string | undefined;
+  for (const cell of cells) {
+    if (cell.link !== curLink) {
+      if (curLink !== undefined) out += term.linkEnd;
+      if (cell.link !== undefined) out += term.linkStart(cell.link);
+      curLink = cell.link;
+    }
+    const open = sgrInline(cell.style);
+    if (open !== curKey) {
+      if (curKey !== null) out += RESET;
+      out += open;
+      curKey = open;
+      curOpen = open;
+    }
+    out += cell.ch;
+  }
+  if (curLink !== undefined) out += term.linkEnd;
+  if (curOpen !== "") out += RESET;
+  return out;
+}
+
+function sgrInline(style: Style): string {
+  const codes: number[] = [];
+  if (style.bold) codes.push(1);
+  if (style.dim) codes.push(2);
+  if (style.italic) codes.push(3);
+  if (style.underline) codes.push(4);
+  if (style.strikethrough) codes.push(9);
+  if (style.fg) codes.push(38, 2, style.fg[0], style.fg[1], style.fg[2]);
+  if (style.bg) codes.push(48, 2, style.bg[0], style.bg[1], style.bg[2]);
+  return codes.length === 0 ? "" : `\x1b[${codes.join(";")}m`;
+}
+
+function mergeBg(style: Style, bg: Style): Style {
+  if (!bg.bg) return style;
+  return { ...style, bg: bg.bg };
+}
+
+function paintIf(text: string, style: Style, color: boolean): string {
+  return color ? paint(text, style) : text;
+}
+
+function kindGlyph(kind: string): string {
+  switch (kind) {
+    case "section":
+      return "▸";
+    case "pattern":
+      return "◆";
+    case "builder":
+      return "◇";
+    case "closure":
+      return "λ";
+    case "schema":
+      return "▦";
+    case "function":
+    case "method":
+      return "ƒ";
+    case "interface":
+    case "typeAlias":
+    case "class":
+      return "𝑻";
+    case "return":
+      return "⏎";
+    case "control":
+      return "⎇";
+    case "hunk":
+      return "±";
+    case "comment":
+      return "#";
+    default:
+      return "·";
+  }
+}
+
+//
+// Visible-width string ops (ANSI-aware)
+//
+
+function padTo(text: string, width: number): string {
+  const len = visibleWidth(text);
+  if (len >= width) return text;
+  return text + " ".repeat(width - len);
+}
+
+/** Slice by visible columns, keeping every ANSI escape. A character counts
+ * as many columns as it takes, and the columns of one that the slice cuts in
+ * two are kept as spaces, after the escapes inside it. A character that
+ * takes no column is kept with the character before it. */
+function sliceVisible(text: string, from: number, to: number): string {
+  const parts = text.split(ESCAPE_SPLIT);
+  const escapes: Array<{ at: number; escape: string }> = [];
+  let plain = "";
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) escapes.push({ at: plain.length, escape: part });
+    else plain += part;
+  });
+  let out = "";
+  let col = 0;
+  let at = 0;
+  let next = 0;
+  for (const char of graphemes(plain)) {
+    const start = at;
+    at += char.length;
+    while (next < escapes.length && escapes[next].at <= start) {
+      out += escapes[next++].escape;
+    }
+    // The character as the text writes it, with the escapes inside it.
+    let source = "";
+    let inside = "";
+    let copied = start;
+    while (next < escapes.length && escapes[next].at < at) {
+      const { at: escapeAt, escape } = escapes[next++];
+      source += plain.slice(copied, escapeAt) + escape;
+      inside += escape;
+      copied = escapeAt;
+    }
+    source += plain.slice(copied, at);
+    const end = col + charColumns(char);
+    const kept = end > col ? col >= from && end <= to : col > from && col <= to;
+    out += kept ? source : inside +
+      " ".repeat(Math.max(0, Math.min(end, to) - Math.max(col, from)));
+    col = end;
+  }
+  for (const { escape } of escapes.slice(next)) out += escape;
+  return out;
+}
+
+/** `text` centered in `width` columns between runs of `fill`, or as much of
+ * it as fits when it is wider. */
+function truncCenter(text: string, width: number, fill: string): string {
+  const chars = clip(shownCells(text), width);
+  const total = Math.max(0, width - chars.length);
+  const leftN = Math.floor(total / 2);
+  return fill.repeat(leftN) + chars.join("") + fill.repeat(total - leftN);
+}
+
+export const _internal = {
+  sliceVisible,
+  padTo,
+  cellsToAnsi,
+  mergeBg,
+  darkenSpan,
+};

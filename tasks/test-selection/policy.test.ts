@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import * as policy from "./policy.ts";
+import { packageDirOf } from "../package-layout.ts";
 
 // A dial nobody documented is a number that decides what runs and cannot
 // be found, so the two halves of this module are held to each other.
@@ -191,7 +192,7 @@ describe("policy", () => {
   describe("the coverage exclusion list", () => {
     it("gives every excluded member a reason", () => {
       for (const [member, reason] of policy.EXCLUDED_FROM_COVERAGE_GATE) {
-        expect(member.startsWith("packages/")).toBe(true);
+        expect(packageDirOf(member)).not.toBe(undefined);
         expect(reason.length).toBeGreaterThan(0);
       }
     });
@@ -199,15 +200,15 @@ describe("policy", () => {
 
   describe("exclusionKind()", () => {
     it("returns `size` for a member on the list for its size", () => {
-      expect(policy.exclusionKind("packages/runner")).toBe("size");
+      expect(policy.exclusionKind("runtime/runner")).toBe("size");
     });
 
     it("returns `source` for a member on the list for what measures it", () => {
-      expect(policy.exclusionKind("packages/cli")).toBe("source");
+      expect(policy.exclusionKind("runtime/cli")).toBe("source");
     });
 
     it("returns `undefined` for a member not on the list", () => {
-      expect(policy.exclusionKind("packages/memory")).toBeUndefined();
+      expect(policy.exclusionKind("runtime/memory")).toBeUndefined();
     });
   });
 });

@@ -1,0 +1,1 @@
+{"date":"2026-10-13","from":{"k":"unit","s":"runner","n":"SpaceServer > watermark under sustained input > covers each input within five cycles of its admission while input keeps arriving"},"to":{"k":"unit","s":"runner","n":"SpaceServer > watermark under sustained input > advances the watermark over the stream's inputs on exhausted cycles while input keeps arriving"}}

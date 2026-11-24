@@ -64,7 +64,7 @@ Event weights at the same reading: `created` 0, `instantiated` 0.5,
 
 ## The instrument, and why its construction is the argument
 
-[`scripts/pattern-index-retrieval-queries.json`](../../../../packages/cf-harness/scripts/pattern-index-retrieval-queries.json)
+[`scripts/pattern-index-retrieval-queries.json`](../../../../runtime/cf-harness/scripts/pattern-index-retrieval-queries.json)
 holds 13 capabilities, 73 capability queries and 15 negatives. Choosing a
 fixture is choosing a population, so the choices are stated in the file and
 summarized here.

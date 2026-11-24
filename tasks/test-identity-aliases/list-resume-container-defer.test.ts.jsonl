@@ -1,0 +1,1 @@
+{"date": "2026-10-25", "from": {"k": "unit", "s": "runner", "n": "list builtin resume container defer > map resume confirms absence, seeds, then rebuilds durably"}, "to": {"k": "unit", "s": "runner", "n": "list builtin resume container defer > map resume confirms absence, then rebuilds durably without seeding"}}

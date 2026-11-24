@@ -1,0 +1,10 @@
+{
+  "env": {
+    "CF_SERVICE_URL": "<the address of their Common Fabric service>",
+    "CF_IDENTITY": "<absolute path of their identity key>"
+  },
+  "claudeMdExcludes": [
+    "<absolute path of the labs root>/CLAUDE.md",
+    "<absolute path of the labs root>/.claude/rules/**"
+  ]
+}

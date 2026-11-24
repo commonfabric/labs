@@ -38,11 +38,12 @@ target. In particular:
   simple `query` / wildcard selector shape remains future protocol design
 - watch installation remains current-state only in this pass; do not treat
   watch specs as historical subscriptions keyed by `atSeq`
-- steady-state topology shrink does not yet drive automatic unwatch/removal
-  semantics; clients should only rely on `removes` from explicit watch-set
-  replacement in this pass
-- branch lifecycle commands are not yet exposed on the v2 wire; current branch
-  creation keeps its fork-seq semantics until that cutover lands
+- a refresh retracts a document a write left no watch reaching, by the
+  attribution of tracked documents to what reached them (04-protocol.md section
+  4.6.3); explicit watch-set replacement and removal retract the rest
+- branch create, delete, list, history and restore commands are on the v2 wire
+  (04-protocol.md section 4.3.8); branch creation keeps its fork-seq
+  semantics, taking no seq of its own (06-branching.md section 6.3.2)
 
 ## 1. Source Of Truth
 
@@ -298,10 +299,10 @@ For schema-aware live watches, keep the cache lifetimes split:
 
 - keep a persistent doc-plus-selector tracker per watched graph so `watchAdd`
   can stop immediately at already-current frontiers
-- allow additive watch growth to reuse a persistent traversal memo for the
-  tracked graph
-- use a fresh traversal memo for write-triggered refreshes so retargets and
-  other topology changes cannot be incorrectly pruned by stale memo entries
+- share a traversal memo only within one evaluation, including additive watch
+  growth, root removal, and write-triggered refreshes; release it when that
+  evaluation finishes. The persistent tracker preserves current coverage
+  without retaining traversal results for removed schemas or old revisions
 
 For one-shot reads, `graph.query` must honor:
 
@@ -311,7 +312,7 @@ For one-shot reads, `graph.query` must honor:
 Do not silently drop `atSeq` from one-shot query semantics.
 
 Keep shared JSON-pointer and path-overlap helpers in one module under
-`packages/memory/v2` so patch application, conflict detection, and runner-side
+`runtime/memory/v2` so patch application, conflict detection, and runner-side
 read invalidation do not drift.
 
 ## 12. Branch Scope
@@ -324,7 +325,9 @@ through the core storage path:
 - branch-aware point-in-time reads
 - branch-aware watch scopes
 
-Public branch lifecycle commands, merge proposal generation, and advanced branch
+Beyond those, the branch lifecycle commands, sessions of a branch, history
+listing and restore of `06-branching.md` sections 6.15-6.18 are implemented.
+Merge proposal generation, serving loops on branches, and advanced branch
 live-sync behavior remain deferred. Do not block the seq/revision rewrite on
 merge ergonomics.
 

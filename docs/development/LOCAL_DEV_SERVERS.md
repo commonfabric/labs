@@ -15,7 +15,7 @@
 ./scripts/restart-local-dev.sh --dangerously-clear-all-spaces # Clear databases/spaces
 ./scripts/start-local-dev.sh --cf-harness    # ...and a cf-harness console
 ./scripts/check-local-dev.sh          # Health check both servers
-./scripts/share-pattern-via-tailscale.sh packages/patterns/lunch-poll/main.tsx  # Host a pattern + share on your tailnet
+./scripts/share-pattern-via-tailscale.sh patterns/apps/lunch-poll/main.tsx  # Host a pattern + share on your tailnet
 ./scripts/share-pattern-via-tailscale.sh --down                                 # Tear that down
 ```
 
@@ -49,13 +49,13 @@ resolves it and prints it beside the record that decided it.
 declare a browser host, such as the Weaver, to show the agent's web pages to the
 owner; it is off unless named here or exported as
 `CF_HARNESS_ALLOW_BROWSER_HOST=1`, and the console lists `browser_host` in
-`GET /api/status` when it is on. `packages/cf-harness/console/README.md` has the
+`GET /api/status` when it is on. `runtime/cf-harness/console/README.md` has the
 rest.
 
 The console is a surface on the fabric rather than part of it. It needs a
 sandbox runtime and a connected model provider, and when it cannot start —
 either of those missing, its port taken, a value underivable — it says so in
-the script's output and in `packages/cf-harness/local-dev-console.log`, and the
+the script's output and in `runtime/cf-harness/local-dev-console.log`, and the
 shell and toolshed keep running. The sandbox runtime is the one
 `CF_HARNESS_SANDBOX_RUNTIME` names, `runsc`. With none named (unset, or white
 space alone), a Mac
@@ -74,8 +74,8 @@ named by `CF_HARNESS_RUNSC_BINARY`; that refusal names the `sudo sysctl -w`
 that allows them. Every other platform does not start unless the runtime is
 named. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
 is set the console is launched for that loom instance, and with no runtime named
-it does not start on any platform, saying that Loom must name one. `packages/cf-harness/console/README.md` covers the console itself,
-and [`../../packages/cf-harness/docs/WEAVER.md`](../../packages/cf-harness/docs/WEAVER.md)
+it does not start on any platform, saying that Loom must name one. `runtime/cf-harness/console/README.md` covers the console itself,
+and [`../../runtime/cf-harness/docs/WEAVER.md`](../../runtime/cf-harness/docs/WEAVER.md)
 the operator procedure it belongs to.
 
 Source-run build metadata describes the checkout the same way compiled
@@ -124,15 +124,44 @@ To let teammates interact with a locally-hosted pattern (e.g. "host latest-main
 `--inspect`) + shell on offset ports, deploys the pattern, and `tailscale serve`s
 it (tailnet-only). It launches the shell with `API_URL` set to your MagicDNS name
 — the standard `dev-local` task bakes in `localhost`, which breaks remote
-browsers.
+browsers. Each server runs in a process group of its own, so the servers keep
+running after the script returns, until `--down` stops them. Until the script
+prints the shareable URL, the servers end with it: a failure, Ctrl-C, or a
+hangup or termination signal sent to the script stops every server it started.
+Their logs are in `tmp/share-pattern-via-tailscale/` in the checkout. The script
+refuses to start while a share from the same checkout is running, or while
+anything answers on one of its ports. `--down` turns off the machine's
+`tailscale serve` mapping only in a checkout that has a record of a share.
 
 `start-local-dev.sh` validates required commands before launching anything and
 waits for both servers to bind their ports and return HTTP 200 before reporting
 success. It then waits on the toolshed's `/`, the page a browser loads, which
 the toolshed answers by fetching the shell dev server and passing the result
 back; that is the one probe covering the hop between the two servers, which
-can be broken while each of them answers on its own port. Set
-`LOCAL_DEV_STARTUP_TIMEOUT` to adjust the readiness timeout in seconds.
+can be broken while each of them answers on its own port.
+
+The script has no time limit. It waits for both servers at once, reading their
+logs as they write them, until each has printed the line that says it has bound
+its port. It then requests the shell's page, the toolshed's `/_health`, and the
+toolshed's `/`, once each, and waits for each answer however long it takes. A
+server that exits before it binds fails the script when it exits, whether or not
+the other server has bound yet. A server that neither binds nor exits keeps the
+script waiting until something stops it, such as Ctrl-C or the time limit of the
+job that runs it. `check-local-dev.sh` likewise waits for each server's answer
+however long it takes.
+
+Each server runs in a process group of its own, so the servers keep running
+after the script returns, even under a tool that ends whatever a command leaves
+in its process group once the command exits. They run until `stop-local-dev.sh`
+stops them, which finds them by the ports they listen on. Until both servers are
+ready, they end with the script: a failed startup, Ctrl-C, or a hangup or
+termination signal sent to the script stops every server it started. While the
+script then waits for a cf-harness console, the same events stop only the
+console. A SIGKILL sent to the script's process group during startup cannot be
+caught, so it leaves the servers it started running, and `stop-local-dev.sh`
+stops them. When `CODEX_SANDBOX` is set, the script stays attached after
+startup, the servers stay in its process group, and stopping the script stops
+them.
 
 **Exit codes (`start-local-dev.sh`):**
 | Code | Meaning |
@@ -140,7 +169,7 @@ can be broken while each of them answers on its own port. Set
 | `0` | Both servers started and became ready. |
 | `3` | A server could not bind because its port is already in use; retry on a different port offset. |
 | `4` | A requested port is one clients refuse to connect to; change the port offset. |
-| other non-zero | Any other startup failure (build error, crash, readiness timeout). |
+| other non-zero | Any other startup failure (build error, crash, an answer other than HTTP 200). |
 
 Code `3` is reported only when a server's actual bind fails, not from a port
 pre-check, so it carries no check-then-bind race. The toolshed and the shell dev
@@ -183,21 +212,21 @@ The same env vars must also be set when running `cf` CLI commands against the
 server. See `docs/development/EXPERIMENTAL_OPTIONS.md` for all available flags.
 
 **Logs:**
-- `packages/shell/local-dev-shell.log`
-- `packages/toolshed/local-dev-toolshed.log`
+- `runtime/shell/local-dev-shell.log`
+- `runtime/toolshed/local-dev-toolshed.log`
 
 **CLI identity for local dev:** For normal development — deploying pieces,
 pattern work, anything acting as *you* — mint a unique key:
 ```bash
 mkdir -p .cf
-deno run -A packages/cli/mod.ts id new > .cf/shared-dev.key
+deno run -A runtime/cli/mod.ts id new > .cf/shared-dev.key
 export CF_IDENTITY="$PWD/.cf/shared-dev.key"
 ```
 The local toolshed itself runs as the identity derived from the passphrase
 `"implicit trust"`. Derive that key only when the CLI must act as the server's
 operator/admin (deploying system home patterns):
 ```bash
-deno run -A packages/cli/mod.ts id derive "implicit trust" > claude.key
+deno run -A runtime/cli/mod.ts id derive "implicit trust" > claude.key
 export CF_IDENTITY="$PWD/claude.key"
 ```
 It is a shared, publicly-derivable key — every developer who derives it gets
@@ -215,9 +244,28 @@ can import a CLI PKCS8/PEM key via `Import CLI Key`. See
 **First-time browser login:**
 
 When accessing a space for the first time, you'll need to register:
-1. Click "➕ Register"
-2. Click "🔑 Generate Passphrase"
-3. Click "🔒 I've Saved It - Continue"
+1. Click "➕ Register". A browser that has signed in before labels this button
+   "➕ Register New Key".
+2. On the "Register with" screen, click "📝 Use Passphrase"
+3. Click "🔑 Generate Passphrase"
+4. Click "🔒 I've Saved It - Continue"
+
+The identity this registers is a new principal, not the one the CLI holds. A
+space the CLI identity created admits only its creator, so for a piece in it
+the shell reports `Slug "<slug>" not found.`, and the console carries
+`AuthorizationError: Principal did:key:... lacks READ on space did:key:...`.
+Either click "📁 Import CLI Key" at step 2 and select the CLI's key file, which
+signs the browser in as the CLI identity
+([`shared-identity.md`](../features/shared-identity.md)), or, with
+`CF_IDENTITY` naming the key that created the space, grant the browser's
+identity access and reload the page:
+```bash
+CF_SPACE="<space DID>" deno task cf acl set "<browser DID>" WRITE
+```
+The browser's DID is the principal the error names;
+`globalThis.app.state().identity?.did()` in the page's console returns it too.
+[Reading and changing a space's ACL](../tutorial/10-identity-and-security.md#reading-and-changing-a-spaces-acl)
+covers the other ACL commands.
 
 For Playwright testing, use:
 ```javascript
@@ -296,7 +344,7 @@ nothing says that port is another process.
 | Stale data | Cache issues | Use `--clear-cache` flag (or `--dangerously-clear-all-spaces` for database issues) |
 | `*.ts.net` URLs hang | Not on Tailscale | Connect to the Tailscale network |
 | OAuth error: `Unexpected token '<'` | Fetching from wrong port | Use port 8000 for API calls ([see below](#oauth-returns-html-instead-of-json)) |
-| UI component changes not appearing | Shell doesn't watch packages/ui | Restart local dev server |
+| UI component changes not appearing | Shell doesn't watch runtime/ui | Restart local dev server |
 
 ### Manual Fallback
 
@@ -316,34 +364,34 @@ ss -tlnp 'sport = :5173' | awk -F'pid=' 'NF>1{split($2,a,","); print a[1]}' | xa
 sleep 2
 
 # 3. Start backend (Terminal 1)
-cd packages/toolshed
+cd runtime/toolshed
 SHELL_URL=http://localhost:5173 deno task dev
 
 # 4. Start frontend (Terminal 2)
-cd packages/shell
+cd runtime/shell
 TOOLSHED_PORT=8000 deno task dev-local
 ```
 
 **Alternative: Local shell with cloud backend:**
 ```bash
-cd packages/toolshed
+cd runtime/toolshed
 SHELL_URL=http://localhost:5173 API_URL=https://toolshed.saga-castor.ts.net/ deno task dev
 ```
 
-**Environment setup:** Copy `.env.example` to `.env` in the toolshed directory. See [`CONFIGURATION.md`](./CONFIGURATION.md) for a categorized reference of all configuration (env vars, tasks, flags), or `packages/toolshed/env.ts` for the canonical Zod schema.
+**Environment setup:** Copy `.env.example` to `.env` in the toolshed directory. See [`CONFIGURATION.md`](./CONFIGURATION.md) for a categorized reference of all configuration (env vars, tasks, flags), or `runtime/toolshed/env.ts` for the canonical Zod schema.
 
 ### Checking Logs
 
 ```bash
 # View recent shell errors
-tail -50 packages/shell/local-dev-shell.log
+tail -50 runtime/shell/local-dev-shell.log
 
 # View recent toolshed errors
-tail -50 packages/toolshed/local-dev-toolshed.log
+tail -50 runtime/toolshed/local-dev-toolshed.log
 
 # Follow logs in real-time
-tail -f packages/shell/local-dev-shell.log
-tail -f packages/toolshed/local-dev-toolshed.log
+tail -f runtime/shell/local-dev-shell.log
+tail -f runtime/toolshed/local-dev-toolshed.log
 ```
 
 ### OAuth Returns HTML Instead of JSON
@@ -364,12 +412,12 @@ This happens when OAuth or API calls hit port 5173 (frontend) instead of port 80
 
 ### UI Component Changes Not Appearing
 
-When editing `cf-*` components in `packages/ui/`, restart the local dev server to ensure the updated code is running.
+When editing `cf-*` components in `runtime/ui/`, restart the local dev server to ensure the updated code is running.
 
-The shell's dev server watches `packages/shell/src` only, so a change anywhere
-else in the workspace — `packages/ui`, `packages/runtime-client`, and the rest —
+The shell's dev server watches `runtime/shell/src` only, so a change anywhere
+else in the workspace — `runtime/ui`, `runtime/runtime-client`, and the rest —
 does not trigger a rebuild, and the browser keeps serving the previous bundle.
-Touching any file under `packages/shell/src` rebuilds everything the shell
+Touching any file under `runtime/shell/src` rebuilds everything the shell
 bundles, which is quicker than a restart.
 
 ---
@@ -400,7 +448,9 @@ follows the queue. It prints a line when it claims a run and when the run ends,
 and it runs until interrupted. The model provider is the one `cf-harness` is
 configured with under `CF_HARNESS_HOME`; `--model` names a model, and
 `--loom-retrieval-config` names the host-owned file backing the read-only Loom
-tools. A run's workspace and artifacts go under `--work-root`, which defaults to
+tools. `--commands-url` and `--commands-actor` name the host's command endpoint
+behind `list_commands` and `run_command`, and the actor a run's commands run as.
+A run's workspace and artifacts go under `--work-root`, which defaults to
 `$CF_HARNESS_HOME/agent-runs`.
 
 A run's sandbox is the one the harness selects.
@@ -425,4 +475,4 @@ own enforcement is a separate setting and is unchanged by it.
 
 When the home space and the runner's own toolshed are different deployments,
 `--api-url` names the first and `--local-api-url` the second. The
-[CLI README](../../packages/cli/README.md#agent-runner) describes the command.
+[CLI README](../../runtime/cli/README.md#agent-runner) describes the command.

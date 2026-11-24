@@ -174,7 +174,7 @@ const startEditing = action(() => {
 ```
 
 (You may see `cell()` in older patterns; it's deprecated in favor of
-`new Writable()` — `packages/patterns/DEPRECATED_IDIOMS.md`.)
+`new Writable()` — `patterns/DEPRECATED_IDIOMS.md`.)
 
 ## Identity: comparing cells, not values
 

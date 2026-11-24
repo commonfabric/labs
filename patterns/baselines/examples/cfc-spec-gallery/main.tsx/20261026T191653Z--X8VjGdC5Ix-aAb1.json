@@ -1,0 +1,563 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "examples/cfc-spec-gallery/main.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "acceptInvite": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "acceptInvite"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "acknowledgeAlert": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "acknowledgeAlert"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "acknowledgeDisclosure": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "acknowledgeDisclosure"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "authorizeResearchSend": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedAuthorizeResearchSend",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedDirectCommandSurface"
+            ],
+            "trustedPattern": "TrustedDirectCommandSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/cfc/trusted-surfaces/direct-command.tsx",
+              "moduleIdentity": "xz5Gr9dOfutZHjpntaTd1JWZkO1lgsOsty_dwZraUjI",
+              "path": [
+                "commitTrustedResearchSend"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "authorizeResearchSendCell": {
+        "type": "string"
+      },
+      "capturedCommand": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedCaptureDirectCommand",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedDirectCommandSurface"
+            ],
+            "trustedPattern": "TrustedDirectCommandSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/cfc/trusted-surfaces/direct-command.tsx",
+              "moduleIdentity": "xz5Gr9dOfutZHjpntaTd1JWZkO1lgsOsty_dwZraUjI",
+              "path": [
+                "captureTrustedDirectCommand"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "capturedCommandCell": {
+        "type": "string"
+      },
+      "completedCount": {
+        "type": "number"
+      },
+      "confirmReceipt": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "confirmReceipt"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "escalateSupportCase": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "escalateSupportCase"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "finalizeChecklist": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "finalizeChecklist"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "forwardHotelNote": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedForwardNote",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedForwardSurface"
+            ],
+            "trustedPattern": "TrustedForwardSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/cfc/trusted-surfaces/forward.tsx",
+              "moduleIdentity": "pkbnx2oS6qIvnFtm4th_PNFqpoY1VkGqq6JEweX4vhs",
+              "path": [
+                "commitTrustedForward"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "forwardHotelNoteCell": {
+        "type": "string"
+      },
+      "forwardPreparedPreview": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedPrepareForward",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedForwardSurface"
+            ],
+            "trustedPattern": "TrustedForwardSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/cfc/trusted-surfaces/forward.tsx",
+              "moduleIdentity": "pkbnx2oS6qIvnFtm4th_PNFqpoY1VkGqq6JEweX4vhs",
+              "path": [
+                "prepareTrustedForward"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "forwardPreparedPreviewCell": {
+        "type": "string"
+      },
+      "forwardRecipientInput": {
+        "type": "string"
+      },
+      "forwardRecipientInputCell": {
+        "type": "string"
+      },
+      "forwardSourceNote": {
+        "type": "string"
+      },
+      "forwardStage": {
+        "type": "string"
+      },
+      "hotelMembershipReturn": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "returnHotelMembership"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "hotelMembershipReturnCell": {
+        "type": "string"
+      },
+      "lastCompleted": {
+        "type": "string"
+      },
+      "prepareForwardHotelNote": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "prepareSafeLinkRelease": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "previewResearchBrief": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedPrepareResearchBrief",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedDirectCommandSurface"
+            ],
+            "trustedPattern": "TrustedDirectCommandSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/cfc/trusted-surfaces/direct-command.tsx",
+              "moduleIdentity": "xz5Gr9dOfutZHjpntaTd1JWZkO1lgsOsty_dwZraUjI",
+              "path": [
+                "prepareTrustedResearchBrief"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "releaseRedactedSummary": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "releaseRedactedSummary"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "releaseSafeLink": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedReleaseSafeLink",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedSafeLinkSurface"
+            ],
+            "trustedPattern": "TrustedSafeLinkSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/cfc/trusted-surfaces/safe-link.tsx",
+              "moduleIdentity": "ojUEEcpThJPbnn3yodBXXa2R4fvMYqYjYerSox1ADLo",
+              "path": [
+                "commitTrustedSafeLink"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "releaseSafeLinkCell": {
+        "type": "string"
+      },
+      "researchCommandInput": {
+        "type": "string"
+      },
+      "researchCommandInputCell": {
+        "type": "string"
+      },
+      "researchPreparedBrief": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedPrepareResearchBrief",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedDirectCommandSurface"
+            ],
+            "trustedPattern": "TrustedDirectCommandSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/cfc/trusted-surfaces/direct-command.tsx",
+              "moduleIdentity": "xz5Gr9dOfutZHjpntaTd1JWZkO1lgsOsty_dwZraUjI",
+              "path": [
+                "prepareTrustedResearchBrief"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "researchPreparedBriefCell": {
+        "type": "string"
+      },
+      "researchStage": {
+        "type": "string"
+      },
+      "runAcceptInvite": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runAcknowledgeAlert": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runAcknowledgeDisclosure": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runAuthorizeResearchSend": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runCaptureDirectCommand": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runConfirmReceipt": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runEscalateSupportCase": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runFinalizeChecklist": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runForwardHotelNote": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runHotelMembershipReturn": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runPreviewResearchBrief": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runReleaseRedactedSummary": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runReleaseSafeLink": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "runSelectSearchResult": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "safeLinkPrepared": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedPrepareSafeLink",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedSafeLinkSurface"
+            ],
+            "trustedPattern": "TrustedSafeLinkSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/cfc/trusted-surfaces/safe-link.tsx",
+              "moduleIdentity": "ojUEEcpThJPbnn3yodBXXa2R4fvMYqYjYerSox1ADLo",
+              "path": [
+                "prepareTrustedSafeLink"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "safeLinkPreparedCell": {
+        "type": "string"
+      },
+      "safeLinkSource": {
+        "type": "string"
+      },
+      "safeLinkSourceCell": {
+        "type": "string"
+      },
+      "safeLinkStage": {
+        "type": "string"
+      },
+      "selectSearchResult": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-spec-gallery/main.tsx",
+              "moduleIdentity": "zqM4UCAEyJzTSEHNRlJs_0h6V4o-jRyqip9vQY62gRg",
+              "path": [
+                "selectSearchResult"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "selectSearchResultCell": {
+        "type": "string"
+      },
+      "setForwardRecipient": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "setResearchCommand": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "setSafeLinkSource": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "totalExamples": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "totalExamples",
+      "completedCount",
+      "lastCompleted",
+      "hotelMembershipReturn",
+      "forwardHotelNote",
+      "forwardSourceNote",
+      "forwardRecipientInput",
+      "forwardPreparedPreview",
+      "forwardStage",
+      "forwardRecipientInputCell",
+      "forwardPreparedPreviewCell",
+      "forwardHotelNoteCell",
+      "selectSearchResult",
+      "acknowledgeDisclosure",
+      "acknowledgeAlert",
+      "acceptInvite",
+      "releaseRedactedSummary",
+      "escalateSupportCase",
+      "previewResearchBrief",
+      "researchCommandInput",
+      "capturedCommand",
+      "researchPreparedBrief",
+      "researchStage",
+      "researchCommandInputCell",
+      "capturedCommandCell",
+      "researchPreparedBriefCell",
+      "authorizeResearchSendCell",
+      "finalizeChecklist",
+      "confirmReceipt",
+      "authorizeResearchSend",
+      "releaseSafeLink",
+      "safeLinkSource",
+      "safeLinkPrepared",
+      "safeLinkStage",
+      "safeLinkSourceCell",
+      "safeLinkPreparedCell",
+      "releaseSafeLinkCell",
+      "hotelMembershipReturnCell",
+      "selectSearchResultCell",
+      "runHotelMembershipReturn",
+      "setForwardRecipient",
+      "prepareForwardHotelNote",
+      "runForwardHotelNote",
+      "runSelectSearchResult",
+      "runAcknowledgeDisclosure",
+      "runAcknowledgeAlert",
+      "runAcceptInvite",
+      "runReleaseRedactedSummary",
+      "runEscalateSupportCase",
+      "setResearchCommand",
+      "runCaptureDirectCommand",
+      "runPreviewResearchBrief",
+      "runFinalizeChecklist",
+      "runConfirmReceipt",
+      "runAuthorizeResearchSend",
+      "setSafeLinkSource",
+      "prepareSafeLinkRelease",
+      "runReleaseSafeLink",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

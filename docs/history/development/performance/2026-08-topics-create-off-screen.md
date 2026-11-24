@@ -306,7 +306,7 @@ constant per create, not another growth term.
 
 ## On screen
 
-[`topic-create-onscreen.test.ts`](../../../../packages/patterns/integration/topic-create-onscreen.test.ts)
+[`topic-create-onscreen.test.ts`](../../../../patterns/integration/topic-create-onscreen.test.ts)
 fills two boards in one space in lockstep — the browser routed at the first and
 never at the second — and splits each create on the rendered board where the
 work changes hands: the write and the authoring runtime's settle, then the
@@ -353,7 +353,7 @@ written.
 ### What the harness was measuring before
 
 The first version of this harness held each board live the way
-[`topic-board-fixture.ts`](../../../../packages/patterns/integration/topic-board-fixture.ts)
+[`topic-board-fixture.ts`](../../../../patterns/integration/topic-board-fixture.ts)
 does — `getResult(piece).sink(() => {})`, which is a sink on the piece cell with
 no schema at all, so every change re-materializes the whole result and every
 topic in it. That is the widest demand available, and it was the harness's

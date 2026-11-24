@@ -4,12 +4,10 @@ import {
   declaredTier,
   hasMarkerLine,
   stripMarker,
-  tableTierOf,
   TIER_DIRECTORIES,
   TIER_FILES,
   TIER_MARKERS,
   tierOf,
-  UNTIERED_FILES,
   withMarker,
 } from "./pattern-tiers.ts";
 import {
@@ -39,10 +37,7 @@ async function completeTierTree(): Promise<string> {
   for (const [file, tier] of Object.entries(TIER_FILES)) {
     await write(file, `${TIER_MARKERS[tier]}\ncode;\n`);
   }
-  for (const file of Object.keys(UNTIERED_FILES)) {
-    await write(file, "code;\n");
-  }
-  await write("counter/counter.tsx", "code;\n");
+  await write("examples/counter/counter.tsx", "code;\n");
   return dir;
 }
 
@@ -51,37 +46,24 @@ const FIXTURE = TIER_MARKERS.fixture;
 
 describe("tierOf", () => {
   it("tiers a file by the directory holding it", () => {
-    expect(tierOf("factory-outputs/lot-watch/main.tsx")).toBe("legacy");
-    expect(tierOf("gideon-tests/test-cell-equals.tsx")).toBe("fixture");
-    expect(tierOf("test/non-idempotent/shuffle.tsx")).toBe("fixture");
+    expect(tierOf("dev/factory-outputs/lot-watch/main.tsx")).toBe("legacy");
+    expect(tierOf("dev/gideon-tests/test-cell-equals.tsx")).toBe("fixture");
+    expect(tierOf("dev/test/non-idempotent/shuffle.tsx")).toBe("fixture");
   });
 
   it("tiers a loose file by name", () => {
-    expect(tierOf("vehicles.ts")).toBe("legacy");
-    expect(tierOf("render-test.tsx")).toBe("fixture");
+    expect(tierOf("dev/factory-outputs/vehicles.ts")).toBe("legacy");
+    expect(tierOf("dev/render-test/render-test.tsx")).toBe("fixture");
   });
 
   it("leaves the copyable tiers unmarked", () => {
-    expect(tierOf("counter/counter.tsx")).toBe(undefined);
-    expect(tierOf("system/home.tsx")).toBe(undefined);
-    expect(tierOf("notes/note.tsx")).toBe(undefined);
-  });
-
-  it("exempts the shared helper inside a tiered directory", () => {
-    // Marking the helper pattern tests are meant to call "do not copy" would
-    // say the opposite of what it is for.
-    expect(tierOf("test/vnode-helpers.ts")).toBe(undefined);
-  });
-
-  it("reports through tableTierOf what the exemption is hiding", () => {
-    // `tierOf` alone cannot check an exemption: it honours it, so every
-    // exempted file looks untiered and there is nothing left to test against.
-    expect(tableTierOf("test/vnode-helpers.ts")).toBe("fixture");
-    expect(tableTierOf("counter/counter.tsx")).toBe(undefined);
+    expect(tierOf("examples/counter/counter.tsx")).toBe(undefined);
+    expect(tierOf("system/home/home.tsx")).toBe(undefined);
+    expect(tierOf("system/notes/note.tsx")).toBe(undefined);
   });
 
   it("does not let a directory prefix spill into a sibling", () => {
-    // "test/" must not tier "test-import.tsx" or a "tests-support/" sibling.
+    // "dev/test/" must not tier "test-import.tsx" or a "tests-support/" sibling.
     expect(tierOf("test-import.tsx")).toBe(undefined);
     expect(tierOf("tests-support/helper.ts")).toBe(undefined);
   });
@@ -220,7 +202,6 @@ describe("staleTableEntries", () => {
         {
           directories: { "fixtures/": "fixture" },
           files: { "legacy.tsx": "legacy" },
-          untiered: { "fixtures/helper.ts": "Shared test helper." },
         },
       ),
     ).toEqual([]);
@@ -228,22 +209,16 @@ describe("staleTableEntries", () => {
 
   it("reports a directory entry that matches no pattern source", () => {
     // What catches a tiered directory renamed out from under the tables.
-    const stale = staleTableEntries(["counter/counter.tsx"]);
-    expect(stale.some((entry) => entry.includes("gideon-tests/"))).toBe(true);
+    const stale = staleTableEntries(["examples/counter/counter.tsx"]);
+    expect(stale.some((entry) => entry.includes("dev/gideon-tests/"))).toBe(
+      true,
+    );
   });
 
   it("reports a file entry that is no longer a pattern source", () => {
-    const stale = staleTableEntries(["counter/counter.tsx"]);
-    expect(stale.some((entry) => entry.includes("vehicles.ts"))).toBe(true);
-  });
-
-  it("reports an exemption whose file is gone", () => {
-    const stale = staleTableEntries(["counter/counter.tsx"]);
+    const stale = staleTableEntries(["examples/counter/counter.tsx"]);
     expect(
-      stale.some((entry) =>
-        entry.includes('exempts "test/vnode-helpers.ts"') &&
-        entry.includes("not a pattern source")
-      ),
+      stale.some((entry) => entry.includes("dev/factory-outputs/vehicles.ts")),
     ).toBe(true);
   });
 });
@@ -256,8 +231,8 @@ describe("runTierCheck", () => {
       expect(report.problems).toEqual([]);
       expect(report.stale).toEqual([]);
       expect(report.written).toEqual([]);
-      // The untiered helper and the copyable pattern are examined and unmarked.
-      expect(report.examined).toBe(report.marked + 2);
+      // The copyable pattern is examined and unmarked.
+      expect(report.examined).toBe(report.marked + 1);
     } finally {
       await Deno.remove(dir, { recursive: true });
     }
@@ -266,10 +241,13 @@ describe("runTierCheck", () => {
   it("reports a pattern that arrived in a tiered directory unmarked", async () => {
     const dir = await completeTierTree();
     try {
-      await Deno.writeTextFile(`${dir}/gideon-tests/tempting.tsx`, "code;\n");
+      await Deno.writeTextFile(
+        `${dir}/dev/gideon-tests/tempting.tsx`,
+        "code;\n",
+      );
       const report = await runTierCheck(dir, false);
       expect(report.problems.length).toBe(1);
-      expect(report.problems[0].key).toBe("gideon-tests/tempting.tsx");
+      expect(report.problems[0].key).toBe("dev/gideon-tests/tempting.tsx");
       expect(report.problems[0].detail).toContain("should open with the");
     } finally {
       await Deno.remove(dir, { recursive: true });
@@ -279,10 +257,10 @@ describe("runTierCheck", () => {
   it("writes the marker for such a pattern, ahead of its own text", async () => {
     const dir = await completeTierTree();
     try {
-      const path = `${dir}/gideon-tests/tempting.tsx`;
+      const path = `${dir}/dev/gideon-tests/tempting.tsx`;
       await Deno.writeTextFile(path, "/** A tempting example. */\ncode;\n");
       const report = await runTierCheck(dir, true);
-      expect(report.written).toEqual(["gideon-tests/tempting.tsx"]);
+      expect(report.written).toEqual(["dev/gideon-tests/tempting.tsx"]);
       expect(report.problems).toEqual([]);
       expect(await Deno.readTextFile(path)).toBe(
         `${FIXTURE}\n/** A tempting example. */\ncode;\n`,
@@ -295,10 +273,10 @@ describe("runTierCheck", () => {
   it("corrects a marker naming the tier the tables no longer give", async () => {
     const dir = await completeTierTree();
     try {
-      const path = `${dir}/gideon-tests/main.tsx`;
+      const path = `${dir}/dev/gideon-tests/main.tsx`;
       await Deno.writeTextFile(path, `${LEGACY}\ncode;\n`);
       const report = await runTierCheck(dir, true);
-      expect(report.written).toEqual(["gideon-tests/main.tsx"]);
+      expect(report.written).toEqual(["dev/gideon-tests/main.tsx"]);
       expect(await Deno.readTextFile(path)).toBe(`${FIXTURE}\ncode;\n`);
     } finally {
       await Deno.remove(dir, { recursive: true });
@@ -308,7 +286,7 @@ describe("runTierCheck", () => {
   it("refuses to rewrite marker-shaped text it does not recognize", async () => {
     const dir = await completeTierTree();
     try {
-      const path = `${dir}/gideon-tests/main.tsx`;
+      const path = `${dir}/dev/gideon-tests/main.tsx`;
       const mangled = "// PATTERN TIER: fixture\n// A real comment.\ncode;\n";
       await Deno.writeTextFile(path, mangled);
       const report = await runTierCheck(dir, true);
@@ -327,7 +305,7 @@ describe("runTierCheck", () => {
     const dir = await completeTierTree();
     try {
       await Deno.writeTextFile(
-        `${dir}/counter/counter.tsx`,
+        `${dir}/examples/counter/counter.tsx`,
         `${FIXTURE}\ncode;\n`,
       );
       const report = await runTierCheck(dir, false);
@@ -356,8 +334,8 @@ describe("runTierCheck", () => {
       // A symlink is not a pattern source, so the walk passes over it rather
       // than reading through it and demanding a marker.
       await Deno.symlink(
-        `${dir}/gideon-tests/main.tsx`,
-        `${dir}/gideon-tests/alias.tsx`,
+        `${dir}/dev/gideon-tests/main.tsx`,
+        `${dir}/dev/gideon-tests/alias.tsx`,
       );
       const report = await runTierCheck(dir, false);
       expect(report.problems).toEqual([]);
@@ -370,7 +348,7 @@ describe("runTierCheck", () => {
     const dir = await completeTierTree();
     try {
       // Neither is a pattern source, so neither needs a marker.
-      await Deno.writeTextFile(`${dir}/gideon-tests/a.test.tsx`, "code;\n");
+      await Deno.writeTextFile(`${dir}/dev/gideon-tests/a.test.tsx`, "code;\n");
       await Deno.mkdir(`${dir}/integration`, { recursive: true });
       await Deno.writeTextFile(`${dir}/integration/driver.ts`, "code;\n");
       const report = await runTierCheck(dir, false);
@@ -419,13 +397,16 @@ describe("main", () => {
   it("returns 1 and names the file and the remedy for an unmarked one", async () => {
     const dir = await completeTierTree();
     try {
-      await Deno.writeTextFile(`${dir}/gideon-tests/tempting.tsx`, "code;\n");
+      await Deno.writeTextFile(
+        `${dir}/dev/gideon-tests/tempting.tsx`,
+        "code;\n",
+      );
       let code = 0;
       const { err } = await captureConsole(async () => {
         code = await main(dir, false);
       });
       expect(code).toBe(1);
-      expect(err).toContain("gideon-tests/tempting.tsx");
+      expect(err).toContain("dev/gideon-tests/tempting.tsx");
       expect(err).toContain("deno task fix-pattern-tiers");
     } finally {
       await Deno.remove(dir, { recursive: true });
@@ -435,14 +416,17 @@ describe("main", () => {
   it("returns 0 after writing the markers it was asked to apply", async () => {
     const dir = await completeTierTree();
     try {
-      await Deno.writeTextFile(`${dir}/gideon-tests/tempting.tsx`, "code;\n");
+      await Deno.writeTextFile(
+        `${dir}/dev/gideon-tests/tempting.tsx`,
+        "code;\n",
+      );
       let code = 1;
       const { out } = await captureConsole(async () => {
         code = await main(dir, true);
       });
       expect(code).toBe(0);
       expect(out).toContain("Marked 1 pattern source(s):");
-      expect(out).toContain("gideon-tests/tempting.tsx");
+      expect(out).toContain("dev/gideon-tests/tempting.tsx");
     } finally {
       await Deno.remove(dir, { recursive: true });
     }
@@ -471,30 +455,7 @@ describe("staleTableEntries table guards", () => {
     const stale = staleTableEntries(["test-import.tsx"], {
       directories: { "test": "fixture" },
       files: {},
-      untiered: {},
     });
     expect(stale).toEqual(['TIER_DIRECTORIES["test"] needs a trailing slash.']);
-  });
-
-  it("reports an exemption for a file no table would have tiered", () => {
-    // An exemption that exempts nothing is a typo or a file that moved.
-    const stale = staleTableEntries(["counter/counter.tsx"], {
-      directories: {},
-      files: {},
-      untiered: { "counter/counter.tsx": "why" },
-    });
-    expect(stale).toEqual([
-      'UNTIERED_FILES exempts "counter/counter.tsx", which no table would tier.',
-    ]);
-  });
-
-  it("accepts an exemption for a file a directory entry does tier", () => {
-    expect(
-      staleTableEntries(["test/helper.ts"], {
-        directories: { "test/": "fixture" },
-        files: {},
-        untiered: { "test/helper.ts": "the shared helper" },
-      }),
-    ).toEqual([]);
   });
 });

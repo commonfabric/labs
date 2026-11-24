@@ -2,25 +2,29 @@ import { expect } from "@std/expect";
 import { exists } from "@std/fs";
 import { describe, it } from "@std/testing/bdd";
 
+import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  decomposeSchema,
+  STORED_ARGUMENT_SCHEMA_REFUSAL,
+} from "@commonfabric/runner";
 
 import {
   schemaRelaxedForComparison,
   strandedKeys,
-} from "../packages/piece/test/state-continuity-harness.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
+import { registerSchemaDocument } from "../runtime/runner/src/schema-registry.ts";
 import {
   companionFileName,
   companionSpace,
   vintageCompanionDir,
-} from "../packages/piece/test/vintage-layout.ts";
+} from "../runtime/piece/test/vintage-layout.ts";
 import {
-  armVerdictGuard,
   AUTO,
   AUTO_GENERATIONS_KEPT,
   autoGenerationsToPrune,
   collectVintages,
   describeCaptureOutcome,
-  describeError,
   describePinOutcome,
   hoistSupersessionReason,
   isClean,
@@ -32,6 +36,7 @@ import {
   parseVintagePath,
   patternKeyFromMain,
   PINNED,
+  programAsRecorded,
   promotedPath,
   promoteVintage,
   relativeToRepo,
@@ -47,7 +52,6 @@ import {
   reportNothingMatched,
   reportNothingReplayed,
   reportNothingToPin,
-  reportNoVerdict,
   reportOnlyWithCapture,
   reportPinNeedsOneTestKey,
   reportReplaySummary,
@@ -68,7 +72,6 @@ import {
   acceptedDropKey,
   type AcceptedStateDrop,
 } from "./pattern-vintage-accepted-drops.ts";
-import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "@commonfabric/runner";
 
 const ID_A = "bafyaaaa";
 const ID_B = "bafybbbb";
@@ -83,15 +86,30 @@ const findingKeys = (
 ): string[] => strandedKeys(before, after).map((finding) => finding.key);
 
 describe("vintage paths", () => {
+  it("returns `undefined` for a fixture-named file outside a test and tier directory", () => {
+    const name = vintageFileName(
+      stampFor(new Date("2026-07-29T16:33:28.000Z")),
+      ID_A,
+    );
+
+    expect(parseVintagePath(`root/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root/pinned/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root//pinned/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root/a.test.tsx//${name}`, "root"))
+      .toBeUndefined();
+    expect(parseVintagePath(`root/a.test.tsx/pinned/${name}`, "root"))
+      .toMatchObject({ testKey: "a.test.tsx", tier: PINNED });
+  });
+
   it("round-trips a path it built itself", () => {
     const stamp = stampFor(new Date("2026-07-29T16:33:28.000Z"));
-    const path = `${vintageDir("system/home.test.tsx", PINNED)}/${
+    const path = `${vintageDir("system/home/home.test.tsx", PINNED)}/${
       vintageFileName(stamp, ID_A)
     }`;
     const parsed = parseVintagePath(path);
 
     expect(parsed).toEqual({
-      testKey: "system/home.test.tsx",
+      testKey: "system/home/home.test.tsx",
       tier: PINNED,
       stamp,
       identity: ID_A,
@@ -107,7 +125,7 @@ describe("vintage paths", () => {
     const stamp = stampFor(new Date("2026-07-29T16:33:28.000Z"));
     expect(stamp).toContain("-");
     const parsed = parseVintagePath(
-      `${vintageDir("system/home.test.tsx", PINNED)}/${
+      `${vintageDir("system/home/home.test.tsx", PINNED)}/${
         vintageFileName(stamp, ID_A)
       }`,
     );
@@ -126,7 +144,7 @@ describe("vintage paths", () => {
     const stamp = stampFor(new Date("2026-07-29T16:40:22.484Z"));
     const dashed = "xaLUAd13811rdYUEzKt7vaXYy-P8PAkhRcvqRshiNW4";
     const parsed = parseVintagePath(
-      `${vintageDir("system/home.test.tsx", PINNED)}/${
+      `${vintageDir("system/home/home.test.tsx", PINNED)}/${
         vintageFileName(stamp, dashed)
       }`,
     );
@@ -153,11 +171,13 @@ describe("vintage paths", () => {
 
   it("keeps a pattern key with directories intact", () => {
     const path = `${
-      vintageDir("battleship/multiplayer/lobby.test.tsx", AUTO)
+      vintageDir("showcase/battleship/multiplayer/lobby.test.tsx", AUTO)
     }/${vintageFileName("2026-01-01T00-00-00.000Z", ID_A)}`;
     const parsed = parseVintagePath(path);
 
-    expect(parsed?.testKey).toBe("battleship/multiplayer/lobby.test.tsx");
+    expect(parsed?.testKey).toBe(
+      "showcase/battleship/multiplayer/lobby.test.tsx",
+    );
     expect(parsed?.tier).toBe(AUTO);
   });
 
@@ -166,11 +186,11 @@ describe("vintage paths", () => {
     // walk a directory holding a README without the gate dying on it.
     for (
       const path of [
-        `${VINTAGES_DIR}/system/home.test.tsx/pinned/README.md`,
-        `${VINTAGES_DIR}/system/home.test.tsx/pinned/no-identity.sqlite`,
+        `${VINTAGES_DIR}/system/home/home.test.tsx/pinned/README.md`,
+        `${VINTAGES_DIR}/system/home/home.test.tsx/pinned/no-identity.sqlite`,
         `${VINTAGES_DIR}/loose.sqlite`,
-        "packages/patterns/system/home.tsx",
-        `${VINTAGES_DIR}/system/home.test.tsx/pinned/-${ID_A}.sqlite`,
+        "patterns/system/home/home.tsx",
+        `${VINTAGES_DIR}/system/home/home.test.tsx/pinned/-${ID_A}.sqlite`,
       ]
     ) {
       expect(parseVintagePath(path), `should decline: ${path}`).toBeUndefined();
@@ -182,7 +202,7 @@ describe("vintage paths", () => {
     // each is a raw `.sqlite` under a `.sqlite.spaces/` directory. Enumerating
     // one as a vintage in its own right would replay another space's store
     // against a pattern key it never belonged to.
-    const fixture = `${vintageDir("system/home.test.tsx", PINNED)}/${
+    const fixture = `${vintageDir("system/home/home.test.tsx", PINNED)}/${
       vintageFileName("2026-01-01T00-00-00.000Z", ID_A)
     }`;
     const companions = vintageCompanionDir(fixture);
@@ -223,11 +243,11 @@ describe("coverage", () => {
     // looks like: a fixture is named after the test that made it and covers
     // several patterns, so a directory name is no longer the evidence.
     const uncovered = uncoveredRequiredPatterns(
-      ["system/home.tsx", "system/default-app.tsx"],
-      new Set(["system/home.tsx"]),
+      ["system/home/home.tsx", "system/default-app/default-app.tsx"],
+      new Set(["system/home/home.tsx"]),
     );
 
-    expect(uncovered).toEqual(["system/default-app.tsx"]);
+    expect(uncovered).toEqual(["system/default-app/default-app.tsx"]);
   });
 
   it("does not require a vintage for a pattern nobody auto-updates", () => {
@@ -235,8 +255,8 @@ describe("coverage", () => {
     // REQUIRED. Requiring everything under system/ would wedge the gate on the
     // files there that are not patterns at all.
     expect(uncoveredRequiredPatterns(
-      ["system/home.tsx"],
-      new Set(["system/home.tsx"]),
+      ["system/home/home.tsx"],
+      new Set(["system/home/home.tsx"]),
     )).toEqual([]);
   });
 
@@ -244,9 +264,9 @@ describe("coverage", () => {
     // Hand-listing them would let the gate drift from what actually
     // auto-updates — silently covering nothing the day a third root is added.
     expect(requiredPatternKeys([
-      "/api/patterns/system/home.tsx",
-      "/api/patterns/system/default-app.tsx",
-    ])).toEqual(["system/default-app.tsx", "system/home.tsx"]);
+      "/api/patterns/system/home/home.tsx",
+      "/api/patterns/system/default-app/default-app.tsx",
+    ])).toEqual(["system/default-app/default-app.tsx", "system/home/home.tsx"]);
   });
 
   it("ignores a URL that is not a pattern route", () => {
@@ -255,12 +275,12 @@ describe("coverage", () => {
 
   it("derives keys from the `system:` refs the runtime actually holds", () => {
     expect(requiredPatternKeys([
-      "system:system/home.tsx",
-      "system:system/default-app.tsx",
-    ])).toEqual(["system/default-app.tsx", "system/home.tsx"]);
+      "system:system/home/home.tsx",
+      "system:system/default-app/default-app.tsx",
+    ])).toEqual(["system/default-app/default-app.tsx", "system/home/home.tsx"]);
     // A source naming no route is not silently dropped from the required set:
     // it stays unmapped, and the caller refuses to run on it.
-    expect(unmappedPatternUrls(["system:system/home.tsx"])).toEqual([]);
+    expect(unmappedPatternUrls(["system:system/home/home.tsx"])).toEqual([]);
     expect(unmappedPatternUrls(["system:", "cf:published"]))
       .toEqual(["system:", "cf:published"]);
   });
@@ -271,10 +291,12 @@ describe("coverage", () => {
     // still exiting 0. The caller refuses to run on this, so the drift is
     // loud rather than a silently empty requirement.
     expect(unmappedPatternUrls([
-      "/api/patterns/system/home.tsx",
+      "/api/patterns/system/home/home.tsx",
       "/api/pattern/system/default-app.tsx",
     ])).toEqual(["/api/pattern/system/default-app.tsx"]);
-    expect(unmappedPatternUrls(["/api/patterns/system/home.tsx"])).toEqual([]);
+    expect(unmappedPatternUrls(["/api/patterns/system/home/home.tsx"])).toEqual(
+      [],
+    );
   });
 
   it("ignores covered keys nothing required", () => {
@@ -286,22 +308,39 @@ describe("coverage", () => {
     // "credits coverage only for a PINNED fixture" in
     // `pattern-vintage-run.test.ts`.)
     expect(uncoveredRequiredPatterns(
-      ["system/home.tsx"],
-      new Set(["system/home.tsx", "topics/main.tsx", "lunch-poll/main.tsx"]),
+      ["system/home/home.tsx"],
+      new Set([
+        "system/home/home.tsx",
+        "apps/topics/main.tsx",
+        "apps/lunch-poll/main.tsx",
+      ]),
     )).toEqual([]);
     // ...and a near-miss is still uncovered: matching is by exact key.
     expect(uncoveredRequiredPatterns(
-      ["system/home.tsx"],
-      new Set(["system/home.test.tsx"]),
-    )).toEqual(["system/home.tsx"]);
+      ["system/home/home.tsx"],
+      new Set(["system/home/home.test.tsx"]),
+    )).toEqual(["system/home/home.tsx"]);
   });
 });
 
 describe("collectVintages", () => {
+  it("throws when the tree cannot be read, and returns nothing when it is absent", async () => {
+    const root = await Deno.makeTempDir({ prefix: "vintage-collect-" });
+    try {
+      await Deno.writeTextFile(`${root}/file`, "");
+
+      await expect(collectVintages(`${root}/file`)).rejects
+        .toThrow(Deno.errors.NotADirectory);
+      expect(await collectVintages(`${root}/absent`)).toEqual([]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("finds fixtures at any depth and ignores non-fixtures", async () => {
     const root = await Deno.makeTempDir({ prefix: "vintage-collect-" });
     try {
-      const dir = `${root}/system/home.test.tsx/pinned`;
+      const dir = `${root}/system/home/home.test.tsx/pinned`;
       await Deno.mkdir(dir, { recursive: true });
       await Deno.writeTextFile(
         `${dir}/2026-07-29T16-33-28.000Z-${ID_A}.sqlite`,
@@ -315,7 +354,7 @@ describe("collectVintages", () => {
         tier: v.tier,
         identity: v.identity,
       }))).toEqual([
-        { testKey: "system/home.test.tsx", tier: PINNED, identity: ID_A },
+        { testKey: "system/home/home.test.tsx", tier: PINNED, identity: ID_A },
       ]);
     } finally {
       await Deno.remove(root, { recursive: true }).catch(() => {});
@@ -331,8 +370,8 @@ describe("collectVintages", () => {
 
 describe("reporting", () => {
   const failure = {
-    testKey: "system/home.test.tsx",
-    path: `${VINTAGES_DIR}/system/home.test.tsx/pinned/x.sqlite`,
+    testKey: "system/home/home.test.tsx",
+    path: `${VINTAGES_DIR}/system/home/home.test.tsx/pinned/x.sqlite`,
     detail: "materializing today's source over this vintage was REFUSED",
   };
 
@@ -340,12 +379,12 @@ describe("reporting", () => {
     // The report is the gate's entire interface to whoever trips it. A gate
     // that fails with an unclear message costs more than one that fails late.
     const report = reportUncovered([
-      "system/home.tsx",
-      "system/default-app.tsx",
+      "system/home/home.tsx",
+      "system/default-app/default-app.tsx",
     ]);
 
-    expect(report).toContain("system/home.tsx");
-    expect(report).toContain("system/default-app.tsx");
+    expect(report).toContain("system/home/home.tsx");
+    expect(report).toContain("system/default-app/default-app.tsx");
     expect(report).toContain("deno task pattern-vintage --update <test path>");
     // Says WHY it matters, not just what is missing — the reader is usually
     // someone who has never heard of this gate.
@@ -357,7 +396,7 @@ describe("reporting", () => {
 
     // The fixture is named after the TEST that produced it, so that is what a
     // failure line points at — the manifest says which patterns it covers.
-    expect(report).toContain("system/home.test.tsx");
+    expect(report).toContain("system/home/home.test.tsx");
     expect(report).toContain(failure.path);
     expect(report).toContain("REFUSED");
     // The stakes, because a red gate on a test fixture reads as ignorable and
@@ -368,11 +407,11 @@ describe("reporting", () => {
   it("reports every failure, not just the first", () => {
     const report = reportFailures([
       failure,
-      { ...failure, testKey: "system/default-app.tsx" },
+      { ...failure, testKey: "system/default-app/default-app.tsx" },
     ]);
 
     expect(report).toContain("2 vintage(s)");
-    expect(report).toContain("system/default-app.tsx");
+    expect(report).toContain("system/default-app/default-app.tsx");
   });
 
   it("passes only when there is nothing to report", () => {
@@ -382,8 +421,8 @@ describe("reporting", () => {
     const counts = { replayed: 2, candidates: 5, targets: 5 };
     expect(isClean([], [], counts)).toBe(true);
     expect(isClean([failure], [], counts)).toBe(false);
-    expect(isClean([], ["system/home.tsx"], counts)).toBe(false);
-    expect(isClean([failure], ["system/home.tsx"], counts)).toBe(false);
+    expect(isClean([], ["system/home/home.tsx"], counts)).toBe(false);
+    expect(isClean([failure], ["system/home/home.tsx"], counts)).toBe(false);
   });
 
   it("states what a PASS actually covered, targets included", () => {
@@ -476,7 +515,7 @@ describe("reporting", () => {
     expect(message).toContain("--update <test path>");
     // A concrete example, because "test path" alone is the thing people get
     // wrong — a pattern path names no test and captures nothing.
-    expect(message).toContain("topics/topics.test.tsx");
+    expect(message).toContain("apps/topics/topics.test.tsx");
     expect(message).toContain("not a pattern");
     // And the fact that removes the recurring confusion: nothing lists what
     // CI replays, so committing a fixture is the whole of adding one.
@@ -493,15 +532,15 @@ describe("reporting", () => {
     // function does not control. That is the property under test: hand it the
     // same pattern in four different situations and the advice must change.
     const from = (testKey: string, pinned = true) => ({ testKey, pinned });
-    const HOME = "system/home.tsx";
-    const TEST = "system/home.test.tsx";
+    const HOME = "system/home/home.tsx";
+    const TEST = "system/home/home.test.tsx";
     const recorded = new Map([[HOME, from(TEST)]]);
     const recordedAuto = new Map([[HOME, from(TEST, false)]]);
 
     // 1. Recorded by a fixture that FAILED. Capturing another would change
     //    nothing; the printed failure carries the remedy.
     const broken = reportUncovered([HOME], recorded, new Set([TEST]));
-    expect(broken).toContain("(recorded by system/home.test.tsx)");
+    expect(broken).toContain("(recorded by system/home/home.test.tsx)");
     expect(broken).toContain("FAILED this run");
     expect(broken).not.toContain("--pin");
     expect(broken).not.toContain("<test path>");
@@ -537,16 +576,16 @@ describe("reporting", () => {
     // All four at once, each keeping its own remedy rather than collapsing
     // into whichever branch happens to be evaluated first.
     const mixed = reportUncovered(
-      [HOME, "topics/main.tsx", "system/newcomer.tsx"],
+      [HOME, "apps/topics/main.tsx", "system/newcomer.tsx"],
       new Map([
         [HOME, from(TEST)],
-        ["topics/main.tsx", from("topics/topics.test.tsx", false)],
+        ["apps/topics/main.tsx", from("apps/topics/topics.test.tsx", false)],
       ]),
       new Set([TEST]),
     );
     expect(mixed).toContain("FAILED this run");
     expect(mixed).toContain(
-      "deno task pattern-vintage --pin topics/topics.test.tsx",
+      "deno task pattern-vintage --pin apps/topics/topics.test.tsx",
     );
     expect(mixed).toContain("--update <test path>");
   });
@@ -558,21 +597,21 @@ describe("reporting", () => {
     // concludes there are three things to do when there is one.
     const auto = (testKey: string) => ({ testKey, pinned: false });
     const message = reportUncovered(
-      ["topics/main.tsx", "topics/topic.tsx", "topics/list.tsx"],
+      ["apps/topics/main.tsx", "apps/topics/topic.tsx", "topics/list.tsx"],
       new Map([
-        ["topics/main.tsx", auto("topics/topics.test.tsx")],
-        ["topics/topic.tsx", auto("topics/topics.test.tsx")],
-        ["topics/list.tsx", auto("topics/topics.test.tsx")],
+        ["apps/topics/main.tsx", auto("apps/topics/topics.test.tsx")],
+        ["apps/topics/topic.tsx", auto("apps/topics/topics.test.tsx")],
+        ["topics/list.tsx", auto("apps/topics/topics.test.tsx")],
       ]),
     );
 
     const pins = message.split("\n").filter((line) => line.includes("--pin"));
     expect(pins).toEqual([
-      "  deno task pattern-vintage --pin topics/topics.test.tsx",
+      "  deno task pattern-vintage --pin apps/topics/topics.test.tsx",
     ]);
     // All three patterns are still LISTED — deduping the command must not
     // dedupe the inventory, or two of the three go unmentioned.
-    expect(message).toContain("topics/topic.tsx");
+    expect(message).toContain("apps/topics/topic.tsx");
     expect(message).toContain("topics/list.tsx");
   });
 
@@ -610,71 +649,14 @@ describe("reporting", () => {
     expect(report).toContain("/api/pattern/system/home.tsx");
     expect(report).toContain("requiredPatternKeys");
   });
-
-  it("fails the run when the process ends without a verdict", () => {
-    // The wiring, not just the message. This guard is the one piece of the
-    // gate whose failure mode is SILENCE — before it, a `home.tsx` that did
-    // not compile exited 0 with no output at all — so the listeners being
-    // attached to the right events, in the right order, is the assertion.
-    const target = new EventTarget();
-    const exits: number[] = [];
-    const logs: string[] = [];
-    armVerdictGuard(target, (code) => exits.push(code), (m) => logs.push(m));
-
-    const rejection = Object.assign(new Event("unhandledrejection"), {
-      reason: new Error("database disk image is malformed"),
-    });
-    target.dispatchEvent(rejection);
-    target.dispatchEvent(new Event("beforeunload"));
-
-    expect(exits).toEqual([1]);
-    // The rejection has to survive to the message: "something went wrong
-    // somewhere" would send the reader looking in the wrong place.
-    expect(logs[0]).toContain("database disk image is malformed");
-  });
-
-  it("still fails when no rejection was ever observed", () => {
-    // A promise that simply never settles leaves nothing to report, and that
-    // must still be a red rather than a pass for lack of evidence.
-    const target = new EventTarget();
-    const exits: number[] = [];
-    armVerdictGuard(target, (code) => exits.push(code), () => {});
-
-    target.dispatchEvent(new Event("beforeunload"));
-
-    expect(exits).toEqual([1]);
-  });
-
-  it("explains an end with no verdict, and carries the rejection", () => {
-    // Measured twice — a pattern that does not compile, and a truncated
-    // fixture — both leave the replay's promise pending forever while the real
-    // error surfaces as a rejection nobody awaits. The reader needs the
-    // rejection, or the message is "something went wrong somewhere".
-    const report = reportNoVerdict(
-      new Error("database disk image is malformed"),
-    );
-
-    expect(report).toContain("without reaching a verdict");
-    expect(report).toContain("database disk image is malformed");
-    // And it still says something useful when nothing was observed.
-    expect(reportNoVerdict(undefined)).toContain("unresolved await");
-  });
 });
 
 describe("path and error helpers", () => {
   it("strips the repo root and leaves an outside path alone", () => {
-    expect(relativeToRepo("/repo/packages/x.gz", "/repo")).toBe(
-      "packages/x.gz",
+    expect(relativeToRepo("/repo/runtime/x.gz", "/repo")).toBe(
+      "runtime/x.gz",
     );
     expect(relativeToRepo("/elsewhere/x.gz", "/repo")).toBe("/elsewhere/x.gz");
-  });
-
-  it("describes a non-Error throw without rendering it useless", () => {
-    // `String({})` is "[object Object]", which satisfies a truthiness check
-    // while destroying the reason — the class of bug that made an earlier
-    // rejection assertion pass for nothing.
-    expect(describeError(new Error("boom"))).toBe("boom");
-    expect(describeError("plain string")).toBe("plain string");
   });
 });
 
@@ -819,6 +801,161 @@ describe("stranded-state comparison", () => {
       expect(findings[0].lost, `${JSON.stringify(before)} should FAIL`)
         .toBe(true);
     }
+  });
+
+  describe("a schema held inline and then as a reference", () => {
+    const rowsWith = (
+      row: Record<string, JSONSchema>,
+      comment?: string,
+    ): JSONSchemaObj => ({
+      type: "array",
+      items: { $ref: "#/$defs/Row" },
+      $defs: {
+        Row: {
+          type: "object",
+          properties: row,
+          ...(comment === undefined ? {} : { $comment: comment }),
+        },
+      },
+    });
+
+    /** A reference to `schema`, whose documents the registry holds. */
+    const refTo = (schema: JSONSchemaObj) => {
+      const { rootRef, documents } = decomposeSchema(schema);
+      for (const [hash, document] of documents) {
+        registerSchemaDocument(hash, document);
+      }
+      return { $ref: rootRef };
+    };
+
+    const NOTE = "Docs inherited from intersection constituents. Missing docs";
+    const note = `${NOTE} for: { summary?: string | undefined; }.`;
+    const row = { name: { type: "string" }, note: { type: "string" } } as const;
+
+    it("reports nothing for the same content", () => {
+      const schema = rowsWith(row, note);
+      expect(strandedKeys({ schema }, { schema: refTo(schema) })).toEqual([]);
+    });
+
+    it("reports nothing when only the generator's inherited-docs note differs", () => {
+      const before = rowsWith(row, note);
+      const after = refTo(rowsWith(row, `${NOTE} for: { summary?: string; }.`));
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+      expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
+    });
+
+    it("reports nothing when the note differs after a comment the schema already held", () => {
+      const held = "Conflicting docs across declarations; using first";
+      const before = rowsWith(row, `${held} ${note}`);
+      const after = refTo(
+        rowsWith(row, `${held} ${NOTE} for: { summary?: string; }.`),
+      );
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+    });
+
+    it("grades a difference in the comment before the note as lost", () => {
+      const after = refTo(
+        rowsWith(row, `Conflicting docs for index signatures; ${note}`),
+      );
+      const findings = strandedKeys({
+        schema: rowsWith(row, `Conflicting docs across declarations; ${note}`),
+      }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("reports nothing when only a `description` differs", () => {
+      const before = { ...rowsWith(row), description: "Glazed rows." };
+      const after = refTo({ ...rowsWith(row), description: "Frosted rows." });
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+      expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
+    });
+
+    it("grades a dropped field as lost, with the note differing as well", () => {
+      const { note: _note, ...fewer } = row;
+      const after = refTo(
+        rowsWith(fewer, `${NOTE} for: { summary?: string; }.`),
+      );
+      const findings = strandedKeys({ schema: rowsWith(row, note) }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades any other `$comment` difference as lost", () => {
+      const after = refTo(rowsWith(row, "rejectedProperty"));
+      const findings = strandedKeys({
+        schema: rowsWith(row, "missingProperty"),
+      }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades a reference the registry cannot read as lost", () => {
+      const { rootRef } = decomposeSchema(
+        rowsWith(row, `${NOTE} unregistered.`),
+      );
+      const findings = strandedKeys({ schema: rowsWith(row, note) }, {
+        schema: { $ref: rootRef },
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades nothing in the place of a reference as lost", () => {
+      const findings = strandedKeys({ schema: refTo(rowsWith(row)) }, {});
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+  });
+
+  describe("a schema held inline on both sides", () => {
+    // A stored pattern carries its schemas written out, as `summaryIndex`'s
+    // `search` does in the committed `default-app.tsx` fixture.
+
+    const NOTE = "Docs inherited from intersection constituents. Missing docs";
+    const searchWith = (comment?: string) => ({
+      search: {
+        pattern: {
+          argumentSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            ...(comment === undefined ? {} : { $comment: comment }),
+          },
+        },
+      },
+    });
+
+    it("reports nothing when only the generator's inherited-docs note differs or goes", () => {
+      const before = searchWith(
+        `${NOTE} for: { summary?: string | undefined; }.`,
+      );
+      const after = searchWith(`${NOTE} for: { summary?: string; }.`);
+      expect(strandedKeys(before, after)).toEqual([]);
+      expect(strandedKeys(before, searchWith())).toEqual([]);
+    });
+
+    it("grades the comment before the note as lost when it goes", () => {
+      const held =
+        "Conflicting docs across intersection constituents; using first";
+      const findings = strandedKeys(
+        searchWith(`${held} ${NOTE} for: { summary?: string; }.`),
+        searchWith(),
+      );
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["search", true],
+      ]);
+    });
   });
 
   it("grades PARTIAL loss as lost, not merely changed", () => {
@@ -990,7 +1127,7 @@ describe("relaxing the stored schema for reading", () => {
   it("drops an `unknown` type wherever it sits", () => {
     // Both spellings, because a pattern reaches them differently: a DECLARED
     // `unknown` field lowers to the first, and an index signature
-    // (`[key: string]: unknown`, which `system/default-app.tsx` declares) to
+    // (`[key: string]: unknown`, which `system/default-app/default-app.tsx` declares) to
     // the second. Measured on the committed `default-app.tsx` fixture, the
     // second is what hid `summaryIndex`, which the result type does not name.
     expect(schemaRelaxedForComparison({
@@ -1102,29 +1239,126 @@ describe("relaxing the stored schema for reading", () => {
   });
 });
 
+describe("programAsRecorded()", () => {
+  const program = {
+    main: "/patterns/a/main.tsx",
+    files: [
+      { name: "/patterns/a/main.tsx", contents: "x" },
+      { name: "/patterns/a/data.json", contents: "{}" },
+    ],
+    dataFiles: ["/patterns/a/data.json"],
+  };
+
+  it("names the modules the way a recording under `packages/` did", () => {
+    expect(
+      programAsRecorded(program, "/packages/patterns/a/main.tsx", "/patterns/"),
+    ).toEqual({
+      main: "/packages/patterns/a/main.tsx",
+      files: [
+        { name: "/packages/patterns/a/main.tsx", contents: "x" },
+        { name: "/packages/patterns/a/data.json", contents: "{}" },
+      ],
+      dataFiles: ["/packages/patterns/a/data.json"],
+    });
+  });
+
+  it("names a moved module, and what it imports, as the recording did", () => {
+    const moved = {
+      main: "/patterns/system/home/home.tsx",
+      files: [
+        {
+          name: "/patterns/system/home/home.tsx",
+          contents: 'import M from "../fabrichat/manager.tsx";\n' +
+            'import { look } from "../profile-look/profile-look.ts";\n',
+        },
+        { name: "/patterns/system/fabrichat/manager.tsx", contents: "y" },
+      ],
+    };
+    expect(
+      programAsRecorded(
+        moved,
+        "/packages/patterns/system/home.tsx",
+        "/patterns/",
+      ),
+    ).toEqual({
+      main: "/packages/patterns/system/home.tsx",
+      files: [
+        {
+          name: "/packages/patterns/system/home.tsx",
+          contents: 'import M from "../fabrichat/manager.tsx";\n' +
+            'import { look } from "./profile-look.ts";\n',
+        },
+        { name: "/packages/patterns/fabrichat/manager.tsx", contents: "y" },
+      ],
+    });
+  });
+
+  it("returns a specifier as written where the move kept its module's relative position", () => {
+    // `system/fabrichat/` moved as one directory, so a specifier from one of
+    // its modules to another keeps the spelling it had, including a spelling
+    // that is not the shortest one.
+    const kept = {
+      main: "/patterns/system/fabrichat/room.tsx",
+      files: [{
+        name: "/patterns/system/fabrichat/room.tsx",
+        contents: 'import M from "./x/../manager.tsx";\n',
+      }],
+    };
+    expect(
+      programAsRecorded(
+        kept,
+        "/packages/patterns/fabrichat/room.tsx",
+        "/patterns/",
+      )
+        .files[0].contents,
+    ).toBe('import M from "./x/../manager.tsx";\n');
+  });
+
+  it("returns the program as it is for a recording that names it alike", () => {
+    expect(programAsRecorded(program, "/patterns/a/main.tsx", "/patterns/"))
+      .toBe(program);
+    expect(
+      programAsRecorded(program, "/api/patterns/a/main.tsx", "/patterns/"),
+    ).toBe(program);
+  });
+});
+
 describe("a recorded `main` maps back to a pattern key", () => {
   it("takes a repo path", () => {
     expect(
       patternKeyFromMain(
-        "/packages/patterns/system/home.tsx",
-        "/packages/patterns/",
+        "/patterns/system/home/home.tsx",
+        "/patterns/",
       ),
     )
-      .toBe("system/home.tsx");
+      .toBe("system/home/home.tsx");
+  });
+
+  it("takes a repo path recorded while the packages were under `packages/`", () => {
+    expect(
+      patternKeyFromMain("/packages/patterns/system/home.tsx", "/patterns/"),
+    )
+      .toBe("system/home/home.tsx");
+  });
+
+  it("takes a route recorded under the key a pattern had before it moved", () => {
+    expect(
+      patternKeyFromMain("/api/patterns/lunch-poll/main.tsx", "/patterns/"),
+    ).toBe("apps/lunch-poll/main.tsx");
   });
 
   it("takes the ROUTE the toolshed serves a pattern at", () => {
-    // Not hypothetical: `lunch-poll/main.tsx` loads `profile-create` by URL, so
+    // Not hypothetical: `apps/lunch-poll/main.tsx` loads `profile-create` by URL, so
     // its manifest records `/api/patterns/...`. Resolved against the repo root
     // that is `<repo>/api/patterns/...`, which does not exist — the replay
     // reported a pattern sitting right there as unresolvable.
     expect(
       patternKeyFromMain(
-        "/api/patterns/system/profile-create.tsx",
-        "/packages/patterns/",
+        "/api/patterns/system/profile-create/profile-create.tsx",
+        "/patterns/",
       ),
     )
-      .toBe("system/profile-create.tsx");
+      .toBe("system/profile-create/profile-create.tsx");
   });
 
   it("declines an /api path whose `/patterns/` is not the mount", () => {
@@ -1135,25 +1369,25 @@ describe("a recorded `main` maps back to a pattern key", () => {
     // is the one thing this gate must never produce.
     for (
       const main of [
-        "/api/v2/patterns/system/home.tsx",
-        "/api/pieces/x/patterns/system/home.tsx",
-        "/apifoo/patterns/system/home.tsx",
-        "/patterns/system/home.tsx",
+        "/api/v2/patterns/system/home/home.tsx",
+        "/api/pieces/x/patterns/system/home/home.tsx",
+        "/apifoo/patterns/system/home/home.tsx",
+        "/repo/patterns/system/home/home.tsx",
       ]
     ) {
-      expect(patternKeyFromMain(main, "/packages/patterns/"), main)
+      expect(patternKeyFromMain(main, "/patterns/"), main)
         .toBeUndefined();
     }
   });
 
   it("declines anything that is neither", () => {
-    expect(patternKeyFromMain(undefined, "/packages/patterns/"))
+    expect(patternKeyFromMain(undefined, "/patterns/"))
       .toBeUndefined();
-    expect(patternKeyFromMain("cfc.ts", "/packages/patterns/")).toBeUndefined();
+    expect(patternKeyFromMain("cfc.ts", "/patterns/")).toBeUndefined();
     // A path merely CONTAINING the marker is not a served route: the mount is
     // what makes it one, so the prefix has to be there.
     expect(
-      patternKeyFromMain("/elsewhere/patterns/x.tsx", "/packages/patterns/"),
+      patternKeyFromMain("/elsewhere/patterns/x.tsx", "/patterns/"),
     ).toBeUndefined();
   });
 });
@@ -1587,7 +1821,7 @@ describe("promoting a generation", () => {
 describe("what the capture and promote commands print", () => {
   it("tells --pin it needs exactly one test key", () => {
     expect(reportPinNeedsOneTestKey(0)).toContain("names the TEST");
-    expect(reportPinNeedsOneTestKey(0)).toContain("--pin topics");
+    expect(reportPinNeedsOneTestKey(0)).toContain("--pin apps/topics");
     expect(reportPinNeedsOneTestKey(3)).toContain("3 were named");
   });
 
@@ -1744,7 +1978,7 @@ describe("what the capture and promote commands print", () => {
     expect(unknownFlags(["--pin", "a/a.test.tsx"])).toEqual([]);
     // `--only=<value>` is the same flag as `--only`, written with its value
     // attached.
-    expect(unknownFlags(["--only=system/home.test.tsx"])).toEqual([]);
+    expect(unknownFlags(["--only=system/home/home.test.tsx"])).toEqual([]);
     for (const flag of KNOWN_FLAGS) expect(unknownFlags([flag])).toEqual([]);
 
     const message = reportUnknownFlags(["--capture-chnged"]);
@@ -1816,14 +2050,14 @@ describe("what the capture and promote commands print", () => {
 
   it("takes a fixture whose path holds a filter value, and only then", () => {
     const root = "/work/labs";
-    const relative = "packages/piece/test/vintages/system/home.test.tsx/" +
+    const relative = "runtime/piece/test/vintages/system/home/home.test.tsx/" +
       "pinned/2026-07-30T21-32-46.548Z-abc.sqlite";
     const fixture = `${root}/${relative}`;
     const takes = (only: string[]) => replayFilterTakes(fixture, root, only);
     expect(takes([])).toBe(true);
     expect(takes([relative])).toBe(true);
-    expect(takes(["system/home.test.tsx"])).toBe(true);
-    expect(takes(["topics/topics.test.tsx"])).toBe(false);
+    expect(takes(["system/home/home.test.tsx"])).toBe(true);
+    expect(takes(["apps/topics/topics.test.tsx"])).toBe(false);
     expect(takes(["topics", "system"])).toBe(true);
   });
 
@@ -1831,7 +2065,7 @@ describe("what the capture and promote commands print", () => {
     // A term that names part of the checkout's directory matches no
     // fixture.
     const fixture =
-      "/work/labs/packages/piece/test/vintages/a.test.tsx/x.sqlite";
+      "/work/labs/runtime/piece/test/vintages/a.test.tsx/x.sqlite";
     expect(replayFilterTakes(fixture, "/work/labs", ["labs"])).toBe(false);
   });
 

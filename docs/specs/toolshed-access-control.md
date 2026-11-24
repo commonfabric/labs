@@ -34,7 +34,7 @@ The ingest-channel control plane is different in kind, and is the first route
 family to close the authorization half of the gap described below. It does not
 merely authenticate the caller: it takes the verified DID and requires an
 explicit `OWNER` grant for it in the target space's ACL document before minting
-anything (`packages/toolshed/lib/space-authority.ts`). It is called by `cf
+anything (`runtime/toolshed/lib/space-authority.ts`). It is called by `cf
 ingest`, not by a fetch builtin, so its paths are deliberately **not** in
 `PROTECTED_TOOLSHED_FIRST_PARTY_ROUTES` — adding them would let any pattern mint
 a channel with the user's authority and read the one-time token back, which

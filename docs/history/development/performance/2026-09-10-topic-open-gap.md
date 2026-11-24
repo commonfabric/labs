@@ -92,11 +92,11 @@ selected topic.
 
 Relevant source locations:
 
-- [`PiecesController.getPieceCell`](../../../../packages/piece/src/ops/pieces-controller.ts)
+- [`PiecesController.getPieceCell`](../../../../runtime/piece/src/ops/pieces-controller.ts)
   and `getPieceRegistry` perform the client syncs.
-- [`SpaceServer.#loadDemandedStructure`](../../../../packages/runner/src/executor/space-server.ts)
+- [`SpaceServer.#loadDemandedStructure`](../../../../runtime/runner/src/executor/space-server.ts)
   responds to root-demand arrivals.
-- [`Server.#extendWatchGraphs`](../../../../packages/memory/v2/server.ts) stages
+- [`Server.#extendWatchGraphs`](../../../../runtime/memory/v2/server.ts) stages
   watch additions through tracked-graph cloning and extension.
 
 ## Separate stall: repeated client producer validation
@@ -148,10 +148,10 @@ Read and commit safety checks must remain effective; deleting those checks would
 reopen the unavailable-input overwrite risk.
 
 Relevant source locations are
-[`ViewReplicationClient.producers` and `producerCurrent`](../../../../packages/runner/src/view-replication-client.ts),
-[`SchedulerFacade.prepareViewAction`](../../../../packages/runner/src/scheduler/facade.ts),
+[`ViewReplicationClient.producers` and `producerCurrent`](../../../../runtime/runner/src/view-replication-client.ts),
+[`SchedulerFacade.prepareViewAction`](../../../../runtime/runner/src/scheduler/facade.ts),
 and
-[`validateLocalReadBasis`](../../../../packages/runner/src/storage/local-read-policy.ts).
+[`validateLocalReadBasis`](../../../../runtime/runner/src/storage/local-read-policy.ts).
 
 ## Evidence and limits
 

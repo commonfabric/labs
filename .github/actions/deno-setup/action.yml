@@ -108,6 +108,19 @@ runs:
         dirname "$bin" >> "$GITHUB_PATH"
         "$bin" --version
 
+    # `deno compile` downloads its matching `denort` archive on first use and
+    # keeps it under `DENO_DIR/dl/release/v<version>`. The dependency cache can
+    # be created by a job that never compiles, and cache entries are immutable,
+    # so the compiler runtime has an exact cache of its own.
+    - name: 📦 Cache Deno compiler runtime ${{ steps.resolve.outputs.version }}
+      if: inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cache/deno/dl/release/v${{ steps.resolve.outputs.version }}
+          ~/Library/Caches/deno/dl/release/v${{ steps.resolve.outputs.version }}
+        key: denort-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.version }}
+
     # `actions/cache` evaluates its inputs again during its post-job save. Resolve
     # the dependency hash before tests can fill the checkout with raw coverage
     # profiles, so that save reads a stable step output instead of walking the

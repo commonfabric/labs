@@ -35,11 +35,9 @@ runs Toolshed on `localhost:8000`; use `dev-local` for the shell, not
 `dev`). Then:
 
 ```bash
-# Create a unique dev key. Redirect from `deno run -A packages/cli/mod.ts`,
-# never `deno task cf` — the task wrapper prints ANSI preamble that corrupts
-# the key file. (Chapter 10 covers the shared `implicit trust` dev identity
-# and the narrow case where you'd derive it instead.)
-deno run -A packages/cli/mod.ts id new > cf.key
+# Create a unique dev key. (Chapter 10 covers the shared `implicit trust` dev
+# identity and the narrow case where you'd derive it instead.)
+deno task cf id new > cf.key
 
 export CF_IDENTITY=./cf.key
 export CF_API_URL=http://localhost:8000
@@ -55,7 +53,7 @@ tab completion:
 
 ```bash
 # zsh: add to ~/.zshrc after compinit (bash: swap zsh -> bash, use ~/.bashrc)
-source <(deno run -A packages/cli/mod.ts completion zsh)
+source <(deno run -A runtime/cli/mod.ts completion zsh)
 ```
 
 It completes commands and flags offline, and — once `CF_IDENTITY`/`CF_API_URL`
@@ -124,12 +122,14 @@ pattern. That call is the whole declaration: `setsrc`, `check`, `test` and
 follow what the source imports. Nothing names the file a second time on a
 command line.
 
-A data file is stored verbatim beside the source. Deployment never parses,
-type-checks, or compiles it, and no pattern can import it. It must be UTF-8
-text, and it must sit inside the deployment root, which the CLI infers to cover
-the main entry, every test entry, and every data file. Like a test entry, a data
-file is part of the source revision's identity, so changing one creates a new
-revision, and each revision keeps its own bytes.
+A data file is stored beside the source, and `cf piece getsrc` returns it byte
+for byte. Deployment never parses, type-checks, or compiles it, and no pattern
+can import it. It must be UTF-8
+text, or an image, a font, or a sound that `dataFile.url()` reads (below), and
+it must sit inside the deployment root, which the CLI infers to cover the main
+entry, every test entry, and every data file. Like a test entry, a data file is
+part of the source revision's identity, so changing one creates a new revision,
+and each revision keeps its own bytes.
 
 The bytes travel with the pattern's code, so the read is immediate and returns
 the same text on every load of a given revision. Reading at module scope rather
@@ -147,6 +147,32 @@ interface Cities {
 
 const parsed = JSON.parse(dataFile("./data/cities.json")) as Cities;
 ```
+
+An image, a font, or a sound has no text, so `dataFile()` refuses one.
+`dataFile.url()` reads it as a base64 `data:` URL carrying its media type, such
+as `data:image/png;base64,…`, which is the form an iframe guest can load (see
+"Images and other assets" in the
+[iframe pattern guide](../common/ai/iframe-pattern-guide.md)).
+`dataFile.urls()` reads every such file directly inside a directory, as a
+record keyed by file name without the extension:
+
+```tsx
+// Shown for illustration only.
+const GLAZE = dataFile.url("./assets/glaze.png");
+const ASSETS = dataFile.urls("./assets"); // { glaze: "data:image/png;…", … }
+```
+
+The extension decides which files these are: `.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`, `.avif`, `.svg`, `.woff2`, `.woff`, `.ttf`, `.otf`, `.mp3`, `.ogg`, and
+`.wav`. An SVG is text, so `dataFile()` returns its markup and `dataFile.url()` its
+URL. Both calls declare what they read, as `dataFile()` does: a build attaches
+the file, or lists the directory and attaches each such file in it. `cf piece
+getsrc` writes an image back as the bytes it was read from.
+
+A string of 1,024 characters or more that a data-file read returns and a
+pattern passes into its view, as an iframe pattern passes its guest's document
+and script, is stored once in the space rather than once in each piece. A
+shorter one is stored inline in each piece.
 
 A file the source cannot name — one read by a computed path, or one that ships
 with a pattern that does not read it — is attached with a repeatable
@@ -228,7 +254,7 @@ streams, same cells. The browser shell is just one more client.
 Tests are patterns that test patterns: instantiate the subject, alternate
 `action` steps and `assert(() => boolean)` assertions, and return them
 under the reserved `[TESTS]` key. From
-`packages/patterns/counter/counter.test.tsx`:
+`patterns/examples/counter/counter.test.tsx`:
 
 ```tsx
 // Shown at module scope.
@@ -257,8 +283,8 @@ export default pattern(() => {
 ```
 
 ```bash
-deno task cf test packages/patterns/counter/counter.test.tsx --verbose
-deno task cf test packages/patterns/my-pattern/      # all tests in a directory
+deno task cf test patterns/examples/counter/counter.test.tsx --verbose
+deno task cf test patterns/my-pattern/      # all tests in a directory
 ```
 
 Notice what makes the subject *testable*: dual type parameters on
@@ -268,7 +294,11 @@ Chapter 3 insisted on them. Keep assertions deterministic — no
 (`fetchJson` and friends) can still be tested deterministically: export a
 module-scope `fetchMocks` array from the test file and the harness injects
 it as the runtime's fetch (worked examples in
-`packages/patterns/examples/fetch-mock.test.tsx`). The guidance from the
+`patterns/examples/fetch-json/fetch-mock.test.tsx`). Patterns that ask a
+language model are tested the same way: a module-scope `llmMocks` array
+states each answer the model gives, and a request the test states no answer
+for fails the test (see `docs/common/workflows/pattern-testing.md`). The
+guidance from the
 canonical guide: primary verification is still runtime behavior; write
 tests for logic that's awkward or expensive to verify by clicking.
 

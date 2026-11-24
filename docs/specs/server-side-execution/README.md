@@ -259,8 +259,10 @@ hop and the rebuild must design it deliberately:
 Exactly two states, one flag: `EXPERIMENTAL_SERVER_EXECUTION`
 (RuntimeOptions key `serverExecution`), named deliberately unlike
 v1's `SERVER_PRIMARY_EXECUTION` so the archived docs never alias it.
-OFF is today's behavior byte-for-byte; ON is
-the full v2 posture. **No shippable intermediate states** — partial flag
+OFF runs derivations and handlers on the client. Documents of all scopes
+synchronize by default; the opt-in `localSessionDocuments` flag keeps session
+documents in that client's replica. ON is the full v2 posture, including session
+document synchronization for server execution. **No shippable intermediate states** — partial flag
 combinations exist only as debugging affordances during bring-up, and the
 v1 dial set (eight interlocking dials) is the cautionary tale. Both halves
 of any coupled behavior (e.g. "client suppresses egress" and "server
@@ -269,7 +271,7 @@ and silently dropped side effects in the OFF arm.
 
 ### 3.5 Built-in coverage — every one, placed
 
-The full inventory (from `packages/runner/src/builtins/`), so nothing is
+The full inventory (from `runtime/runner/src/builtins/`), so nothing is
 discovered mid-rebuild. Five placement classes:
 
 | class | built-ins | runs on | client speculation |
@@ -403,7 +405,7 @@ session-scoped client act. The wiring:
   another stream's sends (no cross-stream head-of-line hold), while
   each stream's own fired order stays exact. The default posture 20/s
   sustained, 20 burst, is a dial —* `DEFAULT_EVENT_APPEND_PACING` *in
-  `packages/runner/src/storage/event-append-queue.ts` — flagged for the
+  `runtime/runner/src/storage/event-append-queue.ts` — flagged for the
   owner. The OFF arm never constructs the queue.*
 
 ## 4. Measured constraints (what the learning run bought)

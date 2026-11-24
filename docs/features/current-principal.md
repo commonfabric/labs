@@ -28,8 +28,8 @@ being handled.
 A pattern treats `undefined` as "no one", and refuses whatever needs someone.
 
 The choice is made in one place, `Runtime.actingPrincipalFor()` in
-`packages/runner/src/runtime.ts`, and `currentPrincipal()` is a frame check in
-front of it (`packages/runner/src/builder/current-principal.ts`). Runtime code
+`runtime/runner/src/runtime.ts`, and `currentPrincipal()` is a frame check in
+front of it (`runtime/runner/src/builder/current-principal.ts`). Runtime code
 that needs the actor of a handler run calls that method rather than choosing
 again.
 
@@ -99,10 +99,25 @@ They part in two places.
 
 - A served run with no actor keeps the ambient trust snapshot, whose principal
   is the serving runtime's identity, where `currentPrincipal()` returns
-  `undefined`. A write of such a run that would mint a placeholder claim, on a
-  position that declares no `ownerPrincipal`, is refused rather than labeled
-  with that identity. A value it initializes on nobody's behalf mints no claim
-  and is admitted.
+  `undefined`. A write under that snapshot that would mint a placeholder
+  claim is refused rather than labeled with that identity. On a position that
+  declares an `ownerPrincipal`, that includes a write which would bind the
+  serving runtime as the field's owner or match it against one, so such a run
+  can neither claim an unowned field nor write a field a user owns. A value it
+  initializes on nobody's behalf is admitted, except under a literal owner
+  DID, which every write must come from, and mints no claim of the run's and
+  binds no owner, with one exception: where the piece records its creator,
+  which it does while the `pieceCreatorRecord` experimental option is on,
+  such a value at a placeholder owner binds the recorded creator, a claim the
+  record vouches for rather than the run's snapshot
+  ([`cfc-protected-initialization.md`](../specs/cfc-protected-initialization.md),
+  "Attribution of an initialized value"). A reference the runtime stages at
+  an owner position, the result document's binding to an argument field,
+  writes nothing of the value and is admitted the same way. A run of the serving loop's own that it attaches a principal's
+  snapshot to, as the space-root ensure attaches the owner it resolves, acts
+  for that principal, and so does a piece start it defers, which takes that
+  run's snapshot. A demanded derivation with no actor carries its demander's
+  snapshot for its reads but acts for no one, and is refused the same writes.
 - A host embedding the runtime can supply its own trust snapshot naming a
   different acting principal. The placeholder then resolves to that principal,
   and `currentPrincipal()` still returns the identity the runtime authenticates
@@ -168,26 +183,40 @@ Until both are settled, a pattern shows the viewer by resolving `#profile`, as
 
 ## Tests
 
-`packages/runner/test/current-principal.test.ts` covers the helper on both
+`runtime/runner/test/current-principal.test.ts` covers the helper on both
 kinds of runtime — including the run on another user's instance, the run with no
 actor, and the read scope it leaves alone — and the function in each kind of
 frame, in a compiled pattern, and against an `authored-by` claim written in the
 same handler. The `currentPrincipal()` case in
-`packages/runner/test/executor-trust-attribution.test.ts` drives a handler
+`runtime/runner/test/executor-trust-attribution.test.ts` drives a handler
 through the live serving loop, with a payload naming someone else.
-`packages/runner/test/cfc/authored-by-writer.test.ts` covers the claim on a
+`runtime/runner/test/cfc/authored-by-writer.test.ts` covers the claim on a
 position that declares a writer and no gesture: on a client, on a served run
 with an actor and with none, reached through another handler's `send()`, and
-against claims naming someone other than the acting principal.
+against claims naming someone other than the acting principal. Its owner cases
+cover a served run with no actor at an `ownerPrincipal` position: refused a
+write to a field with no owner yet and to one a user owns, refused an
+initialization attributed to it, and admitted, binding no one, an
+initialization on nobody's behalf. Its serving-loop cases cover a run of the
+loop's own under a principal's snapshot, which labels what it initializes for
+that principal and binds them as owner, and a demanded derivation with no
+actor under its demander's snapshot, which is refused both.
+`runtime/runner/test/cfc-creator-owner-binding.test.ts` covers a release
+adding an owner field to a piece that records its creator, installed by a
+serving runtime acting for no one among others, which binds the creator.
+`runtime/runner/test/executor-space-root-ensure.test.ts` covers the root's
+deferred start taking the owner's snapshot from the ensure, and
+`runtime/runner/test/executor-effect-channel.test.ts` a served handler's
+navigation target, returned or only called, taking the firing actor's.
 
-`packages/runner/test/cfc-current-principal-confidentiality.test.ts` covers the
+`runtime/runner/test/cfc-current-principal-confidentiality.test.ts` covers the
 reader binding, under "a document created under a labeled parent": an item
 another principal appends to an owner-private list, a document nested in it,
 the owner's own append, a list whose policy names no `User` reader, an
 existing document linked into the list, both one stored as present but
 `undefined` and one whose id the transaction also creates in another scope,
 and an existing store another principal writes.
-`packages/patterns/integration/owner-private-inbox-multi-runtime.test.ts`
+`patterns/integration/owner-private-inbox-multi-runtime.test.ts`
 drives the same append through compiled patterns in separate runtimes, under
 either server-execution posture. With server execution on, it also refuses a
 stranger's served copy of the appended items.

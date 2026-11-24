@@ -91,8 +91,8 @@ smaller identity key in UTF-8 order. Identity keys include the occurrence
 number, so no two candidates in one aggregate tie under that order. Selecting
 the first element of a totally ordered set is associative and commutative.
 
-[`aggregate-sum.test.ts`](../../packages/runner/test/aggregate-sum.test.ts) and
-[`chooseAggregateCandidate.test.ts`](../../packages/runner/test/builtins/chooseAggregateCandidate.test.ts)
+[`aggregate-sum.test.ts`](../../runtime/runner/test/aggregate-sum.test.ts) and
+[`chooseAggregateCandidate.test.ts`](../../runtime/runner/test/builtins/chooseAggregateCandidate.test.ts)
 check both properties over seeded inputs in shuffled orders and random
 groupings. A seeded search finds the counterexamples it draws; it does not show
 that none exists.
@@ -143,7 +143,7 @@ to every element's content.
 
 Generic `reduce` remains the full-rerun option for order-dependent folds. Lower
 read counts alone do not establish a speedup: compare committed updates through
-settlement with `packages/runner/test/aggregate.bench.ts`. The benchmark covers
+settlement with `runtime/runner/test/aggregate.bench.ts`. The benchmark covers
 all six names at 10, 100, and 1,000 linked rows, including predicate/score
 maintenance, and excludes fixture construction and disposal from update timing.
 
@@ -151,7 +151,7 @@ For a paired comparison, run the standalone report:
 
 ```sh
 ENV=test deno run --allow-ffi --allow-env --allow-read \
-  --allow-write=/tmp,/var/folders packages/runner/test/aggregate-comparison.ts
+  --allow-write=/tmp,/var/folders runtime/runner/test/aggregate-comparison.ts
 ```
 
 It emits JSON lines with initialization counters, update counters, and twelve

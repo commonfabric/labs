@@ -27,9 +27,9 @@ actually instantiates.
 
 ## Tier 1 — contract compatibility
 
-Compiles **every** authored pattern under `packages/patterns/`, derives its
+Compiles **every** authored pattern under `patterns/`, derives its
 argument and result schemas, and proves the current contract can be applied
-over every contract recorded for it under `packages/patterns/baselines/`.
+over every contract recorded for it under `patterns/baselines/`.
 There is no opt-in: a pattern is covered by existing.
 
 Baselines are **append-only**, enforced mechanically by
@@ -65,13 +65,22 @@ repository decides to ship is declared instead, in
   An entry is bounded twice. It forgives specific `(pattern, baseline)` pairs,
   so the contract recorded once the break ships is a baseline no entry names
   and the next change to that pattern is gated again. Within a pair it forgives
-  only the schema paths it names: one finding carries every issue the proof
-  found against that baseline, so accepting by pair alone would suppress an
-  unintended break landing beside the decided one — and `--update` would then
-  record that contract. A finding blaming any unnamed path stands, and so does
-  one whose paths cannot be parsed. What the proof reports is at most one issue
-  per role, so a second problem in a role whose issue is an accepted path can
-  still hide behind it; name as few paths as the removal needs.
+  only the schema paths it names. The proof reports every issue it finds
+  against a baseline, in both roles, each as a finding blaming one path: each
+  field of an object is judged on its own, and a node that fails at its own
+  level — a changed type, `asCell`, `ifc`, or `scope`, or a union alternative
+  the candidate no longer accepts — is reported once and not descended. So an
+  issue at an unnamed path stands beside the forgiven ones, and so does one
+  whose path cannot be parsed; accepting by pair alone would suppress an
+  unintended break landing beside the decided one, and `--update` would then
+  record that contract.
+
+  An entry names exactly the paths its pairs blame. A named path that none of
+  the entry's pairs blames fails the run, the way a pair that needs no
+  forgiving does: kept, it would silently forgive a later break at that path
+  against the listed baselines, including the one recorded just before the
+  break, which is where an unintended second break in the same change is
+  judged.
 
   An entry also names its decision record under `docs/history/` (`record`),
   and may not name a required pattern — the home and default-app roots update
@@ -79,14 +88,15 @@ repository decides to ship is declared instead, in
   are enforced whenever either gate runs
   (`tasks/pattern-break-registry-guards.ts`).
 
-  The run prints every pair it forgave, and fails on one that no longer needs
-  forgiving, so the list can only shrink. That audit is asked per pattern rather
-  than of the whole list, because CI divides the patterns among its lanes, each
-  lane passing the ones it runs with `--only` — the run that examined a pattern
-  is the one that can judge its entries, and the runs between them cover all of
-  them. A run given every pattern passes no `--only`. An entry whose pattern
-  file does not exist keeps that pattern among the ones the gate is given, and
-  the run given the pattern fails on the entry.
+  The run prints every pair it forgave, with how many issues, and fails on a
+  pair or a named path that no longer needs forgiving, so the list can only
+  shrink. That audit is asked per pattern rather than of the whole list, because
+  CI divides the patterns among its lanes, each lane passing the ones it runs
+  with `--only` — the run that examined a pattern is the one that can judge its
+  entries, and the runs between them cover all of them. A run given every
+  pattern passes no `--only`. An entry whose pattern file does not exist keeps
+  that pattern among the ones the gate is given, and the run given the pattern
+  fails on the entry.
 
   Reaching for any of this is a decision to strand data on running pieces; a
   break that also strands state needs the Tier 2 entry below.
@@ -110,10 +120,13 @@ repository decides to ship is declared instead, in
   unconditionally are the ones that can least afford it. For those, fixing
   the pattern is the only move.
 
-An already-recorded contract is not re-validated. It was proved when recorded
-and has not changed since, and both the definition validator and the subset
-proof blow up combinatorially on some real schemas — so the steady state, where
-no contract changed, costs nothing beyond the compile.
+An already-recorded contract is not validated on its own. It was validated when
+recorded and has not changed since, apart from the module hashes described
+under "Write permissions and module hashes" below, which no validation reads,
+and the definition validator blows up combinatorially on some real schemas. The
+subset proof against every other baseline still runs each time, and it
+validates both of the contracts it compares, so a pattern with many baselines
+costs a proof per baseline even when no contract changed.
 
 Compatibility is directional by role. Existing invocations must still satisfy
 the candidate argument schema, so a newly required argument needs a default or
@@ -132,7 +145,13 @@ below its stream marker (a newly required event field is rescued by a valid
 default the candidate carries, including a newly introduced one), and a
 durable-link proof whose target declares a default below a cell. The metadata
 itself must still compare equal across an update: a changed `asCell`, `scope`,
-`readOnly`, or `writeOnly` is refused on its own. Value constraints that
+`readOnly`, or `writeOnly` is refused on its own. The one exception is in an
+argument contract or a link proof: a node that declared no cell becoming a
+comparable one (`asCell: ["comparable"]`, with no scope). A comparable handle
+says how a reader receives the value, as a reference it can compare, not what
+is stored there or what the node accepts, and it writes nothing, so every value
+the node held reads under it. A result contract keeps the marker exact either
+way, since its proof reads from the candidate to the previous contract. Value constraints that
 default insertion can invalidate, such as `maxProperties`, continue to require
 equal defaults beneath them.
 
@@ -147,6 +166,74 @@ exemption for newly required fields that a pattern generates itself. A field
 the candidate event newly requires therefore needs a valid default, exactly
 as an argument does. Dispatch fills missing fields in a present event object
 from defaults; an entirely absent event payload remains absent.
+
+### Write permissions and module hashes
+
+A field in a schema can carry a write permission meaning "only this handler may
+write here". The compiler records the handler by the content hash of the module
+it is written in:
+
+```json
+{
+  "type": "boolean",
+  "ifc": {
+    "writeAuthorizedBy": {
+      "__ctWriterIdentityOf": {
+        "file": "/patterns/demo/main.tsx",
+        "path": ["setFlag"],
+        "moduleIdentity": "UVJh2ChHuLkknYrVet0Iu"
+      }
+    }
+  }
+}
+```
+
+`path` names the handler, and it is part of the contract. `moduleIdentity` is
+a hash of the module's source, so any edit to that module, even to a comment,
+changes it, and with it the contract of every pattern that imports the module.
+`file` is the module's path as one particular build spelled it, which changes
+with the build. Neither matters to a running piece: the runtime checks the live
+writer when a write happens, and never holds a stored contract to either value.
+These two, and the older `bundleId`, are the permission's **volatile
+identity**. The same applies to each permission listed in an
+`ifc.writePolicyAnyOf`.
+
+So both checks ignore the volatile identity:
+
+- **Is the current contract already recorded?** The gate hashes the contract
+  with the volatile identity removed (`contractHash` in
+  `tasks/pattern-compat-lib.ts`). An edit that only changes a writer's module
+  hash therefore produces no new contract and needs no new baseline. Two pull
+  requests that each make such an edit cannot leave `main` with a contract no
+  baseline records, which they could if each had to record the contract as it
+  looked on its own branch.
+- **Can the current contract replace every old one?** The subset proof removes
+  the volatile identity from both contracts before it starts, and from each
+  shared schema document that a `$ref` brings in, using
+  `schemaWithoutVolatileWriterIdentity` in
+  `runtime/piece/src/schema-compatibility.ts`.
+
+The proof removes it before it starts, rather than ignoring it only when it
+compares two permissions, because three parts of the proof look at whole
+schemas. It reuses one in-memory copy for schemas whose content is identical,
+it stops recursing when it meets a pair of schemas it is already checking,
+which it recognizes by object identity, and it gives up on unions nested more
+than eight deep. If those three saw the module hash, two otherwise identical
+definitions with different hashes would be two different objects to the proof,
+and two contracts that differ only in a hash could recurse to different depths
+and get different answers. With the hash removed first, they get the same
+answer and the same issues against every other contract. That is what makes
+it safe for the gate to treat them as one contract.
+
+One case still counts as different. A `$ref` can point at a shared schema
+document by that document's own content hash, so if two such documents differ
+only in a writer's module hash, the two references differ, and the contracts
+holding them are different contracts to both the gate and the proof.
+
+A baseline file holds the contract as compiled, module hashes included. The
+hash in its file name is for people reading the directory: the gate recomputes
+every baseline's hash from the file's contents, so a name that does not match
+the recomputed hash is not an error.
 
 ## Tier 2 — state continuity
 
@@ -292,11 +379,11 @@ the candidate for closing that gap.
 ## Fixture layout
 
 ```
-packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite
-packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<did>.sqlite
+runtime/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite
+runtime/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<did>.sqlite
 ```
 
-- **`<test key>`** is the path under `packages/patterns/` of the **test** that
+- **`<test key>`** is the path under `patterns/` of the **test** that
   produced the fixture. Keyed by test rather than by pattern because a test
   need not be named after what it drives, and one fixture routinely covers
   several patterns.
@@ -313,7 +400,7 @@ packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<d
   not have. It is part of the fixture, not a fixture itself, so
   `parseVintagePath` declines everything inside one.
 
-The tree is deliberately **not** under `packages/patterns/`.
+The tree is deliberately **not** under `patterns/`.
 `tasks/build-binaries.ts` passes that whole directory to `deno compile
 --include`, which is recursive over non-source files, so fixtures would ship
 inside the toolshed binary; and `PatternsServer` serves the same directory by
@@ -348,14 +435,22 @@ not history.
 
 ```
 deno task pattern-vintage                                  # replay every fixture (what CI runs)
-deno task pattern-vintage --update topics/topics.test.tsx  # capture a first pinned fixture
+deno task pattern-vintage --update apps/topics/topics.test.tsx  # capture a first pinned fixture
 deno task pattern-vintage --capture-changed                # capture a generation where due
-deno task pattern-vintage --pin topics/topics.test.tsx     # promote the newest generation
+deno task pattern-vintage --pin apps/topics/topics.test.tsx     # promote the newest generation
 ```
+
+While it runs, the command prints a line on standard error as each step begins,
+numbered against the count of such steps: each fixture's replay
+(`fixture 2/9: …`), each recorded instantiation in that fixture that today's
+source can be applied to (`  target 3/14: …`), and each test run to capture a
+fixture (`capture 1/2: …`). A line is printed only once the step before it has
+ended, so the last line names the step most recently begun. Nothing is printed
+while one long step runs, such as one slow test run.
 
 `--update` and `--pin` name a **test** path, never a pattern path: a fixture is
 produced by running a test and covers whatever that test instantiates.
-`system/home.tsx` names no test and captures nothing.
+`system/home/home.tsx` names no test and captures nothing.
 
 There is no bare `--update` and no list of what CI replays. Every fixture under
 the vintages tree is replayed by the plain command, so committing a captured
@@ -509,7 +604,7 @@ specification:
   during it (CFC enforcement stays at its `enforce-strict` default), and the
   heal above is the parent re-creating children, not the production
   roll-forward repair — that path has its own assertion in
-  `packages/runner/test/pattern-pointer-unloadable-swap.test.ts`;
+  `runtime/runner/test/pattern-pointer-unloadable-swap.test.ts`;
   and what an adopted fixture pins is old *source*, not old *storage format* —
   the memory migration chain runs once at adopt time, so the committed file
   already carries today's schema and CI does not re-exercise the migrations.

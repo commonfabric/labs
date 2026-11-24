@@ -1,0 +1,115 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "title",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "items": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "log": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "selectedItem": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Item"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "items",
+      "selectedItem",
+      "log"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/gideon-tests/test-cell-equals-diagnostic.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "title",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "items": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "log": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "selectedItem": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Item"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "items",
+      "selectedItem",
+      "log"
+    ],
+    "type": "object"
+  }
+}

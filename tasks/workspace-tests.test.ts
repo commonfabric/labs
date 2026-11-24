@@ -13,16 +13,26 @@ import {
   junitCapableMembers,
   leafFlags,
   leafTask,
+  main,
   memberRecordingArguments,
   memberTestTask,
+  readLeafReport,
   readWorkspaceMembers,
   recordingSpool,
+  type RootTestHost,
+  runRootTestTask,
   runTests,
   testConcurrency,
   testPackage,
 } from "./workspace-tests.ts";
+import { expect } from "@std/expect";
 import * as path from "@std/path";
-import { preloadArgument } from "@commonfabric/test-support/records";
+import {
+  preloadArgument,
+  RECORD_SCHEMA_VERSION,
+  RECORDS_DIR_VARIABLE,
+} from "@commonfabric/test-support/records";
+import type { RunRecording } from "./test-records.ts";
 
 // Write a minimal workspace under `dir`: a root deno.jsonc listing the
 // members, and one directory per package whose `test` task records that it
@@ -35,14 +45,14 @@ async function makeWorkspace(
   await Deno.writeTextFile(
     `${dir}/deno.jsonc`,
     JSON.stringify({
-      workspace: packageNames.map((name) => `./packages/${name}`),
+      workspace: packageNames.map((name) => `./runtime/${name}`),
       tasks: rootTasks,
     }),
   );
   for (const name of packageNames) {
-    await Deno.mkdir(`${dir}/packages/${name}`, { recursive: true });
+    await Deno.mkdir(`${dir}/runtime/${name}`, { recursive: true });
     await Deno.writeTextFile(
-      `${dir}/packages/${name}/deno.jsonc`,
+      `${dir}/runtime/${name}/deno.jsonc`,
       JSON.stringify({ tasks: { test: "echo ok > ran.txt" } }),
     );
   }
@@ -55,7 +65,7 @@ async function ranPackages(
   const ran: string[] = [];
   for (const name of packageNames) {
     try {
-      await Deno.stat(`${dir}/packages/${name}/ran.txt`);
+      await Deno.stat(`${dir}/runtime/${name}/ran.txt`);
       ran.push(name);
     } catch {
       // no marker: the package's test task did not run
@@ -74,13 +84,13 @@ Deno.test("readWorkspaceMembers reads the workspace list from a JSONC manifest",
       configPath,
       `{
   // workspace packages
-  "workspace": ["./packages/a", "./packages/b"]
+  "workspace": ["./runtime/a", "./runtime/b"]
 }
 `,
     );
     assertEquals(await readWorkspaceMembers(configPath), [
-      "./packages/a",
-      "./packages/b",
+      "./runtime/a",
+      "./runtime/b",
     ]);
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -109,9 +119,9 @@ Deno.test("readWorkspaceMembers rejects a manifest declaring no workspace", asyn
 });
 
 Deno.test("assertTaskTestsIncluded requires tasks in the root workspace", () => {
-  assertTaskTestsIncluded(["./packages/api", "./tasks"]);
+  assertTaskTestsIncluded(["./base/api", "./tasks"]);
   assertThrows(
-    () => assertTaskTestsIncluded(["./packages/api"]),
+    () => assertTaskTestsIncluded(["./base/api"]),
     Error,
     "workspace must include tasks",
   );
@@ -139,20 +149,20 @@ async function withEnv<T>(
   }
 }
 
-// Run `fn` with the console's errors captured rather than printed, and
+// Run `fn` with the console's lines captured rather than printed, and
 // return them alongside `fn`'s result.
-async function capturingErrors<T>(
+async function capturingOutput<T>(
   fn: () => Promise<T>,
-): Promise<{ result: T; errors: string[] }> {
-  const errors: string[] = [];
-  const originalError = console.error;
-  console.error = (...values: unknown[]) => {
-    errors.push(values.map(String).join(" "));
+): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = [];
+  const original = { log: console.log, error: console.error };
+  console.log = console.error = (...values: unknown[]) => {
+    lines.push(values.map(String).join(" "));
   };
   try {
-    return { result: await fn(), errors };
+    return { result: await fn(), lines };
   } finally {
-    console.error = originalError;
+    Object.assign(console, original);
   }
 }
 
@@ -187,11 +197,57 @@ Deno.test("runTests drains every package with a concurrency limit of one", async
   }
 });
 
+// Run `runTests` over a one-member workspace whose member writes down the
+// spool it was handed, with recording pointed at a spool of the test's own,
+// and return what the member saw and what the run left in that spool.
+async function recordingSeenBy(
+  options: { recordResults?: boolean },
+): Promise<{ spool: string; seen: string; left: string[] }> {
+  const dir = await Deno.makeTempDir({ prefix: "ws-records-" });
+  try {
+    await makeWorkspace(dir, ["a"]);
+    await Deno.writeTextFile(
+      `${dir}/runtime/a/deno.jsonc`,
+      JSON.stringify({
+        tasks: { test: 'echo "[$CF_TEST_RECORDS_DIR]" > seen.txt' },
+      }),
+    );
+    const spool = path.join(dir, "spool");
+    await Deno.mkdir(spool);
+    await withEnv({ CF_TEST_RECORDS_DIR: spool }, async () => {
+      assertEquals(await runTests(dir, options), true);
+    });
+    return {
+      spool,
+      seen: (await Deno.readTextFile(`${dir}/runtime/a/seen.txt`)).trim(),
+      left: [...Deno.readDirSync(spool)].map((entry) => entry.name),
+    };
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+}
+
+Deno.test("runTests records nothing and hands members recording off for a caller that did not ask", async () => {
+  // The members of a workspace a test builds are that test's fixtures, so
+  // neither the run nor any member writes into the spool the test inherited.
+  const { seen, left } = await recordingSeenBy({});
+  assertEquals(seen, "[]");
+  assertEquals(left, []);
+});
+
+Deno.test("runTests records into the spool and hands it to members for a caller that asked", async () => {
+  const { spool, seen, left } = await recordingSeenBy({ recordResults: true });
+  assertEquals(seen, `[${spool}]`);
+  // The member writes no JUnit, so the one fragment is empty: what this
+  // pins is that the run opened its fragment in the spool it was handed.
+  assertEquals(left.length, 1);
+});
+
 // A workspace of `a`, `b` and `c` whose first package fails.
 async function makeFailingWorkspace(dir: string): Promise<void> {
   await makeWorkspace(dir, ["a", "b", "c"]);
   await Deno.writeTextFile(
-    `${dir}/packages/a/deno.jsonc`,
+    `${dir}/runtime/a/deno.jsonc`,
     JSON.stringify({
       tasks: {
         test:
@@ -201,11 +257,21 @@ async function makeFailingWorkspace(dir: string): Promise<void> {
   );
 }
 
+// The lines of the block a run ended with.
+function summaryOf(lines: readonly string[]): string[] {
+  return lines.slice(lines.findIndex((line) => line.includes("test summary")));
+}
+
+// The directory of logs a failing run's summary names.
+function logsOf(summary: readonly string[]): string {
+  return summary.find((line) => line.startsWith("Logs: "))!.slice(6);
+}
+
 Deno.test("runTests without a coverage directory reports a failure and stops scheduling packages", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-fail-fast-" });
   try {
     await makeFailingWorkspace(dir);
-    const { result: passed, errors } = await capturingErrors(() =>
+    const { result: passed, lines } = await capturingOutput(() =>
       withEnv(
         { TEST_CONCURRENCY: "1", DENO_COVERAGE_DIR: undefined },
         () => runTests(dir),
@@ -214,13 +280,21 @@ Deno.test("runTests without a coverage directory reports a failure and stops sch
 
     assertEquals(passed, false);
     assertEquals(await ranPackages(dir, ["a", "b", "c"]), ["a"]);
-    const downloadErrorIndex = errors.findIndex((message) =>
-      message.includes("upstream package download failed")
+    // The output of the failed package is in its log and quoted in the
+    // summary, rather than printed whole.
+    const summary = summaryOf(lines);
+    assertEquals(summary[1]!.startsWith("FAILED: 0 failed, 0 passed"), true);
+    assertEquals(summary.includes("FAIL a: failed with no failing test"), true);
+    assertEquals(
+      summary.includes("  | upstream package download failed"),
+      true,
     );
-    const summaryIndex = errors.indexOf("One or more tests failed.");
-    assertEquals(downloadErrorIndex >= 0, true);
-    assertEquals(summaryIndex >= 0, true);
-    assertEquals(downloadErrorIndex < summaryIndex, true);
+    const logs = logsOf(summary);
+    assertStringIncludes(
+      await Deno.readTextFile(path.join(logs, "a.log")),
+      "upstream package download failed",
+    );
+    await Deno.remove(logs, { recursive: true });
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -230,7 +304,7 @@ Deno.test("runTests without a coverage directory names the packages it never sta
   const dir = await Deno.makeTempDir({ prefix: "ws-unstarted-" });
   try {
     await makeFailingWorkspace(dir);
-    const { errors } = await capturingErrors(() =>
+    const { lines } = await capturingOutput(() =>
       withEnv(
         { TEST_CONCURRENCY: "1", DENO_COVERAGE_DIR: undefined },
         () => runTests(dir),
@@ -240,12 +314,14 @@ Deno.test("runTests without a coverage directory names the packages it never sta
     // `a` is the only package that started, so `b` and `c` are the ones the
     // run has nothing to say about.
     assertEquals(await ranPackages(dir, ["a", "b", "c"]), ["a"]);
-    const listed = errors.indexOf("Packages this run never started:");
-    assertEquals(listed >= 0, true);
-    assertEquals(errors.slice(listed + 1), [
-      "- ./packages/b",
-      "- ./packages/c",
-    ]);
+    const summary = summaryOf(lines);
+    assertEquals(
+      summary.includes(
+        "Not started, because a package failed: ./runtime/b, ./runtime/c",
+      ),
+      true,
+    );
+    await Deno.remove(logsOf(summary), { recursive: true });
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -255,7 +331,7 @@ Deno.test("runTests with a coverage directory runs every package after a failure
   const dir = await Deno.makeTempDir({ prefix: "ws-coverage-" });
   try {
     await makeFailingWorkspace(dir);
-    const { result: passed, errors } = await capturingErrors(() =>
+    const { result: passed, lines } = await capturingOutput(() =>
       withEnv(
         { TEST_CONCURRENCY: "1", DENO_COVERAGE_DIR: `${dir}/coverage` },
         () => runTests(dir),
@@ -264,8 +340,93 @@ Deno.test("runTests with a coverage directory runs every package after a failure
 
     assertEquals(passed, false);
     assertEquals(await ranPackages(dir, ["a", "b", "c"]), ["a", "b", "c"]);
-    assertEquals(errors.includes("One or more tests failed."), true);
-    assertEquals(errors.includes("Packages this run never started:"), false);
+    const summary = summaryOf(lines);
+    assertEquals(summary.includes("FAIL a: failed with no failing test"), true);
+    assertEquals(
+      summary.some((line) => line.startsWith("Not started")),
+      false,
+    );
+    await Deno.remove(logsOf(summary), { recursive: true });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// A workspace whose one member `a` runs `deno test` over a file holding a
+// passing test, an ignored one, and a test whose step fails.
+async function makeTestingWorkspace(
+  dir: string,
+  failure: string,
+): Promise<void> {
+  await makeWorkspace(dir, ["a"]);
+  await Deno.writeTextFile(
+    `${dir}/runtime/a/deno.jsonc`,
+    JSON.stringify({ tasks: { test: "deno test" } }),
+  );
+  await Deno.writeTextFile(
+    `${dir}/runtime/a/a.test.ts`,
+    [
+      `Deno.test("fine", () => {});`,
+      `Deno.test({ name: "ignored", ignore: true, fn() {} });`,
+      `Deno.test("outer", async (t) => {`,
+      `  await t.step("inner", () => { ${failure} });`,
+      `});`,
+    ].join("\n"),
+  );
+}
+
+Deno.test("runTests names each failing test, its error, and how to run it again", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-failing-test-" });
+  try {
+    await makeTestingWorkspace(dir, `throw new Error("broken\\nsecond");`);
+    const { result: passed, lines } = await capturingOutput(() =>
+      runTests(dir)
+    );
+
+    assertEquals(passed, false);
+    const summary = summaryOf(lines);
+    const logs = logsOf(summary);
+    assertEquals(summary.slice(1, -1), [
+      summary[1]!,
+      "",
+      "FAIL unit/a: outer > inner",
+      "  file:  runtime/a/a.test.ts",
+      "  rerun: cd runtime/a && deno task test --filter outer",
+      "  | Error: broken",
+      "  | second",
+      "",
+    ]);
+    assertEquals(
+      summary[1]!.startsWith("FAILED: 1 failed, 1 passed, 1 skipped ("),
+      true,
+    );
+    // The package's own output is in its log rather than in the run's.
+    assertEquals(lines.some((line) => line.includes("FAILURES")), false);
+    assertStringIncludes(
+      await Deno.readTextFile(path.join(logs, "a.log")),
+      "FAILURES",
+    );
+    await Deno.remove(logs, { recursive: true });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("runTests ends a passing run with one line and keeps no logs", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-passing-test-" });
+  try {
+    await makeTestingWorkspace(dir, "");
+    const { result: passed, lines } = await capturingOutput(() =>
+      runTests(dir)
+    );
+
+    assertEquals(passed, true);
+    const summary = summaryOf(lines);
+    assertEquals(summary.length, 2);
+    assertEquals(
+      summary[1]!.startsWith("PASSED: 0 failed, 2 passed, 1 skipped ("),
+      true,
+    );
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -274,14 +435,17 @@ Deno.test("runTests with a coverage directory runs every package after a failure
 Deno.test("testPackage reports a failure when the package directory cannot be spawned in", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-nodir-" });
   try {
+    const log = path.join(dir, "missing.log");
     const outcome = await testPackage(
-      "./packages/missing",
+      "./runtime/missing",
       "missing",
-      `${dir}/packages/missing`,
+      `${dir}/runtime/missing`,
       undefined,
+      log,
     );
-    assertEquals(outcome.result.success, false);
+    assertEquals(outcome.success, false);
     assertEquals(outcome.packageName, "missing");
+    assertStringIncludes(await Deno.readTextFile(log), "NotFound");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -316,12 +480,12 @@ Deno.test("runTests reports a failure for a workspace with no members", async ()
   const dir = await Deno.makeTempDir({ prefix: "ws-empty-" });
   try {
     await makeWorkspace(dir, []);
-    const { result: passed, errors } = await capturingErrors(() =>
+    const { result: passed, lines } = await capturingOutput(() =>
       runTests(dir)
     );
     // A run that tested nothing is a misconfiguration, not a pass.
     assertEquals(passed, false);
-    assertEquals(errors, ["No workspace packages to test."]);
+    assertEquals(lines, ["No workspace packages to test."]);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -413,22 +577,22 @@ Deno.test("acceptsJUnitPath takes a runner only when it is known to forward", ()
 Deno.test("memberTestTask accepts a directory path as well as a URL", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-manifest-root-" });
   try {
-    await Deno.mkdir(`${dir}/packages/probe`, { recursive: true });
+    await Deno.mkdir(`${dir}/runtime/probe`, { recursive: true });
     await Deno.writeTextFile(
-      `${dir}/packages/probe/deno.jsonc`,
+      `${dir}/runtime/probe/deno.jsonc`,
       JSON.stringify({ tasks: { test: "deno test" } }),
     );
     // A plain path is the natural thing to pass, and reading through it
     // must find the manifest rather than quietly reporting none.
-    assertEquals(await memberTestTask("./packages/probe", dir), "deno test");
+    assertEquals(await memberTestTask("./runtime/probe", dir), "deno test");
     assertEquals(
-      await memberTestTask("./packages/probe", new URL(`file://${dir}/`)),
+      await memberTestTask("./runtime/probe", path.toFileUrl(`${dir}/`)),
       "deno test",
     );
     // Without the trailing slash a member resolves beside the directory
     // rather than inside it, which reads as a member with no manifest.
     assertEquals(
-      await memberTestTask("./packages/probe", new URL(`file://${dir}`)),
+      await memberTestTask("./runtime/probe", path.toFileUrl(dir)),
       "deno test",
     );
   } finally {
@@ -439,17 +603,17 @@ Deno.test("memberTestTask accepts a directory path as well as a URL", async () =
 Deno.test("memberTestTask reads deno.json ahead of deno.jsonc", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-manifest-order-" });
   try {
-    await Deno.mkdir(`${dir}/packages/probe`, { recursive: true });
+    await Deno.mkdir(`${dir}/runtime/probe`, { recursive: true });
     // Deno resolves deno.json first, so that is the task that governs.
     await Deno.writeTextFile(
-      `${dir}/packages/probe/deno.json`,
+      `${dir}/runtime/probe/deno.json`,
       JSON.stringify({ tasks: { test: "deno test" } }),
     );
     await Deno.writeTextFile(
-      `${dir}/packages/probe/deno.jsonc`,
+      `${dir}/runtime/probe/deno.jsonc`,
       JSON.stringify({ tasks: { test: "echo 'No tests defined.'" } }),
     );
-    assertEquals(await memberTestTask("./packages/probe", dir), "deno test");
+    assertEquals(await memberTestTask("./runtime/probe", dir), "deno test");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -465,24 +629,19 @@ Deno.test("the workspace's capable members are read from their manifests", async
   // them running its files as several `deno test` commands.
   for (
     const member of [
-      "./packages/navigation",
+      "./runtime/navigation",
       "./tasks",
-      "./packages/cli",
-      "./packages/runner",
-      "./packages/api",
-      "./packages/memory",
-      "./packages/dashboard",
-      "./packages/patterns",
+      "./runtime/cli",
+      "./runtime/runner",
+      "./base/api",
+      "./base/identity",
+      "./runtime/memory",
+      "./dashboard",
+      "./patterns",
     ]
   ) {
     assertEquals(capable.has(member), true, `${member} should take the flag`);
   }
-  // A browser harness, which does not.
-  assertEquals(
-    capable.has("./packages/identity"),
-    false,
-    "./packages/identity should not",
-  );
 });
 
 Deno.test("the flag reaches the `deno-test` of a member running the wrapper", async () => {
@@ -619,27 +778,25 @@ Deno.test("a recording leaf is given the preload and the permissions it needs", 
   // write at all, are each granted the spool on top of what they have,
   // so the preload has somewhere to leave the name map its class names
   // were traded for.
-  for (const member of ["./packages/runner", "./packages/html"]) {
+  for (const member of ["./runtime/runner", "./runtime/html"]) {
     assertEquals(recording.get(member), [preload, "--allow-write=/spool"]);
   }
   // A member already permitted to write anywhere is granted nothing.
   // This one runs under `-A`, which Deno refuses to take beside an
   // `--allow-write` path list at all, ending the run before it starts.
-  assertEquals(recording.get("./packages/toolshed"), [preload]);
+  assertEquals(recording.get("./runtime/toolshed"), [preload]);
   // A member that cannot read the tree is granted the repository's
   // marker as well, since climbing to it is what names the file each
   // test in the name map belongs to.
-  assertEquals(recording.get("./packages/utils"), [
+  assertEquals(recording.get("./base/text"), [
     preload,
     marker,
     "--allow-write=/spool",
   ]);
   // A member behind the batch runner is read by the flags its leaf takes,
   // which here grant a write anywhere.
-  assertEquals(recording.get("./packages/cli"), [preload]);
-  assertEquals(recording.get("./packages/dashboard"), [preload]);
-  // A member whose task cannot take the preload takes nothing at all.
-  assertEquals(recording.get("./packages/identity"), []);
+  assertEquals(recording.get("./runtime/cli"), [preload]);
+  assertEquals(recording.get("./dashboard"), [preload]);
 });
 
 Deno.test("a leaf that cannot read is granted the skip list the run names", async () => {
@@ -654,12 +811,12 @@ Deno.test("a leaf that cannot read is granted the skip list the run names", asyn
   const marker = path.join(await Deno.realPath(rootUrl), ".git");
   // A member reading nothing of its own is granted the list beside the
   // marker, and one already reading everything is granted no list.
-  assertEquals(recording.get("./packages/utils"), [
+  assertEquals(recording.get("./base/text"), [
     preloadArgument(),
     `--allow-read=${marker},/lists/skip.json`,
     "--allow-write=/spool",
   ]);
-  assertEquals(recording.get("./packages/runner"), [
+  assertEquals(recording.get("./runtime/runner"), [
     preloadArgument(),
     "--allow-write=/spool",
   ]);
@@ -682,22 +839,22 @@ Deno.test("assertMemberTestTasksDefined names every member defining no test task
     // with no manifest, which never gets that far — Deno refuses to load a
     // workspace at all when one of its members has no config file.
     await Deno.writeTextFile(
-      `${dir}/packages/b/deno.jsonc`,
+      `${dir}/runtime/b/deno.jsonc`,
       JSON.stringify({ tasks: { bench: "deno bench" } }),
     );
-    await Deno.remove(`${dir}/packages/c/deno.jsonc`);
+    await Deno.remove(`${dir}/runtime/c/deno.jsonc`);
 
     const members = await readWorkspaceMembers(`${dir}/deno.jsonc`);
     const error = await assertRejects(
       () => assertMemberTestTasksDefined(members, dir),
       Error,
-      "Missing from: `./packages/b/deno.jsonc`, `./packages/c/deno.jsonc`",
+      "Missing from: `./runtime/b/deno.jsonc`, `./runtime/c/deno.jsonc`",
     );
     // Whoever meets this has just added a package and does not know the
     // rule, so the message carries the entry to add and where to copy it
     // from.
     assertStringIncludes(error.message, "echo 'No tests defined.'");
-    assertStringIncludes(error.message, "packages/utils/deno.jsonc");
+    assertStringIncludes(error.message, "base/text/deno.jsonc");
     // Creating the other manifest is the way out that costs the member its
     // `imports`, so the message has to warn against it where it is met.
     assertStringIncludes(error.message, "ignores the other whole");
@@ -711,7 +868,7 @@ Deno.test("assertMemberTestTasksDefined accepts a test task defined by dependenc
   try {
     await makeWorkspace(dir, ["a"]);
     await Deno.writeTextFile(
-      `${dir}/packages/a/deno.jsonc`,
+      `${dir}/runtime/a/deno.jsonc`,
       JSON.stringify({
         tasks: {
           check: "deno check .",
@@ -726,7 +883,7 @@ Deno.test("assertMemberTestTasksDefined accepts a test task defined by dependenc
     // is a different question, and the one `memberTestTask()` asks.
     const members = await readWorkspaceMembers(`${dir}/deno.jsonc`);
     await assertMemberTestTasksDefined(members, dir);
-    assertEquals(await memberTestTask("./packages/a", dir), undefined);
+    assertEquals(await memberTestTask("./runtime/a", dir), undefined);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -741,7 +898,7 @@ Deno.test("assertMemberTestTasksDefined reads the manifest Deno resolves", async
     // other file whole, so the task in it is not one `deno task test` can
     // find, and the member falls through to the root workspace all the same.
     await Deno.writeTextFile(
-      `${dir}/packages/a/deno.json`,
+      `${dir}/runtime/a/deno.json`,
       JSON.stringify({ tasks: { bench: "deno bench" } }),
     );
 
@@ -751,7 +908,7 @@ Deno.test("assertMemberTestTasksDefined reads the manifest Deno resolves", async
     await assertRejects(
       () => assertMemberTestTasksDefined(members, dir),
       Error,
-      "Missing from: `./packages/a/deno.json`",
+      "Missing from: `./runtime/a/deno.json`",
     );
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -763,14 +920,14 @@ Deno.test("runTests refuses a workspace whose member defines no test task", asyn
   try {
     await makeWorkspace(dir, ["a", "b"]);
     await Deno.writeTextFile(
-      `${dir}/packages/b/deno.jsonc`,
+      `${dir}/runtime/b/deno.jsonc`,
       JSON.stringify({ tasks: { bench: "deno bench" } }),
     );
 
     await assertRejects(
       () => runTests(dir),
       Error,
-      "Missing from: `./packages/b/deno.jsonc`",
+      "Missing from: `./runtime/b/deno.jsonc`",
     );
     // Each package's test task writes a marker when it runs, so an empty
     // list is what says the refusal came ahead of the spawn loop rather than
@@ -787,4 +944,277 @@ Deno.test("every workspace member defines a test task of its own", async () => {
   const rootUrl = new URL("../", import.meta.url);
   const members = await readWorkspaceMembers(new URL("deno.jsonc", rootUrl));
   await assertMemberTestTasksDefined(members, rootUrl);
+});
+
+/** A recording this process owns, with its spool at `dir`. */
+function ownedRecording(dir: string): RunRecording {
+  return {
+    mode: "own",
+    spool: { dir, close() {} },
+    context: {
+      schema: RECORD_SCHEMA_VERSION,
+      line: "context",
+      reportId: "01J00000000000000000000000",
+      repo: "commonfabric/labs",
+      commit: "0".repeat(40),
+      dirty: false,
+      env: "local",
+      os: "darwin",
+      arch: "aarch64",
+      denoVersion: "2.0.0",
+      startedAt: "2026-11-13T00:00:00.000Z",
+    },
+    key: {
+      client_email: "runner@example.com",
+      private_key: "",
+      token_uri: "https://oauth2.googleapis.com/token",
+      cf_username: "runner",
+    },
+    spoolRoot: dir,
+  };
+}
+
+/**
+ * A host for `runRootTestTask()` whose recording starts as `recording` and
+ * whose suite passes or fails as `passes` says, and the order in which the
+ * task used it.
+ */
+function rootTestHost(
+  recording: RunRecording,
+  passes: boolean | Error,
+): { host: RootTestHost; calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    host: {
+      env: { set: (name, value) => calls.push(`set ${name}=${value}`) },
+      pinShuffleSeed: () => calls.push("pin"),
+      startRecording: () => {
+        calls.push("start");
+        return Promise.resolve(recording);
+      },
+      finishRecording: (finished) => {
+        calls.push(`finish ${finished.mode}`);
+        return Promise.resolve();
+      },
+      run: () => {
+        calls.push("run");
+        return passes instanceof Error
+          ? Promise.reject(passes)
+          : Promise.resolve(passes);
+      },
+    },
+  };
+}
+
+Deno.test("runRootTestTask refuses arguments, rather than running the whole suite", async () => {
+  const { host, calls } = rootTestHost({ mode: "off" }, true);
+  const { result, lines } = await capturingOutput(() =>
+    runRootTestTask(["--filter", "a name"], host)
+  );
+  expect(result).toBe(2);
+  expect(lines.join("\n")).toContain(
+    "The root `test` task takes no arguments",
+  );
+  expect(calls).toEqual([]);
+});
+
+Deno.test("runRootTestTask returns 0 for a passing run and 1 for a failing one", async () => {
+  const passing = rootTestHost({ mode: "off" }, true);
+  expect(await runRootTestTask([], passing.host)).toBe(0);
+  expect(passing.calls).toEqual(["pin", "start", "run", "finish off"]);
+
+  const failing = rootTestHost({ mode: "off" }, false);
+  expect(await runRootTestTask([], failing.host)).toBe(1);
+  expect(failing.calls).toEqual(["pin", "start", "run", "finish off"]);
+});
+
+Deno.test("runRootTestTask points the members at the spool of a run it owns", async () => {
+  const { host, calls } = rootTestHost(ownedRecording("/spool"), true);
+  expect(await runRootTestTask([], host)).toBe(0);
+  expect(calls).toEqual([
+    "pin",
+    "start",
+    `set ${RECORDS_DIR_VARIABLE}=/spool`,
+    "run",
+    "finish own",
+  ]);
+});
+
+Deno.test("runRootTestTask leaves the environment alone for a run it joined", async () => {
+  const { host, calls } = rootTestHost({ mode: "join", dir: "/ci" }, true);
+  expect(await runRootTestTask([], host)).toBe(0);
+  expect(calls).toEqual(["pin", "start", "run", "finish join"]);
+});
+
+Deno.test("runRootTestTask finishes the recording of a run that throws", async () => {
+  const { host, calls } = rootTestHost({ mode: "off" }, new Error("boom"));
+  await expect(runRootTestTask([], host)).rejects.toThrow("boom");
+  expect(calls).toEqual(["pin", "start", "run", "finish off"]);
+});
+
+Deno.test("main refuses a workspace without tasks before initializing anything", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
+  try {
+    await makeWorkspace(dir, ["a"]);
+    let initialized = false;
+    await expect(main(dir, () => {
+      initialized = true;
+      return Promise.resolve(true);
+    })).rejects.toThrow("workspace must include tasks");
+    expect(initialized).toBe(false);
+    expect(await ranPackages(dir, ["a"])).toEqual([]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// A workspace whose members are `tasks` and `runtime/a`, each of whose test
+// tasks writes a marker when it runs.
+async function makeWorkspaceWithTasks(dir: string): Promise<void> {
+  await makeWorkspace(dir, ["a"]);
+  await Deno.writeTextFile(
+    `${dir}/deno.jsonc`,
+    JSON.stringify({ workspace: ["./tasks", "./runtime/a"] }),
+  );
+  await Deno.mkdir(`${dir}/tasks`);
+  await Deno.writeTextFile(
+    `${dir}/tasks/deno.jsonc`,
+    JSON.stringify({ tasks: { test: "echo ok > ran.txt" } }),
+  );
+}
+
+Deno.test("main runs no member when initializing the database fails", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
+  try {
+    await makeWorkspaceWithTasks(dir);
+    const initializedIn: string[] = [];
+    const passed = await main(dir, (cwd) => {
+      initializedIn.push(cwd);
+      return Promise.resolve(false);
+    });
+    expect(passed).toBe(false);
+    expect(initializedIn).toEqual([dir]);
+    expect(await ranPackages(dir, ["a"])).toEqual([]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("main runs every member once the database is initialized", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
+  try {
+    await makeWorkspaceWithTasks(dir);
+    const { result } = await capturingOutput(() =>
+      withEnv(
+        { CF_TEST_RECORDS_DIR: undefined, TEST_CONCURRENCY: "1" },
+        () => main(dir, () => Promise.resolve(true)),
+      )
+    );
+    expect(result).toBe(true);
+    expect(await ranPackages(dir, ["a"])).toEqual(["a"]);
+    await Deno.stat(`${dir}/tasks/ran.txt`);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("readLeafReport reads the records of a member's report", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-report-" });
+  try {
+    const junit = path.join(dir, "a.xml");
+    await Deno.writeTextFile(
+      junit,
+      `<testsuites><testsuite name="./x.test.ts">` +
+        `<testcase name="works" classname="./x.test.ts" time="0.1"/>` +
+        `</testsuite></testsuites>`,
+    );
+    // A spool holding no name map leaves each case the file its class
+    // name gives, as no spool at all does.
+    for (const spool of [undefined, dir]) {
+      const report = await readLeafReport(junit, "a", "./runtime/a", spool);
+      expect(report?.records.map((record) => record.test.n)).toEqual([
+        "works",
+      ]);
+      expect(report?.records[0]?.file).toBe("runtime/a/x.test.ts");
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("readLeafReport returns undefined for a member that wrote no report", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-report-" });
+  try {
+    const { result, lines } = await capturingWarnings(() =>
+      readLeafReport(path.join(dir, "absent.xml"), "a", "./runtime/a", dir)
+    );
+    expect(result).toBeUndefined();
+    expect(lines).toEqual([]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("readLeafReport warns and returns undefined for a malformed report", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-report-" });
+  try {
+    const junit = path.join(dir, "a.xml");
+    await Deno.writeTextFile(junit, "<testsuites><testsuite");
+    const { result, lines } = await capturingWarnings(() =>
+      readLeafReport(junit, "a", "./runtime/a", undefined)
+    );
+    expect(result).toBeUndefined();
+    expect(lines).toEqual([
+      `test summary: reading ${junit} failed: Error: unterminated tag`,
+    ]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// Run `fn` with `console.warn` captured rather than printed, and return the
+// lines alongside `fn`'s result.
+async function capturingWarnings<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = [];
+  const original = console.warn;
+  console.warn = (...values: unknown[]) => {
+    lines.push(values.map(String).join(" "));
+  };
+  try {
+    return { result: await fn(), lines };
+  } finally {
+    console.warn = original;
+  }
+}
+
+Deno.test("testPackage appends the recording arguments after the report path", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "ws-testpackage-" });
+  try {
+    await Deno.writeTextFile(
+      `${dir}/deno.jsonc`,
+      JSON.stringify({ tasks: { test: "echo" } }),
+    );
+    const log = path.join(dir, "a.log");
+    const { result } = await capturingOutput(() =>
+      testPackage(
+        "./runtime/a",
+        "a",
+        dir,
+        undefined,
+        log,
+        {},
+        "/r/a.xml",
+        ["--preload=/p.ts", "--allow-env"],
+      )
+    );
+    expect(result.success).toBe(true);
+    expect(await Deno.readTextFile(log)).toContain(
+      "--junit-path=/r/a.xml --preload=/p.ts --allow-env",
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });

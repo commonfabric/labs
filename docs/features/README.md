@@ -24,12 +24,19 @@ a line for each new document to the index below.
   unique-key lookup, membership ownership, and work limits
 - [`collection-aggregates.md`](collection-aggregates.md) — named incremental
   aggregates, their numeric contracts, public type surface, and update costs
+- [`indexed-collections.md`](indexed-collections.md) — collections whose
+  membership and chosen fields live in a SQLite database the runtime keeps
+  current, their derived tables, quiet query re-runs, and limits
 - [`read-accounting.md`](read-accounting.md) — opt-in reactive action read
   counters, execution boundaries, and per-step pattern-test reports
 - [`view-scoped-client-replication.md`](view-scoped-client-replication.md) —
   visible renderer demand, server-observed input selection, and guarded local
   previews
-
+- [`document-release.md`](document-release.md) — when a runtime stops watching
+  a document nothing reads, what it drops, and how a later read loads it again
+- [`space-history.md`](space-history.md) — listing a space's history as
+  steps, opening a step in a fork a second runtime runs, and restoring the
+  space from it
 - [`collaborative-fields.md`](collaborative-fields.md) — operation-based fields,
   CodeMirror's opt-in editor path, retained cursors and reset behavior, and
   offline inspection
@@ -63,6 +70,8 @@ a line for each new document to the index below.
 - [`custom-space-roots.md`](custom-space-roots.md) — seal a custom
   default-pattern reservation with the initial ACL, or one leaving the root to
   the space's creator, as `inSpace(..., { root: true })` does.
+- [`meeting-room-allocation.md`](meeting-room-allocation.md) — host-local atomic
+  selection of a canonical calendar meeting Loom, without granting membership.
 - [`space-kinds.md`](space-kinds.md) — the kind a space declares in its genesis
   commit, as `inSpace(..., { spaceKind })` does: how it is sealed so that only
   its creator states it, once; who can read it; the known kinds; and what a
@@ -70,15 +79,15 @@ a line for each new document to the index below.
 - [`lazy-cell-materialization.md`](lazy-cell-materialization.md) — the
   schema-observing view a marked transaction hands back from a read, what it
   checks and when, and the rules that keep it agreeing with an eager read
-- [`data-uri-identifiers.md`](data-uri-identifiers.md) — the cell identifiers
-  that carry their own frozen value rather than naming a document in a space,
-  why the runtime keeps both a broad and a narrow test for one, and what follows
-  from there being nothing stored behind such an address
+- [`immutable-cell-identifiers.md`](immutable-cell-identifiers.md) — native
+  snapshot ownership, relative-link origins, portable value-carrying IDs, and
+  expansion at storage and transport boundaries
 
 ## Identity and people
 
 - [`shared-space-catalog.md`](shared-space-catalog.md) — portable collection
-  membership, transactional registration, and archive/restore confirmation
+  membership, transactional registration, archive/restore confirmation, and
+  entries whose space is deleted
 - [`did-identifiers.md`](did-identifiers.md) — what makes a string a DID, the
   one module that decides it, and the guard for an argument that takes a space
   name rather than a DID
@@ -102,8 +111,10 @@ a line for each new document to the index below.
 - [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
-  and how it stays current; and what `spaceOf(target)` returns, the DID of
-  that space
+  and how it stays current; what `spaceMembers(target)` lists, the principals
+  the space's access list names; what `spaceOf(target)` returns, the DID of
+  that space, and `spaceOfLink(target)`, the space a link names without
+  reading it; and what `spaceDeleted(target)` says of a deleted space
 - [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
   others deliver offers: where it lives, who creates it, what access its space
   grants, the offer envelope it shares with loom's share inbox, what `receive`
@@ -155,7 +166,8 @@ a line for each new document to the index below.
 
 - [`server-pattern-lifecycle.md`](server-pattern-lifecycle.md) — the upload,
   instantiate, and setsrc verbs as calls the space's serving runtime executes
-  under server execution: the route, the writer authority it needs, the wave
+  under server execution: the memory-session request that carries a verb, the
+  writer authority it needs, the wave
   cycle a verb runs in, the direct commit a source update's setup transaction
   makes outside that wave, and what `cf` still does in its own process
 - [`invoking-handlers-outside-a-pattern.md`](invoking-handlers-outside-a-pattern.md)

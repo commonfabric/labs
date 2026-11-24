@@ -64,13 +64,13 @@ jobs:
 
       # One root for every property, so the corpus checks have a population.
       - name: 🧪 Run the CFC property suite
-        working-directory: packages/cf-harness
+        working-directory: runtime/cf-harness
         env:
           CF_HARNESS_PROPERTY_ARTIFACT_ROOT: ${{ runner.temp }}/cfc-properties
         run: deno test --shuffle=$(deno task -q test-seed) --no-check -A test/cfc-properties/
 
       - name: 🔎 Audit the artifacts the suite just wrote
-        working-directory: packages/cf-harness
+        working-directory: runtime/cf-harness
         run: |
           deno task cfc-audit "${{ runner.temp }}/cfc-properties" \
             --corpus \

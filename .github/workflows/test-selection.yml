@@ -15,7 +15,7 @@
 # cheap, and a flake that appears in the morning should not wait until the
 # small hours to be prioritized. Manual dispatch is there so somebody who
 # has just fixed something can refresh without waiting, and it carries the
-# one-off bootstrap that a cold start needs.
+# bootstrap that a cold start needs.
 
 name: Test Selection
 
@@ -24,21 +24,19 @@ on:
     - cron: "17 */4 * * *"
   workflow_dispatch:
     inputs:
-      # The label says what this costs rather than what it reads. A run
-      # with it set starts from an empty aggregate, so the state object it
-      # creates holds what the window shows and nothing earlier, and every
-      # later run reads that one. Nothing in the store is removed: the
-      # identity here holds create and not delete or overwrite, so the
-      # previous state object stays where it is and stops being the newest.
+      # The label says what this is for rather than what it reads. A run
+      # with it set starts from an empty aggregate, and refuses where the
+      # store holds an aggregate any publisher can read, naming it.
       bootstrap:
         description: >-
-          COLD START, RUN ONCE. Rebuilds the score history from the whole
-          window instead of adding to it. Catches recorded before the
-          window stop counting. Nothing already stored is deleted.
+          COLD START. Starts the score history from nothing over the
+          whole window. Refuses where any stored aggregate can be read.
         type: boolean
         default: false
       days:
-        description: Days of submissions to read (default 2, or 60 with a cold start)
+        description: >-
+          Days of submissions to read (default 2, or back to the last day
+          the publisher read; 60 with a cold start)
         required: false
 
 permissions:
@@ -64,8 +62,16 @@ jobs:
     # Six hours is the ceiling for a job on a GitHub-hosted runner: past
     # it the platform cancels the run whatever this says. A bootstrap
     # reads sixty days of records in one job, and the four-hourly path
-    # reads two.
+    # reads two, or back to the last day it read. The longest read is a
+    # fold of the whole history after the rules change, which took 75
+    # minutes over the two months from 2026-08-19.
     timeout-minutes: 360
+    # Both steps that run the publisher name the store, so it is named
+    # once for the job and the two cannot disagree about where it is.
+    env:
+      TEST_RECORDS_BUCKET: ${{ vars.TEST_RECORDS_BUCKET }}
+      TEST_RECORDS_PREFIX: ${{ vars.TEST_RECORDS_PREFIX }}
+      TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
     steps:
       # Every third-party action in this credentialed workflow is pinned to
       # an immutable commit, so a moved tag cannot alter the one privileged
@@ -82,31 +88,28 @@ jobs:
         with:
           cache: false
 
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
+      # Resolve only what this job executes. A workspace-wide install makes
+      # this independent publisher fail when an unrelated dependency cannot
+      # be fetched.
+      - name: 📦 Cache publisher dependencies
+        run: >-
+          deno cache --frozen tasks/test-selection-publish.ts
+          tasks/step-summary.ts
 
-      - name: 🔑 Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          project_id: commontools-core
-          workload_identity_provider: ${{ vars.TEST_SELECTION_WIF_PROVIDER }}
-          service_account: ${{ vars.TEST_SELECTION_SERVICE_ACCOUNT }}
-          token_format: access_token
-          create_credentials_file: false
-
+      # The store is public to read, so building the manifest needs no
+      # credential, and this step is not given the access token. The
+      # token is minted after it, because a token lasts an hour and a run
+      # that folds the whole history again takes longer than that.
+      #
       # The dispatch inputs reach the shell through the environment rather
       # than through expansion into the script. An expansion is substituted
       # before the shell parses the line, so a crafted value would run as
-      # part of this step — which is the step holding the access token.
+      # part of this step, and every step of this job can ask for the
+      # federated identity's token.
       # The window is quoted, then checked against the one shape it may
       # take before it becomes an argument.
-      - name: 📊 Publish the manifest
+      - name: 📊 Build the manifest
         env:
-          TEST_RECORDS_GCS_TOKEN: ${{ steps.auth.outputs.access_token }}
-          TEST_RECORDS_BUCKET: ${{ vars.TEST_RECORDS_BUCKET }}
-          TEST_RECORDS_PREFIX: ${{ vars.TEST_RECORDS_PREFIX }}
-          TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
           PUBLISH_BOOTSTRAP: ${{ inputs.bootstrap }}
           PUBLISH_DAYS: ${{ inputs.days }}
         run: |
@@ -137,8 +140,27 @@ jobs:
           # what to do about it — and the summary below, which is where a
           # person reads a failed run, is built from this log alone.
           deno run --allow-read --allow-env --allow-net --allow-write \
-            tasks/test-selection-publish.ts "${args[@]}" \
-            2>&1 | tee publish.log
+            tasks/test-selection-publish.ts --dry-run --out selection \
+            "${args[@]}" 2>&1 | tee publish.log
+
+      - name: 🔑 Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: commontools-core
+          workload_identity_provider: ${{ vars.TEST_SELECTION_WIF_PROVIDER }}
+          service_account: ${{ vars.TEST_SELECTION_SERVICE_ACCOUNT }}
+          token_format: access_token
+          create_credentials_file: false
+
+      - name: 📤 Create the manifest
+        env:
+          TEST_RECORDS_GCS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          deno run --allow-read --allow-env --allow-net \
+            tasks/test-selection-publish.ts --create selection \
+            2>&1 | tee -a publish.log
 
       # A job summary is taken whole or not at all: GitHub refuses one
       # past 1024 KiB, and what it held is lost rather than shortened. So

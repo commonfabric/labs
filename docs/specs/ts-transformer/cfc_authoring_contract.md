@@ -1,8 +1,8 @@
 # CFC Authoring Contract
 
 **Status:** Implemented direct-authoring contract
-**Scope:** `packages/api`, `packages/ts-transformers`,
-`packages/schema-generator`
+**Scope:** `base/api`, `base/ts-transformers`,
+`base/schema-generator`
 
 This document specifies the compile-time contract for CFC-aware TypeScript
 authoring. It is intentionally narrower than the runner CFC specs: the concern
@@ -46,9 +46,11 @@ type CfcStamp<T, Meta> = {
   readonly of?: T;
 };
 
-type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: CfcStamp<T, Meta>;
-};
+type CfcTag<T, Meta, Stamp = CfcStamp<T, Meta>> = [T] extends [unknown]
+  ? { readonly __ct_cfc__?: Stamp } | Extract<T, null | undefined>
+  : { readonly __ct_cfc__?: Stamp } | Extract<T, null | undefined>;
+
+type Cfc<T, Meta> = T & CfcTag<T, Meta>;
 ```
 
 `Cfc<T, Meta>` must preserve the runtime/schema shape of `T` and only add to
@@ -56,6 +58,22 @@ the emitted `ifc` metadata. The stamp records the payload `T` beside the
 metadata. TypeScript merges the carrier into whatever the value is merged
 into, and the recorded payload is what tells the schema generator which part
 of the merged value the policy names (mapping spec §11).
+
+The tag leaves `null` and `undefined` beside the stamp, since an intersection
+with the stamp alone would reduce them to `never`, and the intersection
+distributes over `T`'s members. So `Confidential<string | null, L>` is
+`(string & carrier) | null`, holds `null`, and keeps the alias name a reader of
+its type finds the declaration by. While `T` holds a type parameter the tag is
+a conditional the checker defers, so `Cfc<T, Meta>` around a bare type
+parameter is one intersection, whose members are read through it; around
+`T | null` it is a union, as around any other union. The conditional checks
+`[T]`, and both its branches are the same type, so a value of the payload's
+type is assignable to `Cfc<T, Meta>` while `T` is a type parameter whose
+constraint excludes `null` and `undefined`, as it is once `T` is known:
+`function label<T extends {}>(value: T): Confidential<T, L>` may return
+`value`. An unconstrained `T` may be `null` or `undefined`, which the stamp is
+not assignable from, so the same function with `<T>` does not type-check.
+Every member's stamp records the whole payload `T`.
 
 ### Path-Bearing Helpers
 
@@ -146,6 +164,10 @@ These aliases lower to direct `ifc` keys:
 - `RequiresIntegrity<T, X>` -> `ifc.requiredIntegrity = X`
 - `MaxConfidentiality<T, X>` -> `ifc.maxConfidentiality = X`
 - `ExactCopy<T, P>` -> `ifc.exactCopyOf = P`
+
+`X` must read as a list of atoms, a tuple such as `readonly ["secret"]`. One
+that reads as no list, as an array type or a union of tuples does, is an error
+(`cfc-label:not-a-list`), since the runtime reads labels only from a list.
 
 ### `AnyOf<X>`
 
@@ -268,7 +290,9 @@ Normative behavior:
    returns under a writer policy — a literal, an object or array literal, a
    spread, a constant, a plain call's result: any value that is not a reactive
    reference — is the exception: the result document holds that data itself,
-   so its schema defines the document there. A view reads a
+   so its schema defines the document there. A cell or a stream within it is
+   still a link, and a writer policy inside the type it links to is the
+   linked document's. A view reads a
    writer policy whole or not at all: where its writer cannot be read, the
    principal claims that need a writer, an `ownerPrincipal` and integrity
    naming the current principal, are left out with it, since either alone
@@ -315,11 +339,31 @@ Normative behavior:
    member's gesture never admits another's writer.
 4. The runtime refuses a position declaring `writePolicyAnyOf` beside its own
    `writeAuthorizedBy` or `uiContract`, whether one schema declares both or a
-   later schema declares one where the stored schema declares the other, and
-   refuses a later schema that adds, drops, reorders, or changes a stored
-   member. Each member's claim is stamped with its module identity where the
-   list is lowered, by rule 5 for `WriteAuthorizedBy`; a stored member with no
-   stamp admits no writer, as a stored lone claim with none does.
+   later schema declares one where the stored schema declares the other. It
+   holds the stored list as a set: a later schema may list the stored members
+   in any order, each matched by its contract and its writer's binding, and
+   the stored envelope keeps them as stored, in stored order. It refuses a
+   later schema that drops or changes a stored member. It refuses one that
+   adds a member, except in a release of the piece the envelope belongs to
+   (the setup of a piece, a swap of its pattern, or a repair of its start),
+   where it appends a member whose writer is of a module the release installs,
+   when one stored member has the same keys and the same contract (or names
+   none where the appended one names none), and a writer claim that differs
+   from the appended one's only in the symbol it binds, of that module or of
+   one the space attests the installed module succeeds. That carve-out
+   lands ahead of its ruling, specs#96, as the
+   [conformance statement](../cfc-conformance-statement.md) §10 records. The
+   pattern contract check an update runs before its commit compares a declared
+   list as a set too, so it passes a reordered list, but it holds the update
+   to the contract it replaces: an update reaches the commit with an added
+   member only as a `system:` release, which that check does not gate, or
+   under `dangerouslyAllowIncompatibleSchema`. A
+   refusal is terminal where the stored schema it compared against is one the
+   transaction holds: the commit is refused as `CfcCommitRefusalError` and is
+   not retried. Each member's claim is stamped with its module identity where
+   the list is lowered, by rule 5 for `WriteAuthorizedBy`; a stored member with
+   no stamp admits no writer, as a stored lone claim with none does, and admits
+   no appended member either.
 5. An `AuthoredByCurrentUser` label beside it needs nothing more of the list:
    every member names a writer, which is what a claim about the current
    principal requires, and a member naming a contract keeps its gesture.
@@ -378,6 +422,7 @@ Required diagnostic type:
 - `cfc-write-authorized-by`
 - `cfc-policy-authoring`
 - `cfc-policy-of`
+- `cfc-label:not-a-list`
 
 Required failure modes:
 
@@ -387,6 +432,8 @@ Required failure modes:
 - policy declarations contain dynamic content, unsupported fields, unbound
   variables, missing guards, invalid exports, or rule reuse
 - `PolicyOf` does not directly query an exported `exchangeRules` binding
+- a label list, a simple wrapper alias's `X`, a `Cfc` payload's label key, or a
+  UI contract's `requiredEventIntegrity`, that reads as no list
 
 ## Current Limits
 
@@ -411,7 +458,7 @@ Required failure modes:
 The contract is not fully implemented until these tests pass or equivalent
 coverage exists:
 
-- `packages/ts-transformers/test/cfc-authoring.test.ts`
-- `packages/schema-generator/test/schema/cfc-authoring.test.ts`
-- `packages/schema-generator/test/schema/write-policy-any-of.test.ts`
-- `packages/runner/test/cfc-write-policy-any-of.test.ts`
+- `base/ts-transformers/test/cfc-authoring.test.ts`
+- `base/schema-generator/test/schema/cfc-authoring.test.ts`
+- `base/schema-generator/test/schema/write-policy-any-of.test.ts`
+- `runtime/runner/test/cfc-write-policy-any-of.test.ts`

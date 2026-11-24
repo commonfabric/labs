@@ -1,0 +1,1340 @@
+// The pattern-lifecycle verbs as the serving side runs them
+// (docs/features/server-pattern-lifecycle.md): compile a program into a
+// space, create a piece from a pattern, replace a piece's source, and point a
+// piece at an origin and adopt what it serves. Each
+// runs on a space's serving runtime inside a wave cycle. A write the first
+// two make seals into that cycle's wave and reaches the store as one of the
+// serving loop's own commits, which rules out the client-side shape of the
+// same operations in two places: a transaction the runtime seals is
+// accepted at the seal and durable only at the wave commit, so a receipt
+// minted from the transaction is refused (`runSyncedWithCommit`), and the
+// storage manager's full `synced()` waits on that same commit and would
+// deadlock. Those verbs mint their receipts from what they wrote and leave
+// durability to the `confirm` read, which the serving loop runs once the
+// wave has committed. A source update carries module-update authority the
+// runner publishes only from a transaction that commits to storage itself,
+// so its setup transaction commits directly, outside the wave, and its
+// receipt is the store's verdict. A follow is such an update over two
+// cycles: the first resolves and compiles the origin's candidate, whose
+// closure seals into that cycle's wave, and reviews it; the second, once the
+// closure is durable, makes the reviewed change as a direct commit.
+
+import type { JSONSchema } from "@commonfabric/api";
+import {
+  streamEntriesDocId,
+  type StreamEventsDocValue,
+} from "@commonfabric/memory/v2";
+import {
+  type Cell,
+  compileAndSavePattern,
+  entityIdFrom,
+  getPatternIdentityRef,
+  getPieceSourceRevisions,
+  getPieceSourceSnapshot,
+  isStream,
+  type MemorySpace,
+  type NormalizedFullLink,
+  type Pattern,
+  PIECE_SOURCE_MOVED,
+  resolveSpaceRootPattern,
+  type Runtime,
+  type RuntimeProgram,
+  scopeCallerEventId,
+  sendEvent,
+} from "@commonfabric/runner";
+import { pieceListSchema } from "@commonfabric/runner/schemas";
+import { isStoredArgumentSchemaRefusal } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+
+import { pieceId as pieceIdOf } from "../piece-id.ts";
+import { claimSlugInTx, prepareSlugClaim } from "../slugs.ts";
+import { PieceOriginError } from "./piece-origin.ts";
+import {
+  isPieceSourceCompatibilityRefusal,
+  type PatternUpdateReceipt,
+  PieceController,
+  type PieceSourceActionResult,
+  PieceSourceChangedError,
+  type PieceSourcePreparation,
+  type PreparedPieceSourceChange,
+} from "./piece-controller.ts";
+import type { PiecesController } from "./pieces-controller.ts";
+import { addPieceHandlerOf } from "./utils.ts";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import { setCfcTrustSnapshot } from "@commonfabric/runner/cfc/trust-authority";
+
+/** A content-addressed pattern pointer: the closure and the export run. */
+export type ServedPatternRef = { identity: string; symbol: string };
+
+/**
+ * Where a served verb takes its pattern from: a program the serving side
+ * compiles, or a pattern the space already holds by identity — the result
+ * of an earlier upload.
+ */
+export type ServedPatternSource =
+  | { program: RuntimeProgram; pattern?: undefined }
+  | { pattern: ServedPatternRef; program?: undefined };
+
+/**
+ * Why a served verb refused. Each code names one condition a caller can
+ * act on; anything else the verbs throw is a failure of the serving side.
+ */
+export type ServedLifecycleRefusalCode =
+  /** The program did not compile. */
+  | "compile-failed"
+  /** The named pattern is not held by the space, or cannot load. */
+  | "pattern-not-found"
+  /** Setup refused the pattern or the argument. */
+  | "setup-failed"
+  /** The requested slug already names something, and `force` was not set. */
+  | "slug-taken"
+  /** The named piece is not held by the space. */
+  | "piece-not-found"
+  /** The candidate source cannot run over the piece's retained state. */
+  | "incompatible"
+  /** The piece is not on the pattern the update was proved against. */
+  | "source-moved"
+  /**
+   * The origin a follow or a source update names is not one a piece can
+   * follow, or, for a follow, the source it names could not be read or
+   * compiled.
+   */
+  | "origin-unreachable";
+
+/** A served verb's refusal, carrying the code the wire reports. */
+export class ServedLifecycleRefusal extends Error {
+  readonly #code: ServedLifecycleRefusalCode;
+
+  constructor(
+    code: ServedLifecycleRefusalCode,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "ServedLifecycleRefusal";
+    this.#code = code;
+  }
+
+  get code(): ServedLifecycleRefusalCode {
+    return this.#code;
+  }
+}
+
+/** What `instantiate` asks for. */
+export interface ServedInstantiateRequest {
+  source: ServedPatternSource;
+
+  /** The new piece's argument; absent means the pattern's defaults. */
+  argument?: object;
+
+  /** Repository locator stored with the piece's source. */
+  repository?: string;
+
+  /** A name for the new piece, claimed in the creation transaction. */
+  slug?: string;
+
+  /** Take `slug` even when it already names something. */
+  force?: boolean;
+
+  /** Register through the root action after the creation commits. */
+  register?: boolean;
+
+  /** Caller-owned creation key, scoped to the acting principal and space. */
+  requestKey?: string;
+
+  /**
+   * The principal the verb acts for. The creation transaction carries this
+   * principal's trust snapshot, so a label the setup mints attributes to
+   * the requester rather than to the serving identity.
+   */
+  actingUser: string;
+}
+
+/** What `instantiate` hands back. */
+export type ServedInstantiateReceipt = {
+  /** Retain this key when retrying creation or pending registration. */
+  requestKey: string;
+
+  /** Registration is a separate durable action after creation. */
+  registration: {
+    status: "skipped" | "pending" | "handled" | "failed";
+    error?: string;
+    /** Delivery attempts advance only after a proven unsuccessful durable outcome. */
+    attempt?: number;
+    /** The durable event failed or committed without registering the piece. */
+    terminal?: true;
+  };
+
+  pieceId: string;
+  pattern: ServedPatternRef;
+
+  /** The name the piece was created under, when one was asked for. */
+  slug?: string;
+};
+
+/**
+ * The requester's instance of a piece held at a scope narrower than its
+ * space, which a served source change reads and writes: `identity` names the
+ * requester, and for session scope the memory session the request came on.
+ */
+export type ServedInstance = {
+  scope: "user" | "session";
+  identity: ScopeKeyIdentity;
+};
+
+/** What `setsrc` asks for. */
+export interface ServedSetSourceRequest {
+  /** The piece whose source is replaced. */
+  pieceId: string;
+
+  /**
+   * The requester's instance of the piece, for one addressed at a user or
+   * session scope; absent, the piece's space instance.
+   */
+  instance?: ServedInstance;
+
+  /**
+   * The pattern the piece moves to: a closure the space already holds. A
+   * program is uploaded first, as a verb of its own, so the closure is
+   * durable before the update's setup transaction reads and extends it.
+   */
+  pattern: ServedPatternRef;
+
+  /** Repository locator stored with the piece's source. */
+  repository?: string;
+
+  /**
+   * Replace the source even when compatibility cannot be proven, or when
+   * the current pattern cannot be loaded at all.
+   */
+  dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /** The pattern the update was proved against; a piece on another refuses. */
+  expectedPattern?: ServedPatternRef;
+
+  /**
+   * The origin the piece follows from then on, recorded with the revision;
+   * absent, the update detaches the piece.
+   */
+  origin?: string;
+
+  /**
+   * The principal the verb acts for. The setup transaction carries this
+   * principal's trust snapshot, as a creation's does
+   * ({@link ServedInstantiateRequest}).
+   */
+  actingUser: string;
+}
+
+/** What `setsrc` hands back: the accepted setup transaction's receipt. */
+export type ServedSetSourceReceipt = {
+  pieceId: string;
+
+  /** The pointer the piece now holds. */
+  pattern: ServedPatternRef;
+
+  /** The source revision the transaction appended. */
+  revisionId: string;
+
+  /**
+   * Position in the space's commit log at which the transaction was
+   * accepted: the seq `cf inspect value-at --seq` and `diff --from/--to`
+   * read.
+   */
+  seq: number;
+
+  /**
+   * The origin the update detached, `null` when the piece had none or keeps
+   * following it.
+   */
+  detachedOrigin: string | null;
+
+  /** The origin the revision records, when the request named one. */
+  origin?: string;
+
+  /** The scope of the instance the update changed, when it was not space. */
+  scope?: ServedInstance["scope"];
+};
+
+/**
+ * What `follow-prepare` asks for: point a piece at an origin and adopt what
+ * the origin serves now, the `repoint` a client's follow makes.
+ */
+export interface ServedFollowRequest {
+  /** The piece pointed at the origin. */
+  pieceId: string;
+
+  /** As {@link ServedSetSourceRequest.instance} is. */
+  instance?: ServedInstance;
+
+  /** What the piece follows from then on: a `system:` ref or a fabric URL. */
+  origin: string;
+
+  /** The pattern the piece must still run; a piece on another refuses. */
+  expectedPattern?: ServedPatternRef;
+
+  /**
+   * The revision the piece's source log must still end at, `null` for a log
+   * that must still be empty; a piece whose log ends elsewhere refuses.
+   */
+  expectedRevision?: string | null;
+
+  /**
+   * Make the change even when its candidate cannot run over the piece's
+   * retained state, or when the current pattern cannot be loaded at all.
+   */
+  dangerouslyAllowIncompatibleSchema?: boolean;
+}
+
+/**
+ * What `follow-prepare` hands to `follow`, which makes the change in the
+ * cycle after: the request, and the change reviewed against the piece, whose
+ * candidate's closure is durable once the preparation's wave has committed.
+ */
+export type ServedFollowPreparation = {
+  request: ServedFollowRequest;
+  prepared: PreparedPieceSourceChange;
+
+  /** The incompatibility the review found, which the request accepted. */
+  acceptedIncompatibility?: string;
+};
+
+/** What `follow` hands back: the transition its direct commit made. */
+export type ServedFollowReceipt = {
+  pieceId: string;
+
+  /** The pointer the piece now holds. */
+  pattern: ServedPatternRef;
+
+  /** The origin the piece now follows, as it records it. */
+  origin: string;
+
+  /** The source revision the transition appended. */
+  revisionId: string;
+
+  /** The incompatibility the request accepted, when the review found one. */
+  acceptedIncompatibility?: string;
+
+  /** The scope of the instance the follow changed, when it was not space. */
+  scope?: ServedInstance["scope"];
+};
+
+/**
+ * Compile `program` into the space and persist its closure, so a later
+ * verb — here or on another runtime — can take the pattern by identity.
+ */
+export async function servedUploadPattern(
+  pieces: PiecesController,
+  program: RuntimeProgram,
+  options: { previousEntryIdentity?: string } = {},
+): Promise<{ pattern: Pattern; ref: ServedPatternRef }> {
+  const runtime = pieces.runtime;
+  let pattern: Pattern;
+  try {
+    pattern = await compileAndSavePattern(runtime, program, {
+      space: pieces.getSpace(),
+      ...(options.previousEntryIdentity === undefined
+        ? {}
+        : { previousEntryIdentity: options.previousEntryIdentity }),
+    });
+  } catch (error) {
+    throw new ServedLifecycleRefusal("compile-failed", describeFailure(error), {
+      cause: error,
+    });
+  }
+  const ref = runtime.patternManager.getArtifactEntryRef(pattern);
+  if (ref === undefined) {
+    throw new Error("the compiled source has no pattern identity");
+  }
+  return { pattern, ref };
+}
+
+async function resolveServedPattern(
+  pieces: PiecesController,
+  source: ServedPatternSource,
+  options: { previousEntryIdentity?: string; repairCache?: boolean } = {},
+): Promise<{ pattern: Pattern; ref: ServedPatternRef }> {
+  if (source.program !== undefined) {
+    return await servedUploadPattern(pieces, source.program, options);
+  }
+  const ref = source.pattern;
+  let pattern: Pattern | undefined;
+  try {
+    pattern = await pieces.runtime.patternManager.loadPatternByIdentity(
+      ref.identity,
+      ref.symbol,
+      pieces.getSpace(),
+      options.repairCache === undefined
+        ? undefined
+        : { repairCache: options.repairCache },
+    );
+  } catch (error) {
+    // A closure the space holds but cannot load is, to the caller, one it
+    // does not hold: the same refusal, with the loader's reason attached.
+    throw new ServedLifecycleRefusal(
+      "pattern-not-found",
+      describeFailure(error),
+      {
+        cause: error,
+      },
+    );
+  }
+  if (!pattern) {
+    throw new ServedLifecycleRefusal(
+      "pattern-not-found",
+      `pattern ${ref.identity}#${ref.symbol} is not held by the space`,
+    );
+  }
+  return { pattern, ref };
+}
+
+/**
+ * Create a piece from the requested pattern in one transaction: the result
+ * document with its pattern metadata and argument, the first source
+ * revision, an idempotent creation receipt, and the slug when asked for
+ * — a name already taken refuses the whole creation unless `force` is set.
+ * The piece is set up here and never started here: a graph instantiated on
+ * the serving runtime before anything demands it is not live, so its first
+ * run would not happen and a later demand would find it registered and
+ * skip the load that runs it. The caller names the new piece's root as the
+ * verb's demand instead, and the serving loop loads and derives it once
+ * the creation has committed.
+ */
+export async function servedInstantiatePiece(
+  pieces: PiecesController,
+  request: ServedInstantiateRequest,
+): Promise<ServedInstantiateReceipt> {
+  const runtime = pieces.runtime;
+  const space = pieces.getSpace();
+  const requestKey = request.requestKey ?? crypto.randomUUID();
+  const requestRecord = receiptRecord(
+    runtime,
+    space,
+    requestKey,
+    request.actingUser,
+  );
+  await requestRecord.sync();
+  const completed = requestRecord.get();
+  if (completed !== undefined) return completed;
+  const { pattern, ref } = await resolveServedPattern(pieces, request.source);
+  await runtime.idle();
+  const piece = runtime.getCell(
+    space,
+    {
+      purpose: "piece-instantiation",
+      principal: request.actingUser,
+      requestKey,
+    },
+    pattern.resultSchema,
+  );
+  // Setup verifies the source closure behind a content-addressed entry
+  // ref synchronously, so that verification is prepared ahead of it.
+  await runtime.patternManager.prepareSourceClosureVerification(space, [
+    ref.identity,
+  ]);
+  const slugClaim = request.slug === undefined
+    ? undefined
+    : await prepareSlugClaim(pieces, request.slug, piece, {
+      writeTargetMetadata: true,
+    });
+  const address = piece.getAsNormalizedFullLink().id;
+  const pieceId = pieceIdOf(piece);
+  if (pieceId === undefined) throw new Error("the new piece has no entity id");
+  const receipt: ServedInstantiateReceipt = {
+    requestKey,
+    pieceId,
+    pattern: ref,
+    registration: { status: request.register === true ? "pending" : "skipped" },
+    ...(slugClaim === undefined ? {} : { slug: slugClaim.validSlug }),
+  };
+  const outcome = await runtime.editWithRetry((tx) => {
+    // Per attempt: the trust snapshot governs the reads that follow it,
+    // and a retry runs on a fresh transaction.
+    runtime.stampServerRun(tx, {
+      actionId: `pattern-lifecycle/instantiate/${address}`,
+      kind: "bookkeeping",
+    });
+    setCfcTrustSnapshot(
+      tx,
+      runtime.trustSnapshotForPrincipal(request.actingUser),
+    );
+    const retained = requestRecord.withTx(tx).get();
+    if (retained !== undefined) return retained;
+    // With a transaction supplied, setup runs to completion before it
+    // returns and leaves the commit to this transaction.
+    void runtime.setup(tx, pattern, request.argument ?? {}, piece, {
+      ...(request.repository === undefined
+        ? {}
+        : { patternRepository: request.repository }),
+      initializePieceSourceHistory: true,
+    });
+    if (slugClaim !== undefined) {
+      const refusal = claimSlugInTx(pieces, slugClaim, tx, {
+        ...(request.force === undefined ? {} : { force: request.force }),
+      });
+      if (refusal !== undefined) {
+        throw new ServedLifecycleRefusal(
+          "slug-taken",
+          `Slug "${slugClaim.validSlug}" already points at ` +
+            `${refusal.held ?? "nothing"}, so assigning it would take that ` +
+            "address from whoever holds it. Pass `force` to take it anyway; " +
+            "nothing was created.",
+        );
+      }
+    }
+    requestRecord.withTx(tx).set(receipt);
+    return receipt;
+  });
+  if (outcome.error !== undefined) {
+    // A setup that threw is reported through the aborted transaction's
+    // `reason`; a storage rejection is the error itself.
+    const cause =
+      "reason" in outcome.error && outcome.error.reason !== undefined
+        ? outcome.error.reason
+        : outcome.error;
+    if (cause instanceof ServedLifecycleRefusal) throw cause;
+    throw new ServedLifecycleRefusal("setup-failed", describeFailure(cause), {
+      cause,
+    });
+  }
+  return outcome.ok!;
+}
+
+/** The address-only delivery plan retained after a registration preparation wave. */
+export interface ServedRegistrationPreparation {
+  receipt: ServedInstantiateReceipt;
+  delivery?: {
+    root: NormalizedFullLink;
+    stream: NormalizedFullLink;
+    piece: ReturnType<Cell<unknown>["getAsLink"]>;
+    eventId: string;
+    deliveryKey: string;
+  };
+  error?: string;
+}
+
+/** Durable event evidence, or an uncertain error that retains its delivery identity. */
+export interface ServedRegistrationOutcome {
+  error?: string;
+  terminal?: true;
+}
+
+/**
+ * The shape a creation receipt is retained in. Read through it, the record
+ * hands back plain data: read with no schema, a nested object such as
+ * `pattern` comes back as a proxy over the store, which a receipt cannot be,
+ * since it leaves the runtime as an HTTP body and, from a serving worker, as
+ * a structured clone on the serving port.
+ */
+const receiptSchema = {
+  type: "object",
+  properties: {
+    requestKey: { type: "string" },
+    registration: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["skipped", "pending", "handled", "failed"],
+        },
+        error: { type: "string" },
+        attempt: { type: "number" },
+        terminal: { type: "boolean" },
+      },
+      required: ["status"],
+    },
+    pieceId: { type: "string" },
+    pattern: {
+      type: "object",
+      properties: {
+        identity: { type: "string" },
+        symbol: { type: "string" },
+      },
+      required: ["identity", "symbol"],
+    },
+    slug: { type: "string" },
+  },
+  required: ["requestKey", "registration", "pieceId", "pattern"],
+} as const satisfies JSONSchema;
+
+/**
+ * The receipt `actingUser`'s creation request `requestKey` left in the space,
+ * or `undefined` when that request never committed. A caller replaying an
+ * uncertain creation reads it to learn the piece's pattern without rebuilding
+ * the program the first attempt sent.
+ */
+export async function readServedInstantiateReceipt(
+  pieces: PiecesController,
+  requestKey: string,
+  actingUser: string,
+): Promise<ServedInstantiateReceipt | undefined> {
+  const record = receiptRecord(
+    pieces.runtime,
+    pieces.getSpace(),
+    requestKey,
+    actingUser,
+  );
+  await record.sync();
+  return record.get();
+}
+
+/** The record retaining the receipt of `actingUser`'s request `requestKey`. */
+function receiptRecord(
+  runtime: Runtime,
+  space: MemorySpace,
+  requestKey: string,
+  actingUser: string,
+): Cell<ServedInstantiateReceipt | undefined> {
+  return runtime.getCell<ServedInstantiateReceipt | undefined>(
+    space,
+    {
+      purpose: "piece-instantiation-receipt",
+      principal: actingUser,
+      requestKey,
+    },
+    receiptSchema,
+  );
+}
+
+/** Select one durable attempt and resolve its native event target inside a serving wave. */
+export async function prepareServedRegistration(
+  pieces: PiecesController,
+  receipt: ServedInstantiateReceipt,
+  actingUser: string,
+): Promise<ServedRegistrationPreparation> {
+  if (
+    receipt.registration.status === "skipped" ||
+    receipt.registration.status === "handled"
+  ) return { receipt };
+  const runtime = pieces.runtime;
+  const requestRecord = receiptRecord(
+    runtime,
+    pieces.getSpace(),
+    receipt.requestKey,
+    actingUser,
+  );
+  await requestRecord.sync();
+  const selected = await runtime.editWithRetry((tx) => {
+    if (runtime.servingPosture) {
+      runtime.stampServerRun(tx, {
+        actionId: "pattern-lifecycle/registration-prepare",
+        kind: "bookkeeping",
+      });
+      setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(actingUser));
+    }
+    const retained = requestRecord.withTx(tx).get();
+    if (retained === undefined || retained.pieceId !== receipt.pieceId) {
+      throw new Error("Registration receipt was not retained for this piece");
+    }
+    if (retained.registration.status === "handled") return retained;
+    const attempt = (retained.registration.attempt ?? 0) +
+      (retained.registration.status === "failed" &&
+          retained.registration.terminal
+        ? 1
+        : 0);
+    const pending: ServedInstantiateReceipt = {
+      ...retained,
+      registration: { status: "pending", attempt },
+    };
+    requestRecord.withTx(tx).set(pending);
+    return pending;
+  });
+  if (selected.error) {
+    throw new Error("Could not retain the registration attempt", {
+      cause: selected.error,
+    });
+  }
+  receipt = selected.ok!;
+  if (receipt.registration.status === "handled") return { receipt };
+  const attempt = receipt.registration.attempt ?? 0;
+  const deliveryKey = JSON.stringify([
+    "piece-registration",
+    receipt.requestKey,
+    attempt,
+  ]);
+  try {
+    const root = await resolveSpaceRootPattern(runtime, pieces.getSpace());
+    if (root === undefined) {
+      throw new Error(
+        "The space has no default pattern; install its root and retry this request key",
+      );
+    }
+    const handler = await addPieceHandlerOf(root);
+    const piece = runtime.getCellFromEntityId(
+      pieces.getSpace(),
+      entityIdFrom(receipt.pieceId),
+    );
+    const stream = handler.getAsNormalizedFullLink();
+    const eventId = scopeCallerEventId(
+      deliveryKey,
+      actingUser,
+      stream,
+    );
+    return {
+      receipt,
+      delivery: {
+        root: root.getAsNormalizedFullLink(),
+        stream,
+        piece: piece.getAsLink(),
+        eventId,
+        deliveryKey,
+      },
+    };
+  } catch (error) {
+    return { receipt, error: describeFailure(error) };
+  }
+}
+
+/** Verify registration and retain its outcome in a separate wave after event completion. */
+export async function finishServedRegistration(
+  pieces: PiecesController,
+  prepared: ServedRegistrationPreparation,
+  actingUser: string,
+  result: ServedRegistrationOutcome,
+): Promise<ServedInstantiateReceipt> {
+  const { receipt } = prepared;
+  if (
+    receipt.registration.status === "skipped" ||
+    receipt.registration.status === "handled"
+  ) return receipt;
+  const runtime = pieces.runtime;
+  const requestRecord = receiptRecord(
+    runtime,
+    pieces.getSpace(),
+    receipt.requestKey,
+    actingUser,
+  );
+  const attempt = receipt.registration.attempt ?? 0;
+  let terminal = result.terminal === true;
+  let completed: ServedInstantiateReceipt;
+  try {
+    if (prepared.error !== undefined || result.error !== undefined) {
+      throw new Error(prepared.error ?? result.error);
+    }
+    if (prepared.delivery === undefined) {
+      throw new Error("Registration has no delivery plan");
+    }
+    const root = runtime.getCellFromLink(prepared.delivery.root);
+    const piece = runtime.getCellFromLink(prepared.delivery.piece);
+    const registry = root.asSchema({
+      type: "object",
+      properties: { pieceRegistry: pieceListSchema },
+    }).key("pieceRegistry") as Cell<Cell<unknown>[]>;
+    const members = await registry.pull();
+    if (!members.some((member) => member.equalLinks(piece))) {
+      terminal = true;
+      throw new Error(
+        "The addPiece handler committed without registering the piece",
+      );
+    }
+    completed = { ...receipt, registration: { status: "handled", attempt } };
+  } catch (error) {
+    completed = {
+      ...receipt,
+      registration: {
+        status: "failed",
+        error: describeFailure(error),
+        attempt,
+        ...(terminal ? { terminal: true as const } : {}),
+      },
+    };
+  }
+  await requestRecord.sync();
+  const outcome = await runtime.editWithRetry((tx) => {
+    if (runtime.servingPosture) {
+      runtime.stampServerRun(tx, {
+        actionId: "pattern-lifecycle/registration-finish",
+        kind: "bookkeeping",
+      });
+      setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(actingUser));
+    }
+    const current = requestRecord.withTx(tx).get();
+    if (current === undefined || current.pieceId !== receipt.pieceId) {
+      throw new Error("Registration receipt was not retained for this piece");
+    }
+    if (
+      current.registration.status === "handled" ||
+      (current.registration.attempt ?? 0) !== attempt ||
+      (current.registration.terminal === true &&
+        completed.registration.status === "failed" &&
+        completed.registration.terminal !== true)
+    ) return current;
+    requestRecord.withTx(tx).set(completed);
+    return completed;
+  });
+  if (outcome.error) {
+    throw new Error("Could not retain the registration outcome", {
+      cause: outcome.error,
+    });
+  }
+  return outcome.ok!;
+}
+
+/** Confirm that a registration wave's receipt is retained, or superseded by stronger evidence. */
+export async function confirmServedRegistration(
+  runtime: Runtime,
+  space: MemorySpace,
+  receipt: ServedInstantiateReceipt,
+  actingUser: string,
+): Promise<void> {
+  const retained = await receiptRecord(
+    runtime,
+    space,
+    receipt.requestKey,
+    actingUser,
+  ).pull();
+  if (retained === undefined || retained.pieceId !== receipt.pieceId) {
+    throw new Error("Registration receipt was not retained");
+  }
+  const actual = retained.registration;
+  const expected = receipt.registration;
+  if (
+    (actual.attempt ?? 0) > (expected.attempt ?? 0) ||
+    actual.status === "handled"
+  ) return;
+  if (
+    (actual.attempt ?? 0) < (expected.attempt ?? 0) ||
+    expected.status === "handled" ||
+    (expected.status === "failed" && actual.status !== "failed") ||
+    (expected.terminal === true && actual.terminal !== true)
+  ) {
+    throw new Error("Registration outcome was not retained");
+  }
+}
+
+/** Finish registration from an authorized client; hosted callers run the phases in serving waves. */
+export async function completeServedRegistration(
+  pieces: PiecesController,
+  receipt: ServedInstantiateReceipt,
+  actingUser: string,
+  options: {
+    append?: (
+      input: {
+        stream: NormalizedFullLink;
+        eventId: string;
+        piece: Cell<unknown>;
+      },
+    ) => Promise<void>;
+  } = {},
+): Promise<ServedInstantiateReceipt> {
+  if (
+    receipt.registration.status === "skipped" ||
+    receipt.registration.status === "handled"
+  ) return receipt;
+  const runtime = pieces.runtime;
+  if (runtime.servingPosture) {
+    throw new Error(
+      "Registration completion requires a client runtime outside the serving wave",
+    );
+  }
+  const prepared = await prepareServedRegistration(pieces, receipt, actingUser);
+  if (prepared.delivery === undefined) {
+    return finishServedRegistration(pieces, prepared, actingUser, {});
+  }
+  const { stream, eventId, deliveryKey } = prepared.delivery;
+  const piece = runtime.getCellFromLink(prepared.delivery.piece);
+  let terminal = false;
+  let observedEntries: Cell<StreamEventsDocValue> | undefined;
+  let observedEventId: string | undefined;
+  let result: ServedRegistrationOutcome = {};
+  try {
+    const entries = runtime.getCellFromEntityId<StreamEventsDocValue>(
+      pieces.getSpace(),
+      entityIdFrom(streamEntriesDocId(stream)),
+      [],
+      {
+        type: "object",
+        properties: {
+          entries: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                eventId: { type: "string" },
+                consequenced: { type: "boolean" },
+                error: { type: "string" },
+                status: { type: "string" },
+                reason: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    );
+    observedEntries = entries;
+    observedEventId = eventId;
+    await entries.sync();
+    if (options.append !== undefined) {
+      let cancel = () => {};
+      try {
+        const consequence = new Promise<void>((resolve, reject) => {
+          cancel = entries.sink((value) => {
+            const entry = value?.entries?.find((entry) =>
+              entry.eventId === eventId
+            );
+            if (!entry) return;
+            if (
+              entry.status === "dropped" ||
+              entry.status === "needs-attention" || entry.error
+            ) {
+              terminal = true;
+              reject(new Error(entry.error ?? entry.reason ?? entry.status));
+            } else if (entry.consequenced) resolve();
+          });
+        });
+        await Promise.all([
+          options.append({ stream, eventId, piece }),
+          consequence,
+        ]);
+      } finally {
+        cancel();
+      }
+    } else {
+      const handler = await runtime.getCellFromLink(stream, {
+        asCell: ["stream"],
+      }).pull();
+      if (!isStream(handler)) {
+        throw new Error("The default pattern has no addPiece handler");
+      }
+      await new Promise<void>((resolve, reject) => {
+        sendEvent(handler, { piece }, (tx) => {
+          const status = tx.status();
+          if (status.status === "error") {
+            reject(new Error(status.error.message));
+          } else resolve();
+        }, { eventId: deliveryKey, session: actingUser });
+      });
+    }
+  } catch (error) {
+    // A lost transport acknowledgment is not proof that the handler failed.
+    // A durable failure or a completed event with verified absent membership
+    // permits another delivery identity; an unreadable registry does not.
+    if (!terminal && observedEntries !== undefined) {
+      try {
+        const value = await observedEntries.pull();
+        const entry = value?.entries?.find((entry) =>
+          entry.eventId === observedEventId
+        );
+        terminal = !!entry &&
+          (entry.status === "dropped" || entry.status === "needs-attention" ||
+            !!entry.error);
+      } catch {
+        /* Keep the original attempt when the outcome cannot be read. */
+      }
+    }
+    result = {
+      error: describeFailure(error),
+      ...(terminal ? { terminal: true as const } : {}),
+    };
+  }
+  return finishServedRegistration(pieces, prepared, actingUser, result);
+}
+
+/**
+ * Replace a piece's source with a pattern the space holds, through the same
+ * checks a client's update runs — the pin against the pattern it was proved
+ * on, the compatibility assertions, the retained-argument validators — and
+ * one setup transaction that commits directly to the store: the transaction
+ * carries the requester's trust snapshot and the update's module authority,
+ * which registers on this runtime from the store's verdict. The piece is
+ * not started here. A piece the loop
+ * runs is swapped by its pointer watcher, and one it does not run waits for
+ * demand; the caller names the piece's root as the verb's demand for the
+ * latter. Neither the candidate nor the current pattern loads with cache
+ * repair, so the verb seals nothing into the cycle's wave that the update
+ * would rest on or answer for.
+ */
+export async function servedSetPieceSource(
+  pieces: PiecesController,
+  request: ServedSetSourceRequest,
+): Promise<ServedSetSourceReceipt> {
+  const { pattern } = await resolveServedPattern(
+    pieces,
+    { pattern: request.pattern },
+    { repairCache: false },
+  );
+  const piece = await servedPiece(pieces, request.pieceId, request.instance);
+  let receipt: PatternUpdateReceipt;
+  try {
+    receipt = await piece.setCompiledPattern(pattern, {
+      ...(request.repository === undefined
+        ? {}
+        : { repository: request.repository }),
+      ...(request.dangerouslyAllowIncompatibleSchema === true
+        ? { dangerouslyAllowIncompatibleSchema: true }
+        : {}),
+      ...(request.expectedPattern === undefined
+        ? {}
+        : { expectedPattern: request.expectedPattern }),
+      ...(request.origin === undefined ? {} : { origin: request.origin }),
+      served: { actingUser: request.actingUser },
+    });
+  } catch (error) {
+    throw error instanceof PieceOriginError
+      ? new ServedLifecycleRefusal("origin-unreachable", error.message, {
+        cause: error,
+      })
+      : setSourceRefusal(error);
+  }
+  return {
+    pieceId: request.pieceId,
+    pattern: receipt.ref,
+    revisionId: receipt.revisionId,
+    seq: receipt.seq,
+    detachedOrigin: receipt.detachedOrigin,
+    ...(receipt.origin === undefined ? {} : { origin: receipt.origin }),
+    ...(request.instance === undefined
+      ? {}
+      : { scope: request.instance.scope }),
+  };
+}
+
+/**
+ * The piece `pieceId` names, opened on the serving runtime without being
+ * started, for a verb that changes its source: the requester's `instance` of
+ * it when one is named, read and written as that instance by the controller.
+ *
+ * @throws ServedLifecycleRefusal `piece-not-found` when the address names no
+ * piece the space holds.
+ */
+async function servedPiece(
+  pieces: PiecesController,
+  pieceId: string,
+  instance?: ServedInstance,
+): Promise<PieceController> {
+  let piece: PieceController;
+  try {
+    if (instance === undefined) {
+      piece = await pieces.get(pieceId, false);
+    } else {
+      const cell = pieceAt(
+        pieces.runtime,
+        pieces.getSpace(),
+        pieceId,
+        instance,
+      );
+      await cell.sync();
+      piece = new PieceController(pieces, cell, {
+        scopeKeyIdentity: instance.identity,
+      });
+    }
+  } catch (error) {
+    throw new ServedLifecycleRefusal(
+      "piece-not-found",
+      describeFailure(error),
+      {
+        cause: error,
+      },
+    );
+  }
+  if (getPatternIdentityRef(piece.getCell()) === undefined) {
+    throw new ServedLifecycleRefusal(
+      "piece-not-found",
+      `piece ${pieceId} is not held by the space`,
+    );
+  }
+  return piece;
+}
+
+/**
+ * The cell of the piece `pieceId` names in `space`: its space instance, or
+ * the requester's `instance`, read through a transaction that names it.
+ */
+function pieceAt(
+  runtime: Runtime,
+  space: MemorySpace,
+  pieceId: string,
+  instance: ServedInstance | undefined,
+): Cell<unknown> {
+  const cell = runtime.getCellFromEntityId(
+    space,
+    entityIdFrom(pieceId),
+    [],
+    undefined,
+    undefined,
+    instance?.scope,
+  );
+  if (instance === undefined) return cell;
+  const tx = runtime.readTx();
+  tx.tx.scopeKeyIdentity = instance.identity;
+  return cell.withTx(tx);
+}
+
+/**
+ * Helper for `servedSetPieceSource()` and `servedFollowPieceSource()`, which
+ * names the refusal a failed update is: the piece moved off the pattern it
+ * was proved against, the candidate cannot run over the piece's state, or
+ * setup refused for a reason of its own.
+ */
+function setSourceRefusal(error: unknown): ServedLifecycleRefusal {
+  const message = describeFailure(error);
+  if (
+    error instanceof PieceSourceChangedError ||
+    message.includes(PIECE_SOURCE_MOVED)
+  ) {
+    return new ServedLifecycleRefusal("source-moved", message, {
+      cause: error,
+    });
+  }
+  if (isPieceSourceCompatibilityRefusal(error)) {
+    return new ServedLifecycleRefusal("incompatible", message, {
+      cause: error,
+    });
+  }
+  return new ServedLifecycleRefusal("setup-failed", message, { cause: error });
+}
+
+/**
+ * The durability read behind {@link servedSetPieceSource}: the piece
+ * document, at the requester's `instance` when the update named one, holds
+ * the pattern pointer the transaction wrote and the revision it appended,
+ * with the origin it records when it named one.
+ */
+export async function confirmServedSetSource(
+  runtime: Runtime,
+  space: MemorySpace,
+  receipt: ServedSetSourceReceipt,
+  instance?: ServedInstance,
+): Promise<void> {
+  const piece = pieceAt(runtime, space, receipt.pieceId, instance);
+  await piece.sync();
+  const stored = getPatternIdentityRef(piece);
+  if (
+    stored === undefined ||
+    stored.identity !== receipt.pattern.identity ||
+    stored.symbol !== receipt.pattern.symbol ||
+    !getPieceSourceRevisions(piece).some((revision) =>
+      revision.revisionId === receipt.revisionId &&
+      (receipt.origin === undefined || revision.origin === receipt.origin)
+    )
+  ) {
+    throw new Error(
+      `piece ${receipt.pieceId} does not hold pattern ` +
+        `${receipt.pattern.identity}#${receipt.pattern.symbol} at revision ` +
+        `${receipt.revisionId}: the source update did not commit`,
+    );
+  }
+}
+
+/**
+ * The first half of a served follow: prepare the `repoint` that points a
+ * piece at `request.origin` and adopts what the origin serves now, through
+ * the review a client's follow runs, without making it. Resolving and
+ * compiling the candidate persists its closure into this cycle's wave, so
+ * the cycle after, in which {@link servedFollowPieceSource} makes the change,
+ * finds it durable. A candidate that cannot run over the piece's retained
+ * state is refused `incompatible` unless the request accepts that.
+ */
+export async function servedPrepareFollow(
+  pieces: PiecesController,
+  request: ServedFollowRequest,
+): Promise<ServedFollowPreparation> {
+  const piece = await servedPiece(pieces, request.pieceId, request.instance);
+  let preparation: PieceSourcePreparation;
+  try {
+    preparation = await piece.prepareSourceChange(
+      { kind: "repoint", url: request.origin },
+      followPins(request),
+    );
+  } catch (error) {
+    throw prepareFollowRefusal(error);
+  }
+  switch (preparation.status) {
+    case "prepared":
+      return { request, prepared: preparation.prepared };
+    case "incompatible":
+      if (request.dangerouslyAllowIncompatibleSchema !== true) {
+        throw new ServedLifecycleRefusal("incompatible", preparation.message);
+      }
+      return {
+        request,
+        prepared: preparation.prepared,
+        acceptedIncompatibility: preparation.message,
+      };
+    case "current":
+      throw new Error("a repoint offered no change to prepare");
+  }
+}
+
+/**
+ * The second half of a served follow: make the change `preparation` reviewed,
+ * checked again against the piece as it stands — pinned to the pattern and
+ * source-log head the review read, so a piece whose source moved since is
+ * refused `source-moved`, and to the review itself — in one transition that
+ * records the origin and commits directly to the store with `actingUser`'s
+ * trust snapshot. The piece is not started here; a piece the loop runs is
+ * swapped by its pointer watcher, and the caller names the piece's root as
+ * the verb's demand for one it does not run.
+ */
+export async function servedFollowPieceSource(
+  pieces: PiecesController,
+  preparation: ServedFollowPreparation,
+  actingUser: string,
+): Promise<ServedFollowReceipt> {
+  const { request, prepared } = preparation;
+  const piece = await servedPiece(pieces, request.pieceId, request.instance);
+  let result: PieceSourceActionResult;
+  try {
+    result = await piece.changeSource(prepared.action, {
+      expectedPattern: prepared.expected.pattern,
+      expectedRevision: prepared.expected.revisionId,
+      confirmedChange: prepared,
+      served: { actingUser },
+    });
+  } catch (error) {
+    throw setSourceRefusal(error);
+  }
+  if (result.status === "incompatible") {
+    throw new ServedLifecycleRefusal("incompatible", result.message);
+  }
+  const settled = getPieceSourceSnapshot(piece.getCell());
+  if (
+    settled === undefined || settled.origin === null ||
+    settled.revisionId === null
+  ) {
+    throw new Error(
+      `piece ${request.pieceId} records no origin after the follow committed`,
+    );
+  }
+  return {
+    pieceId: request.pieceId,
+    pattern: settled.pattern,
+    origin: settled.origin,
+    revisionId: settled.revisionId,
+    ...(preparation.acceptedIncompatibility === undefined
+      ? {}
+      : { acceptedIncompatibility: preparation.acceptedIncompatibility }),
+    ...(request.instance === undefined
+      ? {}
+      : { scope: request.instance.scope }),
+  };
+}
+
+/** The pins a follow's request names, as the piece controller takes them. */
+function followPins(request: ServedFollowRequest): {
+  expectedPattern?: ServedPatternRef;
+  expectedRevision?: string | null;
+} {
+  return {
+    ...(request.expectedPattern === undefined
+      ? {}
+      : { expectedPattern: request.expectedPattern }),
+    ...(request.expectedRevision === undefined
+      ? {}
+      : { expectedRevision: request.expectedRevision }),
+  };
+}
+
+/**
+ * Helper for `servedPrepareFollow()`, which names the refusal a failed
+ * preparation is — the origin cannot be followed or its source could not be
+ * read or compiled, the piece moved off a pin, the candidate cannot run over
+ * the piece's state, or the piece's stored argument does not satisfy the
+ * candidate — and hands back any other failure as it is, a failure of the
+ * serving side.
+ */
+function prepareFollowRefusal(error: unknown): unknown {
+  const message = describeFailure(error);
+  if (error instanceof PieceOriginError) {
+    return new ServedLifecycleRefusal("origin-unreachable", message, {
+      cause: error,
+    });
+  }
+  if (isStoredArgumentSchemaRefusal(error)) {
+    return new ServedLifecycleRefusal("setup-failed", message, {
+      cause: error,
+    });
+  }
+  if (
+    error instanceof PieceSourceChangedError ||
+    message.includes(PIECE_SOURCE_MOVED)
+  ) {
+    return new ServedLifecycleRefusal("source-moved", message, {
+      cause: error,
+    });
+  }
+  if (isPieceSourceCompatibilityRefusal(error)) {
+    return new ServedLifecycleRefusal("incompatible", message, {
+      cause: error,
+    });
+  }
+  return error;
+}
+
+/**
+ * The durability read behind {@link servedFollowPieceSource}: the piece
+ * document, at the requester's `instance` when the follow named one, holds
+ * the pattern pointer and the origin the transition wrote, and the revision
+ * it appended.
+ */
+export async function confirmServedFollow(
+  runtime: Runtime,
+  space: MemorySpace,
+  receipt: ServedFollowReceipt,
+  instance?: ServedInstance,
+): Promise<void> {
+  const piece = pieceAt(runtime, space, receipt.pieceId, instance);
+  await piece.sync();
+  const stored = getPieceSourceSnapshot(piece);
+  if (
+    stored === undefined ||
+    stored.pattern.identity !== receipt.pattern.identity ||
+    stored.pattern.symbol !== receipt.pattern.symbol ||
+    stored.origin !== receipt.origin ||
+    !getPieceSourceRevisions(piece).some((revision) =>
+      revision.revisionId === receipt.revisionId
+    )
+  ) {
+    throw new Error(
+      `piece ${receipt.pieceId} does not follow ${receipt.origin} on ` +
+        `${receipt.pattern.identity}#${receipt.pattern.symbol} at revision ` +
+        `${receipt.revisionId}: the follow did not commit`,
+    );
+  }
+}
+
+/**
+ * Confirm the creation record that commits atomically with setup, and the
+ * retained piece identity. A subsequent source update can change the current
+ * pattern before a creation or registration retry is confirmed.
+ */
+export async function confirmServedInstantiate(
+  runtime: Runtime,
+  space: MemorySpace,
+  receipt: ServedInstantiateReceipt,
+  actingUser: string,
+): Promise<void> {
+  const retained = await receiptRecord(
+    runtime,
+    space,
+    receipt.requestKey,
+    actingUser,
+  ).pull();
+  const expectedPiece = runtime.getCell(space, {
+    purpose: "piece-instantiation",
+    principal: actingUser,
+    requestKey: receipt.requestKey,
+  });
+  if (
+    retained === undefined || retained.requestKey !== receipt.requestKey ||
+    retained.pieceId !== receipt.pieceId ||
+    pieceIdOf(expectedPiece) !== receipt.pieceId ||
+    retained.pattern.identity !== receipt.pattern.identity ||
+    retained.pattern.symbol !== receipt.pattern.symbol ||
+    retained.slug !== receipt.slug
+  ) {
+    throw new Error(
+      "Creation receipt was not retained for this piece and caller",
+    );
+  }
+  const piece = runtime.getCellFromEntityId(
+    space,
+    entityIdFrom(receipt.pieceId),
+  );
+  await piece.sync();
+  if (getPatternIdentityRef(piece) === undefined) {
+    throw new Error(
+      `piece ${receipt.pieceId} has no pattern: the creation did not commit`,
+    );
+  }
+}

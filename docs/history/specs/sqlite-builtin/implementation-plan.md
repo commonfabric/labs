@@ -60,7 +60,7 @@ return `not-implemented`. No behavior yet. De-risks the type design.
 
 **Files**
 
-- [`packages/api/index.ts`](../../../../packages/api/index.ts) — add the public
+- [`packages/api/index.ts`](../../../../base/api/index.ts) — add the public
   types: branded `SqliteDatabase`, `SqliteDatabaseSource`, `SqliteQueryParams`,
   `SqliteQueryState<Row>`, `SqliteExecuteParams`, `SqliteExecuteState`, and the
   function declarations (`sqliteDatabase`, `sqliteQuery`, `sqliteExecute`).
@@ -68,12 +68,12 @@ return `not-implemented`. No behavior yet. De-risks the type design.
   style.
 - `packages/api/` — `table(...)` and `cfLink<T>()` helper types (compile to
   `JSONSchema`; `cfLink` emits `{ type: "string", cfLink: true }`).
-- [`packages/runner/src/builder/built-in.ts`](../../../../packages/runner/src/builder/built-in.ts)
+- [`packages/runner/src/builder/built-in.ts`](../../../../runtime/runner/src/builder/built-in.ts)
   — builder factories via `createNodeFactory({ type: "ref", implementation })`.
-- [`packages/runner/src/builder/factory.ts`](../../../../packages/runner/src/builder/factory.ts)
+- [`packages/runner/src/builder/factory.ts`](../../../../runtime/runner/src/builder/factory.ts)
   — export `sqliteDatabase`/`sqliteQuery`/`sqliteExecute`/`table`/`cfLink` on the
   `commonfabric` object.
-- [`packages/runner/src/builtins/index.ts`](../../../../packages/runner/src/builtins/index.ts)
+- [`packages/runner/src/builtins/index.ts`](../../../../runtime/runner/src/builtins/index.ts)
   — `registerBuiltins` registers `sqliteQuery` (`raw`) and `sqliteExecute`
   (`raw(..., { isEffect: true })`), initially pointing at stubs that throw
   `not-implemented`.
@@ -97,20 +97,20 @@ builtin plumbing.
 **Files & work**
 
 1. **Protocol — new `sqlite.query` verb.**
-   - [`packages/memory/v2.ts`](../../../../packages/memory/v2.ts) — add
+   - [`packages/memory/v2.ts`](../../../../runtime/memory/v2.ts) — add
      `SqliteQueryRequest` to the `ClientMessage` union (near line 396), and a
      `{ rows: unknown[] }` payload on the existing `ResponseMessage`.
-   - [`packages/memory/v2/server.ts`](../../../../packages/memory/v2/server.ts) —
+   - [`packages/memory/v2/server.ts`](../../../../runtime/memory/v2/server.ts) —
      parse the new `type` in `parseClientMessage`, route it in
      `Connection.receiveOrdered` (guarded by `requireSession`, like the
      `transact`/`graph.query` cases), and add `Server.sqliteQuery(message)`
      modelled on `Server.queryGraph` (~line 444 client / server handler).
-   - [`packages/memory/v2/client.ts`](../../../../packages/memory/v2/client.ts) —
+   - [`packages/memory/v2/client.ts`](../../../../runtime/memory/v2/client.ts) —
      add `SpaceSession.sqliteQuery(...)` mirroring `queryGraph` (~line 444),
      using the existing `client.request<T>()` requestId correlation (~line 145).
 
 2. **Server execution & ATTACH.**
-   - [`packages/memory/v2/engine.ts`](../../../../packages/memory/v2/engine.ts) —
+   - [`packages/memory/v2/engine.ts`](../../../../runtime/memory/v2/engine.ts) —
      `Server.sqliteQuery` calls `openEngine(space)` (~line 1456), ATTACHes the
      cell-derived db file via the attach/detach cache, applies the **statement
      guard** (single `SELECT`/read-only CTE; reject DML/DDL, schema-qualified
@@ -118,7 +118,7 @@ builtin plumbing.
      `engine.database.prepare(sql).all(params)`. The guard is tokenizer-level —
      **confirmed: `@db/sqlite@0.12.0` exposes no authorizer** (Section
      [04](../../../specs/sqlite-builtin/04-server-execution-and-transactions.md#isolation-namespacing--the-statement-guard)).
-   - [`packages/memory/v2/storage-path.ts`](../../../../packages/memory/v2/storage-path.ts)
+   - [`packages/memory/v2/storage-path.ts`](../../../../runtime/memory/v2/storage-path.ts)
      — add sibling-file naming `cell-<entityhash>.sqlite` next to the space file
      (`engine-v3/…`). (Q6 resolved → Option A, one file per db.)
    - **Attach/detach LRU cache** + **core-table-rename flag** (Q6/Q8a): probe the
@@ -129,10 +129,10 @@ builtin plumbing.
 3. **Runner builtin — `sqlite-query.ts`.**
    - Read `db`, `sql`, `params` from `inputsCell`. Recover the handle cell from
      `db` via the `toCell` back-pointer
-     ([`packages/runner/src/back-to-cell.ts`](../../../../packages/runner/src/back-to-cell.ts);
-     [`query-result-proxy.ts`](../../../../packages/runner/src/query-result-proxy.ts)).
+     ([`packages/runner/src/back-to-cell.ts`](../../../../runtime/runner/src/back-to-cell.ts);
+     [`query-result-proxy.ts`](../../../../runtime/runner/src/query-result-proxy.ts)).
    - Allocate `{ pending, result, error }` output cells (model on
-     [`packages/runner/src/builtins/fetch.ts`](../../../../packages/runner/src/builtins/fetch.ts)).
+     [`packages/runner/src/builtins/fetch.ts`](../../../../runtime/runner/src/builtins/fetch.ts)).
    - Issue the query over the space session (the runner's storage client) and
      write the result back. (Reads are non-mutating, so no post-commit effect is
      needed for the read path itself.)
@@ -141,7 +141,7 @@ builtin plumbing.
    - `sqliteDatabase()` (no source) allocates a handle cell in the current frame
      (as builtins allocate result cells), with an **empty readable value**; the
      db name derives from its entity id
-     ([`packages/runner/src/create-ref.ts`](../../../../packages/runner/src/create-ref.ts)).
+     ([`packages/runner/src/create-ref.ts`](../../../../runtime/runner/src/create-ref.ts)).
 
 **Tests**
 
@@ -164,11 +164,11 @@ cells + rows commit atomically.
 **Files & work**
 
 1. **Commit operation kind.**
-   - [`packages/memory/v2.ts`](../../../../packages/memory/v2.ts) — add
+   - [`packages/memory/v2.ts`](../../../../runtime/memory/v2.ts) — add
      `SqliteOperation { op: "sqlite"; db; sql; params }` to the `Operation`
      union (currently `SetOperation | PatchOperation | DeleteOperation`, lines
      69–89).
-   - [`packages/memory/v2/engine.ts`](../../../../packages/memory/v2/engine.ts) —
+   - [`packages/memory/v2/engine.ts`](../../../../runtime/memory/v2/engine.ts) —
      add `case "sqlite"` to `writeOperation` (line 3241): ensure the db is
      ATTACHed to `engine.database` (already inside the open transaction from
      `applyCommit` → `applyCommitTransaction`, lines 1510 / 3068), then execute
@@ -218,8 +218,8 @@ state.
 
 **Files & work**
 
-- [`packages/memory/v2/engine.ts`](../../../../packages/memory/v2/engine.ts) /
-  [`server.ts`](../../../../packages/memory/v2/server.ts) — when
+- [`packages/memory/v2/engine.ts`](../../../../runtime/memory/v2/engine.ts) /
+  [`server.ts`](../../../../runtime/memory/v2/server.ts) — when
   `applyCommitTransaction` applies a `sqlite` op, mark the **handle cell's
   entity** dirty via `markSpaceDirty` (line ~1280; already per-entity). The
   session sync (`syncSessionForConnection`, ~line 1152) pushes only after the
@@ -227,10 +227,10 @@ state.
 - `sqlite-query.ts` — read `reactOn` wholesale (any schema) so the scheduler
   subscribes to the handle cell; re-issue the query when it is dirtied. Confirm
   via the scheduler's own-commit-source / committed-state semantics
-  ([`packages/runner/src/scheduler/`](../../../../packages/runner/src/scheduler)).
+  ([`packages/runner/src/scheduler/`](../../../../runtime/runner/src/scheduler)).
 - Fallback: if a server hook is not viable, bump the handle cell from a
   post-commit effect (`enqueueSinkRequestPostCommitEffect`,
-  [`packages/runner/src/cfc/sink-request.ts`](../../../../packages/runner/src/cfc/sink-request.ts)).
+  [`packages/runner/src/cfc/sink-request.ts`](../../../../runtime/runner/src/cfc/sink-request.ts)).
 
 **Tests:** write → dependent `sqliteQuery` re-runs after commit; assert no
 re-run against optimistic in-flight state (no phantom rows).
@@ -252,8 +252,8 @@ re-run against optimistic in-flight state (no phantom rows).
   named columns) against the db table schema; for a link column, require a cell
   and serialize an **absolute** sigil link via
   `createSigilLinkFromParsedLink(link, { includeSchema: false })`
-  ([`packages/runner/src/link-utils.ts`](../../../../packages/runner/src/link-utils.ts);
-  cf. `Cell.getAsLink`, [`packages/runner/src/cell.ts`](../../../../packages/runner/src/cell.ts) ~1400).
+  ([`packages/runner/src/link-utils.ts`](../../../../runtime/runner/src/link-utils.ts);
+  cf. `Cell.getAsLink`, [`packages/runner/src/cell.ts`](../../../../runtime/runner/src/cell.ts) ~1400).
   Enforce all throw conditions (Section 02).
 - **Decode (query builtin):** identify link columns (Row schema `Cell<T>` → table
   `cfLink` → `*_cf_link` suffix); `JSON.parse`, validate single `link@1`,
@@ -274,14 +274,14 @@ fields drive decode through aliases/joins.
 This is a **routine, well-trodden change**, not a research item: the transformer
 already lowers type arguments to schemas for `toSchema<T>`, `generateObject`, and
 `lift`. Follow the existing path — see
-[`packages/ts-transformers/docs/adding-type-arg-schema-lowering.md`](../../../../packages/ts-transformers/docs/adding-type-arg-schema-lowering.md)
+[`packages/ts-transformers/docs/adding-type-arg-schema-lowering.md`](../../../../base/ts-transformers/docs/adding-type-arg-schema-lowering.md)
 (added alongside this spec).
 
 **Files & work**
 
-- [`packages/ts-transformers/src/core/commonfabric-runtime-registry.ts`](../../../../packages/ts-transformers/src/core/commonfabric-runtime-registry.ts)
+- [`packages/ts-transformers/src/core/commonfabric-runtime-registry.ts`](../../../../base/ts-transformers/src/core/commonfabric-runtime-registry.ts)
   — register `sqliteQuery` (a `runtime-call` entry is enough).
-- [`packages/ts-transformers/src/transformers/schema-injection.ts`](../../../../packages/ts-transformers/src/transformers/schema-injection.ts)
+- [`packages/ts-transformers/src/transformers/schema-injection.ts`](../../../../base/ts-transformers/src/transformers/schema-injection.ts)
   — recognize the `sqliteQuery<Row>` call (`detectCallKind` + single type arg)
   and inject the lowered schema via `createSchemaCallWithRegistryTransfer`,
   exactly as `generate-object` injects its result schema. `schema-generator.ts`
@@ -309,7 +309,7 @@ ops in the commit record.
 
 **Files & work**
 
-- [`packages/memory/v2/engine.ts`](../../../../packages/memory/v2/engine.ts):
+- [`packages/memory/v2/engine.ts`](../../../../runtime/memory/v2/engine.ts):
   - Add a `_cf_commit_watermark(seq)` row in each attached db, written **inside**
     the commit txn and advanced on commit (done in Phase 2; no hot-path cost).
   - **Persist the commit's `sqlite` ops** in the commit record (Phase 2) so a
@@ -342,7 +342,7 @@ source-agnostic. **[gated on Q13/Q14 — co-location, cross-space dirty.]**
 
 **Files & work**
 
-- [`packages/cli/commands/piece.ts`](../../../../packages/cli/commands/piece.ts) /
+- [`packages/cli/commands/piece.ts`](../../../../runtime/cli/commands/piece.ts) /
   `parseLink` — recognize the `sqlite:` scheme in `cf piece link`. Create-if-absent
   a handle cell with id from `createRef(space, absPath)` in a service space,
   store the `{ disk: { path } }` descriptor as server-side registration (not in
@@ -384,8 +384,8 @@ remain deferred).
 
 - **9a — per-column:** honor static `ifc` on table columns for read-label
   propagation and write-time checks, reusing `ContextualFlowControl`
-  ([`packages/runner/src/cfc.ts`](../../../../packages/runner/src/cfc.ts)) and the
-  write-policy sink ([`sink-request.ts`](../../../../packages/runner/src/cfc/sink-request.ts)).
+  ([`packages/runner/src/cfc.ts`](../../../../runtime/runner/src/cfc.ts)) and the
+  write-policy sink ([`sink-request.ts`](../../../../runtime/runner/src/cfc/sink-request.ts)).
 - **9b — per-row:** declarative row-label projection evaluated server-side at
   commit and on read; row-level filtering / fail-closed reads. **[gated on
   Q16/Q17.]** Implementation note: `@db/sqlite` exposes custom scalar/aggregate

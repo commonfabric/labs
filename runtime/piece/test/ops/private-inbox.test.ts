@@ -1,0 +1,1306 @@
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import { createSession, Identity } from "@commonfabric/identity";
+import {
+  ACLManager,
+  type Cell,
+  type JSONSchema,
+  type MemorySpace,
+  Runtime,
+  type RuntimeProgram,
+} from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
+import * as ops from "../../src/ops/mod.ts";
+import { PiecesController } from "../../src/ops/pieces-controller.ts";
+import { seedProfileOwner } from "../../../runner/test/cfc-seed-envelope.ts";
+import { installCustomRoot } from "../install-custom-root.ts";
+import {
+  ensurePrivateInboxOf,
+  PRIVATE_INBOX_SPACE_NAME,
+  type PrivateInboxEnsure,
+} from "../../src/ops/private-inbox.ts";
+
+const identity = await Identity.fromPassphrase("private inbox adoption");
+
+/** A principal other than the test's, to own a foreign inbox's space. */
+const someoneElse = (await Identity.fromPassphrase("someone else")).did();
+
+// A Home pattern reduced to the fields the host reads and the streams it sends,
+// whose ensure records what it is sent: the inbox to adopt, the inbox to
+// replace, the deciding profile, and the refusal, its reason and inbox. `defaultProfile` is a slot
+// holding the default under `profile`, as Home's is. The ensure throws while
+// `failEnsure` is set. Its `createOwnPrivateInbox` counts its runs in
+// `createdOwn`, and throws while `failCreate` is set; `order` names each
+// stream's runs in the order they happened.
+const program: RuntimeProgram = {
+  main: "/home.tsx",
+  files: [{
+    name: "/home.tsx",
+    contents: `
+import { type Cell, handler, pattern, Writable } from "commonfabric";
+
+type Pointer = { piece?: Cell<{ name?: string }> };
+
+type Named = { piece?: Cell<{ inbox?: Pointer }> };
+
+type Refused = { reason?: string; piece?: Cell<{ name?: string }> };
+
+const createOwnPrivateInbox = handler<
+  Record<string, never>,
+  {
+    createdOwn: Writable<number>;
+    order: Writable<string[]>;
+    failCreate: Writable<boolean>;
+  }
+>((_event, { createdOwn, order, failCreate }) => {
+  if (failCreate.get()) throw new Error("Home fails the creation");
+  createdOwn.set(createdOwn.get() + 1);
+  order.push("create");
+});
+
+const ensurePrivateInbox = handler<
+  {
+    adopt?: Cell<{ name?: string }>;
+    replace?: Cell<{ name?: string }>[];
+    from?: Cell<{ inbox?: Pointer }>;
+    refused?: { reason: string; inbox: Cell<{ name?: string }> };
+  },
+  {
+    ensured: Writable<number>;
+    adopted: Writable<Pointer>;
+    replaced: Writable<Cell<{ name?: string }>[]>;
+    decidedBy: Writable<Named>;
+    refused: Writable<Refused>;
+    failEnsure: Writable<boolean>;
+    order: Writable<string[]>;
+  }
+>((event, { ensured, adopted, replaced, decidedBy, refused, failEnsure, order }) => {
+  if (failEnsure.get()) throw new Error("Home fails the ensure");
+  ensured.set(ensured.get() + 1);
+  order.push("ensure");
+  adopted.set(event?.adopt === undefined ? {} : { piece: event.adopt });
+  replaced.set(event?.replace ?? []);
+  decidedBy.set(event?.from === undefined ? {} : { piece: event.from });
+  refused.set(
+    event?.refused === undefined
+      ? {}
+      : { reason: event.refused.reason, piece: event.refused.inbox },
+  );
+});
+
+export default pattern(() => {
+  const privateInbox = new Writable<Pointer>({}).for("privateInbox");
+  const profiles = new Writable<{ inbox?: Pointer }[]>([]).for("profiles");
+  const defaultProfile = new Writable<
+    { profile?: Cell<{ inbox?: Pointer }> }
+  >({}).for("defaultProfileSlot");
+  const mru = new Writable<Cell<{ inbox?: Pointer }>[]>([]).for("mru");
+  const retiredProfiles = new Writable<Cell<{ inbox?: Pointer }>[]>([]).for(
+    "retiredProfiles",
+  );
+  const ensured = new Writable(0).for("ensured");
+  const adopted = new Writable<Pointer>({}).for("adopted");
+  const replaced = new Writable<Cell<{ name?: string }>[]>([]).for(
+    "replaced",
+  );
+  const decidedBy = new Writable<Named>({}).for("decidedBy");
+  const refused = new Writable<Refused>({}).for("refused");
+  const failEnsure = new Writable(false).for("failEnsure");
+  const ownPrivateInbox = new Writable<Pointer>({}).for("ownPrivateInbox");
+  const createdOwn = new Writable(0).for("createdOwn");
+  const failCreate = new Writable(false).for("failCreate");
+  const order = new Writable<string[]>([]).for("order");
+  return {
+    privateInbox,
+    profiles,
+    defaultProfile,
+    mru,
+    retiredProfiles,
+    ensured,
+    adopted,
+    replaced,
+    decidedBy,
+    refused,
+    failEnsure,
+    ownPrivateInbox,
+    createdOwn,
+    failCreate,
+    order,
+    ensurePrivateInbox: ensurePrivateInbox({
+      ensured,
+      adopted,
+      replaced,
+      decidedBy,
+      refused,
+      failEnsure,
+      order,
+    }),
+    createOwnPrivateInbox: createOwnPrivateInbox({
+      createdOwn,
+      order,
+      failCreate,
+    }),
+  };
+});`,
+  }],
+};
+
+/** A space's allocation record of the space a name stands for. */
+const allocationSchema = {
+  type: "object",
+  properties: { did: { type: "string" } },
+} as const satisfies JSONSchema;
+
+/** A list of links, each read as the link it is. */
+const linkListSchema = {
+  type: "array",
+  items: { type: "unknown", asCell: ["cell"] },
+} as const satisfies JSONSchema;
+
+/** The space and id a link names, which is what makes two links one. */
+function addressOf(cell: Cell<unknown>): { space: string; id: string } {
+  const { space, id } = cell.getAsNormalizedFullLink();
+  return { space, id };
+}
+
+describe("ensurePrivateInboxOf()", () => {
+  let storage: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+  let controller: PiecesController;
+  let home: Cell<unknown>;
+  // The space Home's own inboxes live in, which Home's space records under
+  // `PRIVATE_INBOX_SPACE_NAME`, as Home's first creation of one records it.
+  let ownSpace: MemorySpace;
+
+  beforeEach(async () => {
+    storage = StorageManager.emulate({ as: identity });
+    runtime = new Runtime({
+      apiUrl: new URL("https://home.example"),
+      storageManager: storage,
+      experimental: { serverExecution: false },
+    });
+    controller = new PiecesController(
+      createSession({ identity, spaceDid: identity.did() }),
+      runtime,
+    );
+    await controller.synced();
+    home = await installCustomRoot(runtime, controller, program);
+    ownSpace = await runtime.createSpace({ grants: { "*": "WRITE" } });
+    await runtime.editWithRetry((tx) =>
+      runtime.getCell(
+        home.space,
+        {
+          inSpaceAllocation: {
+            space: home.space,
+            name: PRIVATE_INBOX_SPACE_NAME,
+          },
+        },
+        allocationSchema,
+        tx,
+      ).set({ did: ownSpace })
+    );
+  });
+
+  afterEach(async () => {
+    await controller.dispose();
+    await storage.close();
+  });
+
+  /** A document in `space` holding `value`. */
+  async function documentIn(
+    space: MemorySpace,
+    value: unknown,
+  ): Promise<Cell<unknown>> {
+    const cell = runtime.getCell<unknown>(space, crypto.randomUUID());
+    await runtime.editWithRetry((tx) => cell.withTx(tx).set(value as never));
+    return cell;
+  }
+
+  /**
+   * What an inbox piece in `space` holds: a list of offers, and a link to a
+   * `receive` stream, as a piece's result links to each stream it declares.
+   */
+  function inboxValue(space: MemorySpace): unknown {
+    return {
+      offers: [],
+      receive: runtime.getCell(space, crypto.randomUUID(), {
+        asCell: ["stream"],
+      }),
+    };
+  }
+
+  /** A usable inbox Home made, in the space it makes its own inboxes in. */
+  async function usableInbox(): Promise<Cell<unknown>> {
+    return await documentIn(ownSpace, inboxValue(ownSpace));
+  }
+
+  /**
+   * A usable inbox Home did not make, as a loom daemon makes one: in a space
+   * of its own that grants every principal `WRITE`.
+   */
+  async function inboxHomeDidNotMake(): Promise<Cell<unknown>> {
+    const space = await runtime.createSpace({ grants: { "*": "WRITE" } });
+    return await documentIn(space, inboxValue(space));
+  }
+
+  /**
+   * A profile of the identity's, in a space of its own, whose stored pointer
+   * is `inbox`, labeled as one the identity set up is.
+   */
+  async function profilePointingAt(inbox: unknown): Promise<Cell<unknown>> {
+    const space = await runtime.createSpace({ grants: { "*": "WRITE" } });
+    const profile = await documentIn(space, {
+      inbox: inbox === undefined ? {} : { piece: inbox },
+    });
+    const { id } = profile.getAsNormalizedFullLink();
+    await runtime.editWithRetry((tx) =>
+      seedProfileOwner(tx, { space, scope: "space", id }, identity.did())
+    );
+    return profile;
+  }
+
+  /** Puts `profiles` in Home's profile list. */
+  async function listProfiles(profiles: Cell<unknown>[]): Promise<void> {
+    await runtime.editWithRetry((tx) =>
+      home.withTx(tx).key("profiles" as never).set(profiles as never)
+    );
+  }
+
+  /** Ensures Home's inbox, and waits for Home's handler to run. */
+  async function ensure(): Promise<PrivateInboxEnsure> {
+    const result = await ensurePrivateInboxOf(runtime, home, identity.did());
+    await runtime.idle();
+    return result;
+  }
+
+  /** Makes `profile` Home's default profile. */
+  async function setDefault(profile: Cell<unknown>): Promise<void> {
+    await runtime.editWithRetry((tx) =>
+      home.withTx(tx).key("defaultProfile" as never).key("profile" as never)
+        .set(profile as never)
+    );
+  }
+
+  /** Puts `profiles` in Home's MRU list, most recent first. */
+  async function listRecent(profiles: Cell<unknown>[]): Promise<void> {
+    await runtime.editWithRetry((tx) =>
+      home.withTx(tx).key("mru" as never).set(profiles as never)
+    );
+  }
+
+  /** Home's retired list, its elements read as the links they are. */
+  function retiredList(): Cell<Cell<unknown>[]> {
+    return home.key("retiredProfiles").asSchema(linkListSchema);
+  }
+
+  /** Puts `profiles` in Home's retired list. */
+  async function retire(profiles: Cell<unknown>[]): Promise<void> {
+    await runtime.editWithRetry((tx) => retiredList().withTx(tx).set(profiles));
+  }
+
+  /** The profile the event Home's handler was last sent names, if any. */
+  async function decidedBy(): Promise<Cell<unknown> | undefined> {
+    const named = await home.key("decidedBy" as never).asSchema({
+      type: "object",
+      properties: { piece: { type: "unknown", asCell: ["cell"] } },
+    }).pull() as { piece?: Cell<unknown> } | undefined;
+    return named?.piece;
+  }
+
+  /** The inbox Home's handler was last sent to adopt, if any. */
+  async function adopted(): Promise<Cell<unknown> | undefined> {
+    const pointer = await home.key("adopted" as never).asSchema({
+      type: "object",
+      properties: { piece: { type: "unknown", asCell: ["cell"] } },
+    }).pull() as { piece?: Cell<unknown> } | undefined;
+    return pointer?.piece;
+  }
+
+  /** The inboxes Home's handler was last sent to replace. */
+  async function replacedSent(): Promise<Cell<unknown>[]> {
+    return (await home.key("replaced" as never).asSchema(linkListSchema)
+      .pull() as Cell<unknown>[] | undefined) ?? [];
+  }
+
+  /**
+   * The refusal the event Home's handler was last sent names, as its reason
+   * and the address of the inbox refused, if any.
+   */
+  async function refusedSent(): Promise<
+    { reason?: string; inbox?: { space: string; id: string } } | undefined
+  > {
+    const sent = await home.key("refused" as never).asSchema({
+      type: "object",
+      properties: {
+        reason: { type: "string" },
+        piece: { type: "unknown", asCell: ["cell"] },
+      },
+    }).pull() as { reason?: string; piece?: Cell<unknown> } | undefined;
+    if (sent?.reason === undefined && sent?.piece === undefined) {
+      return undefined;
+    }
+    return {
+      reason: sent.reason,
+      inbox: sent.piece === undefined ? undefined : addressOf(sent.piece),
+    };
+  }
+
+  /** How many adoption refusals have been logged. */
+  function refusalsLogged(): number {
+    return getLoggerCountsBreakdown()["piece.private-inbox"]
+      ?.["adoption-refused"]?.warn ?? 0;
+  }
+
+  it("names a usable advertised inbox for Home to adopt", async () => {
+    const inbox = await usableInbox();
+    await listProfiles([await profilePointingAt(inbox)]);
+
+    const result = await ensure();
+
+    expect(result.outcome).toBe("adopt");
+    const named = await adopted();
+    expect(named === undefined ? undefined : addressOf(named)).toEqual(
+      addressOf(inbox),
+    );
+    expect(await refusedSent()).toBeUndefined();
+  });
+
+  it("vets the first profile in list order that points at an inbox", async () => {
+    const first = await usableInbox();
+    const second = await usableInbox();
+    await listProfiles([
+      await profilePointingAt(undefined),
+      await profilePointingAt(first),
+      await profilePointingAt(second),
+    ]);
+
+    const result = await ensure();
+
+    expect(result.outcome).toBe("adopt");
+    expect(
+      result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+    ).toEqual(addressOf(first));
+  });
+
+  it("passes over a profile whose stored pointer is not an object", async () => {
+    const inbox = await usableInbox();
+    await listProfiles([
+      await documentIn(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
+        { inbox: "broken-pointer-container" },
+      ),
+      await profilePointingAt(inbox),
+    ]);
+
+    const result = await ensure();
+
+    expect(
+      result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+    ).toEqual(addressOf(inbox));
+  });
+
+  it("passes over a profile whose stored pointer holds no link", async () => {
+    const inbox = await usableInbox();
+    await listProfiles([
+      await profilePointingAt("not a link"),
+      await profilePointingAt(inbox),
+    ]);
+
+    const result = await ensure();
+
+    expect(
+      result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+    ).toEqual(addressOf(inbox));
+  });
+
+  it("passes over an entry in Home's list that is not a profile", async () => {
+    const inbox = await usableInbox();
+    await listProfiles([
+      null as unknown as Cell<unknown>,
+      await profilePointingAt(inbox),
+    ]);
+
+    const result = await ensure();
+
+    expect(
+      result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+    ).toEqual(addressOf(inbox));
+  });
+
+  it("names no inbox when no profile advertises one", async () => {
+    await listProfiles([await profilePointingAt(undefined)]);
+
+    const result = await ensure();
+
+    expect(result).toEqual({ outcome: "none-advertised" });
+    expect(await adopted()).toBeUndefined();
+    expect(await home.key("ensured" as never).pull()).toBe(1);
+  });
+
+  it("resolves once Home's handler has run on the event", async () => {
+    await listProfiles([await profilePointingAt(undefined)]);
+
+    await ensurePrivateInboxOf(runtime, home, identity.did());
+
+    expect(home.key("ensured" as never).get()).toBe(1);
+  });
+
+  it("rejects when Home's handling of the event fails", async () => {
+    await listProfiles([await profilePointingAt(undefined)]);
+    await runtime.editWithRetry((tx) =>
+      home.withTx(tx).key("failEnsure" as never).set(true as never)
+    );
+
+    await expect(ensurePrivateInboxOf(runtime, home, identity.did())).rejects
+      .toThrow("Home fails the ensure");
+    expect(await home.key("ensured" as never).pull()).toBe(0);
+  });
+
+  describe("which profile decides", () => {
+    /** The address of the inbox Home's handler was last sent to adopt. */
+    async function adoptedAddress() {
+      const named = await adopted();
+      return named === undefined ? undefined : addressOf(named);
+    }
+
+    /** The address of the profile the handler's last event named. */
+    async function deciderAddress() {
+      const decider = await decidedBy();
+      return decider === undefined ? undefined : addressOf(decider);
+    }
+
+    it("decides by the default profile ahead of list order", async () => {
+      const second = await usableInbox();
+      const deciding = await profilePointingAt(second);
+      await listProfiles([
+        await profilePointingAt(await usableInbox()),
+        deciding,
+      ]);
+      await setDefault(deciding);
+
+      await ensure();
+
+      expect(await adoptedAddress()).toEqual(addressOf(second));
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+    });
+
+    it("decides by the most recently used profile when Home names no default", async () => {
+      const second = await usableInbox();
+      const recent = await profilePointingAt(second);
+      await listProfiles([
+        await profilePointingAt(await usableInbox()),
+        recent,
+      ]);
+      await listRecent([recent]);
+
+      await ensure();
+
+      expect(await adoptedAddress()).toEqual(addressOf(second));
+      expect(await deciderAddress()).toEqual(addressOf(recent));
+    });
+
+    it("decides by the default profile ahead of the most recently used one", async () => {
+      const chosen = await usableInbox();
+      const deciding = await profilePointingAt(chosen);
+      const recent = await profilePointingAt(await usableInbox());
+      await listProfiles([recent, deciding]);
+      await setDefault(deciding);
+      await listRecent([recent]);
+
+      await ensure();
+
+      expect(await adoptedAddress()).toEqual(addressOf(chosen));
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+    });
+
+    it("passes over a retired profile, though it is the default, to the next in order", async () => {
+      const chosen = await usableInbox();
+      const retired = await profilePointingAt(await usableInbox());
+      const deciding = await profilePointingAt(chosen);
+      await listProfiles([retired, deciding]);
+      await setDefault(retired);
+      await retire([retired]);
+
+      await ensure();
+
+      expect(await adoptedAddress()).toEqual(addressOf(chosen));
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+    });
+
+    it("passes over a default profile that points at no inbox, to the next in order", async () => {
+      const chosen = await usableInbox();
+      const unpointed = await profilePointingAt(undefined);
+      const recent = await profilePointingAt(chosen);
+      await listProfiles([
+        unpointed,
+        await profilePointingAt(await usableInbox()),
+        recent,
+      ]);
+      await setDefault(unpointed);
+      await listRecent([recent]);
+
+      await ensure();
+
+      expect(await adoptedAddress()).toEqual(addressOf(chosen));
+      expect(await deciderAddress()).toEqual(addressOf(recent));
+    });
+
+    it("rejects, sending nothing, when a profile ordered ahead of the deciding one cannot be read", async () => {
+      const unreadable = await profilePointingAt(await usableInbox());
+      await listProfiles([
+        unreadable,
+        await profilePointingAt(await usableInbox()),
+      ]);
+      using _refused = stub(
+        storage,
+        "spaceAccessError",
+        (space) =>
+          space === unreadable.space ? new Error("access refused") : undefined,
+      );
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did())).rejects
+        .toThrow("Cannot read the profile that decides");
+      await runtime.idle();
+      expect(await home.key("ensured" as never).pull()).toBe(0);
+    });
+  });
+
+  describe("profiles that do not load", () => {
+    it("names no inbox when Home's list is empty", async () => {
+      await listProfiles([]);
+
+      const result = await ensure();
+
+      expect(result).toEqual({ outcome: "none-advertised" });
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+    });
+
+    it("names no inbox when no entry in Home's list is a profile", async () => {
+      await listProfiles([null as unknown as Cell<unknown>]);
+
+      const result = await ensure();
+
+      expect(result).toEqual({ outcome: "none-advertised" });
+    });
+
+    it("passes over a profile whose document is absent", async () => {
+      const inbox = await usableInbox();
+      const absent = runtime.getCell<unknown>(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
+        crypto.randomUUID(),
+      );
+      await listProfiles([absent, await profilePointingAt(inbox)]);
+
+      const result = await ensure();
+
+      expect(
+        result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+      ).toEqual(addressOf(inbox));
+    });
+
+    it("decides by an earlier profile when a later one fails to load", async () => {
+      const inbox = await usableInbox();
+      const failing = await profilePointingAt(await usableInbox());
+      await listProfiles([await profilePointingAt(inbox), failing]);
+      const sync = storage.syncCell.bind(storage);
+      using _failed = stub(
+        storage,
+        "syncCell",
+        (cell, options) =>
+          cell.space === failing.space
+            ? Promise.reject(new Error("load failed"))
+            : sync(cell, options),
+      );
+
+      const result = await ensure();
+
+      expect(
+        result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
+      ).toEqual(addressOf(inbox));
+    });
+
+    it("rejects, sending nothing, when Home's retired list fails to load", async () => {
+      // Which profiles are retired is then unknown, so a retired one could be
+      // taken for the deciding profile.
+      const retired = await profilePointingAt(await usableInbox());
+      await listProfiles([
+        retired,
+        await profilePointingAt(await usableInbox()),
+      ]);
+      await retire([retired]);
+      const listId = retiredList().resolveAsCell().getAsNormalizedFullLink().id;
+      const settled = storage.loadsSettled.bind(storage);
+      using _failed = stub(
+        storage,
+        "loadsSettled",
+        (keys) =>
+          keys.some((key) => key.includes(listId))
+            ? Promise.reject(new Error("load failed"))
+            : settled(keys),
+      );
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did())).rejects
+        .toThrow("Could not load document");
+      await runtime.idle();
+      expect(await home.key("ensured").asSchema({ type: "number" }).pull())
+        .toBe(0);
+    });
+
+    it("rejects, sending nothing, when an earlier profile's load is reported failed though its sync resolves", async () => {
+      // A provider reports a failed load in its result, so the sync resolves
+      // with no document and only the storage manager's ledger of loads says
+      // it failed.
+      const failing = await profilePointingAt(await usableInbox());
+      await listProfiles([
+        failing,
+        await profilePointingAt(await usableInbox()),
+      ]);
+      const settled = storage.loadsSettled.bind(storage);
+      using _failed = stub(
+        storage,
+        "loadsSettled",
+        (keys) =>
+          keys.some((key) => key.includes(failing.space))
+            ? Promise.reject(new Error("load failed"))
+            : settled(keys),
+      );
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did())).rejects
+        .toThrow("Cannot read the profile that decides");
+      await runtime.idle();
+      expect(await home.key("ensured" as never).pull()).toBe(0);
+    });
+  });
+
+  describe("when Home holds an inbox", () => {
+    /** Has Home hold `inbox` as its private inbox. */
+    async function hold(inbox: Cell<unknown>): Promise<void> {
+      await runtime.editWithRetry((tx) =>
+        home.withTx(tx).key("privateInbox" as never).set(
+          { piece: inbox } as never,
+        )
+      );
+    }
+
+    it("names no inbox when the deciding profile advertises the held one, though a later profile advertises another", async () => {
+      const held = await usableInbox();
+      await hold(held);
+      await listProfiles([
+        await profilePointingAt(held),
+        await profilePointingAt(await usableInbox()),
+      ]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("held");
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names the deciding profile, and no inbox or refusal, when it advertises the held inbox", async () => {
+      const held = await usableInbox();
+      await hold(held);
+      const deciding = await profilePointingAt(held);
+      await listProfiles([deciding, await profilePointingAt(undefined)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("held");
+      expect(
+        result.outcome === "held" && result.profile !== undefined
+          ? addressOf(result.profile)
+          : undefined,
+      ).toEqual(addressOf(deciding));
+      const decider = await decidedBy();
+      expect(decider === undefined ? undefined : addressOf(decider)).toEqual(
+        addressOf(deciding),
+      );
+      expect(await adopted()).toBeUndefined();
+      expect(await refusedSent()).toBeUndefined();
+    });
+
+    it("names the deciding profile's inbox, though a later profile advertises the held one", async () => {
+      const held = await usableInbox();
+      await hold(held);
+      const other = await usableInbox();
+      const deciding = await profilePointingAt(other);
+      await listProfiles([deciding, await profilePointingAt(held)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("adopt");
+      const named = await adopted();
+      expect(named === undefined ? undefined : addressOf(named)).toEqual(
+        addressOf(other),
+      );
+      const decider = await decidedBy();
+      expect(decider === undefined ? undefined : addressOf(decider)).toEqual(
+        addressOf(deciding),
+      );
+    });
+
+    it("names no inbox when the deciding profile advertises the held one through another link to it", async () => {
+      const held = await usableInbox();
+      await hold(await documentIn(identity.did(), held));
+      await listProfiles([
+        await profilePointingAt(held),
+        await profilePointingAt(await usableInbox()),
+      ]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("held");
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names no inbox when no profile advertises one", async () => {
+      await hold(await usableInbox());
+      await listProfiles([await profilePointingAt(undefined)]);
+
+      const result = await ensure();
+
+      expect(result).toEqual({ outcome: "held" });
+      expect(result).not.toHaveProperty("profile");
+      expect(await adopted()).toBeUndefined();
+      expect(await decidedBy()).toBeUndefined();
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+    });
+
+    it("names the inbox the first advertising profile points at when it is not the held one", async () => {
+      await hold(await usableInbox());
+      const first = await usableInbox();
+      await listProfiles([
+        await profilePointingAt(undefined),
+        await profilePointingAt(first),
+        await profilePointingAt(await usableInbox()),
+      ]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("adopt");
+      const named = await adopted();
+      expect(named === undefined ? undefined : addressOf(named)).toEqual(
+        addressOf(first),
+      );
+    });
+
+    it("names no inbox, and logs the refusal, when the advertised one fails vetting", async () => {
+      await hold(await usableInbox());
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+      await listProfiles([
+        await profilePointingAt(await documentIn(space, inboxValue(space))),
+      ]);
+      const before = refusalsLogged();
+
+      const result = await ensure();
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+      expect(await adopted()).toBeUndefined();
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+      expect(refusalsLogged()).toBe(before + 1);
+    });
+  });
+
+  describe("an inbox Home did not make", () => {
+    /** Has Home hold `inbox` as its private inbox. */
+    async function hold(inbox: Cell<unknown>): Promise<void> {
+      await runtime.editWithRetry((tx) =>
+        home.withTx(tx).key("privateInbox" as never).set(
+          { piece: inbox } as never,
+        )
+      );
+    }
+
+    /** The addresses of the inboxes Home's handler was last sent to replace. */
+    async function replacedAddresses(): Promise<
+      { space: string; id: string }[]
+    > {
+      return (await replacedSent()).map(addressOf);
+    }
+
+    /** The address of the profile Home's handler was last sent, if any. */
+    async function deciderAddress(): Promise<
+      { space: string; id: string } | undefined
+    > {
+      const decider = await decidedBy();
+      return decider === undefined ? undefined : addressOf(decider);
+    }
+
+    it("names the inbox Home holds to replace, and no profile, when no profile advertises it", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      await listProfiles([await profilePointingAt(undefined)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(result).not.toHaveProperty("profile");
+      expect(await replacedAddresses()).toEqual([addressOf(held)]);
+      expect(await deciderAddress()).toBeUndefined();
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names the held inbox to replace with the deciding profile when that profile advertises it", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      const deciding = await profilePointingAt(held);
+      await listProfiles([deciding]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddresses()).toEqual([addressOf(held)]);
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+    });
+
+    it("names a usable inbox Home made that the deciding profile advertises to adopt, in place of a held one Home did not make", async () => {
+      // Home's adoption retains the inbox it held, so nothing is replaced.
+
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      const inbox = await usableInbox();
+      const deciding = await profilePointingAt(inbox);
+      await listProfiles([deciding]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("adopt");
+      expect(addressOf((await adopted())!)).toEqual(addressOf(inbox));
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+      expect(await replacedSent()).toEqual([]);
+    });
+
+    it("names the held inbox and the deciding profile's usable one to replace, when Home made neither", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      const inbox = await inboxHomeDidNotMake();
+      const deciding = await profilePointingAt(inbox);
+      await listProfiles([deciding]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddresses()).toEqual([
+        addressOf(held),
+        addressOf(inbox),
+      ]);
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+      expect(await adopted()).toBeUndefined();
+      expect(await refusedSent()).toBeUndefined();
+    });
+
+    it("names the held inbox to replace beside the refusal of the deciding profile's inbox", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+      const refused = await documentIn(space, inboxValue(space));
+      const deciding = await profilePointingAt(refused);
+      await listProfiles([deciding]);
+      const logged = refusalsLogged();
+
+      const result = await ensure();
+
+      expect(result.outcome === "replace" && result.refused?.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+      expect(await replacedAddresses()).toEqual([addressOf(held)]);
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+      expect(await refusedSent()).toEqual({
+        reason: "inbox-adoption-acl-mismatch",
+        inbox: addressOf(refused),
+      });
+      expect(refusalsLogged()).toBe(logged + 1);
+    });
+
+    it("names a usable advertised inbox to replace, with its profile, when Home holds none", async () => {
+      const inbox = await inboxHomeDidNotMake();
+      const deciding = await profilePointingAt(inbox);
+      await listProfiles([deciding]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddresses()).toEqual([addressOf(inbox)]);
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+      expect(await adopted()).toBeUndefined();
+      expect(await refusedSent()).toBeUndefined();
+    });
+
+    it("names a usable advertised inbox to replace when Home holds one of its own", async () => {
+      await hold(await usableInbox());
+      const inbox = await inboxHomeDidNotMake();
+      await listProfiles([await profilePointingAt(inbox)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddresses()).toEqual([addressOf(inbox)]);
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names every usable advertised inbox to replace while Home's space records no space of its own", async () => {
+      await runtime.editWithRetry((tx) =>
+        runtime.getCell(
+          home.space,
+          {
+            inSpaceAllocation: {
+              space: home.space,
+              name: PRIVATE_INBOX_SPACE_NAME,
+            },
+          },
+          allocationSchema,
+          tx,
+        ).set({})
+      );
+      const inbox = await usableInbox();
+      await listProfiles([await profilePointingAt(inbox)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddresses()).toEqual([addressOf(inbox)]);
+    });
+
+    it("names an advertised inbox that fails vetting as refused, not to replace", async () => {
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+      await listProfiles([
+        await profilePointingAt(await documentIn(space, inboxValue(space))),
+      ]);
+
+      const result = await ensure();
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+      expect(await replacedSent()).toEqual([]);
+    });
+  });
+
+  describe("Home's own inbox", () => {
+    /** Sets Home's `field` to `value`. */
+    async function setHome(field: string, value: unknown): Promise<void> {
+      await runtime.editWithRetry((tx) =>
+        home.withTx(tx).key(field as never).set(value as never)
+      );
+    }
+
+    /** The names of Home's streams' runs, in the order they happened. */
+    async function order(): Promise<string[]> {
+      return await home.key("order" as never).pull() as string[];
+    }
+
+    it("has Home create its own inbox, and waits for that, before the ensure when Home holds none", async () => {
+      await listProfiles([await profilePointingAt(undefined)]);
+
+      await ensurePrivateInboxOf(runtime, home, identity.did());
+
+      expect(home.key("order" as never).get()).toEqual(["create", "ensure"]);
+    });
+
+    it("has Home create its own inbox before an ensure naming an inbox to replace", async () => {
+      await setHome("privateInbox", { piece: await inboxHomeDidNotMake() });
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await order()).toEqual(["create", "ensure"]);
+    });
+
+    it("rejects, sending no ensure, when Home's creation of its own inbox fails", async () => {
+      await listProfiles([await profilePointingAt(undefined)]);
+      await setHome("failCreate", true);
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did()))
+        .rejects.toThrow("Home fails the creation");
+      await runtime.idle();
+      expect(await home.key("ensured" as never).pull()).toBe(0);
+    });
+
+    it("has Home create none when it has an inbox of its own", async () => {
+      await listProfiles([await profilePointingAt(undefined)]);
+      await setHome("ownPrivateInbox", { piece: await usableInbox() });
+
+      await ensure();
+
+      expect(await order()).toEqual(["ensure"]);
+    });
+
+    it("has Home create none for an ensure naming an inbox to adopt", async () => {
+      await listProfiles([await profilePointingAt(await usableInbox())]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("adopt");
+      expect(await order()).toEqual(["ensure"]);
+    });
+
+    it("has Home create none while it keeps the inbox it holds", async () => {
+      const inbox = await usableInbox();
+      await setHome("privateInbox", { piece: inbox });
+      await listProfiles([await profilePointingAt(inbox)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("held");
+      expect(await order()).toEqual(["ensure"]);
+    });
+  });
+
+  it("sends nothing, and returns `abandoned`, once its signal has aborted", async () => {
+    await listProfiles([await profilePointingAt(await usableInbox())]);
+    const stopped = new AbortController();
+    stopped.abort();
+
+    const result = await ensurePrivateInboxOf(
+      runtime,
+      home,
+      identity.did(),
+      stopped.signal,
+    );
+    await runtime.idle();
+
+    expect(result).toEqual({ outcome: "abandoned" });
+    expect(await home.key("ensured" as never).pull()).toBe(0);
+  });
+
+  it("is the function the package's ops entry point exports", () => {
+    expect(ops.ensurePrivateInboxOf).toBe(ensurePrivateInboxOf);
+  });
+
+  it("leaves a Home with no `ensurePrivateInbox` as it is", async () => {
+    const result = await ensurePrivateInboxOf(
+      runtime,
+      runtime.getCell<unknown>(identity.did(), "no ensure here"),
+      identity.did(),
+    );
+
+    expect(result).toEqual({ outcome: "unavailable" });
+  });
+
+  describe("refusals", () => {
+    /** Ensures Home's inbox over `inbox`, advertised by one profile. */
+    async function ensureOver(
+      inbox: Cell<unknown>,
+      profile?: Cell<unknown>,
+    ): Promise<PrivateInboxEnsure> {
+      await listProfiles([profile ?? await profilePointingAt(inbox)]);
+      return await ensure();
+    }
+
+    it("refuses an inbox in the Home space", async () => {
+      const result = await ensureOver(
+        await documentIn(identity.did(), inboxValue(identity.did())),
+      );
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-home-space",
+      );
+    });
+
+    it("refuses an inbox in the advertising profile's own space", async () => {
+      const space = await runtime.createSpace({ grants: { "*": "WRITE" } });
+      const inbox = await documentIn(space, inboxValue(space));
+      const profile = await documentIn(space, { inbox: { piece: inbox } });
+      const { id } = profile.getAsNormalizedFullLink();
+      await runtime.editWithRetry((tx) =>
+        seedProfileOwner(tx, { space, scope: "space", id }, identity.did())
+      );
+
+      const result = await ensureOver(inbox, profile);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-profile-space",
+      );
+    });
+
+    it("refuses an inbox whose space another principal owns", async () => {
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+
+      const result = await ensureOver(
+        await documentIn(space, inboxValue(space)),
+      );
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+    });
+
+    it("refuses an inbox whose space does not grant every principal WRITE", async () => {
+      const space = await runtime.createSpace();
+
+      const result = await ensureOver(
+        await documentIn(space, inboxValue(space)),
+      );
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+    });
+
+    it("refuses an inbox whose offers are not a list", async () => {
+      const space = await runtime.createSpace({ grants: { "*": "WRITE" } });
+
+      const result = await ensureOver(
+        await documentIn(space, {
+          ...inboxValue(space) as object,
+          offers: "not a list",
+        }),
+      );
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-offers-invalid",
+      );
+    });
+
+    it("refuses an inbox with no `receive` stream", async () => {
+      const space = await runtime.createSpace({ grants: { "*": "WRITE" } });
+
+      const result = await ensureOver(
+        await documentIn(space, { offers: [], receive: "not a stream" }),
+      );
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-receive-missing",
+      );
+    });
+
+    it("refuses an inbox in a space this identity is refused access to", async () => {
+      // Emulated storage enforces no access list, so the refusal is the one a
+      // memory server reports: the read fails, and the storage manager holds
+      // the space's access error.
+      const inbox = await usableInbox();
+      const before = refusalsLogged();
+      using _refused = stub(
+        storage,
+        "spaceAccessError",
+        (space) =>
+          space === inbox.space ? new Error("access refused") : undefined,
+      );
+      using _stored = stub(
+        ACLManager.prototype,
+        "getStored",
+        () => Promise.reject(new Error("read refused")),
+      );
+
+      const result = await ensureOver(inbox);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-access-refused",
+      );
+      expect(await adopted()).toBeUndefined();
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+      expect(refusalsLogged()).toBe(before + 1);
+    });
+
+    it("refuses an inbox in a space this identity is refused access to, when its reads return", async () => {
+      // A refused read can complete without data rather than fail, leaving the
+      // refusal with the storage manager alone.
+      const inbox = await usableInbox();
+      using _refused = stub(
+        storage,
+        "spaceAccessError",
+        (space) =>
+          space === inbox.space ? new Error("access refused") : undefined,
+      );
+
+      const result = await ensureOver(inbox);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-access-refused",
+      );
+    });
+
+    it("refuses an inbox whose stored access list is malformed", async () => {
+      const inbox = await usableInbox();
+      using _stored = stub(
+        ACLManager.prototype,
+        "getStored",
+        () => Promise.resolve("not an access list"),
+      );
+
+      const result = await ensureOver(inbox);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+    });
+
+    it("refuses an inbox whose stored access list names no concrete owner", async () => {
+      const inbox = await usableInbox();
+      using _stored = stub(
+        ACLManager.prototype,
+        "getStored",
+        () => Promise.resolve({ "*": "WRITE" }),
+      );
+
+      const result = await ensureOver(inbox);
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+    });
+
+    it("rejects, sending nothing, when reading the access list fails", async () => {
+      const inbox = await usableInbox();
+      await listProfiles([await profilePointingAt(inbox)]);
+      using _stored = stub(
+        ACLManager.prototype,
+        "getStored",
+        () => Promise.reject(new Error("transport failed")),
+      );
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did())).rejects
+        .toThrow("transport failed");
+      await runtime.idle();
+      expect(await home.key("ensured" as never).pull()).toBe(0);
+    });
+
+    it("names the refusal, with its reason and the refused inbox, and the deciding profile, for Home to record", async () => {
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+      const inbox = await documentIn(space, inboxValue(space));
+      const profile = await profilePointingAt(inbox);
+
+      await ensureOver(inbox, profile);
+
+      expect(await refusedSent()).toEqual({
+        reason: "inbox-adoption-acl-mismatch",
+        inbox: addressOf(inbox),
+      });
+      const decider = await decidedBy();
+      expect(decider === undefined ? undefined : addressOf(decider)).toEqual(
+        addressOf(profile),
+      );
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names no inbox for Home to adopt, and logs the refusal", async () => {
+      const before = refusalsLogged();
+
+      await ensureOver(
+        await documentIn(identity.did(), inboxValue(identity.did())),
+      );
+
+      expect(await adopted()).toBeUndefined();
+      expect(await home.key("ensured" as never).pull()).toBe(1);
+      expect(refusalsLogged()).toBe(before + 1);
+    });
+  });
+});

@@ -16,6 +16,7 @@ and an `error` naming the flag.
 ```typescript
 // Shown inside a pattern body.
 const recommendation = agent<{ picks: { book: string; why: string }[] }>({
+  progress: true,
   task: "Which of the finished books would a reader who likes the listed " +
     "authors enjoy? Return up to five.",
   inputs: { finished: booksRead, likes: favoriteAuthors },
@@ -37,7 +38,7 @@ const recommendation = agent<{ picks: { book: string; why: string }[] }>({
 });
 
 const view = recommendation.pending
-  ? "working"
+  ? recommendation.progress?.message ?? "working"
   : recommendation.error
   ? `failed: ${recommendation.error}`
   : recommendation.result?.picks.map((pick) => pick.book).join(", ");
@@ -48,8 +49,13 @@ const view = recommendation.pending
   labeled data into the text puts that label on the request. Pass the cell
   under `inputs` instead.
 - `inputs` are cells, keyed by the names the run sees them under. Each
-  reaches the run as a reference, and the run reads through it with the
-  tools it has; nothing here is copied into the request.
+  reaches the run as a handle; nothing here is copied into the request. The
+  run looks at a handle with `describe_handle`, which reports its shape and
+  never its value, and reads one `describe_handle` has described with
+  `read_value`. A read is measured against the run's read ceiling before it is
+  released, and the label of what was read joins the run's context, so
+  everything the model writes afterwards carries it. Every run has those two
+  tools, whatever `tools` selects.
 - `resultSchema` is the schema the run's structured result is validated
   against before it is written.
 - `maxConfidentiality` (optional) bounds what the run may observe. Declared,
@@ -60,9 +66,56 @@ const view = recommendation.pending
   or not this is declared (see below).
 - `tools` (optional) names the tools the run may use, from the list the
   deployment publishes (`AGENT_TOOL_NAMES` in
-  `packages/runner/src/builtins/agent-schemas.ts`). A name the user's
+  `runtime/runner/src/builtins/agent-schemas.ts`); `describe_handle` and
+  `read_value` come with every run and need not be named. A name the user's
   registered runner does not offer fails the request with `INVALID_INPUT`
   before it is staged; with no runner registered the request queues.
+
+## Interim progress
+
+Set `progress: true` to give the run a `report_progress` tool and instructions
+in that tool's description to report short, user-facing milestones. With the
+option absent or false, neither the tool nor its reporting instructions is
+provided. Reports are optional: a short run may finish without one.
+
+Read `request.progress?.message` reactively. The latest report contains
+`message`, a `sequence` starting at 1 for each execution attempt, and an ISO
+`updatedAt` timestamp. Each report replaces the current progress link while
+`pending` remains true; `result` still appears only after completion. The latest
+report remains available after the run finishes. If a lost runner's run is
+reclaimed, progress is cleared and numbering restarts for that attempt. A
+different request starts without progress, and opting in changes the request
+hash. Explicit false and omission identify the same request.
+
+If storing a report fails, the tool returns an error and the run can continue
+with later reports or its final result. Sequence numbers can therefore have
+gaps. Cancellation or loss of the run's ownership still stops publication.
+
+Progress is a labeled model output. Its document goes through the same writer
+as the final result, carrying the run's observed-input labels and the
+`LlmDerived` stamp when enforcement is enabled. A pattern's ordinary display
+policy governs whether it can render the report. Raw tool output, reasoning,
+and child transcripts are not published as progress.
+
+The harness declares the run's observation ceiling as the store policy for
+every report. A generic message therefore does not make a report less
+confidential, and reports from one harness run share that declared ceiling.
+Replacing a progress link does not carry the previous report's label into the
+new one: a reader can recover when a later independently labeled report fits
+its ceiling. That return-channel property does not make the harness produce
+lower-confidentiality reports after observing confidential input.
+
+For a `cf-iframe` guest, pass `request.progress` in `$context` with the resource
+kind `readonly`, alongside `pending`, `error`, and `result`. The guest subscribes
+to that resource and renders its `message`, with a fallback before the first
+report. The [iframe guide's example](../ai/iframe-pattern-guide.md#optional-streams)
+shows the wrapper and the user-triggered request.
+
+The runner advertises support in its registration's `progress` field. A request
+opting in fails with `INVALID_INPUT` when the registered runner does not
+advertise support. Without a registered runner it queues as usual. Pattern
+authors do not add `report_progress` to `tools`: the option provides the return
+channel independently of the selected task tools.
 
 ## Reading the result
 
@@ -73,15 +126,27 @@ const view = recommendation.pending
   reference in it keeps its own label.
 - `error` carries the run's error code when it ended any other way —
   `INVALID_INPUT`, `INVALID_RESULT`, `LIMIT_REACHED`, `PROVIDER_FAILURE`, `RUNNER_LOST`,
-  `CANCELLED`, `REFUSED` — or the refusal text when the request never left
-  the graph.
+  `CANCELLED`, `REFUSED`, `CFC_REFUSED` — or the refusal text when the request
+  never left the graph.
 - `INVALID_RESULT` means the model loop completed without a structured result
   satisfying `resultSchema`: the result was missing, malformed JSON, or
-  schema-invalid. Model and tool failures use `PROVIDER_FAILURE`.
+  schema-invalid. The model returns its result through `submit_result`, which
+  must be the only tool call in its model turn; a turn that pairs it with
+  another call is refused and the run continues. Model and tool failures use
+  `PROVIDER_FAILURE`.
+- `CFC_REFUSED` means the session's read ceiling withheld a value the run
+  read, and that ended the run: the information-flow rules stopped it, rather
+  than a model or tool. The run's state is `failed`; `REFUSED`, with the state
+  `refused`, is a result the boundary would not release.
 - `run` is a link to the run's `AgentRun` record: its `state`, `stateSince`,
   and, once finished, `outcome`, `usage`, `modelTurns`, and `toolCalls`, for
-  a pattern that wants to show progress or cost. `host` is the origin of the
-  toolshed serving the record's space, for a reader on another host.
+  a pattern that wants to show progress or cost. Optional `modelResponses`
+  records the model ID returned for each direct model response, with `null`
+  when the provider omitted it; `actualModels` lists the distinct observed IDs.
+  `modelAttributionComplete` is true only when every direct model turn has an
+  observed ID. Missing attribution fields mean unknown, including on older
+  records. `host` is the origin of the toolshed serving the record's space, for
+  a reader on another host.
 - `requestHash` identifies the request. The same request in the same user
   instance yields the same record, so a re-run of the node over unchanged
   inputs is a memo hit and creates nothing; a pattern that wants a fresh run
@@ -99,7 +164,7 @@ runner starts. A request made where the home space holds no queue ends
 `refused`.
 
 To stop a run, set `cancelRequestedAt` on its record — the `cancel` stream of
-`packages/patterns/system/agent-run.tsx` does — and the runner ends it
+`patterns/system/agent-run/agent-run.tsx` does — and the runner ends it
 `cancelled`.
 
 ## What the request carries, and what is measured

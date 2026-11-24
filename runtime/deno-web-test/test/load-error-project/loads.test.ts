@@ -1,0 +1,1 @@
+Deno.test("loads", function () {});

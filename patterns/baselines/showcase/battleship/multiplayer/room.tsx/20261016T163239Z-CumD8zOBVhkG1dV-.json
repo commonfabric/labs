@@ -1,0 +1,291 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Coordinate": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "row",
+          "col"
+        ],
+        "type": "object"
+      },
+      "GameState": {
+        "properties": {
+          "currentTurn": {
+            "enum": [
+              1,
+              2
+            ]
+          },
+          "lastMessage": {
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "waiting",
+              "playing",
+              "finished"
+            ]
+          },
+          "winner": {
+            "enum": [
+              1,
+              2,
+              null
+            ]
+          }
+        },
+        "required": [
+          "phase",
+          "currentTurn",
+          "winner",
+          "lastMessage"
+        ],
+        "type": "object"
+      },
+      "PlayerData": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar text, snapshotted instead when the joiner's profile has no\npicture.",
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "picture": {
+            "description": "Picture bytes, snapshotted from the joiner's shared profile.",
+            "type": "FabricBytes"
+          },
+          "ships": {
+            "items": {
+              "$ref": "#/$defs/Ship"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "ships",
+          "color",
+          "joinedAt"
+        ],
+        "type": "object"
+      },
+      "Ship": {
+        "properties": {
+          "orientation": {
+            "enum": [
+              "horizontal",
+              "vertical"
+            ]
+          },
+          "start": {
+            "$ref": "#/$defs/Coordinate"
+          },
+          "type": {
+            "$ref": "#/$defs/ShipType"
+          }
+        },
+        "required": [
+          "type",
+          "start",
+          "orientation"
+        ],
+        "type": "object"
+      },
+      "ShipType": {
+        "enum": [
+          "carrier",
+          "battleship",
+          "cruiser",
+          "submarine",
+          "destroyer"
+        ]
+      },
+      "ShotsState": {
+        "properties": {
+          "1": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/SquareState"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "2": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/SquareState"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "1",
+          "2"
+        ],
+        "type": "object"
+      },
+      "SquareState": {
+        "enum": [
+          "empty",
+          "miss",
+          "hit"
+        ]
+      }
+    },
+    "description": "Room pattern receives shared cells plus per-user player identity.",
+    "properties": {
+      "gameName": {
+        "type": "string"
+      },
+      "gameState": {
+        "$ref": "#/$defs/GameState",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "currentTurn": 1,
+          "lastMessage": "Waiting for players...",
+          "phase": "waiting",
+          "winner": null
+        }
+      },
+      "myName": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "myPlayerNumber": {
+        "anyOf": [
+          {
+            "enum": [
+              1,
+              2
+            ],
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null
+      },
+      "player1": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PlayerData"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null
+      },
+      "player2": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PlayerData"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null
+      },
+      "shots": {
+        "$ref": "#/$defs/ShotsState",
+        "asCell": [
+          "cell"
+        ]
+      }
+    },
+    "required": [
+      "gameName",
+      "player1",
+      "player2",
+      "shots",
+      "gameState",
+      "myName",
+      "myPlayerNumber"
+    ],
+    "type": "object"
+  },
+  "pattern": "battleship/multiplayer/room.tsx",
+  "resultSchema": {
+    "description": "Room pattern output exposes player identity and actions for testing.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "scope": "session"
+      },
+      "fireShot": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Fire a shot at the enemy board - exported for testing",
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "row",
+          "col"
+        ],
+        "type": "object"
+      },
+      "myName": {
+        "type": "string"
+      },
+      "myPlayerNumber": {
+        "enum": [
+          1,
+          2,
+          null
+        ]
+      }
+    },
+    "required": [
+      "myName",
+      "myPlayerNumber",
+      "fireShot",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

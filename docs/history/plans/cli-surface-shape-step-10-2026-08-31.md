@@ -8,7 +8,7 @@ reason: "Record of step 10's execution and the trade it made; the plan it came f
 # Step 10 of the CLI surface shape: what the sweep cost, and what it traded
 
 A record of executing step 10 of
-[CLI surface shape](../../plans/cli-surface-shape.md) — the step that made the
+[CLI surface shape](cli-surface-shape.md) — the step that made the
 verb open the callable's section and `--` close it, so a projection is written
 after the verb it shapes rather than before.
 

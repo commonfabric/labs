@@ -1,0 +1,1 @@
+{"date":"2026-11-07","from":{"k":"unit","s":"toolshed","n":"pattern-lifecycle route (transport + middleware) > reads the hosted ACL through the memory service before refusing a read-only caller"},"to":{"k":"unit","s":"toolshed","n":"pattern-lifecycle-handler > lifecycleRequestHandler() > reads the hosted ACL through the memory service before refusing a read-only caller"}}

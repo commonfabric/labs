@@ -24,18 +24,36 @@ that case is a per-write question, which SC-23 left transaction-global.
 ## The class
 
 The write machinery reads below carry `writeDestinationRead`
-([`reactivity-log.ts`](../../packages/runner/src/storage/reactivity-log.ts)),
+([`reactivity-log.ts`](../../runtime/runner/src/storage/reactivity-log.ts)),
 and `deriveFlowJoin()` in
-[`prepare.ts`](../../packages/runner/src/cfc/prepare.ts) drops a read
+[`prepare.ts`](../../runtime/runner/src/cfc/prepare.ts) drops a read
 carrying it. The read walk the join is built from, `forEachFlowObservation()`,
 still visits it and classifies it, which is what leaves every other consumer
 of that walk alone — the next section but two.
+
+The per-write read-prefix gate of
+[`cfc-write-prefix-provenance.md`](./cfc-write-prefix-provenance.md), which
+checks a protected entry's `requiredIntegrity` and `maxConfidentiality`
+against the reads before the write, leaves the class out as well
+(`buildGatedInputReads()` in the same file). A destination read precedes the
+write it is about, which is the position that gate quantifies over, but its
+result decides which writes are emitted and reaches no written value.
+Counted, it would gate a write on whatever label the destination holds: a
+store whose ceiling admits only public values, once a write stamps it with a
+clause an exchange rule opened, would refuse every later writer, even one
+writing a constant. A read the program makes of its destination carries no
+marker and still gates.
+
+A caller whose own check rests on what a write reaches has to read it before
+the write. `Runtime.prepareExternalContentObservation()` is one: it reads
+through the observed value, and every link the value stores, before it writes
+the value, so the linked content is an input to that write.
 
 **The type probe.** `CellImpl.set()` asks whether the cell holds a stream
 before choosing between delivering the value as an event and storing it. The
 stream marker is a scalar at one known key of the stored value, named by
 `STREAM_MARKER_KEY` in
-[`builder/types.ts`](../../packages/runner/src/builder/types.ts), and
+[`builder/types.ts`](../../runtime/runner/src/builder/types.ts), and
 `CellImpl.isStream()` reads that key's own path. Reading the marker's path
 rather than the whole resolved value is the narrower question and is worth
 asking that way on its own; it is not what earns the exclusion, because a
@@ -46,7 +64,7 @@ caller, so `set()` passes the marker and `sink()` does not: the same probe
 made to decide whether to add a listener is an ordinary observation and joins.
 
 **The destination comparison.** `normalizeAndDiff()` in
-[`data-updating.ts`](../../packages/runner/src/data-updating.ts) walks the
+[`data-updating.ts`](../../runtime/runner/src/data-updating.ts) walks the
 value a caller handed to `set()` against what is stored at the destination and
 emits a change for each path where the two differ. The read it makes of the
 destination to do that carries the marker.
@@ -54,14 +72,57 @@ destination to do that carries the marker.
 **The array append snapshot.** `Cell.push()` and `Cell.pushAll()` read the
 destination array to build their tail-relative append. The snapshot carries
 `writeDestinationRead` and `mergeableOpRead`: its existing entries stay at the
-same destination, and only caller-supplied entries are appended. Neither method
-returns a value, so neither existing content nor the array's length reaches the
-caller. This lets a writer append a scalar or a held cell reference to an
+same destination, and only caller-supplied entries are appended. The indices
+those entries land at, and the `length` written beside them, come from the
+snapshot; the array's `shape` label, which a reader of `length` consumes, keeps
+whatever clause the stored length carried, so a later read of the length is
+still labeled with it. Neither method returns a value, so neither existing
+content nor the array's length reaches the caller. This lets a writer append a scalar or a held cell reference to an
 owner-confidential array without observing its membership. The destination's
 write policy still applies, and explicit source reads still contribute their
 labels. Object anchoring's ancestry reads retain their ordinary classification.
-Value-dependent operations such as `addUnique()` still observe the destination
-and require its read ceiling.
+
+**The add-unique snapshot.** `Cell.addUnique()` reads the destination array
+the same way, with the same two markers, to decide which candidates are already
+present and to place the rest at its tail. A candidate matches an existing entry
+by link identity when it is a cell, and by stored-value equality otherwise.
+Whichever way the comparison goes, the destination afterwards holds every
+candidate, the method returns nothing, and every value it writes is a caller's
+candidate. That is §18.6.2's unobservability invariant, and why the snapshot
+is a write-destination read. Resolving an existing entry's link for the
+identity comparison reads that entry's document as an ordinary observation, and
+the operation still answers to the destination's write policy. As with the
+append, a writer whose read ceiling the list's label exceeds can add to it
+without reading it.
+
+A handler that adds a keyed element (`elementById()`) to a list therefore
+carries into that element's document what the handler itself read and what
+resolving the list's existing entries read, but not the list's own label.
+Without the marker, a clause one earlier write left on the list would reach
+every later element document, which has no declaration to hold it, and every
+later keyed add would be refused. An object candidate is different: it anchors into
+a document of its own, and the anchoring's ancestry reads keep their ordinary
+classification, because they decide the id the new document takes, which is
+where the write lands. `removeByValue()` writes back a value built from what it
+read, so its read stays an ordinary observation.
+
+**The served event append.** Under server execution, a handler run's send to a
+stream in the same space appends the event's entry to that stream's entries
+document within the run's own transaction (the serving arm of the event path
+`CellImpl.set()` takes for a stream, in
+[`cell.ts`](../../runtime/runner/src/cell.ts)). It reads the document's
+`entries` to build that append, which it records as a mergeable append of one
+entry, as `Cell.pushAll()` does. The read carries `writeDestinationRead`: the
+entries already there stay where they are, and the only value written is the
+run's own entry, built from the event it sends. Nothing returns to the sending
+code either: the document sits at an id derived from the stream's link
+(`STREAM_ENTRIES_DOC_PREFIX` in
+[`memory/v2.ts`](../../runtime/memory/v2.ts)), which no pattern names, and a
+pattern reaches a stream only by sending to it or handling its events. So a
+label an earlier entry carries, such as the one its `consequenced` mark took
+from the run that handled it, is not an input of the sending run. What the
+sending run itself read still joins, and still labels the entry it appends,
+and the entries document's own write policy still applies.
 
 **The SQLite publication comparison.** A query snapshots its raw destination
 record before staging a request and compares that snapshot with the destination
@@ -75,6 +136,17 @@ scheduling prevents a previous result's membership label from tainting the
 public pending flag through a trigger read. Conflict detection remains in
 force. This lets trusted publication machinery update a shared result whose
 shape label withholds it from the observing runtime.
+
+**The setup's result comparison.** A pattern setup builds the projection it
+places on the piece's result document, the pattern's own result bound to the
+piece, and compares it with the one the document stores to decide whether to
+write it (`#nextResultProjection()` in
+[`runner.ts`](../../runtime/runner/src/runner.ts)). That read of the stored
+result carries `writeDestinationRead`: what it finds decides whether the
+setup writes, never what. The name a setup carries over from the stored result
+is what it writes, so the setup reads it again, at its own slot, without the
+marker. So a label an earlier attempt left on the result's root does not join
+a later setup's flow join, and comes off when that setup rewrites the root.
 
 The marker is opt-in at a call site, never derived from the shape of a read,
 which is what makes the failure direction the safe one: a destination read
@@ -129,7 +201,7 @@ consume.
 
 Third, nothing a pattern writes can put the marker on a read. The symbol
 keying it is private to
-[`reactivity-log.ts`](../../packages/runner/src/storage/reactivity-log.ts),
+[`reactivity-log.ts`](../../runtime/runner/src/storage/reactivity-log.ts),
 so only runtime code importing `writeDestinationRead` can set it, and the
 runner's public surface does not export it.
 
@@ -213,6 +285,15 @@ observes is the parent's membership, and what surfaces is a delete at a
 child, so the parent's membership reaches a child whose own ceiling may
 admit a wider audience than the parent's.
 
+The add-unique snapshot is the second shape at a list. Whether
+`Cell.addUnique()` appended discloses whether an entry equal to the candidate
+was already present. That is one bit of the list's membership, landing in the
+list document's own write set, and repeated attempts with candidates of the
+writer's choosing make it a membership oracle for whoever sees that write set.
+Pattern code does not: the method returns nothing, and reading the list back,
+or running because it changed, is a labeled observation. The write set reaches
+only the runtime and the memory server, which the threat model trusts.
+
 Write elision is what opens that channel, and elision is not new here. What
 the exclusion changes is that the elision's influence is no longer labeled at
 all. Before it, the transaction's join reached every path the transaction
@@ -237,7 +318,7 @@ existence channel is the neighboring disclosure, carried as SC-4 in
 
 ## What this does not change
 
-The exclusion is scoped to the flow join, and the marker changes nothing else
+Beyond the flow join and the per-write input gate, the marker changes nothing
 about either read. What each read is recorded as follows from the rest of its
 metadata, which this marker sits beside rather than replaces.
 
@@ -256,17 +337,13 @@ marker, so it is in neither of those logs, and it was in neither before this
 marker existed. What it has always been is a read the journal records for
 label purposes and the reactivity log does not.
 
-The exclusion is also scoped to the flow join among the three consumed sets
-CFC derives. The transaction-global consumed set the egress and sink ceilings
-read (`collectConsumedLabel`), and the per-write read-prefix gate of
-[`cfc-write-prefix-provenance.md`](./cfc-write-prefix-provenance.md), both
-still count these reads: a destination read precedes the write it is about,
-which is exactly the position the prefix gate quantifies over. Those two can
-therefore gate a write or a release on a label this one does not, which
-over-gates and never under-gates. Widening the exclusion to reach them is a
-separate change with its own measurements to take, and SC-23 in
-[`cfc-spec-changes.md`](./cfc-spec-changes.md) is the precedent for stating
-such a boundary rather than leaving it to be discovered.
+The transaction-global consumed set the egress and sink ceilings read
+(`collectConsumedLabel`) still counts these reads. It can therefore gate a
+release on a label the other two do not, which over-gates and never
+under-gates. Widening the exclusion to reach it is a separate change with its
+own consumers to check, the custody seal's consent reads among them, and
+SC-23 in [`cfc-spec-changes.md`](./cfc-spec-changes.md) is the precedent for
+stating such a boundary rather than leaving it to be discovered.
 
 That SC-23 boundary is worth naming precisely, because it names the flow join
 as the one place it declined to narrow. It declined to narrow it *by journal

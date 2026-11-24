@@ -13,8 +13,8 @@ import { recordCoverage } from "./coverage-records.ts";
 describe("recordCoverage()", () => {
   const metrics = [
     [coverageMetricForGroup("workspace"), 900],
-    [coverageMetricForGroup("packages/memory"), 40],
-    [measuredSetCoverageMetric("workspace-unit/packages/memory"), 12],
+    [coverageMetricForGroup("runtime/memory"), 40],
+    [measuredSetCoverageMetric("workspace-unit/runtime/memory"), 12],
     ["ci duration: Test", 300],
   ] as const;
 
@@ -27,12 +27,38 @@ describe("recordCoverage()", () => {
     try {
       recordCoverage(metrics, true, naming(spool));
       expect(coverageFiguresOf((await readSpool(spool)).records)).toEqual({
-        groups: new Map([["workspace", 900], ["packages/memory", 40]]),
-        sets: new Map([["workspace-unit/packages/memory", 12]]),
+        groups: new Map([["workspace", 900], ["runtime/memory", 40]]),
+        sets: new Map([["workspace-unit/runtime/memory", 12]]),
         cold: true,
       });
     } finally {
       await Deno.remove(spool, { recursive: true });
+    }
+  });
+
+  it("writes nothing to the process's own spool where the environment it is given names none", async () => {
+    // The process's own spool is the one a recording run names, and a
+    // fixture's figures filed there would read as that run's. Where this
+    // process names none, one is named for the case. The group is the
+    // case's own, so figures the run itself records cannot be mistaken
+    // for it.
+    const named = Deno.env.get("CF_TEST_RECORDS_DIR");
+    const spool = named ??
+      await Deno.makeTempDir({ prefix: "coverage-records-" });
+    if (named === undefined) Deno.env.set("CF_TEST_RECORDS_DIR", spool);
+    try {
+      recordCoverage(
+        [[coverageMetricForGroup("coverage-records-fixture"), 7]],
+        false,
+        () => undefined,
+      );
+      const { groups } = coverageFiguresOf((await readSpool(spool)).records);
+      expect(groups.has("coverage-records-fixture")).toBe(false);
+    } finally {
+      if (named === undefined) {
+        Deno.env.delete("CF_TEST_RECORDS_DIR");
+        await Deno.remove(spool, { recursive: true });
+      }
     }
   });
 

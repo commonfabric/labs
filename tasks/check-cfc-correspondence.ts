@@ -6,7 +6,7 @@
  *
  * The specification lives in the private `commonfabric/specs` repository, and
  * what this public repository commits of it is the spec snapshot at
- * `packages/runner/src/cfc/kernel/spec-snapshot.json`: the specs commit,
+ * `runtime/runner/src/cfc/kernel/spec-snapshot.json`: the specs commit,
  * every section number, and one hash per pseudocode function. Against that
  * snapshot, and against the manifest beside it, this holds four things:
  *
@@ -18,20 +18,23 @@
  *    with the row and the snapshot; a `missing` row names a function the
  *    kernel does not export.
  * 2. **The kernel is pinned and pure.** Every function a file under
- *    `packages/runner/src/cfc/kernel/` exports carries a `@spec` header whose
+ *    `runtime/runner/src/cfc/kernel/` exports carries a `@spec` header whose
  *    hash is the snapshot's for that function, and the file's value imports
  *    reach only other kernel files: a type import is erased before anything
  *    runs and is allowed from anywhere, and nothing else from outside the
  *    kernel executes. The ledger files, {@link KERNEL_LEDGER_FILES}, are
  *    exempt from the header rule and held to the import rule.
- * 3. **Every `§` citation under `packages/runner/src/cfc/` names a section
- *    the snapshot has.** A citation written on purpose to something else is
+ * 3. **Every `§` citation in the CFC sources, {@link CITATION_SOURCE}, names
+ *    a section the snapshot has.** A citation written on purpose to something else is
  *    recorded in {@link EXEMPTIONS}, naming the file, the citation and why;
  *    an entry whose file no longer writes its citation is reported too.
  * 4. **`SPEC-PENDING` markers stay under budget and name their ruling.** At
  *    most {@link SPEC_PENDING_BUDGET} markers across the files the CFC rule
  *    governs, {@link GOVERNED_SOURCE}, each on a line naming a
  *    `commonfabric/specs` pull request.
+ * 5. **A `missing` row's runtime symbols are there.** Every symbol a row's
+ *    `decidedToday` names is declared at the top level of the file it
+ *    names, so a function that moves takes its row with it.
  *
  * What it does not check: that a kernel function's body matches its block,
  * which is equivalence the hash makes reviewable and review decides; that a
@@ -46,6 +49,7 @@
  */
 
 import { dirname, fromFileUrl } from "@std/path";
+import ts from "typescript";
 import {
   type Companion,
   COMPANIONS,
@@ -64,7 +68,7 @@ import { repositoryFiles } from "./repository-files.ts";
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 /** The kernel directory, repository-relative, with its trailing slash. */
-export const KERNEL_DIR = "packages/runner/src/cfc/kernel/";
+export const KERNEL_DIR = "runtime/runner/src/cfc/kernel/";
 
 /**
  * The files under the kernel directory that are the ledger rather than kernel
@@ -76,25 +80,55 @@ export const KERNEL_LEDGER_FILES: ReadonlySet<string> = new Set([
   `${KERNEL_DIR}spec-header.ts`,
 ]);
 
-/** The most `SPEC-PENDING` markers the governed files may hold at once. */
-export const SPEC_PENDING_BUDGET = 3;
+/**
+ * The most `SPEC-PENDING` markers the governed files may hold at once. Set
+ * by the CFC owner (2026-10-30: three was too low to let labs changes land
+ * while their rulings wait).
+ */
+export const SPEC_PENDING_BUDGET = 40;
+
+/**
+ * The memory package's CFC sources: the release authority and the label-field
+ * table, which the store and the runtime both decide by, and the store's
+ * envelope admission.
+ */
+const MEMORY_CFC_SOURCE: readonly RegExp[] = [
+  /^runtime\/memory\/v2\/cfc-[^/]*\.ts$/,
+  /^runtime\/memory\/v2\/envelope-admission\.ts$/,
+];
 
 /**
  * The source files the CFC rule in `.claude/rules/cfc.md` governs, which is
  * where a `SPEC-PENDING` marker may sit: the runner's CFC sources and their
- * tests, the render boundaries in `html`, the harness's CFC modules, and the
- * harness console's display ceiling. The two lists are kept in step by hand.
+ * tests, the memory package's CFC sources and the store's test of them, the
+ * render boundaries in `html`, the worker's host read gate, the harness's CFC
+ * modules, and the harness console's display ceiling. The two lists are kept
+ * in step by hand.
  */
 export const GOVERNED_SOURCE: readonly RegExp[] = [
-  /^packages\/runner\/src\/cfc\/.*\.tsx?$/,
-  /^packages\/runner\/src\/cfc\.ts$/,
-  /^packages\/runner\/test\/cfc[^/]*\.test\.tsx?$/,
-  /^packages\/runner\/test\/cfc\/.*\.tsx?$/,
-  /^packages\/html\/src\/worker\/(?:reconciler|display-fit)\.ts$/,
-  /^packages\/cf-harness\/src\/cfc-[^/]*\.ts$/,
-  /^packages\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
-  /^packages\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
-  /^packages\/cf-harness\/console\/display-ceiling\.ts$/,
+  /^runtime\/runner\/src\/cfc\/.*\.tsx?$/,
+  /^runtime\/runner\/src\/cfc\.ts$/,
+  /^runtime\/runner\/test\/cfc[^/]*\.test\.tsx?$/,
+  /^runtime\/runner\/test\/cfc\/.*\.tsx?$/,
+  /^runtime\/html\/src\/worker\/(?:reconciler|display-fit|display-fit-atoms)\.ts$/,
+  /^runtime\/runtime-client\/src\/backends\/host-read-gate\.ts$/,
+  /^runtime\/cf-harness\/src\/cfc-[^/]*\.ts$/,
+  /^runtime\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
+  /^runtime\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
+  /^runtime\/cf-harness\/console\/display-ceiling\.ts$/,
+  ...MEMORY_CFC_SOURCE,
+  /^runtime\/memory\/test\/v2-(?:cfc-[^/]*|envelope-admission)\.test\.ts$/,
+];
+
+/**
+ * The CFC sources whose `§` citations are held to the snapshot: the runner's
+ * CFC sources, and the memory package's, which hold the decisions the store
+ * shares with the runtime.
+ */
+export const CITATION_SOURCE: readonly RegExp[] = [
+  /^runtime\/runner\/src\/cfc\/.*\.tsx?$/,
+  /^runtime\/runner\/src\/cfc\.ts$/,
+  ...MEMORY_CFC_SOURCE,
 ];
 
 /** Whether `path` is one the CFC rule governs. */
@@ -119,10 +153,52 @@ export interface Exemption {
 }
 
 /**
- * Every `§` citation under `packages/runner/src/cfc/` that names something
- * other than a section of the specification, on purpose.
+ * Every `§` citation in {@link CITATION_SOURCE} that names something other
+ * than a section of the specification, on purpose.
  */
-export const EXEMPTIONS: readonly Exemption[] = [];
+export const EXEMPTIONS: readonly Exemption[] = [
+  {
+    file: "runtime/memory/v2/cfc-anchors-label.ts",
+    citation: "§7.7.4",
+    reason: "cites the memory-v2 specification, " +
+      "docs/specs/memory-v2/07-op-views-and-annotations.md, where the " +
+      "engine's labeling of moved anchors is arranged",
+  },
+  {
+    file: "runtime/runner/src/cfc/schema-merge.ts",
+    citation: "§8.15.13",
+    reason: "the write-policy merge cites the section " +
+      "https://github.com/commonfabric/specs/pull/52 adds, and the merge in it " +
+      "https://github.com/commonfabric/specs/pull/96 adds, neither of which " +
+      "the pinned snapshot (specs#88's head) holds; its SPEC-PENDING marker " +
+      "names specs#96",
+  },
+  {
+    file: "runtime/runner/src/cfc/schema-merge.ts",
+    citation: "§8.15.6.1",
+    reason: "the write-policy merge cites the section " +
+      "https://github.com/commonfabric/specs/pull/96 adds, which the pinned " +
+      "snapshot (specs#88's head) does not hold; its SPEC-PENDING marker names " +
+      "that pull request",
+  },
+  {
+    file: "runtime/runner/src/cfc/claim-preservation.ts",
+    citation: "§8.15.6.1",
+    reason: "the keep rule's matching of write-policy alternatives cites the " +
+      "section https://github.com/commonfabric/specs/pull/96 adds, which the " +
+      "pinned snapshot (specs#88's head) does not hold; its SPEC-PENDING " +
+      "marker names that pull request",
+  },
+  {
+    file: "runtime/runner/src/cfc/claim-preservation.ts",
+    citation: "§8.15.13",
+    reason: "the keep rule's write-policy admission cites the section " +
+      "https://github.com/commonfabric/specs/pull/52 adds, and the carve-out " +
+      "in it https://github.com/commonfabric/specs/pull/96 adds, neither of " +
+      "which the pinned snapshot (specs#88's head) holds; its SPEC-PENDING " +
+      "marker names specs#96",
+  },
+];
 
 /** A file this check reads. */
 export interface SourceFile {
@@ -145,7 +221,10 @@ export interface Finding {
   message: string;
 }
 
-/** Everything the check reads, gathered by `main` and given to the pure core. */
+/**
+ * Everything the check reads, gathered by `gatherInput` and given to the pure
+ * core.
+ */
 export interface CheckInput {
   snapshot: SpecSnapshot;
   manifest: readonly ManifestRow[];
@@ -164,6 +243,13 @@ export interface CheckInput {
   /** Every governed file a marker may sit in. */
   markerFiles: readonly SourceFile[];
   budget: number;
+
+  /**
+   * Each file a `missing` row's `decidedToday` names, by its path under
+   * `runtime/runner/src/`, as the row writes it; `undefined` text for one
+   * that does not exist.
+   */
+  decidedFiles: ReadonlyMap<string, string | undefined>;
 }
 
 /** The 1-based line number holding `index` in `text`. */
@@ -424,7 +510,7 @@ function kernelFileFindings(
 }
 
 /**
- * Every finding over `input`. Pure: all reading happens in `main`.
+ * Every finding over `input`. Pure: all reading happens in `gatherInput`.
  */
 export function collectFindings(input: CheckInput): Finding[] {
   const findings: Finding[] = [];
@@ -589,6 +675,29 @@ export function collectFindings(input: CheckInput): Finding[] {
     }
   }
 
+  // The runtime symbols a `missing` row says decide its function today.
+  for (const row of input.manifest) {
+    if (row.relation !== "missing" || row.decidedToday === "unknown") {
+      continue;
+    }
+    for (const symbol of row.decidedToday) {
+      const text = input.decidedFiles.get(symbol.file);
+      if (text === undefined) {
+        findings.push({
+          file: `${KERNEL_DIR}manifest.ts`,
+          message: `the row for \`${row.name}\` names ` +
+            `${symbol.file}, which does not exist`,
+        });
+      } else if (!declaresSymbol(text, symbol.symbol, symbol.file)) {
+        findings.push({
+          file: `${KERNEL_DIR}manifest.ts`,
+          message: `the row for \`${row.name}\` names ` +
+            `\`${symbol.symbol}\` in ${symbol.file}, which does not declare it at top level`,
+        });
+      }
+    }
+  }
+
   // Pending markers.
   let markers = 0;
   for (const file of input.markerFiles) {
@@ -606,7 +715,7 @@ export function collectFindings(input: CheckInput): Finding[] {
   }
   if (markers > input.budget) {
     findings.push({
-      file: "packages/runner/src/cfc/",
+      file: "runtime/runner/src/cfc/",
       message: `${markers} \`SPEC-PENDING\` markers across the governed ` +
         `files exceed the budget of ${input.budget}; land a ruling before ` +
         "adding another",
@@ -623,35 +732,116 @@ export function collectFindings(input: CheckInput): Finding[] {
 /** A TypeScript or TSX source file. */
 const SOURCE = /\.tsx?$/;
 
-/** Reads the files the check covers from the tree at `root`. */
-export async function readInput(root: string): Promise<CheckInput> {
-  const read = async (path: string): Promise<SourceFile> => ({
+/** The directory a manifest row's `decidedToday` file is relative to. */
+const RUNTIME_SYMBOL_ROOT = "runtime/runner/src/";
+
+/**
+ * Whether `text` declares `name` at top level, exported or not, or exports
+ * it under that name from an `export { … }` list with no `from` clause. The
+ * source is parsed, as TSX when `path` names a `.tsx` file and as TypeScript
+ * otherwise, so a declaration written in a comment or a string is not one.
+ */
+export function declaresSymbol(
+  text: string,
+  name: string,
+  path = "decided.ts",
+): boolean {
+  const source = ts.createSourceFile(
     path,
-    text: await Deno.readTextFile(`${root}/${path}`),
+    text,
+    ts.ScriptTarget.Latest,
+    false,
+    path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  for (const statement of source.statements) {
+    if (
+      (ts.isFunctionDeclaration(statement) ||
+        ts.isClassDeclaration(statement) ||
+        ts.isInterfaceDeclaration(statement) ||
+        ts.isTypeAliasDeclaration(statement) ||
+        ts.isEnumDeclaration(statement)) &&
+      statement.name?.text === name
+    ) {
+      return true;
+    }
+    if (
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some((declaration) =>
+        ts.isIdentifier(declaration.name) && declaration.name.text === name
+      )
+    ) {
+      return true;
+    }
+    if (
+      ts.isExportDeclaration(statement) &&
+      statement.moduleSpecifier === undefined &&
+      statement.exportClause !== undefined &&
+      ts.isNamedExports(statement.exportClause) &&
+      statement.exportClause.elements.some((element) =>
+        element.name.text === name
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** `path` with its `.` and `..` segments resolved, `/`-separated. */
+function normalizedPath(path: string): string {
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") segments.pop();
+    else segments.push(segment);
+  }
+  return segments.join("/");
+}
+
+/**
+ * Gathers what the check reads from a tree: `files` is every file the tree
+ * holds, repository-relative, and `read` returns one of them, or the snapshot,
+ * by that path. `manifest` is the ledger whose `missing` rows name the
+ * `decidedToday` files to read.
+ */
+export async function gatherInput(
+  files: readonly string[],
+  read: (path: string) => Promise<string>,
+  manifest: readonly ManifestRow[] = MANIFEST,
+): Promise<CheckInput> {
+  const source = async (path: string): Promise<SourceFile> => ({
+    path,
+    text: await read(path),
   });
-  const files = await repositoryFiles(root);
   const kernelFiles: SourceFile[] = [];
   const citationFiles: SourceFile[] = [];
   const markerFiles: SourceFile[] = [];
   for (const path of files) {
     if (path.startsWith(KERNEL_DIR) && SOURCE.test(path)) {
-      kernelFiles.push(await read(path));
+      kernelFiles.push(await source(path));
     }
-    if (
-      (path.startsWith("packages/runner/src/cfc/") ||
-        path === "packages/runner/src/cfc.ts") && SOURCE.test(path)
-    ) {
-      citationFiles.push(await read(path));
+    if (CITATION_SOURCE.some((pattern) => pattern.test(path))) {
+      citationFiles.push(await source(path));
     }
     if (isGovernedSource(path)) {
-      markerFiles.push(await read(path));
+      markerFiles.push(await source(path));
+    }
+  }
+  const decidedFiles = new Map<string, string | undefined>();
+  const tracked = new Set(files);
+  for (const row of manifest) {
+    if (row.relation !== "missing" || row.decidedToday === "unknown") {
+      continue;
+    }
+    for (const { file } of row.decidedToday) {
+      if (decidedFiles.has(file)) continue;
+      const path = normalizedPath(`${RUNTIME_SYMBOL_ROOT}${file}`);
+      decidedFiles.set(file, tracked.has(path) ? await read(path) : undefined);
     }
   }
   return {
-    snapshot: JSON.parse(
-      await Deno.readTextFile(`${root}/${SNAPSHOT_PATH}`),
-    ) as SpecSnapshot,
-    manifest: MANIFEST,
+    snapshot: JSON.parse(await read(SNAPSHOT_PATH)) as SpecSnapshot,
+    manifest,
     companions: COMPANIONS,
     criticalSections: CRITICAL_SECTIONS,
     kernelFiles,
@@ -659,57 +849,80 @@ export async function readInput(root: string): Promise<CheckInput> {
     exemptions: EXEMPTIONS,
     markerFiles,
     budget: SPEC_PENDING_BUDGET,
+    decidedFiles,
   };
 }
 
-function reportFindings(
-  findings: readonly Finding[],
-  specsCommit: string,
-): void {
-  console.error(
-    [
-      "",
-      `CFC correspondence against specs ${specsCommit.slice(0, 8)}:`,
-      "",
-      ...findings.map((finding) =>
-        `  ${finding.file}${
-          finding.line === undefined ? "" : `:${finding.line}`
-        }` +
-        `\n      ${finding.message}`
-      ),
-      "",
-      "docs/development/cfc-spec-correspondence.md is the procedure. A kernel",
-      "header or manifest row that disagrees with the snapshot is re-derived",
-      "from the specification at the recorded commit, or the snapshot is",
-      "regenerated with `deno task cfc-spec-snapshot` from a specs checkout.",
-      "A citation naming a section the specification does not have is",
-      "corrected, or, where it is written on purpose to something else,",
-      "recorded in EXEMPTIONS in tasks/check-cfc-correspondence.ts with the",
-      "file, the citation and the reason.",
-      "",
-    ].join("\n"),
+/** Reads the files the check covers from the working tree at `root`. */
+export async function readInput(root: string): Promise<CheckInput> {
+  return gatherInput(
+    await repositoryFiles(root),
+    (path) => Deno.readTextFile(`${root}/${path}`),
   );
 }
 
-/** Runs the check over `root`, reports, and returns a process exit code. */
-export async function main(root: string = REPO_ROOT): Promise<number> {
-  const input = await readInput(root);
+/** What the check says, and the process exit code it ends with. */
+export interface Report {
+  /** The text: standard output's when `code` is 0, standard error's if not. */
+  text: string;
+
+  code: number;
+}
+
+/** The check's verdict over `input`. */
+export function report(input: CheckInput): Report {
+  const specsCommit = input.snapshot.specsCommit.slice(0, 8);
   const findings = collectFindings(input);
   if (findings.length > 0) {
-    reportFindings(findings, input.snapshot.specsCommit);
-    return 1;
+    return {
+      text: [
+        "",
+        `CFC correspondence against specs ${specsCommit}:`,
+        "",
+        ...findings.map((finding) =>
+          `  ${finding.file}${
+            finding.line === undefined ? "" : `:${finding.line}`
+          }` +
+          `\n      ${finding.message}`
+        ),
+        "",
+        "docs/development/cfc-spec-correspondence.md is the procedure. A kernel",
+        "header or manifest row that disagrees with the snapshot is re-derived",
+        "from the specification at the recorded commit, or the snapshot is",
+        "regenerated with `deno task cfc-spec-snapshot` from a specs checkout.",
+        "A citation naming a section the specification does not have is",
+        "corrected, or, where it is written on purpose to something else,",
+        "recorded in EXEMPTIONS in tasks/check-cfc-correspondence.ts with the",
+        "file, the citation and the reason.",
+        "",
+      ].join("\n"),
+      code: 1,
+    };
   }
   let citations = 0;
   for (const file of input.citationFiles) {
     citations += [...file.text.matchAll(/§\s?\d/g)].length;
   }
-  console.log(
-    `CFC correspondence OK against specs ` +
-      `${input.snapshot.specsCommit.slice(0, 8)}: ${input.manifest.length} ` +
-      `manifest rows, ${input.kernelFiles.length} kernel files, ` +
+  return {
+    text: `CFC correspondence OK against specs ${specsCommit}: ` +
+      `${input.manifest.length} manifest rows, ` +
+      `${input.kernelFiles.length} kernel files, ` +
       `${citations} citations in ${input.citationFiles.length} files.`,
-  );
-  return 0;
+    code: 0,
+  };
 }
 
-if (import.meta.main) Deno.exit(await main());
+/**
+ * Prints `shown`'s text through `sink.log` when its code is 0 and through
+ * `sink.error` otherwise, and returns the code.
+ */
+export function show(
+  shown: Report,
+  sink: Pick<Console, "log" | "error"> = console,
+): number {
+  if (shown.code === 0) sink.log(shown.text);
+  else sink.error(shown.text);
+  return shown.code;
+}
+
+if (import.meta.main) Deno.exit(show(report(await readInput(REPO_ROOT))));

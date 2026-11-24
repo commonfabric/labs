@@ -2,12 +2,13 @@
 
 This document specifies the JSON-compatible wire format used to represent
 `FabricValue`s, including the `fvj1:` encoding prefix, the tagged-object
-convention, escaping mechanisms, codec engine responsibilities, and the
-reservation rules for `/`-prefixed keys.
+convention, escaping mechanisms, codec engine responsibilities, the
+reservation rules for `/`-prefixed keys, the canonical text an encoder writes,
+and the floors on the guarantees an implementation states.
 
 ## Status
 
-Draft formal spec — extracted from Section 5 of `1-fabric-values.md`.
+Draft formal spec.
 
 ---
 
@@ -34,13 +35,16 @@ a string is sufficient to tell whether it carries a `FabricValue` payload.
 
 - A conforming **encoder** emits the prefix exactly once, immediately before
   the JSON body, on every encoded value (including encoded primitives — e.g.,
-  the number `42` encodes as the seven-character string `fvj1:42`).
+  the number `42` encodes as the seven-character string `fvj1:42`). The JSON
+  body it writes is the canonical text of Sections 10 and 11.
 - A conforming **decoder** verifies the prefix is present before parsing the
   remainder as JSON, and strips the prefix before processing. It refuses JSON
   in which an object names one member twice, and a number too large in
   magnitude for an IEEE 754 double, which it does not round to an infinity or
   to the largest double. It refuses the number `-0` too: negative zero is
-  written only as `SpecialNumber@1` (Section 3).
+  written only as `SpecialNumber@1` (Section 3). Short of those refusals, it
+  accepts any JSON text, not only the canonical text an encoder writes
+  (Section 11.4), for a value within the guarantees it states (Section 12).
 - A short detection helper (`JsonCodecEngine.seemsLikeEncoded()`) tests for
   the prefix without parsing — useful for routing arbitrary input through the
   right decode path.
@@ -58,30 +62,21 @@ All special types in JSON use a single convention: single-key objects where the
 key follows the pattern `/<Type>@<Version>`.
 
 - `/` — sigil prefix (nodding to IPLD heritage)
-- `<Type>` — type name
+- `<Type>` — type name, after any namespace prefixes, in any case
 - `@<Version>` — version number
 
-The tag is the key without its sigil, and its syntax is exact, because that
-syntax is what separates an unrecognized type from a malformation. A name is an
-uppercase ASCII letter followed by any number of ASCII letters and digits —
-`UpperCamelCase`. A version is a decimal integer with no leading zero, so the
-lowest version is 1. A tag is a name, `@`, and a version, with nothing before
-or after. `Bytes@1` and `Abc123@1234` are tags; `bytes@1`, `By-tes@1`,
-`Bytes@0`, `Bytes@01` and `Bytes@1.0` are not, and neither is any of those
-padded with whitespace or a newline.
+The key is a type tag with the sigil in front of it, and the tag is the key
+without its sigil. The type-tag syntax is not particular to JSON: it is the one
+every interchange format shares, defined in `1-fabric-values.md` Section 2.5.
+So `Bytes@1`, `bytes@1` and `sys.beep.Boop@1` are type tags, written as the keys
+`/Bytes@1`, `/bytes@1` and `/sys.beep.Boop@1`, while `Bytes` and `sys.Boop` are
+not.
 
-A string outside that syntax is not an unrecognized tag; it is not a tag at
-all. A key naming one is a structural violation under Section 9 rather than an
-`UnknownValue` under Section 8, and that is what lets an `UnknownValue` always
-hold a real tag. The escapes `/quote` and `/object` (Section 6), and the
-sparse-array marker `/hole` (Section 3), fall outside the syntax deliberately,
-each being a structural marker the format handles itself rather than a type
-anything encodes.
-
-The syntax is not particular to JSON. It is the type-tag syntax the whole codec
-system shares: a registry refuses a codec that declares a fixed tag outside it,
-so no codec can claim a tag the decoder would reject, and a format that lays
-its tags out differently on the wire still writes tags of this syntax.
+A key whose remainder after the sigil is not a type tag is a structural
+violation under Section 9 rather than an `UnknownValue` under Section 8. The
+escapes `/quote` and `/object` (Section 6), and the sparse-array marker `/hole`
+(Section 3), are the format's own forms rather than types anything encodes, and
+their names are not type tags, having no `@<Version>`.
 
 This convention does **not** prohibit storing plain objects that happen to have
 `/`-prefixed keys. The escaping mechanism in Section 6 (`/object` and
@@ -100,10 +95,19 @@ round-trip correctly.
 > trailing padding. Every bit the characters carry past the last whole byte
 > must be zero, so that `AQ` is the one spelling of the byte `0x01` and `AR`
 > is refused.
+>
+> Padding, where a state has it, is exactly RFC 4648's (Section 3.2, "Padding
+> of Encoded Data"). `=` appears only at the end of a state, and there are
+> exactly as many as complete its final group of characters to four: two after
+> a final group of two, one after a final group of three, and none when the
+> characters already make whole groups. So `AQ==` and `AQI=` are accepted, and
+> `AA=`, `AAA==`, `AAAA=`, and `==` are refused. Padded or not, the characters
+> before any `=` never number one more than a multiple of four, since a group of
+> one character cannot carry a whole byte.
+>
 > This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`,
-> `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, to the
-> `hash` field of `Hash@1` state, and to the `publicKey` and `privateKey` fields
-> of `KeyPair@1` state.
+> `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, and to the
+> `hash` field of `Hash@1` state.
 
 The JSON key for a tagged value is the tag with `/` prepended, per Section 2:
 a value under `Link@1` is written `{ "/Link@1": <state> }`. What follows
@@ -116,9 +120,6 @@ These types need no rule beyond the shape of their state:
 - `Link@1` — a plain object, the link's payload. The format sets no policy on
   its fields, which each use of links defines; `{ id: string, path: string[],
   space: string }` is one such shape.
-- `Error@1` — `{ type: string, name: string | null, message: string, stack?:
-  string, cause?: <any>, ... }`, where the trailing properties are the error's
-  own custom ones.
 - `Undefined@1` — `null`, and nothing else. The type is stateless (Section 5).
 - `Map@1` — `[[key, value], ...]`, entry pairs in insertion order.
 - `Set@1` — `[value, ...]`, values in insertion order.
@@ -127,22 +128,52 @@ These types need no rule beyond the shape of their state:
   is a structural meta-key rather than a type tag, and is valid only directly
   inside an array; see the sparse-array note below.
 
+### `Error@1` — errors
+
+State is `{ type: string, name?: string | null, message: string, stack?:
+string, cause?: <any>, ... }`, where the trailing properties are the error's own
+custom ones. `type` names the error's class and `message` is its message, and
+both are required. `name` is the error's name where that differs from `type`.
+A `name` of `null` means the name is the same as `type`, and so does a state
+with no `name` at all; an encoder writes `null` for such a name rather than
+leaving it out. `stack` and `cause` are present exactly when the error has
+them.
+
+On decoding, a state that is not an object, that lacks `type` or `message`, or
+whose `type`, `message`, or `stack` is not a string, or whose `name` is neither
+a string nor `null`, produces a `ProblematicValue`.
+
 ### `Hash@1` — content hashes
 
 State is `{ tag: string, hash: string }`. `tag` is the algorithm tag (for
-example `fid1`), and `hash` is the hash bytes as an unpadded base64url string,
-per the convention above. On decoding, a state that is not an object, or whose
-fields are not strings, produces a `ProblematicValue`. See `1-fabric-values.md`
+example `fid1`), in the general tag syntax of `1-fabric-values.md` Section 2.5,
+and `hash` is the hash bytes as an unpadded base64url string, per the
+convention above. An encoder does not write a hash whose algorithm tag is
+outside that syntax. On decoding, a state that is not an object, whose fields
+are not strings, whose `tag` is outside that syntax, or that holds any field
+besides those two, produces a `ProblematicValue`. See `1-fabric-values.md`
 Section 1.4.9.
 
 ### `KeyPair@1` — asymmetric key pairs
 
-State is `{ algorithm: string, publicKey: string, privateKey: string }`.
+State is `{ algorithm: string, publicKey: <Bytes@1>, privateKey: <Bytes@1> }`.
 `algorithm` names the algorithm in Web Crypto's normalized spelling (for
-example `Ed25519`), and the two keys are their raw bytes as unpadded base64url
-strings, per the convention above. On decoding, a state that is not an object,
-or whose fields are not strings, produces a `ProblematicValue`, as does a key
-that is not valid base64url.
+example `Ed25519`), and each key is its raw bytes as a `Bytes@1` value of its
+own:
+
+```json
+{
+  "/KeyPair@1": {
+    "algorithm": "Ed25519",
+    "privateKey": { "/Bytes@1": "vu8B" },
+    "publicKey": { "/Bytes@1": "3q0" }
+  }
+}
+```
+
+On decoding, a state that is not an object, whose `algorithm` is not a
+non-empty string, whose keys do not decode as `Bytes@1` values, or that holds
+any field besides those three produces a `ProblematicValue`.
 
 **Only a pair that holds key material has a state here.** A `FabricKeyPair`
 that holds `CryptoKey` handles instead is refused: encoding one throws rather
@@ -153,37 +184,26 @@ carry a key it did not. Such a pair crosses under the realm encoding
 (Section 3.4 of [4-realm-encoding.md](./4-realm-encoding.md)) and nowhere else.
 See `1-fabric-values.md` Section 1.4.11.
 
-### `RegExp@1` — regular expressions
-
-State is `{ source: string, flags: string, flavor: string }`. `source` is the
-pattern string and `flags` the flag string (for example `gi`). `flavor`
-identifies the regular-expression dialect, `es2025` being the default.
-
-On decoding, a state that is not an object produces a `ProblematicValue`, as
-does an `es2025` pattern that fails to construct. A pattern under any other
-flavor is stored faithfully and **not** validated, its dialect not being one
-this format can construct. See `1-fabric-values.md` Section 1.4.5.
-
 ### `Unavailable@1` — unavailable data
 
 State is `{ reason: string }` for a transient reason, and for reason `error`
 `{ reason: string, errorKind: string }` or
-`{ reason: string, errorKind: string, errorMessage: string }`. `reason` is one
-of `pending`, `syncing`, and `error`; `errorKind` is one of `general`,
+`{ reason: string, errorKind: string, message: string }`. `reason` is one of
+`pending`, `syncing`, and `error`; `errorKind` is one of `general`,
 `schemaMismatch`, `invalidInput`, `network`, `decode`, `compile`, `provider`,
-and `sync`, present exactly when the reason is `error`; and `errorMessage` is
+and `sync`, present exactly when the reason is `error`; and `message` is
 present exactly when a message is stored. A field with nothing to say is
-absent rather than present as `null`. An `error` whose message is its kind's
-default encodes without one, the default being presentation rather than
-state.
+absent rather than present as `null`. Any string is a message, whatever its
+text, and a decoded state holding one keeps it.
 
 On decoding, a state that is not an object, whose `reason` is not one of the
-three, whose `errorKind` is present and not one of the kinds, or whose
-`errorMessage` is present and not a string produces a `ProblematicValue`. So
-does a state pairing a kind or a message with a transient reason, or omitting
-the kind from `error`: the class never writes either, and the constructor
-refuses both. A well-formed state that is a transient reason alone decodes to
-that reason's prefab instance. See `1-fabric-values.md` Section 1.4.12.
+three, whose `errorKind` is present and not one of the kinds, whose `message`
+is present and not a string, or that holds any field besides those three
+produces a `ProblematicValue`. So does a state pairing a kind or a message with
+a transient reason, or omitting the kind from `error`: the class never writes
+either, and the constructor refuses both. A well-formed state that is a
+transient reason alone decodes to that reason's prefab instance. See
+`1-fabric-values.md` Section 1.4.12.
 
 ### `BigInt@1` — arbitrary-precision integers
 
@@ -231,7 +251,7 @@ the only way negative zero is written: the JSON number `-0` is refused
 (Section 1.1).
 
 Whether such a value reaches the encoder at all depends on the `FabricValue`
-conversion gate (`1-fabric-values.md` Section 4.9). The encoding above is the
+conversion gate (`1-fabric-values.md` Section 8.2). The encoding above is the
 encoder's contract however the value arrived.
 
 ### `Symbol@1` — registry-interned symbols
@@ -246,7 +266,7 @@ declines to encode one rather than coercing it to a key. On decoding, a state
 that is not a string produces a `ProblematicValue`.
 
 Whether such a value reaches the encoder at all depends on the `FabricValue`
-conversion gate (`1-fabric-values.md` Section 4.9). The encoding above is the
+conversion gate (`1-fabric-values.md` Section 8.2). The encoding above is the
 encoder's contract however the value arrived.
 
 ### `Problematic@1` — preserved failures
@@ -264,9 +284,11 @@ things this type is for, and such a value could not go back out under it.
 which it can because that tag is known to be a real one.
 
 On decoding, a state that is not an object, a `tag` or `error` that is not a
-string, or an absent `state` property is refused, and settles against `lenient`
-like any other malformation: a lenient decode yields a `ProblematicValue`
-describing that decode, and a strict one raises. A well-formed record is a
+string, an absent `state` property, or any field besides those three is
+refused, and settles against `lenient` like any other malformation: a lenient
+decode yields a `ProblematicValue` describing that decode, recording
+`Problematic@1` as its tag and the record as it arrived as its state, and a
+strict one raises. A well-formed record is a
 record of a *past* failure and reads back as one under either setting, this
 decode having succeeded. `state` is checked for presence rather than for type,
 because every `FabricValue` is a valid state, `undefined` among them; filling in
@@ -276,12 +298,17 @@ See `1-fabric-values.md` Section 3.5.
 
 > **Decoding validation.** Decoding cannot assume type safety from the wire.
 > Each codec must reject a state it did not write, rather than silently
-> producing garbage from one — wrong type, invalid format, or missing fields
-> alike. The rejection has two homes, and which one a check belongs in is
-> settled by what asking costs. `canDecode()` holds what is cheap to ask and not
-> already asked by the decoding: that the state is a `string`, that a record
-> carries the fields the decoding reads and that they are strings, that a
-> literal is one of a fixed set. `decode()` holds a check whose only
+> producing garbage from one — wrong type, invalid format, missing fields, or
+> a field the codec does not read alike. Decoding a record without a field it
+> arrived with would build a value that re-encodes and hashes differently from
+> what was sent. A codec whose state is open-ended by design reads every field
+> it is handed, so this refuses nothing there: `Error@1` reads each field
+> beyond its fixed ones as one of the error's own properties, and `Link@1`'s
+> state is its payload whole. The rejection has two homes, and which one a
+> check belongs in is settled by what asking costs. `canDecode()` holds what
+> is cheap to ask and not already asked by the decoding: that the state is a
+> `string`, that a record carries the fields the decoding reads, no others, and
+> that they are strings, that a literal is one of a fixed set. `decode()` holds a check whose only
 > implementation is the decoding itself — that a base64url string (such as
 > `BigInt@1`, `EpochNsec@1`, `EpochDay@1`, `DurationNsec@1`, `DurationDay@1`,
 > or `Bytes@1`) is valid base64url is answered by decoding it, so asking first
@@ -294,7 +321,7 @@ See `1-fabric-values.md` Section 3.5.
 > (see `1-fabric-values.md` Section 4.5). Which one a codec uses is therefore a
 > matter of what reads well where it is written, and carries no meaning for a
 > caller. This principle applies to all codecs. Wire data is untrusted input.
-> See `1-fabric-values.md` Section 7.4 for the broader principle that applies to
+> See `1-fabric-values.md` Section 2.11 for the broader principle that applies to
 > all code consuming decoded values.
 
 > **Sparse array encoding in JSON.** Even when an array contains holes, it is
@@ -308,6 +335,10 @@ See `1-fabric-values.md` Section 3.5.
 > - A very sparse array like `a = []; a[1000000] = 'x'` encodes as `[{ "/hole":
 >   1000000 }, "x"]`.
 
+> **Maximum array length.** How long an array an implementation handles is
+> one of the guarantees of Section 12, which also says how a run of holes counts
+> toward it.
+
 > **Bounding a decode of untrusted text.** Parsing JSON text builds every
 > value the text writes, and because a `hole` run carries its length as a
 > number, a few bytes can also stand for billions of array slots that any walk
@@ -317,8 +348,10 @@ See `1-fabric-values.md` Section 3.5.
 > appears, and a `hole` run adds one slot for each hole past the first that it
 > stands for. The elements and members can be counted by scanning the text
 > without parsing it, so a decoder can refuse text before building any of it.
-> The format itself sets no limit, and a decoder reading text it wrote itself
-> sets none.
+> The format itself sets no slot limit, and a decoder reading text it wrote
+> itself sets none. A slot limit is distinct from the guarantees of Section 12:
+> it belongs to one decode rather than to the implementation, and the floors
+> that section sets do not bind it.
 
 ## 4. Detection
 
@@ -393,11 +426,11 @@ other malformation off a channel.
 
 **When the encoder emits `/object`:** During encoding, if a plain object
 has any string key that starts with `/` — regardless of how many other keys the
-object has — the encoder wraps it in one of these escapes (either `/object`
-or `/quote`; see "Encoder dispatch" below). This prevents the decoder from
-treating the object as a reserved form. `/object` is always a valid choice; the
-distinction between `/object` and `/quote` is a recommendation about which form
-makes the wire output most readable, not a correctness requirement.
+object has — the encoder wraps it in one of these escapes, `/object` or
+`/quote`, chosen as "Encoder Dispatch" below requires. This prevents the
+decoder from treating the object as a reserved form. A decoder reads either
+escape wherever it is well-formed; the choice binds the encoder alone, so that a
+value has one text (Section 11).
 
 ### `/quote` — Fully Literal
 
@@ -414,7 +447,7 @@ decoded. It remains a plain object.
 **Freeze guarantee.** Although `/quote` skips type-tag interpretation, the
 result is still deep-frozen (arrays and plain objects within the quoted value
 are frozen via `Object.freeze()`). The immutability guarantee (see
-`1-fabric-values.md` Section 2.9) is a property of decoding output, not of
+`1-fabric-values.md` Section 2.10) is a property of decoding output, not of
 whether decoding occurred. A caller receiving a value from the engine's
 `decode()` can always assume it is immutable, regardless of whether it came from
 a `/quote` path, a decoded type, or a plain literal. An engine constructed with
@@ -434,29 +467,35 @@ Use cases:
   should still be interpreted normally.
 - `/quote`: You want the entire subtree treated as literal JSON data.
 
-### Encoder Dispatch (Recommended Best Practice)
+### Encoder Dispatch
 
 When the encoder encounters a plain object that needs an escape (i.e., any plain
-object containing one or more `/`-prefixed keys), both `/object` and `/quote`
-are valid choices. The recommended best practice is:
+object containing one or more `/`-prefixed keys), it **must** choose the escape
+this way:
 
-- If the entire subtree to be wrapped is fully literal — i.e., it contains no
-  values that would themselves need encoding as special types — emit `/quote`.
+- If the entire subtree to be wrapped is fully literal — it contains no value
+  encoded under a tag (Section 3, `undefined` and the special numbers among
+  them) and no array holding a hole — emit `/quote`. A plain object within it
+  that has `/`-prefixed keys of its own is written as itself, `/quote` having
+  already made the whole subtree literal.
 - Otherwise (some descendant value still needs to be processed as a special
-  type during decoding), emit `/object`.
+  type during decoding), emit `/object`. Each plain object within it that has
+  `/`-prefixed keys of its own makes the same choice for its own subtree.
 
-The motivation for the recommendation is wire-format readability and round-trip
-fidelity: a `/quote`-wrapped literal subtree appears in the wire format as
-itself, with no per-key escaping or restructuring, which is easier for humans to
-read and easier for tools to compare. Conversely, `/object` is required (not
-just preferred) whenever any descendant value still needs encoding, because
-`/quote` would suppress that encoding entirely.
+The motivation is wire-format readability and round-trip fidelity: a
+`/quote`-wrapped literal subtree appears in the wire format as itself, with no
+per-key escaping or restructuring, which is easier for humans to read and
+easier for tools to compare. Conversely, `/object` is required whenever any
+descendant value still needs encoding, because `/quote` would suppress that
+encoding entirely. Requiring one choice rather than allowing either is what
+gives a value one text (Section 11).
 
-This is a **recommendation, not a requirement**. A conforming encoder may emit
-`/object` in either case; the wire format is unambiguous either way. **A
-conforming decoder must accept both forms.** See `1-fabric-values.md` Section
-2.9 (immutability) and the freeze guarantee under `/quote` above for the
-properties a decoder preserves regardless of which form it sees.
+The rule binds the encoder alone. **A conforming decoder must accept both
+forms** wherever each is well-formed, whichever an encoder would have chosen:
+`{ "/object": { "/x": 1 } }` decodes to the plain object `{ "/x": 1 }`, whose
+canonical text is `{"/quote":{"/x":1}}`. See `1-fabric-values.md` Section 2.10
+(immutability) and the freeze guarantee under `/quote` above for the properties
+a decoder preserves regardless of which form it sees.
 
 ## 7. Codec Engine Responsibilities
 
@@ -491,7 +530,8 @@ When a JSON decode encounters a `/<Type>@<Version>` key it doesn't recognize,
 it wraps the data in `UnknownValue` (see `1-fabric-values.md` Section 3) to
 preserve it for round-tripping. Re-encoding reproduces the original key,
 the codec's `tagForValue()` reading back the preserved tag and `encode()`
-returning the preserved bare state, so the value passes through byte for byte.
+returning the preserved bare state, so the value passes through byte for byte
+when it arrived as its canonical text (Section 11).
 
 This applies only to a key that is syntactically a tag but claimed by no
 codec. A key that is not a tag at all is a structural violation rather than an
@@ -551,6 +591,9 @@ byte order**, using the same comparison defined for hashing in
 2. At each position, the byte with the smaller unsigned value comes first.
 3. If one key is a prefix of another, the shorter key comes first.
 
+A key holding a lone surrogate is compared by the bytes WTF-8 gives it, as
+`2-hash-byte-format.md` Sections 4.4 and 5 specify.
+
 This requirement applies to every plain object that reaches the wire,
 including:
 
@@ -560,9 +603,10 @@ including:
 - Plain objects wrapped in `/quote` (Section 6) — the keys of the quoted
   literal must be sorted.
 
-> **Why sort.** Sorting makes the JSON wire form **canonical**: two plain
-> objects with the same keys and values produce the same JSON bytes regardless
-> of the order in which their keys were inserted. This in turn lets two
+> **Why sort.** Sorting is the part of the JSON wire form's **canonical** text
+> (Section 11) that concerns records: two plain objects with the same keys and
+> values produce the same JSON bytes regardless of the order in which their keys
+> were inserted. This in turn lets two
 > independently-built encoders agree on a single byte-for-byte encoding for the
 > same logical value, which simplifies content addressing, deduplication, and
 > diffing. The sort key is the same UTF-8 byte order used by hashing, so the two
@@ -588,3 +632,183 @@ including:
 > regardless of the order in which they appeared on the wire). A conforming
 > encoder re-establishes UTF-8 canonical key order on output regardless of the
 > order in which keys were received or the host language's iteration rules.
+
+## 11. Canonical Text
+
+The sections before this one settle the structure of the JSON body for a value:
+which arrays, records, and tags it holds, the exact states of Section 3, the
+escape each record with a `/`-prefixed key takes (Section 6), and the order of
+a record's keys (Section 10). This section settles the text: for a given value,
+a conforming encoder **must** write exactly one text, fixing where whitespace
+goes, how a number is written, and how a string is written. Two independently
+built encoders therefore write the same text for the same value.
+
+The rules are the ones ECMAScript's `JSON.stringify()` follows when called with
+no indentation argument, and ECMA-262 is the authority wherever the summary
+below seems to leave room. The summary is written so that an implementation in
+another language can follow it without running JavaScript.
+
+### 11.1 Whitespace
+
+The body carries no insignificant whitespace: none before or after it, and none
+between tokens. Members of a record are separated by a bare `,`, and a key from
+its value by a bare `:`, so a record holding an array is written
+`{"a":[1,2],"b":null}`. Whitespace appears only inside strings, as Section 11.3
+writes it. The JSON examples elsewhere in this document are spaced for reading,
+and are not the text an encoder writes for them.
+
+### 11.2 Numbers
+
+A number in the body is finite and is not negative zero: `NaN`, the infinities,
+and `-0` are written as `SpecialNumber@1` (Section 3). A number is written as
+ECMA-262's `Number::toString` abstract operation writes it in radix 10, which
+is what `JSON.stringify()` writes for a finite number. In outline:
+
+1. **Digits.** Take the shortest string of significant decimal digits that,
+   scaled by a power of ten, reads back as the same IEEE 754 double. Where more
+   than one string of that length reads back, take the one closest in value to
+   the double, and of two equally close, the one whose last digit is even.
+   ECMA-262 states this last refinement as a recommendation, in a note to
+   `Number::toString`; this format requires it, since without it the final
+   digit is not determined.
+2. **Form.** Let `e` be the decimal exponent of the leading digit, so that the
+   number's magnitude is `d.ddd × 10^e`.
+   - For `-6 ≤ e ≤ 20`, the number is written positionally, with no exponent:
+     a whole number as its digits followed by any zeros needed, with no decimal
+     point; any other magnitude of 1 or more with the point after the first
+     `e + 1` digits; and a magnitude below 1 as `0.`, then `-e - 1` zeros,
+     then the digits.
+   - Otherwise, that is for `e ≥ 21` or `e ≤ -7`, it is written exponentially:
+     the first digit; then, if there are more, `.` and the rest; then a
+     lowercase `e`, the sign of the exponent (`+` or `-`, always present), and
+     the exponent's magnitude in decimal with no leading zeros.
+3. **Sign.** A negative number is `-` followed by the form of its magnitude. A
+   positive number carries no sign.
+
+So `0`, `-1`, `100`, `0.1`, `0.000001`, `1e-7`, `1.5e-7`,
+`100000000000000000000` (`1e20`), `1e+21`, `1.25e+21`, `0.30000000000000004`,
+and `5e-324` are each the one way to write their number. A digit string never
+ends in a zero after the point, and no number is written with an uppercase
+`E`, a leading `+`, or a leading zero other than the one before `.` in a
+magnitude below 1.
+
+### 11.3 Strings
+
+Every string in the body — a string value, a record key, a tag key such as
+`"/Bytes@1"` — is written as ECMA-262's `QuoteJSONString` abstract operation
+writes it. The string is taken as its sequence of UTF-16 code units, lone
+surrogates included (`1-fabric-values.md` Section 6.7), and written between two
+`"` characters, code unit by code unit:
+
+- `"` and `\` are written `\"` and `\\`.
+- U+0008, U+0009, U+000A, U+000C, and U+000D are written `\b`, `\t`, `\n`,
+  `\f`, and `\r`.
+- Every other code unit below U+0020, and every lone surrogate (a code unit in
+  the range U+D800 to U+DFFF that is not part of a high-then-low pair), is
+  written `\u` followed by four **lowercase** hexadecimal digits: U+001B is
+  `\u001b`, and a lone U+DABC is `\udabc`.
+- Everything else is written as itself, `/`, U+007F, U+2028, and U+2029
+  included, and a surrogate pair as the one character it encodes.
+
+Because a lone surrogate is always escaped, the body is always well-formed
+Unicode, whatever strings the value holds.
+
+### 11.4 Encoder and decoder
+
+These rules bind what an encoder writes, and nothing else. A decoder accepts
+any JSON text RFC 8259 allows, subject only to the refusals of Section 1.1:
+whitespace between tokens, a number written `1.0E2` or `1E+21`, an escaped `\/`
+or `\u2028`, an escape with uppercase digits such as `\uD800`, keys in any order
+(Section 10), and `/object` where an encoder would write `/quote` (Section 6)
+all decode. Such a text decodes to the same value its
+canonical form does, so re-encoding that value writes the canonical form, which
+can differ from the text that arrived even though the value does not.
+
+> **Why one text.** Section 10's reasoning for key order extends to the rest of
+> the body: when the text is a function of the value alone, equal values have
+> equal text, which lets content addressing, deduplication, and diffing work on
+> the text directly, and lets a conformance case state the exact text an
+> encoder must produce.
+
+## 12. Implementation Guarantees
+
+An implementation states how large a value it guarantees to handle, by each of
+the measures below. A stated figure is a guarantee rather than a limit: the
+implementation encodes and decodes any value within it. Past the figure, the
+implementation may refuse the value or may handle it, and the format says
+neither, so a conformance test asks nothing of a value past a stated
+guarantee, and in particular does not ask that one be refused. An implementation
+that states no figure for a measure guarantees every size by it.
+
+Each measure has a floor, the smallest guarantee an implementation may state:
+
+| Measure | Floor |
+|---------|-------|
+| Length of an array | 2^24 (16,777,216) elements |
+| Members of a record | 2^14 (16,384) members |
+| Length of a string | 2^24 (16,777,216) code points |
+| Length of a byte sequence | 2^24 (16,777,216) bytes |
+| Length of a registered symbol's key | 2^10 (1,024) code points |
+| Depth | 2^9 (512) containers |
+| Size of a bigint, in bytes of its two's-complement representation | 2^21 (2,097,152) bytes (2^24 bits) |
+
+A guarantee covers one measure taken alone. The format sets no floor on a
+value's size as a whole, and an implementation may fail a value that is within
+each of its guarantees but too large in total for it to hold.
+
+**Arrays.** An array's length counts every hole a `hole` run stands for
+(Section 3), not just the members the text writes. An array of exactly the
+guaranteed length is within the guarantee even when every element is a hole:
+an implementation guaranteeing a length of `n` decodes `[{ "/hole": n }]`, and
+encodes the array it stands for.
+
+**Records.** A record is any object the JSON body writes: a plain object,
+including one wrapped in `/object` or `/quote` (Section 6), and equally a
+type's state, such as an `Error@1` state with its custom properties. The
+single-key object that wraps a tagged value has one member.
+
+**Strings.** A string's length is its count of Unicode code points. A surrogate
+pair is one code point, and so is a lone surrogate, which the format treats as
+a code point of its own value (`1-fabric-values.md` Section 6.7, and the WTF-8
+encoding of `2-hash-byte-format.md` Section 4.4). The guarantee covers every
+string the value holds: string values, record keys, and the strings in a
+type's state, such as an `Error@1` message. It is about
+the value, not the text: a string's JSON text can be several times as long as
+its count of code points, an escaped code unit taking six characters.
+
+**Byte sequences.** The guarantee covers every byte sequence the value holds: a
+`Bytes@1` value, the hash of a `Hash@1`, and each key of a `KeyPair@1`. It
+counts the bytes, not the base64url characters of the state that writes them.
+
+**Registered symbol keys.** The key a `Symbol@1` state carries is measured as a
+string is, but has its own, smaller floor. For that one string, the
+implementation's guarantee for symbol keys takes the place of its guarantee for
+strings.
+
+**Depth.** A value's depth is the greatest number of containers enclosing any
+point in it, counted as `2-hash-byte-format.md` Section 4.19 counts the path:
+arrays, plain objects, and instances, with an instance and its state as two
+where the state is an array or a plain object. A value that is not a container
+has depth 0, `[]` has depth 1, `[[]]` has depth 2, and an `Error` whose state
+holds no container has depth 2. Depth is the value's, not the text's: an escape
+wrapper, `/object` or `/quote`, adds nothing, and nor does a `hole` entry; the
+single-key object wrapping an instance is the instance. A value of one of the
+format's leaf types adds nothing, whatever the shape of its state in the text:
+these are `Bytes@1`, `Hash@1`, the four temporal quantities, and the types
+that carry a JavaScript primitive (`BigInt@1`, `SpecialNumber@1`, `Symbol@1`
+and `Undefined@1`). Every other tagged value is an instance, `KeyPair@1` and
+`Unavailable@1` among them, so a key pair or an unavailable value has depth 2.
+
+**Bigints.** A bigint's size is the length of its minimal two's-complement
+representation in bytes, the bytes `BigInt@1` writes (Section 3): at least one
+byte, and no leading `0x00` or `0xFF` byte that only repeats the sign the next
+byte carries. `0n`, `-1n`, `127n` and `-128n` are 1 byte each, and `128n` and
+`-129n` are 2. The size is the value's, not the text's: it counts the bytes, not
+the base64url characters of the state that writes them. The guarantee covers
+every bigint the value holds: a `BigInt@1` value, and the bigint each temporal
+quantity carries.
+
+**What the floors do not bind.** The floors bind only the guarantees an
+implementation states. A caller reading untrusted text may set a lower bound
+for one decode, the slot limit of Section 3, and refusing text under that bound
+is no failure to meet a guarantee.

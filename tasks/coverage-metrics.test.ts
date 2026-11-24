@@ -1,36 +1,62 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import * as path from "@std/path";
 import {
   collectCoverageDebtMetrics,
   collectCoverageDebtMetricsFromLcov,
+  collectFileCoverageDebt,
   collectMeasuredSetDebt,
   collectRegressedLines,
   collectSourceFiles,
   collectUncoveredLinesForFiles,
   countTrackedSourceLines,
   countUncoveredProfileLines,
+  main,
   metricGroupFor,
   parseLcov,
   shouldTrackSourceFile,
+  sourceFilesUnder,
   trackedSourceLineNumbers,
 } from "./coverage-metrics.ts";
 import { normalizeLcovInstancePaths } from "./write-coverage-lcov.ts";
 
 Deno.test("parseLcov accumulates hits per source line", () => {
-  const coverage = parseLcov([
-    "SF:/repo/packages/example/src/mod.ts",
-    "DA:1,1",
-    "DA:2,0",
-    "DA:2,3",
-    "DA:3,0",
-    "end_of_record",
-  ].join("\n"));
+  const coverage = parseLcov(
+    [
+      "SF:/repo/runtime/example/src/mod.ts",
+      "DA:1,1",
+      "DA:2,0",
+      "DA:2,3",
+      "DA:3,0",
+      "end_of_record",
+    ].join("\n"),
+    "/elsewhere",
+  );
 
-  const file = coverage.get("/repo/packages/example/src/mod.ts");
+  const file = coverage.get("/repo/runtime/example/src/mod.ts");
   assertEquals(file?.lineHits.get(1), 1);
   assertEquals(file?.lineHits.get(2), 3);
   assertEquals(countUncoveredProfileLines(file!), 1);
+});
+
+Deno.test("parseLcov resolves a relative source path against the root it is given", () => {
+  const coverage = parseLcov(
+    "SF:runtime/example/src/mod.ts\nDA:1,1\nend_of_record",
+    "/repo",
+  );
+
+  assertEquals([...coverage.keys()], ["/repo/runtime/example/src/mod.ts"]);
+});
+
+Deno.test("parseLcov keys a relative path the way a relative root's source files are keyed", () => {
+  const coverage = parseLcov(
+    "SF:runtime/example/src/mod.ts\nDA:1,1\nend_of_record",
+    "repo",
+  );
+
+  assertEquals([...coverage.keys()], [
+    path.join("repo", "runtime/example/src/mod.ts"),
+  ]);
 });
 
 Deno.test("instance-suffix normalization merges records of the same physical file", () => {
@@ -43,23 +69,23 @@ Deno.test("instance-suffix normalization merges records of the same physical fil
   // metric counted the same physical line once per instance that skipped it,
   // flapping with test order and punishing added tests (CT-1861).
   const normalized = normalizeLcovInstancePaths([
-    "SF:/repo/packages/example/src/mod.ts",
+    "SF:/repo/runtime/example/src/mod.ts",
     "DA:1,1",
     "DA:2,0",
     "end_of_record",
-    "SF:/repo/packages/example/src/mod.ts?testRun=aaaa-1111",
+    "SF:/repo/runtime/example/src/mod.ts?testRun=aaaa-1111",
     "DA:1,0",
     "DA:2,2",
     "DA:3,0",
     "end_of_record",
-    "SF:/repo/packages/example/src/mod.ts?testRun=bbbb-2222",
+    "SF:/repo/runtime/example/src/mod.ts?testRun=bbbb-2222",
     "DA:3,0",
     "end_of_record",
   ].join("\n"));
-  const coverage = parseLcov(normalized);
+  const coverage = parseLcov(normalized, "/repo");
 
   assertEquals(coverage.size, 1);
-  const file = coverage.get("/repo/packages/example/src/mod.ts");
+  const file = coverage.get("/repo/runtime/example/src/mod.ts");
   // Line 1 covered by the plain instance, line 2 by testRun aaaa; line 3 by
   // neither — the ONLY genuinely uncovered line.
   assertEquals(file?.lineHits.get(1), 1);
@@ -83,6 +109,19 @@ Deno.test("countTrackedSourceLines ignores blank and comment-only lines", () => 
   );
 });
 
+Deno.test("trackedSourceLineNumbers skips every line of a block comment", () => {
+  assertEquals(
+    trackedSourceLineNumbers([
+      "/* opening", // 1
+      " * middle", // 2
+      " */", // 3
+      "/* inline */ const value = 1;", // 4
+      "/* only a comment */", // 5
+    ].join("\n")),
+    [4],
+  );
+});
+
 Deno.test("trackedSourceLineNumbers reports the executable line numbers", () => {
   assertEquals(
     trackedSourceLineNumbers([
@@ -99,16 +138,48 @@ Deno.test("trackedSourceLineNumbers reports the executable line numbers", () => 
 });
 
 Deno.test("source inventory helpers group tracked files by package", () => {
-  assertEquals(shouldTrackSourceFile("packages/runner/src/cell.ts"), true);
+  assertEquals(shouldTrackSourceFile("runtime/runner/src/cell.ts"), true);
   assertEquals(
-    shouldTrackSourceFile("packages/runner/test/cell.test.ts"),
+    shouldTrackSourceFile("runtime/runner/test/cell.test.ts"),
     false,
   );
   assertEquals(shouldTrackSourceFile("scripts/start-local-dev.sh"), false);
   assertEquals(shouldTrackSourceFile("scripts/build.ts"), false);
+  assertEquals(shouldTrackSourceFile("runtime/runner/README.md"), false);
+  assertEquals(shouldTrackSourceFile("base/static/assets/app.js"), false);
+  assertEquals(shouldTrackSourceFile("base/static/src/app.js"), true);
   assertEquals(
-    metricGroupFor("packages/runner/src/cell.ts"),
-    "packages/runner",
+    shouldTrackSourceFile("base/static/deno-web-test.config.ts"),
+    false,
+  );
+  assertEquals(shouldTrackSourceFile("runtime/deno-web-test/config.ts"), true);
+  assertEquals(
+    shouldTrackSourceFile("patterns/showcase/iframe-board/guest.js"),
+    false,
+  );
+  assertEquals(
+    shouldTrackSourceFile("patterns/showcase/iframe-board/editor/guest.js"),
+    false,
+  );
+  assertEquals(
+    shouldTrackSourceFile("patterns/showcase/iframe-board/guest.ts"),
+    true,
+  );
+  assertEquals(
+    shouldTrackSourceFile("patterns/showcase/board/guest.js"),
+    true,
+  );
+  assertEquals(
+    shouldTrackSourceFile("patterns/showcase/group/iframe-board/guest.js"),
+    false,
+  );
+  assertEquals(
+    shouldTrackSourceFile("runtime/ui/iframe-board/guest.js"),
+    true,
+  );
+  assertEquals(
+    metricGroupFor("runtime/runner/src/cell.ts"),
+    "runtime/runner",
   );
   assertEquals(metricGroupFor("tasks/coverage-check.ts"), "tasks");
 });
@@ -122,27 +193,42 @@ Deno.test("collectSourceFiles excludes generated and dependency directories", as
       await Deno.writeTextFile(fullPath, "export const value = 1;\n");
     };
 
-    await writeSourceFile("packages/example/src/mod.ts");
-    await writeSourceFile("packages/example/build/generated.ts");
-    await writeSourceFile("packages/example/node_modules/dep/index.ts");
-    await writeSourceFile("packages/example/coverage/report.ts");
-    await writeSourceFile("packages/example/src/test/helper.ts");
+    await writeSourceFile("runtime/example/src/mod.ts");
+    await writeSourceFile("runtime/example/build/generated.ts");
+    await writeSourceFile("runtime/example/node_modules/dep/index.ts");
+    await writeSourceFile("runtime/example/coverage/report.ts");
+    await writeSourceFile("runtime/example/src/test/helper.ts");
+    await writeSourceFile("runtime/example/src/mod.test.ts");
+    await writeSourceFile("runtime/example/src/notes.md");
     await writeSourceFile("scripts/build.ts");
 
     const files = await collectSourceFiles(rootDir);
     assertEquals(
       files.map((file) => file.relativePath),
-      ["packages/example/src/mod.ts"],
+      ["runtime/example/src/mod.ts"],
     );
   } finally {
     await Deno.remove(rootDir, { recursive: true });
   }
 });
 
+Deno.test("collectSourceFiles throws where a source root cannot be read, rather than counting it as absent", async () => {
+  // A root whose path runs through a file is a root that exists in no
+  // readable form, which is not the same as a root the checkout lacks.
+  const rootDir = await Deno.makeTempFile({ prefix: "coverage-source-test-" });
+  try {
+    await expect(collectSourceFiles(rootDir)).rejects.toThrow(
+      Deno.errors.NotADirectory,
+    );
+  } finally {
+    await Deno.remove(rootDir);
+  }
+});
+
 Deno.test("collectCoverageDebtMetricsFromLcov computes debt from compact reports", async () => {
   const rootDir = await Deno.makeTempDir({ prefix: "coverage-lcov-test-" });
   try {
-    const sourcePath = path.join(rootDir, "packages/example/src/mod.ts");
+    const sourcePath = path.join(rootDir, "runtime/example/src/mod.ts");
     await Deno.mkdir(path.dirname(sourcePath), { recursive: true });
     await Deno.writeTextFile(
       sourcePath,
@@ -170,7 +256,7 @@ Deno.test("collectCoverageDebtMetricsFromLcov computes debt from compact reports
     );
     assertEquals(
       metrics.find((metric) =>
-        metric.name === "coverage-debt: packages/example uncovered lines"
+        metric.name === "coverage-debt: runtime/example uncovered lines"
       )?.uncoveredLines,
       1,
     );
@@ -188,7 +274,7 @@ Deno.test("collectCoverageDebtMetrics scores the profiles a directory holds", as
     await Deno.makeTempDir({ prefix: "coverage-profile-dir-" }),
   );
   try {
-    const sourceDir = path.join(rootDir, "packages", "example", "src");
+    const sourceDir = path.join(rootDir, "runtime", "example", "src");
     await Deno.mkdir(sourceDir, { recursive: true });
     await Deno.writeTextFile(
       path.join(sourceDir, "mod.ts"),
@@ -198,7 +284,7 @@ Deno.test("collectCoverageDebtMetrics scores the profiles a directory holds", as
     await Deno.writeTextFile(
       testPath,
       [
-        'import { add } from "./packages/example/src/mod.ts";',
+        'import { add } from "./runtime/example/src/mod.ts";',
         'Deno.test("add", () => {',
         '  if (add(1, 2) !== 3) throw new Error("wrong");',
         "});",
@@ -226,10 +312,20 @@ Deno.test("collectCoverageDebtMetrics scores the profiles a directory holds", as
           uncoveredLines: 0,
         },
         {
-          name: "coverage-debt: packages/example uncovered lines",
+          name: "coverage-debt: runtime/example uncovered lines",
           uncoveredLines: 0,
         },
       ]);
+    expect(
+      JSON.parse(
+        await main([
+          `--root=${rootDir}`,
+          `--profile-dir=${coverageProfileDir}`,
+        ]),
+      ).metrics,
+    ).toEqual(
+      await collectCoverageDebtMetrics({ rootDir, coverageProfileDir }),
+    );
   } finally {
     await Deno.remove(rootDir, { recursive: true });
   }
@@ -247,7 +343,7 @@ Deno.test("a file that compiles to nothing carries no debt", async () => {
     // Declarations only: no statement to run, so no test could cover a line of
     // it, and Deno's coverage reports no record for it either way.
     await writeSourceFile(
-      "packages/example/src/types.ts",
+      "runtime/example/src/types.ts",
       [
         "export interface Shape {",
         "  sides: number;",
@@ -257,7 +353,7 @@ Deno.test("a file that compiles to nothing carries no debt", async () => {
     );
     // Real code no test loaded: charged in full.
     await writeSourceFile(
-      "packages/example/src/untested.ts",
+      "runtime/example/src/untested.ts",
       ["export function untested() {", "  return 1;", "}"].join("\n"),
     );
 
@@ -268,7 +364,7 @@ Deno.test("a file that compiles to nothing carries no debt", async () => {
 
     expect(
       metrics.find((metric) =>
-        metric.name === "coverage-debt: packages/example uncovered lines"
+        metric.name === "coverage-debt: runtime/example uncovered lines"
       )?.uncoveredLines,
     ).toBe(3);
   } finally {
@@ -288,7 +384,7 @@ Deno.test("a file that opts out of coverage carries no debt", async () => {
     // Opted out on the first line, which is where Deno reads the comment, with
     // a reason after the directive: no test loaded it, and it owes nothing.
     await writeSourceFile(
-      "packages/example/src/browser-only.js",
+      "runtime/example/src/browser-only.js",
       [
         "// deno-coverage-ignore-file -- runs only in a browser",
         "// @ts-check",
@@ -300,7 +396,7 @@ Deno.test("a file that opts out of coverage carries no debt", async () => {
     // Opted out on the line after a shebang, the other line Deno reads it
     // from.
     await writeSourceFile(
-      "packages/example/src/script.ts",
+      "runtime/example/src/script.ts",
       [
         "#!/usr/bin/env -S deno run",
         "// deno-coverage-ignore-file",
@@ -312,7 +408,7 @@ Deno.test("a file that opts out of coverage carries no debt", async () => {
     // The same comment on any later line is one Deno does not read, so the
     // file stays charged in full, as it would stay in Deno's report.
     await writeSourceFile(
-      "packages/example/src/late-comment.ts",
+      "runtime/example/src/late-comment.ts",
       [
         "// @ts-check",
         "// deno-coverage-ignore-file",
@@ -331,7 +427,7 @@ Deno.test("a file that opts out of coverage carries no debt", async () => {
     // of code.
     expect(
       metrics.find((metric) =>
-        metric.name === "coverage-debt: packages/example uncovered lines"
+        metric.name === "coverage-debt: runtime/example uncovered lines"
       )?.uncoveredLines,
     ).toBe(3);
 
@@ -339,14 +435,14 @@ Deno.test("a file that opts out of coverage carries no debt", async () => {
       rootDir,
       lcov: "",
       files: [
-        "packages/example/src/browser-only.js",
-        "packages/example/src/script.ts",
-        "packages/example/src/late-comment.ts",
+        "runtime/example/src/browser-only.js",
+        "runtime/example/src/script.ts",
+        "runtime/example/src/late-comment.ts",
       ],
     });
-    expect(uncovered.has("packages/example/src/browser-only.js")).toBe(false);
-    expect(uncovered.has("packages/example/src/script.ts")).toBe(false);
-    expect(uncovered.get("packages/example/src/late-comment.ts")?.length).toBe(
+    expect(uncovered.has("runtime/example/src/browser-only.js")).toBe(false);
+    expect(uncovered.has("runtime/example/src/script.ts")).toBe(false);
+    expect(uncovered.get("runtime/example/src/late-comment.ts")?.length).toBe(
       3,
     );
   } finally {
@@ -357,7 +453,7 @@ Deno.test("a file that opts out of coverage carries no debt", async () => {
 Deno.test("integration pattern coverage feeds the debt metric", async () => {
   const rootDir = await Deno.makeTempDir({ prefix: "coverage-fold-test-" });
   try {
-    const sourcePath = path.join(rootDir, "packages/patterns/main.tsx");
+    const sourcePath = path.join(rootDir, "patterns/main.tsx");
     await Deno.mkdir(path.dirname(sourcePath), { recursive: true });
     await Deno.writeTextFile(
       sourcePath,
@@ -370,8 +466,7 @@ Deno.test("integration pattern coverage feeds the debt metric", async () => {
 
     const metricFor = async (lcov: string) =>
       (await collectCoverageDebtMetricsFromLcov({ rootDir, lcov })).find(
-        (metric) =>
-          metric.name === "coverage-debt: packages/patterns uncovered lines",
+        (metric) => metric.name === "coverage-debt: patterns uncovered lines",
       )?.uncoveredLines;
 
     // No record: every tracked line is uncovered.
@@ -379,7 +474,7 @@ Deno.test("integration pattern coverage feeds the debt metric", async () => {
 
     // A record from the integration stream is scored like any other: its
     // covered lines leave the debt and its unhit lines stay in it. Nothing
-    // discriminates on the test name, so a line only an end-to-end flow
+    // tells it apart from the unit stream, so a line only an end-to-end flow
     // exercises lowers the gated number.
     assertEquals(
       await metricFor([
@@ -396,12 +491,77 @@ Deno.test("integration pattern coverage feeds the debt metric", async () => {
   }
 });
 
+Deno.test("a statement Deno's coverage counts on fewer lines than the pattern instrumentation is charged by Deno's lines", async () => {
+  // Lines 3 to 5 are one statement. Deno's coverage names lines 3 and 4 of
+  // it and the instrumentation names all three. The pattern tests never
+  // reach it, so the instrumentation's record has it unrun.
+  const rootDir = await Deno.makeTempDir({ prefix: "coverage-join-test-" });
+  try {
+    const sourcePath = path.join(rootDir, "patterns/showcase/model.ts");
+    await Deno.mkdir(path.dirname(sourcePath), { recursive: true });
+    await Deno.writeTextFile(
+      sourcePath,
+      [
+        "export function check(n: number): void {",
+        "  if (n < 0) {",
+        "    throw new RangeError(",
+        "      `bad ${n}`,",
+        "    );",
+        "  }",
+        "}",
+      ].join("\n"),
+    );
+    const report = (throwHits: number) =>
+      [
+        "TN:pattern-runtime",
+        `SF:${sourcePath}`,
+        "DA:1,1",
+        "DA:2,1",
+        "DA:3,0",
+        "DA:4,0",
+        "DA:5,0",
+        "DA:6,1",
+        "DA:7,1",
+        "end_of_record",
+        `SF:${sourcePath}`,
+        "DA:1,1",
+        "DA:2,2",
+        `DA:3,${throwHits}`,
+        `DA:4,${throwHits}`,
+        "DA:6,1",
+        "DA:7,1",
+        "end_of_record",
+      ].join("\n");
+    const groupDebt = async (lcov: string) =>
+      (await collectCoverageDebtMetricsFromLcov({ rootDir, lcov })).find(
+        (metric) => metric.name === "coverage-debt: patterns uncovered lines",
+      )?.uncoveredLines;
+    const setDebt = async (lcov: string) =>
+      (await collectMeasuredSetDebt({
+        rootDir,
+        lcov,
+        member: "patterns",
+        members: ["patterns"],
+      })).uncoveredLines;
+
+    // The Deno tests ran the statement, so no line of it is charged.
+    expect(await groupDebt(report(1))).toBe(0);
+    expect(await setDebt(report(1))).toBe(0);
+
+    // No test ran it, so the lines Deno names for it are charged.
+    expect(await groupDebt(report(0))).toBe(2);
+    expect(await setDebt(report(0))).toBe(2);
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+  }
+});
+
 Deno.test("collectUncoveredLinesForFiles resolves lines only for requested files", async () => {
   const rootDir = await Deno.makeTempDir({ prefix: "coverage-lines-test-" });
   try {
-    const coveredPath = path.join(rootDir, "packages/example/src/covered.ts");
-    const untestedPath = path.join(rootDir, "packages/example/src/untested.ts");
-    const otherPath = path.join(rootDir, "packages/example/src/other.ts");
+    const coveredPath = path.join(rootDir, "runtime/example/src/covered.ts");
+    const untestedPath = path.join(rootDir, "runtime/example/src/untested.ts");
+    const otherPath = path.join(rootDir, "runtime/example/src/other.ts");
     await Deno.mkdir(path.dirname(coveredPath), { recursive: true });
     await Deno.writeTextFile(
       coveredPath,
@@ -424,31 +584,43 @@ Deno.test("collectUncoveredLinesForFiles resolves lines only for requested files
         "end_of_record",
       ].join("\n"),
       files: [
-        "packages/example/src/covered.ts",
-        "packages/example/src/untested.ts",
+        "runtime/example/src/covered.ts",
+        "runtime/example/src/untested.ts",
         "scripts/build.ts",
         // A test file is not tracked source, so it is skipped.
-        "packages/example/src/covered.test.ts",
+        "runtime/example/src/covered.test.ts",
       ],
     });
 
     // Covered file: only the zero-hit line.
-    assertEquals(uncovered.get("packages/example/src/covered.ts"), [2]);
+    assertEquals(uncovered.get("runtime/example/src/covered.ts"), [2]);
     // Absent from the report: every tracked line is uncovered.
-    assertEquals(uncovered.get("packages/example/src/untested.ts"), [1]);
+    assertEquals(uncovered.get("runtime/example/src/untested.ts"), [1]);
     // Untracked and unrequested files are absent.
     assertEquals(uncovered.has("scripts/build.ts"), false);
-    assertEquals(uncovered.has("packages/example/src/covered.test.ts"), false);
-    assertEquals(uncovered.has("packages/example/src/other.ts"), false);
+    assertEquals(uncovered.has("runtime/example/src/covered.test.ts"), false);
+    assertEquals(uncovered.has("runtime/example/src/other.ts"), false);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
   }
 });
 
+Deno.test("collectUncoveredLinesForFiles reads a record with no line as none at all", async () => {
+  await withMembers(["runtime/bakery"], async (rootDir) => {
+    const bakery = path.join(rootDir, "runtime/bakery/src/main.ts");
+    const uncovered = await collectUncoveredLinesForFiles({
+      rootDir,
+      lcov: `SF:${bakery}\nend_of_record\n`,
+      files: ["runtime/bakery/src/main.ts"],
+    });
+    expect(uncovered.get("runtime/bakery/src/main.ts")).toEqual([1, 2, 3, 4]);
+  });
+});
+
 Deno.test("collectUncoveredLinesForFiles reports no lines for a file that compiles to nothing", async () => {
   const rootDir = await Deno.makeTempDir({ prefix: "coverage-lines-test-" });
   try {
-    const typesPath = path.join(rootDir, "packages/example/src/types.ts");
+    const typesPath = path.join(rootDir, "runtime/example/src/types.ts");
     await Deno.mkdir(path.dirname(typesPath), { recursive: true });
     await Deno.writeTextFile(
       typesPath,
@@ -458,7 +630,7 @@ Deno.test("collectUncoveredLinesForFiles reports no lines for a file that compil
     const uncovered = await collectUncoveredLinesForFiles({
       rootDir,
       lcov: "",
-      files: ["packages/example/src/types.ts"],
+      files: ["runtime/example/src/types.ts"],
     });
 
     expect(uncovered.size).toBe(0);
@@ -474,7 +646,7 @@ Deno.test("collectUncoveredLinesForFiles skips a deleted file (absent from check
       rootDir,
       lcov: "",
       // Tracked source path with no file on disk — i.e. deleted by the PR.
-      files: ["packages/example/src/deleted.ts"],
+      files: ["runtime/example/src/deleted.ts"],
     });
     assertEquals(uncovered.size, 0);
   } finally {
@@ -487,14 +659,14 @@ Deno.test("collectUncoveredLinesForFiles surfaces non-NotFound read failures", a
   try {
     // A directory at a tracked source path makes readTextFile fail with a
     // non-NotFound error, which must propagate rather than be swallowed.
-    const trackedPath = path.join(rootDir, "packages/example/src/mod.ts");
+    const trackedPath = path.join(rootDir, "runtime/example/src/mod.ts");
     await Deno.mkdir(trackedPath, { recursive: true });
 
     await assertRejects(() =>
       collectUncoveredLinesForFiles({
         rootDir,
         lcov: "",
-        files: ["packages/example/src/mod.ts"],
+        files: ["runtime/example/src/mod.ts"],
       })
     );
   } finally {
@@ -507,9 +679,9 @@ Deno.test("collectRegressedLines names lines the baseline covered and this run d
     prefix: "coverage-regressed-test-",
   });
   try {
-    const flakyPath = path.join(rootDir, "packages/example/src/flaky.ts");
-    const steadyPath = path.join(rootDir, "packages/example/src/steady.ts");
-    const debtPath = path.join(rootDir, "packages/example/src/debt.ts");
+    const flakyPath = path.join(rootDir, "runtime/example/src/flaky.ts");
+    const steadyPath = path.join(rootDir, "runtime/example/src/steady.ts");
+    const debtPath = path.join(rootDir, "runtime/example/src/debt.ts");
     await Deno.mkdir(path.dirname(flakyPath), { recursive: true });
     await Deno.writeTextFile(
       flakyPath,
@@ -541,15 +713,15 @@ Deno.test("collectRegressedLines names lines the baseline covered and this run d
       // Line 2 covered before and not now; line 3 uncovered in both.
       lcov: report(["DA:1,1", "DA:2,0", "DA:3,0"]),
       baselineLcov: report(["DA:1,1", "DA:2,4", "DA:3,0"]),
-      groups: new Set(["packages/example"]),
+      groups: new Set(["runtime/example"]),
       changedFiles: new Set(),
     });
 
     // Only the line that moved: the file uncovered in both runs is not one
     // this run regressed, and the file covered in both has nothing to report.
     assertEquals(regressed, [{
-      relativePath: "packages/example/src/flaky.ts",
-      metricGroup: "packages/example",
+      relativePath: "runtime/example/src/flaky.ts",
+      metricGroup: "runtime/example",
       lines: [2],
     }]);
   } finally {
@@ -562,8 +734,8 @@ Deno.test("collectRegressedLines skips changed files and other groups", async ()
     prefix: "coverage-regressed-test-",
   });
   try {
-    const changedPath = path.join(rootDir, "packages/example/src/changed.ts");
-    const otherPath = path.join(rootDir, "packages/other/src/mod.ts");
+    const changedPath = path.join(rootDir, "runtime/example/src/changed.ts");
+    const otherPath = path.join(rootDir, "runtime/other/src/mod.ts");
     await Deno.mkdir(path.dirname(changedPath), { recursive: true });
     await Deno.mkdir(path.dirname(otherPath), { recursive: true });
     await Deno.writeTextFile(changedPath, "export const changed = 1;\n");
@@ -589,8 +761,8 @@ Deno.test("collectRegressedLines skips changed files and other groups", async ()
       ].join("\n"),
       // A file the PR changed has line numbers that moved between the two
       // checkouts, and a group the PR did not regress is not being explained.
-      groups: new Set(["packages/example"]),
-      changedFiles: new Set(["packages/example/src/changed.ts"]),
+      groups: new Set(["runtime/example"]),
+      changedFiles: new Set(["runtime/example/src/changed.ts"]),
     });
 
     assertEquals(regressed, []);
@@ -604,7 +776,7 @@ Deno.test("collectRegressedLines counts a file the baseline reported and this ru
     prefix: "coverage-regressed-test-",
   });
   try {
-    const droppedPath = path.join(rootDir, "packages/example/src/dropped.ts");
+    const droppedPath = path.join(rootDir, "runtime/example/src/dropped.ts");
     await Deno.mkdir(path.dirname(droppedPath), { recursive: true });
     await Deno.writeTextFile(
       droppedPath,
@@ -622,13 +794,13 @@ Deno.test("collectRegressedLines counts a file the baseline reported and this ru
         "DA:2,1",
         "end_of_record",
       ].join("\n"),
-      groups: new Set(["packages/example"]),
+      groups: new Set(["runtime/example"]),
       changedFiles: new Set(),
     });
 
     assertEquals(regressed, [{
-      relativePath: "packages/example/src/dropped.ts",
-      metricGroup: "packages/example",
+      relativePath: "runtime/example/src/dropped.ts",
+      metricGroup: "runtime/example",
       lines: [1, 2],
     }]);
   } finally {
@@ -675,21 +847,26 @@ function lcovFor(file: string, lines: number, covered: number): string {
 
 Deno.test("collectMeasuredSetDebt counts only the member's own lines", async () => {
   await withMembers([
-    "packages/bakery",
-    "packages/cellar",
+    "runtime/bakery",
+    "runtime/cellar",
   ], async (rootDir) => {
-    const bakery = path.join(rootDir, "packages/bakery/src/main.ts");
-    const cellar = path.join(rootDir, "packages/cellar/src/main.ts");
+    const bakery = path.join(rootDir, "runtime/bakery/src/main.ts");
+    const cellar = path.join(rootDir, "runtime/cellar/src/main.ts");
     // The set's tests covered lines in both members. Only the member the
     // set is scored over is counted, so what the tests reached elsewhere
     // cannot pay another set's debt down.
     const lcov = lcovFor(bakery, 4, 1) + lcovFor(cellar, 4, 4);
+    // A test file of the member is not charged to it.
+    await Deno.writeTextFile(
+      path.join(rootDir, "runtime/bakery/src/main.test.ts"),
+      "const untested = 1;\n",
+    );
     assertEquals(
       (await collectMeasuredSetDebt({
         rootDir,
         lcov,
-        member: "packages/bakery",
-        members: ["packages/bakery", "packages/cellar"],
+        member: "runtime/bakery",
+        members: ["runtime/bakery", "runtime/cellar"],
       })).uncoveredLines,
       3,
     );
@@ -697,8 +874,8 @@ Deno.test("collectMeasuredSetDebt counts only the member's own lines", async () 
       (await collectMeasuredSetDebt({
         rootDir,
         lcov: "",
-        member: "packages/cellar",
-        members: ["packages/bakery", "packages/cellar"],
+        member: "runtime/cellar",
+        members: ["runtime/bakery", "runtime/cellar"],
       })).uncoveredLines,
       4,
     );
@@ -707,15 +884,15 @@ Deno.test("collectMeasuredSetDebt counts only the member's own lines", async () 
 
 Deno.test("collectMeasuredSetDebt charges a nested member to itself", async () => {
   await withMembers([
-    "packages/bakery",
-    "packages/bakery/cellar",
+    "runtime/bakery",
+    "runtime/bakery/cellar",
   ], async (rootDir) => {
     assertEquals(
       (await collectMeasuredSetDebt({
         rootDir,
         lcov: "",
-        member: "packages/bakery",
-        members: ["packages/bakery", "packages/bakery/cellar"],
+        member: "runtime/bakery",
+        members: ["runtime/bakery", "runtime/bakery/cellar"],
       })).uncoveredLines,
       4,
     );
@@ -723,8 +900,8 @@ Deno.test("collectMeasuredSetDebt charges a nested member to itself", async () =
       (await collectMeasuredSetDebt({
         rootDir,
         lcov: "",
-        member: "packages/bakery/cellar",
-        members: ["packages/bakery", "packages/bakery/cellar"],
+        member: "runtime/bakery/cellar",
+        members: ["runtime/bakery", "runtime/bakery/cellar"],
       })).uncoveredLines,
       4,
     );
@@ -732,13 +909,13 @@ Deno.test("collectMeasuredSetDebt charges a nested member to itself", async () =
 });
 
 Deno.test("collectMeasuredSetDebt charges a file no test loaded in full", async () => {
-  await withMembers(["packages/bakery"], async (rootDir) => {
+  await withMembers(["runtime/bakery"], async (rootDir) => {
     assertEquals(
       (await collectMeasuredSetDebt({
         rootDir,
         lcov: "",
-        member: "packages/bakery",
-        members: ["packages/bakery"],
+        member: "runtime/bakery",
+        members: ["runtime/bakery"],
       })).uncoveredLines,
       4,
     );
@@ -746,7 +923,7 @@ Deno.test("collectMeasuredSetDebt charges a file no test loaded in full", async 
 });
 
 Deno.test("collectMeasuredSetDebt refuses a member with no tree", async () => {
-  await withMembers(["packages/bakery"], async (rootDir) => {
+  await withMembers(["runtime/bakery"], async (rootDir) => {
     // Scoring it as nothing uncovered would pass a gate over a name that
     // measures nothing, which a count of zero cannot be told apart from.
     await assertRejects(
@@ -754,40 +931,50 @@ Deno.test("collectMeasuredSetDebt refuses a member with no tree", async () => {
         collectMeasuredSetDebt({
           rootDir,
           lcov: "",
-          member: "packages/nowhere",
-          members: ["packages/bakery"],
+          member: "runtime/nowhere",
+          members: ["runtime/bakery"],
         }),
       Error,
-      "no directory for the workspace member packages/nowhere",
+      "no directory for the workspace member runtime/nowhere",
     );
   });
 });
 
 Deno.test("collectMeasuredSetDebt reads a record with no line as none at all", async () => {
-  await withMembers(["packages/bakery"], async (rootDir) => {
+  await withMembers(["runtime/bakery"], async (rootDir) => {
     // Such a record says nothing about the file, so counting it as
     // measured would let the gate score a report that measured nothing.
-    const bakery = path.join(rootDir, "packages/bakery/src/main.ts");
+    const bakery = path.join(rootDir, "runtime/bakery/src/main.ts");
     const measured = await collectMeasuredSetDebt({
       rootDir,
       lcov: `SF:${bakery}\nend_of_record\n`,
-      member: "packages/bakery",
-      members: ["packages/bakery"],
+      member: "runtime/bakery",
+      members: ["runtime/bakery"],
     });
     assertEquals(measured.files, 0);
     assertEquals(measured.uncoveredLines, 4);
+    // The group total reads it the same way.
+    expect(
+      await collectCoverageDebtMetricsFromLcov({
+        rootDir,
+        lcov: `SF:${bakery}\nend_of_record\n`,
+      }),
+    ).toContainEqual({
+      name: "coverage-debt: runtime/bakery uncovered lines",
+      uncoveredLines: 4,
+    });
   });
 });
 
 Deno.test("collectMeasuredSetDebt counts the files the report named", async () => {
-  await withMembers(["packages/bakery"], async (rootDir) => {
-    const bakery = path.join(rootDir, "packages/bakery/src/main.ts");
+  await withMembers(["runtime/bakery"], async (rootDir) => {
+    const bakery = path.join(rootDir, "runtime/bakery/src/main.ts");
     assertEquals(
       (await collectMeasuredSetDebt({
         rootDir,
         lcov: lcovFor(bakery, 4, 1),
-        member: "packages/bakery",
-        members: ["packages/bakery"],
+        member: "runtime/bakery",
+        members: ["runtime/bakery"],
       })).files,
       1,
     );
@@ -797,8 +984,8 @@ Deno.test("collectMeasuredSetDebt counts the files the report named", async () =
       (await collectMeasuredSetDebt({
         rootDir,
         lcov: "",
-        member: "packages/bakery",
-        members: ["packages/bakery"],
+        member: "runtime/bakery",
+        members: ["runtime/bakery"],
       })).files,
       0,
     );
@@ -807,25 +994,291 @@ Deno.test("collectMeasuredSetDebt counts the files the report named", async () =
 
 Deno.test("a measured set and its source group are two readings of one report", async () => {
   await withMembers([
-    "packages/bakery",
-    "packages/cellar",
+    "runtime/bakery",
+    "runtime/cellar",
   ], async (rootDir) => {
-    const bakery = path.join(rootDir, "packages/bakery/src/main.ts");
+    const bakery = path.join(rootDir, "runtime/bakery/src/main.ts");
     const lcov = lcovFor(bakery, 4, 2);
     // The group counts every member's lines the report speaks for; the set
     // counts one member's. Neither is the other, which is why they are
     // published under different names.
     const group = (await collectCoverageDebtMetricsFromLcov({ rootDir, lcov }))
-      .find((metric) => metric.name.includes("packages/bakery"));
+      .find((metric) => metric.name.includes("runtime/bakery"));
     assertEquals(group?.uncoveredLines, 2);
     assertEquals(
       (await collectMeasuredSetDebt({
         rootDir,
         lcov,
-        member: "packages/cellar",
-        members: ["packages/bakery", "packages/cellar"],
+        member: "runtime/cellar",
+        members: ["runtime/bakery", "runtime/cellar"],
       })).uncoveredLines,
       4,
     );
   });
+});
+
+/**
+ * Runs `body` over a tree holding a source file of each kind the debt
+ * rules tell apart, with an LCOV report naming two of them, and removes
+ * the tree afterwards.
+ */
+async function withScoredTree(
+  body: (rootDir: string, lcov: string) => Promise<void>,
+): Promise<void> {
+  const rootDir = await Deno.makeTempDir({ prefix: "coverage-by-file-" });
+  const write = async (relativePath: string, lines: string[]) => {
+    const fullPath = path.join(rootDir, relativePath);
+    await Deno.mkdir(path.dirname(fullPath), { recursive: true });
+    await Deno.writeTextFile(fullPath, lines.join("\n"));
+  };
+  const statements = (count: number) =>
+    Array.from({ length: count }, (_, at) => `export const v${at} = ${at};`);
+  // Recorded, two of its four lines uncovered.
+  await write("runtime/example/src/partly.ts", statements(4));
+  // Recorded, every line covered.
+  await write("runtime/example/src/covered.ts", statements(2));
+  // No record and executable, so charged its three lines.
+  await write("runtime/example/src/unloaded.ts", statements(3));
+  // No record, but nothing to run.
+  await write("runtime/example/src/types.ts", [
+    "export interface Shape {",
+    "  sides: number;",
+    "}",
+  ]);
+  // No record, but opted out of coverage.
+  await write("runtime/example/src/browser.js", [
+    "// deno-coverage-ignore-file",
+    ...statements(5),
+  ]);
+  // A sibling whose name extends the example's, and a file in another
+  // group, both with no record.
+  await write("runtime/examples/src/mod.ts", statements(6));
+  await write("tasks/tool.ts", statements(3));
+  const lcov = [
+    lcovFor("runtime/example/src/partly.ts", 4, 2),
+    lcovFor("runtime/example/src/covered.ts", 2, 2),
+  ].join("");
+  try {
+    await body(rootDir, lcov);
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+  }
+}
+
+Deno.test("collectFileCoverageDebt charges each file by the rules the group totals use", async () => {
+  await withScoredTree(async (rootDir, lcov) => {
+    const coverage = parseLcov(lcov, rootDir);
+    const files = await collectFileCoverageDebt({
+      sourceFiles: await collectSourceFiles(rootDir),
+      coverage,
+    });
+    expect(files).toEqual([
+      {
+        relativePath: "runtime/example/src/browser.js",
+        metricGroup: "runtime/example",
+        uncoveredLines: 0,
+        hasRecord: false,
+      },
+      {
+        relativePath: "runtime/example/src/covered.ts",
+        metricGroup: "runtime/example",
+        uncoveredLines: 0,
+        hasRecord: true,
+      },
+      {
+        relativePath: "runtime/example/src/partly.ts",
+        metricGroup: "runtime/example",
+        uncoveredLines: 2,
+        hasRecord: true,
+      },
+      {
+        relativePath: "runtime/example/src/types.ts",
+        metricGroup: "runtime/example",
+        uncoveredLines: 0,
+        hasRecord: false,
+      },
+      {
+        relativePath: "runtime/example/src/unloaded.ts",
+        metricGroup: "runtime/example",
+        uncoveredLines: 3,
+        hasRecord: false,
+      },
+      {
+        relativePath: "runtime/examples/src/mod.ts",
+        metricGroup: "runtime/examples",
+        uncoveredLines: 6,
+        hasRecord: false,
+      },
+      {
+        relativePath: "tasks/tool.ts",
+        metricGroup: "tasks",
+        uncoveredLines: 3,
+        hasRecord: false,
+      },
+    ]);
+    expect(await collectCoverageDebtMetricsFromLcov({ rootDir, lcov }))
+      .toEqual([
+        {
+          name: "coverage-debt: workspace uncovered lines",
+          uncoveredLines: 14,
+        },
+        {
+          name: "coverage-debt: runtime/example uncovered lines",
+          uncoveredLines: 5,
+        },
+        {
+          name: "coverage-debt: runtime/examples uncovered lines",
+          uncoveredLines: 6,
+        },
+        { name: "coverage-debt: tasks uncovered lines", uncoveredLines: 3 },
+      ]);
+  });
+});
+
+Deno.test("sourceFilesUnder keeps only the files under a path", async () => {
+  await withScoredTree(async (rootDir) => {
+    const sourceFiles = await collectSourceFiles(rootDir);
+    const pathsUnder = (under: string) =>
+      sourceFilesUnder(rootDir, sourceFiles, under)
+        .map((file) => file.relativePath);
+    // A directory takes in what is below it and not a sibling whose name
+    // merely starts the same way.
+    const example = [
+      "runtime/example/src/browser.js",
+      "runtime/example/src/covered.ts",
+      "runtime/example/src/partly.ts",
+      "runtime/example/src/types.ts",
+      "runtime/example/src/unloaded.ts",
+    ];
+    expect(pathsUnder("runtime/example")).toEqual(example);
+    expect(pathsUnder("./runtime/example/")).toEqual(example);
+    expect(pathsUnder("runtime//example")).toEqual(example);
+    expect(pathsUnder(path.join(rootDir, "runtime/example")))
+      .toEqual(example);
+    expect(pathsUnder(".")).toEqual(
+      sourceFiles.map((file) => file.relativePath),
+    );
+    expect(pathsUnder("runtime/examples")).toEqual([
+      "runtime/examples/src/mod.ts",
+    ]);
+    expect(pathsUnder("runtime/example/src/partly.ts")).toEqual([
+      "runtime/example/src/partly.ts",
+    ]);
+    for (const under of ["runtime/exam", "../runtime/example"]) {
+      assertThrows(
+        () => pathsUnder(under),
+        Error,
+        `no tracked source file under ${under}`,
+      );
+    }
+  });
+});
+
+Deno.test("main lists the files that owe lines, largest first", async () => {
+  await withScoredTree(async (rootDir, lcov) => {
+    const lcovPath = path.join(rootDir, "combined.lcov");
+    await Deno.writeTextFile(lcovPath, lcov);
+    const args = [`--root=${rootDir}`, `--lcov=${lcovPath}`];
+    // Files with equal counts come in path order.
+    const listing = [
+      "6\tno-record\truntime/examples/src/mod.ts",
+      "3\tno-record\truntime/example/src/unloaded.ts",
+      "3\tno-record\ttasks/tool.ts",
+      "2\trecord\truntime/example/src/partly.ts",
+    ].join("\n");
+    expect(await main([...args, "--by-file"])).toBe(listing);
+    // A relative root names the same tree, including for a report that
+    // names its files by absolute path.
+    await Deno.writeTextFile(
+      lcovPath,
+      lcovFor(path.join(rootDir, "runtime/example/src/partly.ts"), 4, 2) +
+        lcovFor(path.join(rootDir, "runtime/example/src/covered.ts"), 2, 2),
+    );
+    expect(
+      await main([
+        `--root=${path.relative(Deno.cwd(), rootDir)}`,
+        `--lcov=${lcovPath}`,
+        "--by-file",
+        "--under=runtime/example",
+      ]),
+    ).toBe(
+      "3\tno-record\truntime/example/src/unloaded.ts\n" +
+        "2\trecord\truntime/example/src/partly.ts",
+    );
+    await Deno.writeTextFile(lcovPath, lcov);
+    expect(await main([...args, "--by-file", "--under=runtime/example"]))
+      .toBe([
+        "3\tno-record\truntime/example/src/unloaded.ts",
+        "2\trecord\truntime/example/src/partly.ts",
+      ].join("\n"));
+    expect(JSON.parse(await main(args)).metrics).toEqual(
+      await collectCoverageDebtMetricsFromLcov({ rootDir, lcov }),
+    );
+  });
+});
+
+Deno.test("main refuses arguments it cannot act on", async () => {
+  const refusals: [string[], string][] = [
+    [["--by-file"], "give one of --profile-dir and --lcov"],
+    [
+      ["--lcov=a.lcov", "--profile-dir=raw"],
+      "give one of --profile-dir and --lcov",
+    ],
+    [["--lcov=a.lcov", "--under=runtime"], "--under needs --by-file"],
+    [["--lcov=a.lcov", "--by-files"], "unknown argument --by-files"],
+    [
+      ["--lcov=a.lcov", "--by-file", "runtime/memory"],
+      "unknown argument runtime/memory",
+    ],
+    [["--lcov=a.lcov", "--by-file", "--under="], "--under needs a value"],
+    [["--lcov="], "--lcov needs a value"],
+    [["--root=", "--lcov=a.lcov"], "--root needs a value"],
+    [["--profile-dir=/no-such-coverage-profile"], "deno coverage failed"],
+  ];
+  for (const [args, message] of refusals) {
+    await assertRejects(() => main(args), Error, message);
+  }
+});
+
+Deno.test("main refuses a report of nothing or of another tree's files", async () => {
+  await withScoredTree(async (rootDir) => {
+    const lcovPath = path.join(rootDir, "combined.lcov");
+    const refuse = async (lcov: string) => {
+      await Deno.writeTextFile(lcovPath, lcov);
+      await assertRejects(
+        () => main([`--root=${rootDir}`, `--lcov=${lcovPath}`, "--by-file"]),
+        Error,
+        "the report has no line of a tracked source file",
+      );
+    };
+    await refuse("");
+    await refuse(lcovFor("/elsewhere/runtime/example/src/partly.ts", 4, 2));
+    // A record of a tracked file that names no line of it.
+    await refuse("SF:runtime/example/src/partly.ts\nend_of_record\n");
+    // A record only of a file the metric does not track.
+    await refuse(lcovFor("runtime/example/src/partly.test.ts", 4, 2));
+    // A record of a tracked path the tree does not hold, as a combined
+    // report names its files relative to whatever root it is given.
+    await refuse(lcovFor("runtime/elsewhere/src/mod.ts", 4, 2));
+  });
+});
+
+Deno.test("main lists files with equal counts in code unit order", async () => {
+  const rootDir = await Deno.makeTempDir({ prefix: "coverage-by-file-" });
+  try {
+    await Deno.mkdir(path.join(rootDir, "tasks"));
+    for (const name of ["a.ts", "B.ts", "c.ts"]) {
+      await Deno.writeTextFile(
+        path.join(rootDir, "tasks", name),
+        "export const v = 1;\n",
+      );
+    }
+    const lcovPath = path.join(rootDir, "combined.lcov");
+    await Deno.writeTextFile(lcovPath, lcovFor("tasks/c.ts", 1, 1));
+    expect(
+      await main([`--root=${rootDir}`, `--lcov=${lcovPath}`, "--by-file"]),
+    ).toBe("1\tno-record\ttasks/B.ts\n1\tno-record\ttasks/a.ts");
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+  }
 });

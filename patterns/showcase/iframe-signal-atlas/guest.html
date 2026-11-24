@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signal Propagation Atlas</title>
+    <style>
+    :root {
+      color-scheme: dark;
+      font-family:
+        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+      background: #07111b;
+      color: #e8f4f3;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 22% 10%, #153341 0, transparent 34rem),
+        linear-gradient(145deg, #08131e 0%, #061018 52%, #0b1622 100%);
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button,
+    select,
+    input,
+    textarea {
+      color: #e8f4f3;
+      background: #0b1b27;
+      border: 1px solid #284454;
+      border-radius: 8px;
+    }
+
+    button {
+      min-height: 36px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+
+    button:hover:not(:disabled) {
+      border-color: #73e4d2;
+      background: #102d37;
+    }
+
+    button:disabled,
+    input:disabled,
+    select:disabled,
+    textarea:disabled {
+      cursor: wait;
+      opacity: 0.5;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      padding: 8px 10px;
+    }
+
+    textarea {
+      min-height: 72px;
+      resize: vertical;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 24px 28px 16px;
+      border-bottom: 1px solid #1d3543;
+    }
+
+    .eyebrow,
+    .section-label {
+      margin: 0 0 5px;
+      color: #71d5c5;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      margin-bottom: 5px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(28px, 4vw, 48px);
+      font-weight: 500;
+      letter-spacing: -0.035em;
+    }
+
+    .subtitle {
+      margin-bottom: 0;
+      color: #94aebb;
+      font-size: 14px;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: #aac1cb;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e1ad5a;
+      box-shadow: 0 0 12px currentColor;
+    }
+
+    [data-ready="true"] .status-dot {
+      background: #60dbc0;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      min-height: 0;
+    }
+
+    .map-panel {
+      min-width: 0;
+      padding: 18px 18px 24px 28px;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 150px auto;
+      gap: 14px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: #9bb2bd;
+      font-size: 12px;
+    }
+
+    .time-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    #time-value {
+      color: #f3d49e;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .layers {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+    }
+
+    .layers label {
+      display: flex;
+      flex-direction: row;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .layers input {
+      width: auto;
+    }
+
+    .map-frame {
+      position: relative;
+      min-height: 560px;
+      overflow: hidden;
+      border: 1px solid #25404e;
+      border-radius: 14px;
+      background: #071821;
+      box-shadow: 0 24px 70px #02080d80;
+    }
+
+    #atlas {
+      display: block;
+      width: 100%;
+      height: min(70vh, 690px);
+      min-height: 560px;
+      touch-action: none;
+    }
+
+    .map-caption {
+      position: absolute;
+      bottom: 14px;
+      left: 16px;
+      max-width: 400px;
+      padding: 8px 10px;
+      border: 1px solid #2a4655;
+      border-radius: 8px;
+      background: #06121cde;
+      color: #9db6c1;
+      font-size: 11px;
+      pointer-events: none;
+    }
+
+    aside {
+      overflow: auto;
+      padding: 18px 26px 32px 16px;
+      border-left: 1px solid #1d3543;
+    }
+
+    section {
+      margin-bottom: 14px;
+      padding: 15px;
+      border: 1px solid #203a49;
+      border-radius: 12px;
+      background: #091923c7;
+    }
+
+    section h2 {
+      margin-bottom: 11px;
+      font-size: 15px;
+      font-weight: 650;
+    }
+
+    .stack {
+      display: grid;
+      gap: 9px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .primary {
+      border-color: #4e9b91;
+      background: #123d40;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .metric {
+      padding: 9px;
+      border-radius: 8px;
+      background: #10232e;
+    }
+
+    .metric strong,
+    .metric span {
+      display: block;
+    }
+
+    .metric strong {
+      color: #f1d9ad;
+      font-size: 18px;
+    }
+
+    .metric span {
+      color: #7895a2;
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+
+    .record-list {
+      display: grid;
+      gap: 7px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .record-list li {
+      padding: 9px 10px;
+      border-left: 2px solid #548e9b;
+      background: #0d202b;
+      color: #bdd0d7;
+      font-size: 12px;
+    }
+
+    .empty {
+      color: #6f8b98;
+      font-style: italic;
+    }
+
+    [role="alert"] {
+      min-height: 18px;
+      margin: 8px 0 0;
+      color: #ff9d91;
+      font-size: 12px;
+    }
+
+    .terrain {
+      stroke: #567660;
+      stroke-width: 0.7;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .heat-contour {
+      stroke: #8cead5;
+      stroke-width: 0.45;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .flow-route {
+      fill: none;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      vector-effect: non-scaling-stroke;
+      stroke-dasharray: 5 7;
+      animation: flow 2.8s linear infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .flow-route {
+        animation: none;
+      }
+    }
+
+    @keyframes flow {
+      to {
+        stroke-dashoffset: -24;
+      }
+    }
+
+    .observation {
+      cursor: pointer;
+    }
+
+    .observation .halo {
+      fill: none;
+      stroke-width: 1;
+      opacity: 0.45;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .observation .core {
+      stroke: #e7ffff;
+      stroke-width: 0.9;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .observation text {
+      fill: #d4e8e9;
+      font-size: 9px;
+      paint-order: stroke;
+      stroke: #071821;
+      stroke-width: 3px;
+      stroke-linejoin: round;
+    }
+
+    .observation[data-selected="true"] .halo {
+      stroke-width: 2.2;
+      opacity: 1;
+    }
+
+    @media (max-width: 900px) {
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        border-top: 1px solid #1d3543;
+        border-left: 0;
+        padding-left: 28px;
+      }
+
+      .toolbar {
+        grid-template-columns: 1fr 130px;
+      }
+
+      .layers {
+        grid-column: 1 / -1;
+      }
+    }
+    </style>
+  </head>
+  <body>
+    <div class="app" data-ready="false">
+      <header>
+        <div>
+          <p class="eyebrow">Pelagic research commons</p>
+          <h1 id="title">Loading atlas</h1>
+          <p id="subtitle" class="subtitle"></p>
+        </div>
+        <div class="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-text">Synchronizing field records</span>
+        </div>
+      </header>
+      <div class="workspace">
+        <main class="map-panel">
+          <div class="toolbar">
+            <label>
+              <span
+                class="time-line"><span>Temporal cursor</span><span id="time-value">—</span></span>
+              <input id="time" type="range" min="0" max="100" value="72"
+                disabled>
+            </label>
+            <label>
+              Signal band
+              <select id="band" disabled>
+                <option value="all">All bands</option>
+                <option value="pulse">Pulse</option>
+                <option value="drift">Drift</option>
+                <option value="echo">Echo</option>
+              </select>
+            </label>
+            <div class="layers" aria-label="Map layers">
+              <label><input id="layer-terrain" type="checkbox" checked disabled>Terrain</label>
+              <label><input id="layer-propagation" type="checkbox" checked disabled>Field</label>
+              <label><input id="layer-routes" type="checkbox" checked disabled>Flows</label>
+            </div>
+          </div>
+          <div class="map-frame">
+            <svg id="atlas"
+              aria-label="Temporal signal propagation map"></svg>
+            <div
+              class="map-caption">Scroll or drag to explore. View movement stays local until you choose Save view.</div>
+          </div>
+        </main>
+        <aside>
+          <section>
+            <p class="section-label">Shared field</p>
+            <div class="summary-grid">
+              <div
+                class="metric"><strong id="observation-count">0</strong><span>observations</span></div>
+              <div
+                class="metric"><strong id="route-count">0</strong><span>routes</span></div>
+              <div
+                class="metric"><strong id="visible-count">0</strong><span>visible</span></div>
+            </div>
+          </section>
+          <section>
+            <p class="section-label">Shared contribution</p>
+            <h2>Plot a relay</h2>
+            <div class="stack">
+              <input id="observation-label" aria-label="Observation label"
+                placeholder="Observation label" disabled>
+              <div class="split">
+                <select id="observation-band" aria-label="Observation band"
+                  disabled>
+                  <option value="pulse">Pulse</option>
+                  <option value="drift">Drift</option>
+                  <option value="echo">Echo</option>
+                </select>
+                <input id="observation-strength"
+                  aria-label="Observation strength" type="number" min="0.1"
+                  max="1" step="0.05" value="0.75" disabled>
+              </div>
+              <button id="add-observation" class="primary" type="button"
+                disabled>Plot observation</button>
+              <button id="connect-recent" type="button"
+                disabled>Connect recent observations</button>
+            </div>
+          </section>
+          <section>
+            <p class="section-label">Session view</p>
+            <h2>Viewport checkpoint</h2>
+            <div class="split">
+              <button id="save-view" type="button" disabled>Save view</button>
+              <button id="restore-view" type="button"
+                disabled>Restore view</button>
+            </div>
+          </section>
+          <section>
+            <p class="section-label">Personal fieldbook</p>
+            <h2>Bookmark selected signal</h2>
+            <div class="stack">
+              <input id="bookmark-note" aria-label="Bookmark note"
+                placeholder="Why this matters" disabled>
+              <button id="add-bookmark" type="button"
+                disabled>Add bookmark</button>
+              <ul id="bookmarks" class="record-list"></ul>
+            </div>
+          </section>
+          <section>
+            <p class="section-label">Personal interpretation</p>
+            <h2>Record a hypothesis</h2>
+            <div class="stack">
+              <input id="hypothesis-title" aria-label="Hypothesis title"
+                placeholder="Hypothesis title" disabled>
+              <textarea id="hypothesis-narrative"
+                aria-label="Hypothesis narrative"
+                placeholder="Describe the pattern you suspect"
+                disabled></textarea>
+              <button id="add-hypothesis" type="button"
+                disabled>Add hypothesis</button>
+              <ul id="hypotheses" class="record-list"></ul>
+            </div>
+          </section>
+          <p id="error" role="alert" aria-live="assertive"></p>
+        </aside>
+      </div>
+    </div>
+  </body>
+</html>

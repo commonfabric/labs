@@ -54,11 +54,23 @@ export default pattern<{ orders: SqliteDb }>(({ orders }) => {
 ```
 
 The call returns an envelope, not the rows:
-`{ pending, result?, error?, withheld? }`. `result` holds the rows once there
-are any, so a field typed as the rows themselves — `PerSession<Row[]>` — cannot
-take the call's value, and reading `.result` is what gets from one to the
-other. `withheld` counts the rows a read-time clearance kept from this reader,
-and is absent unless the query asked for one.
+`{ pending, result?, error?, withheld?, requestKey? }`. `result` holds the rows
+once there are any, so a field typed as the rows themselves —
+`PerSession<Row[]>` — cannot take the call's value, and reading `.result` is what
+gets from one to the other. `withheld` counts the rows a read-time clearance
+kept from this reader, and is absent unless the query asked for one.
+
+Pass an optional string `requestKey` in the query options to correlate this
+envelope with the application state that requested it. The same key accompanies
+pending, successful (including empty), and failed results. A changed key issues
+a new request even when SQL and parameters match. Compare the returned key with
+the current key before using rows as current search results: reactive inputs can
+change while the query still holds its previous state. Choose keys that cover
+the search and source identity; the runtime separately enforces its full request
+identity and reader scope. Keep the key stable while those inputs are unchanged:
+render counters, timestamps, or pane identifiers cause extra database requests
+without changing the search. Include a source or registration generation only
+when that change must invalidate the previous answer and issue a fresh request.
 
 Render the failure, not just the wait. A pattern that branches only on
 `pending` shows a loading view for as long as the query stays broken, because a
@@ -273,6 +285,9 @@ export const recentOrders = (orders: SqliteDb) =>
   );
 ```
 
+The scope is read when the pattern is built, so it is written in the pattern:
+a pattern input or a computed value cannot supply it.
+
 `PerSession<>` on the result field and `.asScope("session")` on the query do
 the same thing, and a session-scoped database makes its queries session-scoped
 without a declaration. Use a session-scoped result when each session needs its
@@ -306,6 +321,100 @@ labels, and not the other rows'. `cf cell get-label <cell> <path>/result/<i>/<co
 the path crosses and reports the
 column's label from the row's own doc. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.
+
+## Indexed collections
+
+A list of thousands of cells is expensive to ask questions of, because a
+computation that reads the list reads all of it. An indexed collection holds
+the same cells with no list at all. You declare which fields to mirror, add
+cells in a handler, and ask your questions in SQL.
+
+```tsx
+import {
+  type Cell,
+  handler,
+  indexedCollections,
+  type IndexedCollections,
+  pattern,
+  type Stream,
+} from "commonfabric";
+
+interface Donut {
+  name: string;
+  price: number;
+  pairsWith: Donut[];
+}
+
+type Shop = IndexedCollections<{ donuts: Donut }>;
+
+const stock = handler<{ donut: Donut }, { shop: Shop }>(
+  ({ donut }, { shop }) => shop.add("donuts", donut),
+);
+
+export default pattern<{ favorite: Cell<Donut> }, {
+  pairedWithFavorite: { pending: boolean; result?: { name: string }[] };
+  stock: Stream<{ donut: Donut }>;
+}>(({ favorite }) => {
+  const shop = indexedCollections<{ donuts: Donut }>({
+    donuts: {
+      columns: { name: "text", price: "real" },
+      relations: ["pairsWith"],
+    },
+  });
+  return {
+    pairedWithFavorite: shop.query<{ name: string }>(
+      "SELECT m.name AS name FROM donuts_pairsWith e JOIN donuts m " +
+        "ON m.member_cf_link = e.source_cf_link " +
+        "WHERE e.target_cf_link = :favorite_cf_link ORDER BY m.name LIMIT 50",
+      { params: { favorite_cf_link: favorite } },
+    ),
+    stock: stock({ shop }),
+  };
+});
+```
+
+- A collection declares its members by kind. Each kind has a table named for
+  it, here `donuts`, with one row per member: `member_cf_link`, the member's
+  own reference, and a column per field in `columns`.
+- Each field in `relations` becomes a table named for the kind and the field,
+  here `donuts_pairsWith`, with a `source_cf_link` and a `target_cf_link`
+  column, one row per reference. Both are indexed, so "which members refer to
+  this one" is a lookup.
+- A member is identified by its cell reference and by nothing else. Bind a
+  cell to a `:name_cf_link` parameter to look one up.
+- To get a member back, select `member_cf_link` into a row field typed as a
+  cell: `OpaqueCell<Donut>` for a reference you pass along, to a handler or
+  into another query, and `Cell<Donut>` for one you read or write. Mirror the
+  few fields a list needs beside it, and the list never opens a member.
+- A column can mirror a nested value,
+  `bakerName: { type: "text", path: ["baker", "name"] }`, and a relation a
+  field holding one reference as well as a list of them. A column whose
+  field is absent holds `NULL`, and a relation whose field is absent has no
+  row.
+- `add(kind, member)` and `remove(kind, member)` are called in a handler. After `add()`,
+  you write to the member and nothing else: the runtime re-reads a member when
+  a document its mirrored fields were read from is written.
+- A query over a collection needs no `reactOn`. It re-runs when the collection
+  changes, and its result changes only when its rows do.
+- Anything holding the handle can write the collection. Pass `{ guard }`, a
+  cell declared `WriteAuthorizedBy<number, typeof yourHandler>`, to let only
+  that handler add, remove or run a statement. See "Who may write a
+  collection" in `docs/features/indexed-collections.md`.
+- A collection can gain columns, relations and indexes later. The runtime
+  re-reads every member once to fill them in.
+- To join two kinds of cell in one statement, declare them as kinds of one
+  collection: `indexedCollections({ donuts: { … }, orders: { … } })`.
+- A field stored per user or per session cannot be mirrored, and `add()`
+  throws on one. A field whose value carries a label needs a column that
+  declares it: `name: { type: "text", ifc: { confidentiality: […] } }`.
+
+Mirror the fields your queries filter, order, or join on, and read the rest
+from the member cell. A column holds a string, a finite number, or a boolean;
+any other value is stored as `NULL`.
+[Indexed collections](../../features/indexed-collections.md) describes how the
+mirror is maintained and where it stops, and
+`patterns/examples/indexed-topics/` is a board of topics that mention one
+another, built this way.
 
 ## The rest of the API
 

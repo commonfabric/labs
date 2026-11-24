@@ -50,7 +50,7 @@ const sortByColumn = action(({ label }: { label: string }) => {
 Sorting a table is a reordering of its rows, so this is also the more honest
 model: `sortBy` becomes a record of the ordering already applied rather than an
 instruction to apply one, and the caret cannot disagree with the order on
-screen. `packages/patterns/primitives/sortable-table.tsx` is written this way.
+screen. `patterns/product/primitives/sortable-table.tsx` is written this way.
 
 The same holds for any derived *arrangement* of a list — grouping, reversing,
 moving an item — as distinct from a derived *membership* (a filter). A filter

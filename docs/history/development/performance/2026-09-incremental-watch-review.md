@@ -11,7 +11,7 @@ This supplements the [initial report](2026-09-incremental-watch-maintenance.md)
 and qualifies its removal-workload wording and integration evidence. The first
 PR head was `f6bc2af1e36b5a3d817be75c1d3632bc964e3e37`, based on
 `27f10d2d4f02f125c0492e5d6288acb3f0da148b`. The
-[portable evidence](../../../../tools/server-execution-topics/evidence/2026-09-10-incremental-watch/README.md)
+[portable evidence](../../../../scripts/server-execution-topics/evidence/2026-09-10-incremental-watch/README.md)
 includes these controls under `review/` and retains the original captured bytes.
 No quiet-machine latency claim is established.
 

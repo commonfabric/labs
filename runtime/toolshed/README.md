@@ -1,0 +1,433 @@
+# Toolshed
+
+Toolshed is where we organize all of our backend platform tools that are needed
+to run our system.
+
+## Project Overview
+
+### API Endpoints
+
+For a detailed list of endpoints, their documentation, and an interactive API
+playground, take a look at the Toolshed API reference playground:
+<https://toolshed.commontools.dev/reference>
+
+### Calendar meeting rooms
+
+The authenticated `/api/meeting-rooms/ensure` boundary retains one canonical
+social Loom address per portable occurrence within a host. Address lookup grants
+no access.
+[Meeting-room allocation](../../docs/features/meeting-room-allocation.md)
+describes concurrency, recovery, legacy-room adoption and deployment scope.
+
+### Philosophy and Structure
+
+Toolshed is built as a single monolithic [Deno2](https://deno.com/blog/v2.0)
+[Hono HTTP API](https://hono.dev/) with the following key principles:
+
+1. **Personal Computing, Not Webscale** - Each user will have their own
+   instance, so optimize for individual-user-scale
+2. **Minimize Complexity** - Keep implementations and endpoints simple and
+   shallow
+3. **Product Before Protocol** - Focus on building features that enable
+   user-facing use cases
+4. **Ship First, Optimize Later** - Use proven technology and iterate quickly
+
+The project follows a structured layout:
+
+```sh
+toolshed/
+├── lib/          # Shared utilities and configuration
+├── middlewares/  # Global hono middleware
+├── routes/       # API endpoints
+│   ├── ai/       # AI-related services
+│   │   └── llm/   # LLM services
+│   │   └── img/   # Image generation services
+│   │   └── spell/ # Spell casting and other spell related things.
+│   │   └── voice/ # Voice transcription services
+│   └── health/   # Health checks
+├── app.ts        # Main app setup, where we mount all the routes
+├── env.ts        # Environment variable configuration
+└── index.ts      # Main hono entry point
+```
+
+### The LLM provider abstraction
+
+The model catalog, the aliases, the capability records, the provider clients,
+and the chain that decides what `default` means are all in
+[`routes/ai/llm/models.ts`](routes/ai/llm/models.ts). `@commonfabric/llm` is the
+caller's side of that boundary and holds none of it: it names a model and posts
+the request here.
+[`docs/features/llm-provider-boundary.md`](../../docs/features/llm-provider-boundary.md)
+gives the reasoning.
+
+### Gateway request provenance
+
+The LLM gateway attributes its spend by what a caller says about itself, so the
+requests toolshed sends it carry the same `x-cf-harness-*` headers and
+`User-Agent` that `cf-harness` sends. The headers are built by
+`lib/gateway-provenance.ts` from
+[`@commonfabric/cf-harness/provenance`](../cf-harness/src/provenance.ts), and
+they go on requests to the gateway alone: the other providers in
+`routes/ai/llm/models.ts` address a model vendor's own API, which has nothing in
+front of it to remove an internal header.
+
+A request reports `service=toolshed`, a principal for the machine, a session for
+this toolshed process, and a `command` naming the route it came from —
+`generate-text`, `generate-object`, `list-models`, or `web-search`. The access
+log records the user agent of every request, so in Cloud Logging:
+
+```text
+resource.type="k8s_container"
+resource.labels.namespace_name="envoy-gateway-system"
+jsonPayload."user-agent"=~"^toolshed "
+```
+
+`jsonPayload.caller_command` splits that traffic by route, and
+`jsonPayload.caller_session` groups the requests of one toolshed process.
+
+The principal is kept in `$CF_HARNESS_HOME/principal`, or under `HOME` when that
+is unset, so a deployment whose filesystem does not survive a restart draws a
+new one each time. Setting `CF_HARNESS_PRINCIPAL` pins it to the deployment.
+
+What a value may contain is fixed by the invariants in
+[`docs/features/gateway-request-provenance.md`](../../docs/features/gateway-request-provenance.md):
+no request content, and nothing that identifies a person. The gateway removes
+these headers from the request by name, so a field added here without the
+matching change to the gateway manifests reaches the model vendor instead.
+
+## Getting Started
+
+Follow the repository
+[development quick start](../../README.md#quick-start-development) to clone the
+repository and install the pinned toolchain. Then configure the Toolshed
+environment.
+
+### Environment Setup
+
+To set up your environment, you'll need to create a `.env` file in the root of
+the toolshed application. You can use the `.env.example` file as a reference.
+
+```shell
+cd runtime/toolshed
+cp .env.example .env
+```
+
+The single source of truth for environment variables is the `env.ts` file; it
+specifies the types and the defaults for all environment variables in toolshed.
+
+## Development
+
+To run the toolshed development server, you'll want to cd into the toolshed
+directory, and then run the following command:
+
+```shell
+deno task dev
+```
+
+### Running in the background
+
+Passing `--background` starts the server without the caller having to put it in
+the background and then wait for it to come up. The command spawns the server as
+a child, waits until it has bound its port, and only then returns. Its exit code
+reports whether the server started: zero once the server is listening, non-zero
+if the server exits before it binds. So a script can start the toolshed and move
+straight on to work that needs it, with no readiness poll of its own:
+
+```shell
+./toolshed --port=8000 --background --log-file=/tmp/toolshed.log
+```
+
+The background server sends its own output to `--log-file` (a temporary file
+when the flag is omitted); the command prints that path on success and dumps the
+file if the server exits before binding. Readiness travels from the child to the
+command over a pipe, so the wait resolves on the event rather than on a poll.
+`--background` re-runs the program, so it needs the compiled binary or a
+`deno run` launch, not `deno --watch`.
+
+To run the tests:
+
+```shell
+deno task test
+```
+
+## Editor Setup
+
+The simplest thing to do is open the toolshed directory in vscode/cursor, and
+everything should work; as there is configuration in
+/toolshed/.vscode/settings.json`.
+
+You'll want to install the
+[Deno extension](https://docs.deno.com/runtime/reference/vscode/), and the
+[Prettier extension](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode).
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Open a pull request
+4. If you want a review, ask for a review!
+5. Merge!
+
+All code that gets merged into the `main` branch will be immediately deployed to
+production.
+
+If you break it, you are responsible for fixing it.
+
+## Space invitations
+
+`GET /api/space-invites` advertises protocol version 1 and its host limits:
+1,000 distinct identities per invitation and 2,592,000 seconds (30 days) of
+admission lifetime. `maxUses` defaults to 1. Unsupported hosts return 404;
+clients must report that state without falling back to wildcard grants.
+
+It also lists `access`, the grants this host can issue: `READ`, `WRITE`, and
+`OWNER`. A response without `access` comes from a host that predates OWNER
+invitations; such a host refuses an OWNER `create` with `invalid-request`, so a
+client that wants OWNER reads the field before offering it and never falls back
+to a lesser grant. An OWNER invitation makes every identity that redeems it a
+full owner of the space, able to change the ACL and to issue, list, and revoke
+invitations. The access is fixed by the issuer's signed `create` body and held
+by the service; neither the join link nor the redemption request carries it.
+Redemption only raises access: an identity that already holds the invited access
+or more keeps what it has.
+
+An invitation made for one person may carry a `suggestedProfile`: the name, and
+optionally the picture, its issuer knows that person by, for the person to keep,
+edit, or drop when they make their first profile. `suggestedProfile` in the
+capability response bounds it: `maxNameLength` (128) UTF-16 code units of
+well-formed name, which has no leading or trailing whitespace and no control
+character, and `maxPictureBytes` (65,536) bytes of picture, carried as unpadded
+base64url text, which the service holds without inspecting. An invitation that
+carries one admits one identity, so its `maxUses` is 1. A response without the
+field comes from a host that predates suggestions and refuses a create carrying
+one with `invalid-request`, as it refuses every unknown field. The suggestion is
+returned to the identity that redeemed the invitation, on its `redeemed` receipt
+and on each `already-redeemed` receipt after it, until the invitation expires or
+is revoked, or its issuer is found to own the space no longer, when the service
+forgets it. Exhausting the invitation keeps it, so a redeemer that lost its
+first receipt reads it again on retry, on either transport. No administration
+operation (`create`, `list`, `revoke`, `receipts`) returns it, and anyone
+holding the link before the person it is for can redeem it and read the
+suggestion, as they can redeem the invitation.
+
+Any invitation may also carry a `spaceName` and an `issuerName`: the names its
+issuer gives the space and themself, for the person opening the invitation to
+read before they decide to redeem it. `preview` in the capability response
+bounds them: `maxNameLength` (128) UTF-16 code units each, judged as a suggested
+name is. Like the suggestion, they are the issuer's claims, checked only for
+their form. A response without the field comes from a host that predates them,
+which refuses a create carrying either with `invalid-request` and has no
+`preview` route.
+
+`preview` takes `inviteId` and `code`, as `redeem` does, signed by any identity,
+and returns what the invitation shows before it is redeemed: `access`, the
+access it grants, and its `spaceName`, `issuerName` and `suggestedProfile` while
+the service holds them. A preview consumes no use, grants nothing, and records
+no receipt, so it may be repeated. For an identity without a receipt for the
+invitation, every reason it cannot be read — unknown, wrong code, expired,
+revoked, exhausted, or an issuer who no longer owns the space — is the one
+refusal `invite-unavailable`, so only the code tells such a caller whether the
+invitation exists. The receipt comes first, as on redemption: an identity
+holding one for the invitation is not checked against the code and needs no
+active row, so it previews with any well-formed code, including once the
+invitation is used up. Its preview reads the access, the names and the
+suggestion the service keeps beside the invitation, with the suggestion's
+lifetime; revocation, expiry and an issuer who no longer owns the space still
+refuse it.
+
+The service moves a document of the space with its ledger,
+`of:space-invites-revision`. Its value is `{ revision }`, a count of the
+ledger's changes from `1`. The service sets it, in a system commit of its own
+inside the transaction that makes the change, whenever an operation changes what
+`list` or `receipts` return: a `create` that adds an invitation, a `revoke` that
+withdraws one, a redemption that records a receipt, whether or not it raises the
+redeemer's access, and a preview or redemption that retires an invitation
+because its issuer no longer owns the space, which is refused but still commits.
+Reading the ledger, repeating a `create` or a redemption, a refusal for any
+other reason, and expiry move nothing; expiry because every reader compares
+`expiresAt` with the time itself. The commit is on the space's default branch,
+while the ledger itself belongs to no branch. A client holding a session on the
+space's default branch watches the document to learn of changes it did not make,
+such as another owner's invitation, and reads `list` and `receipts` again when
+it moves; a session on another branch sees the document as it stood when the
+branch was forked, and learns nothing from it. The memory server that ran the
+operation tells its own sessions on the space of the move, and no other process,
+so the guarantee rests on the deployment, not on this build: one that holds a
+space's sessions in one process must route that space's invitation requests,
+over HTTP as well as on a session, to the same process, as it routes Gmail
+ingest. Until it does, a session hears only of the moves its own process made,
+though its server advertises the flag below. The document says only that the
+ledger moved, so every principal that may read the space may read it, and its
+commit names no principal, so the space's history does not name whoever's
+operation moved it. Only the service writes it: the store refuses it in an
+authored or derived commit, the server's direct write path (`writeDocument`)
+refuses it too, and a branch restore leaves it as it is. A memory server whose
+service writes it advertises `spaceInvitesRevision` in its handshake
+([protocol](../../docs/specs/memory-v2/04-protocol.md#411-websocket)), so a
+client reads the flag on the connection its session is on, from the process that
+tells that session of the move. `ISpaceReplica.invitesRevisionWatchable()`
+answers `true` only for a session that asked for the default branch, which is
+narrower than the sessions that see the document move: a server that refuses a
+principal the fork it asked for opens its session on the default branch, and
+`session.open` does not say so, so the client errs toward reading the ledger. A
+server without the flag writes no such document.
+
+Over HTTP, every invitation operation is a signed JSON POST under
+`/api/spaces/:space/invites/`: `create`, `redeem`, `preview`, `list`, `revoke`,
+and `receipts`; the memory-session forms are below. They use the existing CF1
+proof, binding method, authority, path, body hash, and signer DID, with a
+maximum 300-second lifetime and 60 seconds of future clock skew. Bodies are
+limited to 4 KiB, beyond which a `create` may add the base64url text of the
+largest suggested picture, and unknown fields are refused. Redemption and
+preview do not require an existing target-space session. A redemption's
+recipient is always the proof signer. Creation, listing, revocation, and receipt
+listing require a current explicit OWNER entry in the space ACL. First
+redemption also requires the issuer to remain an explicit OWNER.
+
+The memory server runs the same service for `create`, `list`, `revoke`, and
+`receipts` sent as a `space.invite` request on a memory session on the space
+(`docs/specs/memory-v2/04-protocol.md` §4.3.11). The operation runs as the DID
+the session was opened as, and takes the same body and returns the same result
+as its HTTP route, without the route's per-client rate limits: it is bounded as
+the session's other requests are. A refusal is an error named
+`SpaceInviteRefusal` carrying the service's code. Redemption cannot be a
+`space.invite`, since the redeeming identity holds no grant on the space and
+cannot open a session on it; instead a `session.open` carries the invitation in
+its descriptor, bound to the open's principal as the rest of the descriptor is,
+and the server redeems it as the open's principal before checking the open's
+grant (§4.1.2). A preview has no memory-session form: it always goes over signed
+HTTP, whoever sends it, even a principal that holds a session or has already
+redeemed, so a client deciding whether to redeem needs no session. The toolshed
+gives its memory server `inviteHost: normalizeInviteHost(API_URL)`, so codes are
+checked against the same host on both transports, and the server advertises the
+`spaceInvites` hello flag. A memory server given no invitation host refuses
+every `space.invite` with `invite-service-unsupported`.
+
+Configure `API_URL` as the canonical public HTTPS origin, or loopback HTTP in
+local development. It is the audience authority and verifier origin for this
+service, including behind a reverse proxy. Forwarded headers cannot override it.
+Signed POST CORS permits the CF1 headers without cookies; deploy the service at
+a host reachable by the intended shell. Request logging records no bodies. Codes
+belong only in POST bodies and browser fragments, never URL queries.
+
+The server prints that origin as its configured first-party authority at
+startup, and a refused proof is logged at `warn` with the request path, its
+method, that authority, and the verification failure — enough to tell a
+misconfigured origin from a bad signature without recording the proof, the
+signature, or any code.
+
+The reusable client is `SpaceInviteClient` from
+`@commonfabric/runner/space-invites`. The same export provides
+`createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`, and
+`parseInviteLink`, and `INVITE_LINK_SCHEME`. A join link is
+`/join?host&space&invite#code`, with an optional `inviter` DID key in the query;
+the parser refuses any other query key, and any fragment but the code.
+`parseInviteLink` accepts the same invitation in three more forms and returns
+the same result for each: `/open?…#code=…` on any HTTPS origin, or loopback HTTP
+as for `/join`, which a person reaches by asking to open the invitation in
+Weaver; `fbrc://join?…#code=…`, on the custom scheme every Weaver answers, where
+`join` is the URL's host and its path is empty; and that scheme form without a
+fragment, with the code passed separately as `parseInviteLink(url, { code })`,
+which is how Android delivers it (the code arrives as the intent's `S.code`
+extra). The result's `host` is always the service named in the query, never the
+link's own origin. Other paths, a `/join` or `/open` URL whose query names none
+of `host`, `space`, and `invite`, and any scheme action but `join` return
+`undefined`: `fbrc://setup?n=<nonce>`, the reply a Weaver receives while making
+itself the browser's default for the scheme; a space link, `fbrc://space?…`
+(below); and any action added later, so a newer link reaches an older reader as
+one it does not know rather than a malformed one. A malformed `join` URL
+(`fbrc://JOIN?…`, `fbrc://join/?…`) or a scheme URL naming no action
+(`fbrc:join?…`) throws `invalid-link`. `inviter` is a display hint that anyone
+holding the link can change; it is checked only syntactically and is not part of
+the code verifier. A recipient cannot read the space ACL before redeeming, and
+afterwards an ACL check can show at most that the DID is an owner, not that it
+issued the link. Like the space DID, it travels in the query, so it reaches the
+shell host's access logs. `issue` accepts a prepared request containing
+`inviteId`, `codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`,
+`suggestedProfile`, `spaceName` and `issuerName`. Retain the credentials before
+calling it so an uncertain response can be retried with the same ID. The
+convenience `create` accepts the same access/lifetime/limit/suggestion/name
+options and optional paired `inviteId` and `code`, and returns flat active
+metadata plus `code`. If the create request fails, `SpaceInviteCreateError`
+retains its credentials and original options in the frozen `retry` getter. Retry
+with `client.create(error.retry)` on the same client. The getter contains the
+bearer code: keep it private, and use it only to recover or retry this
+invitation. Ordinary error inspection and JSON serialization omit these
+credentials. The error preserves a structured refusal code; uncertain transport
+or response parsing failures use `create-outcome-unknown`. Validation failures
+before sending remain `SpaceInviteError` refusals. `redeem` and `preview` accept
+only `inviteId` and `code`, and `preview` always sends the signed HTTP request;
+`list` and `receipts` return arrays; `revoke` returns `{ "revoked": true }`.
+
+A space link names a space and grants nothing, so a member can say which space
+they mean without handing out access: it opens the space for someone who already
+has access, and anyone else is told they don't.
+`@commonfabric/memory/space-links` defines it, and
+`@commonfabric/runner/space-invites` re-exports it.
+`buildSpaceLink(shell, link)` makes `/space?host&space` on the shell origin, and
+`parseSpaceLink` reads that and the scheme form `fbrc://space?host&space`. The
+service and the space follow the invitation's rules: an HTTPS (or loopback)
+origin, and a `did:key`. Each link names exactly one `host` and one `space`;
+unlike an invitation's, whose fields its code binds, other query fields and any
+fragment are ignored. The format has no version number: a new field may only add
+what a reader can safely ignore, and anything that would change what an existing
+link means takes a new path or scheme action. `parseSpaceLink` returns
+`undefined` for anything that is not a space link, including other scheme
+actions, and throws a `SpaceLinkError`: `invalid-link` for a malformed space
+link, and `invalid-host` for a link or service that is not a secure origin.
+
+Given a `session`, a function that sends an operation on the space's memory
+session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends
+administration there and falls back to the signed HTTP request on
+`invite-service-unsupported`. Given a `redeemer`, a function that redeems as
+`IStorageManager.redeemInvite()` does, `redeem` redeems on the open of a session
+there, and sends the signed HTTP request on `invite-service-unsupported` or when
+that open is refused its grant (an `AuthorizationError`), which a repeat
+redemption of an invitation whose access was since removed is.
+
+Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
+`redemption` (`inviteId` and `did`), `currentAccess` (`READ`, `WRITE`, `OWNER`,
+or null), and the invitation's `suggestedProfile` while the service holds one.
+Current access is an observation, and the ordinary session checks it again. A
+receipt-first retry never regrants removed access. New identities see
+`invite-unavailable` for unknown, wrong-code, expired, revoked, exhausted, or
+issuer-invalid invitations. Proof failures use `invalid-proof`; owner failures
+use `not-owner`. Every operation, `create`, `redeem`, `preview`, `list`,
+`revoke` and `receipts` alike, on a
+[deleted space](../../docs/specs/random-space-identities.md#deleting-a-space) is
+refused with `space-deleted` and HTTP status 410 (Gone), since no grant can
+admit anyone to such a space. Over HTTP that check comes after rate limiting,
+proof verification and body validation, so a request that fails any of those
+gets the refusal it would get for a live space, and learns nothing about the
+space. The memory-session forms meet the memory server's own refusal of a
+deleted space first: a `session.open` carrying an invitation is refused, before
+it redeems anything, with an `AuthorizationError` marked `deleted: true`, and a
+`space.invite` has no session to run on, since the server revokes every session
+on a deleted space and refuses each reopen the same way. `SpaceInviteClient`'s
+redemption then falls back to the HTTP route, as it does whenever its open is
+refused with an `AuthorizationError`, and the route answers `space-deleted`. Its
+administration through a session surfaces the deleted `AuthorizationError`
+itself. Outside the convenience `create` operation, transport failures remain
+transport failures. Malformed error responses use `service-error`.
+
+Admission uses private tables in the target space's SQLite engine, inside the
+same serialized transaction as its public commits: a redemption's ACL-only
+grant, and the revision document's own commit. A suggested profile is a private
+row of its own, beside the invitation's, and so is what its preview reads: the
+access and any names it returns, and the issuing DID, kept only to check that
+its issuer still owns the space and never returned. A unique receipt pair
+consumes one use, including when the recipient already has sufficient access.
+Stronger explicit or wildcard access remains intact. Exhaustion, revocation, and
+expiration remove the active verifier; successful receipt pairs remain.
+Expiration is checked on each operation, with lazy physical cleanup. Unredeemed
+retired IDs have secret-free rejection markers for 361 seconds, covering replay
+of every still-fresh accepted create proof.
+
+A full SQLite backup includes private invite tables and receipts atomically.
+Restore the complete store; restoring only the graph must not be used to
+reconstruct active invitations. Ordinary graph exports contain neither the
+active rows nor receipt tables; the revision document they do contain holds only
+its count. Administrative whole-store snapshots contain private verifiers and
+must receive the same protection as the live store. Deletion of an active row
+does not erase retained backups, WAL pages, or old filesystem bytes. Expiry and
+revocation stop admission; removing a member is a separate ACL operation.

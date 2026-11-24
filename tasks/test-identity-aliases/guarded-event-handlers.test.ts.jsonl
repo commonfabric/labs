@@ -1,0 +1,1 @@
+{"date": "2026-11-02", "from": {"k": "unit", "s": "runner", "n": "guarded-event-handlers > defers a replacement that arrives while the prior body is presyncing"}, "to": {"k": "unit", "s": "runner", "n": "guarded-event-handlers > runs a replacement that arrives while the prior body is presyncing"}}

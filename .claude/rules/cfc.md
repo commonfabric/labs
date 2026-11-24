@@ -1,15 +1,21 @@
 ---
 paths:
-  - "packages/runner/src/cfc/**"
-  - "packages/runner/src/cfc.ts"
-  - "packages/runner/test/cfc*.test.ts"
-  - "packages/runner/test/cfc/**"
-  - "packages/html/src/worker/reconciler.ts"
-  - "packages/html/src/worker/display-fit.ts"
-  - "packages/cf-harness/src/cfc-*.ts"
-  - "packages/cf-harness/src/contracts/cfc-*.ts"
-  - "packages/cf-harness/src/sandbox/runsc-cfc-result.ts"
-  - "packages/cf-harness/console/display-ceiling.ts"
+  - "runtime/runner/src/cfc/**"
+  - "runtime/runner/src/cfc.ts"
+  - "runtime/runner/test/cfc*.test.ts"
+  - "runtime/runner/test/cfc/**"
+  - "runtime/memory/v2/cfc-*.ts"
+  - "runtime/memory/v2/envelope-admission.ts"
+  - "runtime/memory/test/v2-cfc-*.test.ts"
+  - "runtime/memory/test/v2-envelope-admission.test.ts"
+  - "runtime/html/src/worker/reconciler.ts"
+  - "runtime/html/src/worker/display-fit.ts"
+  - "runtime/html/src/worker/display-fit-atoms.ts"
+  - "runtime/runtime-client/src/backends/host-read-gate.ts"
+  - "runtime/cf-harness/src/cfc-*.ts"
+  - "runtime/cf-harness/src/contracts/cfc-*.ts"
+  - "runtime/cf-harness/src/sandbox/runsc-cfc-result.ts"
+  - "runtime/cf-harness/console/display-ceiling.ts"
   - "docs/specs/cfc-*.md"
 ---
 
@@ -27,19 +33,21 @@ it; the document's section "Without access to the specification" says what to
 do then.
 
 `deno task check-cfc-correspondence` reads the specification snapshot at
-`packages/runner/src/cfc/kernel/spec-snapshot.json` and fails on: a `§`
-citation in `packages/runner/src/cfc/` or `packages/runner/src/cfc.ts` naming
+`runtime/runner/src/cfc/kernel/spec-snapshot.json` and fails on: a `§`
+citation in `runtime/runner/src/cfc/`, `runtime/runner/src/cfc.ts` or the
+memory package's CFC sources naming
 a section it does not list, unless the task's `EXEMPTIONS` table names that
 file, citation and reason; a function exported under
-`packages/runner/src/cfc/kernel/` without a `@spec` header, with a hash the
+`runtime/runner/src/cfc/kernel/` without a `@spec` header, with a hash the
 snapshot does not record, or with a value import from outside the kernel
 (type-only imports are free; a constant a kernel function needs is declared
 inside the kernel); a critical pseudocode function in the snapshot that no manifest row or
-companion entry in `packages/runner/src/cfc/kernel/manifest.ts` covers, or a
-row the snapshot or the kernel contradicts; and more than three `SPEC-PENDING`
+companion entry in `runtime/runner/src/cfc/kernel/manifest.ts` covers, or a
+row the snapshot or the kernel contradicts; a `missing` row's `decidedToday`
+symbol its file no longer declares; and more than forty `SPEC-PENDING`
 markers in the governed source files (the runner CFC sources and tests, the
-two html worker modules, the harness's CFC sources), or one naming no specs
-pull request. Citations in documents are not checked. `deno task
+memory package's CFC sources and their test, the three html worker modules,
+the host read gate, the harness's CFC sources), or one naming no specs pull request. Citations in documents are not checked. `deno task
 cfc-spec-snapshot` regenerates the snapshot from a specs checkout, and the
 manifest row is what you update when a critical function moves into the
 kernel.

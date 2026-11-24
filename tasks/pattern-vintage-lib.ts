@@ -5,29 +5,34 @@
  * Tier 1 (`pattern-compat`) records a contract per pattern and proves the next
  * one is compatible with it. Tier 2 records a real prior STATE per pattern and
  * proves the next version can still read it. Capture and replay live in
- * `packages/piece/test/state-continuity-harness.ts` and the task shell in
+ * `runtime/piece/test/state-continuity-harness.ts` and the task shell in
  * `pattern-vintage.ts`. Where a fixture lives and how its path parses is
  * `pattern-vintage-layout.ts`, which this module re-exports, so one import
  * serves a caller working with vintages.
  */
 
 import { exists } from "@std/fs";
+import * as posix from "@std/path/posix";
 import {
   acceptedDropKey,
   type AcceptedStateDrop,
 } from "./pattern-vintage-accepted-drops.ts";
+import type { CommandOutput } from "./command-output.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
 
 import {
+  currentPatternKey,
+  formerPatternKey,
   isStoredArgumentSchemaRefusal,
   resolveSystemPatternSource,
+  type RuntimeProgram,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "@commonfabric/runner";
 
 import {
   VINTAGE_SPACES_SUFFIX,
   vintageCompanionDir,
-} from "../packages/piece/test/vintage-layout.ts";
+} from "../runtime/piece/test/vintage-layout.ts";
 
 import {
   AUTO,
@@ -195,13 +200,23 @@ export function promotedPath(ref: VintageRef): string {
  */
 const PATTERN_ROUTE_MARKER = "/patterns/";
 
+/** A relative module specifier, with what leads it and the quote around it. */
+const RELATIVE_SPECIFIER =
+  /(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.{1,2}\/[^"']+)\2/g;
+
 /**
- * A recorded `main` as a path under `packages/patterns/`, or `undefined`.
+ * The directory that holds the patterns in a vintage recorded from a checkout
+ * whose packages lived under `packages/`.
+ */
+const RECORDED_PATTERNS_PREFIX = "/packages/patterns/";
+
+/**
+ * A recorded `main` as a path under `patterns/`, or `undefined`.
  *
  * Two spellings reach a manifest and only one is a repo path. A pattern
- * imported locally records `/packages/patterns/x.tsx`; one loaded BY URL — as
- * `lunch-poll/main.tsx` does for `profile-create` — records the route the
- * toolshed serves it at, `/api/patterns/system/profile-create.tsx`. Resolving
+ * imported locally records `/patterns/x.tsx`; one loaded BY URL — as
+ * `apps/lunch-poll/main.tsx` does for `profile-create` — records the route the
+ * toolshed serves it at, `/api/patterns/system/profile-create/profile-create.tsx`. Resolving
  * the second against the repo root looks for `<repo>/api/patterns/...`, which
  * does not exist, and the replay reports a pattern that is right there as
  * unresolvable.
@@ -209,10 +224,16 @@ const PATTERN_ROUTE_MARKER = "/patterns/";
  * The route prefix is the same `/patterns/` marker `requiredPatternKeys` keys
  * on, for the same reason: it is where `PatternsServer` mounts the directory.
  *
+ * A vintage recorded from a checkout whose packages lived under `packages/`
+ * names a local pattern `/packages/patterns/x.tsx`. It uses the key the
+ * pattern had before the patterns were sorted into categories. That key, and
+ * a key in a route recorded before the move, map to the key the pattern has
+ * now.
+ *
  * `patternsPrefix` is a parameter rather than a constant so the gate stays
  * exercisable against a temp tree — the suite's fixtures record
- * `/patterns/x.tsx`, the repo's record `/packages/patterns/x.tsx`, and a
- * hardcoded prefix would quietly make every synthetic fixture unmappable.
+ * `/patterns/x.tsx` under whatever root they make, and a hardcoded prefix
+ * would quietly make every synthetic fixture unmappable.
  */
 export function patternKeyFromMain(
   main: string | undefined,
@@ -220,14 +241,81 @@ export function patternKeyFromMain(
 ): string | undefined {
   if (main === undefined) return undefined;
   if (main.startsWith(patternsPrefix)) return main.slice(patternsPrefix.length);
+  if (main.startsWith(RECORDED_PATTERNS_PREFIX)) {
+    return currentPatternKey(main.slice(RECORDED_PATTERNS_PREFIX.length));
+  }
   // The route EXACTLY, not "/api" plus the marker somewhere later. Matching
   // loosely turned `/api/anything/at/all/patterns/x.tsx` into the repo key
   // `x.tsx`, so an unrelated served path would resolve to a real source file
   // and be replayed as though it were that pattern — a wrong answer rather
   // than a refused one, which is the shape this gate must never produce.
   const route = "/api/patterns/";
-  if (main.startsWith(route)) return main.slice(route.length);
+  if (main.startsWith(route)) {
+    return currentPatternKey(main.slice(route.length));
+  }
   return undefined;
+}
+
+/**
+ * `program` with its modules renamed to match the names in a recording.
+ *
+ * `program` was compiled from the checkout, with its patterns under
+ * `patternsPrefix`. When `recordedMain` names its pattern under `packages/`,
+ * each module below `patternsPrefix` is renamed to the name it had then: under
+ * `packages/`, by the key its pattern had before the patterns were sorted into
+ * categories. A module's content identity is a hash that includes its name, so
+ * a module whose source has not changed has the recorded identity only when it
+ * also has the recorded name. When `recordedMain` already names its pattern
+ * under `patternsPrefix`, or names a served route, `program` is returned
+ * unchanged.
+ */
+export function programAsRecorded(
+  program: RuntimeProgram,
+  recordedMain: string | undefined,
+  patternsPrefix: string,
+): RuntimeProgram {
+  if (
+    patternsPrefix === RECORDED_PATTERNS_PREFIX ||
+    !recordedMain?.startsWith(RECORDED_PATTERNS_PREFIX)
+  ) {
+    return program;
+  }
+  const rename = (name: string) =>
+    name.startsWith(patternsPrefix)
+      ? RECORDED_PATTERNS_PREFIX +
+        formerPatternKey(name.slice(patternsPrefix.length))
+      : name;
+  // A relative specifier names a module by its position relative to the
+  // importing module. When the move changed that relative position, the
+  // specifier is rewritten to lead from the importer's old location to the
+  // module's old location. Every other specifier is left as written.
+  const respell = (importer: string, contents: string) =>
+    contents.replace(
+      RELATIVE_SPECIFIER,
+      (whole, lead: string, quote: string, specifier: string) => {
+        const target = rename(posix.join(posix.dirname(importer), specifier));
+        const from = posix.dirname(rename(importer));
+        if (posix.join(from, specifier) === target) return whole;
+        const relative = posix.relative(from, target);
+        const spelled = relative.startsWith("../") ? relative : `./${relative}`;
+        return `${lead}${quote}${spelled}${quote}`;
+      },
+    );
+  return {
+    ...program,
+    main: rename(program.main),
+    files: program.files.map((file) => ({
+      ...file,
+      name: rename(file.name),
+      contents: respell(file.name, file.contents),
+    })),
+    ...(program.sourceRoots === undefined
+      ? {}
+      : { sourceRoots: program.sourceRoots.map(rename) }),
+    ...(program.dataFiles === undefined
+      ? {}
+      : { dataFiles: program.dataFiles.map(rename) }),
+  };
 }
 
 /**
@@ -370,11 +458,6 @@ export interface ReplayFailure {
   detail: string;
 }
 
-/** A readable message for anything thrown across the task's I/O boundary. */
-export function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** An absolute path back to a repo-relative one, for readable output. */
 export function relativeToRepo(path: string, repoRoot: string): string {
   const prefix = `${repoRoot}/`;
@@ -505,22 +588,6 @@ async function gitMove(from: string, to: string): Promise<void> {
       }`,
     );
   }
-}
-
-/**
- * Everything a command wants to say, and the code it wants to exit with.
- *
- * Returned rather than printed so the OUTPUT is testable, not just the
- * decision behind it. That is where this file's defects have actually lived:
- * across five review rounds the recurring fault was never a wrong decision, it
- * was the wrong text printed for a correct one — a remedy that did not fit the
- * situation, or a promise about output the function did not control. Text
- * assembled inside the task shell is text no test can read.
- */
-export interface CommandOutput {
-  out?: string;
-  err?: string;
-  code: number;
 }
 
 /** What `--pin` says, given what it decided. */
@@ -686,9 +753,9 @@ export function reportOnlyWithCapture(): string {
  * printed instead of a promotion.
  *
  * For a gate whose every other design decision is about never reading as
- * success by accident — `armVerdictGuard`, the `replayed`/`candidates`/
- * `targets` floors, the per-fixture root control — accepting an unrecognized
- * flag and exiting 0 is the same failure in the argument parser.
+ * success by accident — the `replayed`/`candidates`/`targets` floors, the
+ * per-fixture root control — accepting an unrecognized flag and exiting 0 is
+ * the same failure in the argument parser.
  */
 export function unknownFlags(args: readonly string[]): string[] {
   const known = new Set<string>(KNOWN_FLAGS);
@@ -729,7 +796,7 @@ export function reportPinNeedsOneTestKey(given: number): string {
       ? "`--pin` names the TEST whose newest auto generation to promote."
       : `\`--pin\` promotes one test key at a time; ${given} were named.`,
     "",
-    "  deno task pattern-vintage --pin topics/topics.test.tsx",
+    "  deno task pattern-vintage --pin apps/topics/topics.test.tsx",
     "",
     "Promotion is a deliberate act per fixture — it moves a generation into",
     "the tier retention can never reach, and pinning a batch by accident is",
@@ -925,7 +992,7 @@ export function reportUncovered(
         "",
         "  deno task pattern-vintage --update <test path>",
         "",
-        "e.g. `--update topics/topics.test.tsx`. Which test that is cannot be",
+        "e.g. `--update apps/topics/topics.test.tsx`. Which test that is cannot be",
         "derived: a test need not be named after what it drives, and nothing",
         "on disk knows until a fixture exists.",
       ]
@@ -1049,7 +1116,7 @@ export function reportUpdateNeedsATestKey(): string {
     "",
     "  deno task pattern-vintage --update <test path>",
     "",
-    "e.g. `--update topics/topics.test.tsx`. It is a test path, not a pattern",
+    "e.g. `--update apps/topics/topics.test.tsx`. It is a test path, not a pattern",
     "path: a fixture is produced by RUNNING a test, and covers whatever that",
     "test instantiates — routinely several patterns, none of which need share",
     "its name.",
@@ -1074,7 +1141,7 @@ export function reportNothingReplayed(): string {
     "",
     "  deno task pattern-vintage --update <test path>",
     "",
-    "e.g. `--update system/home.test.tsx`. Bare `--update` captures nothing:",
+    "e.g. `--update system/home/home.test.tsx`. Bare `--update` captures nothing:",
     "there is no default set, because the one case a default would serve is a",
     "MISSING fixture, and nothing on disk knows which test covers a pattern",
     "whose fixture is gone.",
@@ -1093,59 +1160,6 @@ export function reportUnmappedUrls(unmapped: readonly string[]): string {
     "nothing, which would leave the gate requiring nothing at all — so it stops",
     "here instead. Teach `requiredPatternKeys` the new route shape.",
   ].join("\n");
-}
-
-/**
- * What the gate prints when the process is about to end without a verdict.
- *
- * Measured, twice: a pattern that fails to compile and a truncated fixture BOTH
- * reject a promise nobody awaits while `harness.resolve()`'s own promise never
- * settles. `main` never reaches its verdict, the event loop drains, and the
- * process exits 0 having replayed nothing and printed nothing. A gate that goes
- * green because the thing it gates is too broken to test is worse than no gate,
- * so reaching a verdict is itself part of passing.
- */
-export function reportNoVerdict(reason?: unknown): string {
-  return [
-    "The vintage gate ended without reaching a verdict.",
-    "",
-    "Something the replay awaited never settled — a pattern that does not",
-    "compile and a corrupt fixture both do this, because the failure surfaces",
-    "as an unhandled rejection while the promise stays pending forever. The",
-    "gate proved nothing, so it fails.",
-    "",
-    reason === undefined
-      ? "  (no rejection was observed; look for an unresolved await)"
-      : `  last unhandled rejection: ${describeError(reason)}`,
-  ].join("\n");
-}
-
-/**
- * Make "ended without a verdict" fail instead of pass.
- *
- * `beforeunload` fires when the event loop is about to drain, which is the last
- * moment at which a run that never finished is still distinguishable from one
- * that did. The caller's clean path exits explicitly, so anything that reaches
- * this listener did not get there.
- *
- * Takes its `target` and `exit` rather than reaching for `globalThis` and
- * `Deno.exit`, so the wiring itself is testable — the guard is the one piece of
- * this gate whose failure mode is silence, and an untested guard against
- * silence is a comment.
- */
-export function armVerdictGuard(
-  target: EventTarget,
-  exit: (code: number) => void,
-  log: (message: string) => void = console.error,
-): void {
-  let lastRejection: unknown;
-  target.addEventListener("unhandledrejection", (event) => {
-    lastRejection = (event as { reason?: unknown }).reason;
-  });
-  target.addEventListener("beforeunload", () => {
-    log(reportNoVerdict(lastRejection));
-    exit(1);
-  });
 }
 
 /**

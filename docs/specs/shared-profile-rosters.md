@@ -28,14 +28,14 @@ contribute their own entry when they join**:
 - Current-viewer identity (have-I-joined, my draft name) stays `PerUser<>` or
   `PerSession<>` — it is never broadcast directly; it only gates the join.
 - The **join flow resolves the current viewer's shared profile** via
-  `wish({ query: "#profile" })` (and the convenience targets `#profileName` /
-  `#profileAvatar`). Under PR #3830 a user can have multiple profiles; the wish
+  `wish({ query: "#profile" })` (and the convenience target `#profileName`).
+  Under PR #3830 a user can have multiple profiles; the wish
   resolves the user's **default** profile in the headless/single-profile case
   and launches the framework picker when there are two or more. Patterns just
   read `wish(...).result`; the multi-profile selection is handled for them.
 - The join handler writes that viewer's contribution into the shared roster —
   by default a **link** to their live profile cell (rendered with
-  `<cf-profile-badge>`), or a **stable snapshot** of name/avatar for the
+  `<cf-profile-badge>`), or a **stable snapshot** of name/picture for the
   self-containment case (see next section).
 - Every other user renders each participant from `participants` — a live
   `<cf-profile-badge $profile={p.profile} />` bound to the contributed profile
@@ -43,12 +43,12 @@ contribute their own entry when they join**:
   is **visitable** (clicking it opens that user's live profile). No cross-user
   profile enumeration is ever required.
 
-This is the same shape used by `packages/patterns/scrabble/scrabble.tsx`
+This is the same shape used by `patterns/showcase/scrabble/scrabble.tsx`
 (a `PerSpace` `players` roster + a join handler that `push`es the current
-player — its join now sources name/avatar from the shared profile this way) and
-`packages/patterns/scoped-user-directory/main.tsx` (a `PerSpace` `directory` +
-a `PerUser` `me` pointer). The only addition here is sourcing the display
-name/avatar from the shared profile instead of a free-text field.
+player — its join sources the name and profile from the shared profile this
+way) and `patterns/examples/scoped-user-directory/main.tsx` (a `PerSpace`
+`directory` + a `PerUser` `me` pointer). The only addition here is sourcing the display
+name/picture from the shared profile instead of a free-text field.
 
 ## Why links vs snapshots
 
@@ -83,21 +83,30 @@ participants.push({ profile: myProfile, joinedAt: Date.now() });
 
 ### Snapshot (self-containment fallback)
 
-Copy the resolved `name` and `avatar` strings into the roster entry when the user
-joins:
+Copy the resolved `name` and the profile's face into the roster entry when the
+user joins. `profileFace()` from `patterns/system/profile-face/profile-face.ts`,
+given the profile cell, reads the face: the picture, or else the avatar text,
+only as the profile's owner set it. A stored picture may not be its owner's:
+earlier releases let anyone set one through `setPicture`, and bytes can be
+stored without a label, so a picture copied any other way may be someone else's.
+The copy carries no claim of its own: a reader of the roster cannot tell it from
+anything else a roster writer stored, and only a live `<cf-profile-badge>`
+checks the face it draws.
 
 ```ts
 // Shown inside a handler.
-participants.push({ name, avatar, joinedAt: Date.now() });
+participants.push({ name, ...profileFace(myProfile), joinedAt: Date.now() });
 ```
 
-- **Pros:** Self-contained — every other viewer renders from plain strings
+- **Pros:** Self-contained — every other viewer renders from plain values
   already in the shared space, no cross-space resolution, no dependency on the
-  joiner's profile space being reachable later. Cheap, durable, and trivially
+  joiner's profile space being reachable later, except that a picture held as
+  a blob is copied as its reference: drawing it fetches it from the blob's
+  space, and it shows as initials while that space's host is unreachable. Durable and trivially
   serializable. Renders identically and immediately for all viewers. Best when
   the roster must stay legible with remote profile spaces offline, or when you
   explicitly do not want a live cross-space dependency.
-- **Cons:** Goes stale. If the user renames themselves or changes their avatar
+- **Cons:** Goes stale. If the user renames themselves or changes their picture
   after joining, the roster keeps the old values until they re-join / you add a
   refresh path. Renders a plain `<cf-avatar>` — no verified seal, not visitable.
 
@@ -116,31 +125,30 @@ live link for the badge and freshness) gives both.
 ## Reference demos
 
 The **canonical live-link reference** is
-[`packages/patterns/profile-roster-live-demo.tsx`](../../packages/patterns/profile-roster-live-demo.tsx):
+[`patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`](../../patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx):
 every participant renders with a live, visitable `<cf-profile-badge>` bound to
 their real profile cell, identity is keyed with `equals()`, and it was verified
 end-to-end across multiple real identities. Prefer it as the starting point.
 
 The snapshot pattern below is the **self-containment variant** — it renders
-name/avatar from strings copied at join time (no live cross-space dependency)
+name/picture from values copied at join time (no live cross-space dependency)
 and additionally stores each joiner's profile **cell as the stable identity
 key**, deduped with `equals()`. Here the cell is used only for *identity
 comparison*, not dereferenced for cross-space render, so it never depends on
 other users' profile spaces being reachable. Every API used below is exercised
 elsewhere in the repo:
 
-- `wish<string>({ query: "#profileName" | "#profileAvatar" })` and reading
-  `.result` — `packages/patterns/shared-profile-demo/main.tsx`,
-  `packages/patterns/chatbot.tsx`.
+- `wish<string>({ query: "#profileName" })` and reading `.result` —
+  `patterns/examples/shared-profile-demo/main.tsx`,
+  `patterns/system/chatbot/chatbot.tsx`; `profileFace()` on the profile cell
+  in the join handler — `patterns/examples/group-chat-lobby/group-chat-lobby.tsx`.
 - `PerSpace` / `PerUser` roster + writable-cell aliases + a join handler that
-  writes the roster — `packages/patterns/scrabble/scrabble.tsx`,
-  `packages/patterns/scoped-group-chat/main-plain-inputs.tsx`.
+  writes the roster — `patterns/showcase/scrabble/scrabble.tsx`,
+  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`.
 - `Date.now()` for timestamps in handlers —
-  `packages/patterns/scoped-group-chat/main-plain-inputs.tsx`.
-- avatar rendering from snapshot strings — `<img src={...}>` here for
-  self-containment; production patterns use `<cf-avatar src name>`
-  (`packages/patterns/group-chat-room.tsx`,
-  `packages/patterns/profile-group-chat/main.tsx`).
+  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`.
+- picture rendering from a snapshot with `<cf-avatar bytes name>` —
+  `patterns/examples/group-chat-room/group-chat-room.tsx`.
 
 ```tsx
 import {
@@ -148,6 +156,7 @@ import {
   computed,
   Default,
   equals,
+  type FabricBytes,
   handler,
   NAME,
   pattern,
@@ -160,6 +169,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import { profileFace } from "../../patterns/system/profile-face/profile-face.ts";
 
 // ---------------------------------------------------------------------------
 // Roster shapes
@@ -179,8 +189,14 @@ export interface Participant {
   profile: ParticipantProfileCell;
   /** Display name, snapshotted from the joiner's profile at join time. */
   name: string;
-  /** Avatar URL/text, snapshotted from the joiner's profile (may be empty). */
-  avatar: string;
+  /** The picture's blob, snapshotted from the joiner's profile, if its owner
+   * set one. */
+  pictureBlob?: { space: string; id: string };
+  /** Picture bytes, snapshotted instead from a profile that holds its owner's
+   * picture inline. */
+  picture?: FabricBytes;
+  /** Avatar text, snapshotted instead when its owner set no picture. */
+  avatar?: string;
   joinedAt: number;
 }
 
@@ -215,9 +231,10 @@ export type JoinEvent = void;
 // Join handler: contribute the current viewer's profile snapshot
 // ---------------------------------------------------------------------------
 //
-// `name` / `avatar` (plain strings) and the live `profile` cell are resolved
-// from the viewer's shared profile in the pattern body (via wish). The handler
-// appends a snapshot to the shared roster and records that this viewer joined.
+// `name` (a plain value) and the live `profile` cell are resolved from the
+// viewer's shared profile in the pattern body (via wish). The handler appends a
+// snapshot to the shared roster, its face read from the profile with
+// `profileFace()`, and records that this viewer joined.
 // Identity is keyed on the `profile` CELL — never the display name, which is
 // mutable and may collide between distinct users. `profile` round-trips through
 // the roster write as a link and is compared with `equals()`, the cell-identity
@@ -240,8 +257,7 @@ const join = handler<JoinEvent, {
   // May be undefined until the viewer's `#profile` wish resolves; guarded below.
   profile: ParticipantProfileCell | undefined;
   name: string;
-  avatar: string;
-}>((_event, { roster, viewer, profile, name, avatar }) => {
+}>((_event, { roster, viewer, profile, name }) => {
   const trimmed = (name ?? "").trim();
   if (!trimmed) return; // No resolved profile name yet — nothing to contribute.
   if (!profile) return; // No resolved profile cell — no stable identity yet.
@@ -256,7 +272,7 @@ const join = handler<JoinEvent, {
     participants.set([...existing, {
       profile,
       name: trimmed,
-      avatar: (avatar ?? "").trim(),
+      ...profileFace(profile),
       joinedAt: Date.now(),
     }]);
   }
@@ -287,18 +303,16 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
   ({ roster, viewer }) => {
     // Resolve THIS viewer's shared profile. Under PR #3830 this yields the
     // user's default profile (or the picker result if they have >= 2). `#profile`
-    // gives the live profile CELL (the stable identity used to dedupe); the
-    // convenience targets give just the snapshot strings.
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    // gives the live profile CELL (the stable identity used to dedupe, and
+    // what the join handler reads the face from); `#profileName` gives the name.
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
     // Derived viewer-facing values. Falls back gracefully if the profile has
     // not resolved yet (e.g. user has no profile, or it is still loading).
     const myName = computed(() => profileNameWish.result ?? "");
-    const myAvatar = computed(() => profileAvatarWish.result ?? "");
     // The live profile cell — passed to the join handler as the identity key.
     const myProfile = profileWish.result;
 
@@ -316,7 +330,6 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
       viewer,
       profile: myProfile,
       name: myName,
-      avatar: myAvatar,
     });
 
     return {
@@ -333,32 +346,17 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
               </cf-button>
             </cf-hstack>
 
-            {/* Other users' names/avatars rendered straight from the roster. */}
+            {/* Other users' names/pictures rendered straight from the roster. */}
             <cf-vstack gap="2">
               {participants.map((p) => (
                 <cf-hstack gap="2" align="center">
-                  {p.avatar
-                    ? (
-                      <img
-                        src={p.avatar}
-                        style={{
-                          width: "28px",
-                          height: "28px",
-                          borderRadius: "50%",
-                          objectFit: "cover",
-                        }}
-                      />
-                    )
-                    : (
-                      <div
-                        style={{
-                          width: "28px",
-                          height: "28px",
-                          borderRadius: "50%",
-                          background: "var(--cf-theme-color-border, #ccc)",
-                        }}
-                      />
-                    )}
+                  <cf-avatar
+                    blob={p.pictureBlob}
+                    bytes={p.picture}
+                    src={p.avatar}
+                    name={p.name}
+                    size="sm"
+                  />
                   <span>{p.name}</span>
                 </cf-hstack>
               ))}
@@ -377,10 +375,11 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
 
 ### Notes on the demo
 
-- **`myName` / `myAvatar` are passed as plain string state to the handler.** The
-  CTS transformer auto-unwraps named `computed` values when used as handler
-  state, so the handler receives the resolved string, not a cell. Do not call
-  `.get()` on them inside the handler.
+- **`myName` is passed as a plain value to the handler.** The CTS transformer
+  auto-unwraps named `computed` values when used as handler state, so the
+  handler receives the resolved value, not a cell. Do not call `.get()` on it
+  inside the handler. `profile` arrives as a cell, which is what
+  `profileFace()` reads.
 - **`participants.map(...)` runs on a direct input cell** (`roster.participants`),
   which is the form the transformer lowers to `.mapWithPattern(...)`. Mapping a
   cell reached through a nested map entry would not convert — keep the roster
@@ -394,7 +393,7 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
 
 The live-link approach — store each joiner's profile **cell** and render it with
 a visitable `<cf-profile-badge>` — is the recommended idiom; see
-[`profile-roster-live-demo.tsx`](../../packages/patterns/profile-roster-live-demo.tsx)
+[`profile-roster-live-demo.tsx`](../../patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx)
 for the complete pattern. The shape:
 
 ```tsx
@@ -407,7 +406,7 @@ const profileWish = wish({ query: "#profile" }); // result is ProfileHomeOutput-
 
 Cross-space resolution works for any viewer with access to the profile's space
 (CT-1667/1687, PR #4019); the trade-off is availability — entries render blank
-while the remote space is unreachable. A hybrid (snapshot strings for immediate,
+while the remote space is unreachable. A hybrid (a snapshot for immediate,
 availability-independent text + the link for the badge and freshness) gives
 both.
 
@@ -418,12 +417,13 @@ both.
    or `PerSession<>` (resets per tab). Never put user/session ids into ordinary
    shared data to fake isolation — use the scope wrappers.
 2. On join, resolve the current viewer's shared profile with
-   `wish({ query: "#profile" })` (or `#profileName` / `#profileAvatar` for just
-   the fields). This returns the user's default profile under PR #3830, with the
-   framework picker handling the multi-profile case.
+   `wish({ query: "#profile" })` (or `#profileName` for just the name). The
+   wish returns the user's default profile under PR #3830, with the framework
+   picker handling the multi-profile case. Read the face from that profile
+   with `profileFace()`.
 3. **Store a live link** to each joiner's profile cell by default and render it
    with `<cf-profile-badge $profile={p.profile} />` (live, visitable, verified
-   seal + tooltip). Fall back to a snapshot (name + avatar copied at join time)
+   seal + tooltip). Fall back to a snapshot (name + picture copied at join time)
    when the roster must render with remote profile spaces unreachable; a hybrid
    gives availability-independent text plus the live badge.
 4. Append idempotently — guard on "already joined" (keyed on the profile cell
@@ -438,35 +438,37 @@ both.
 Two deployable versions:
 
 - **Live link (canonical):**
-  [`packages/patterns/profile-roster-live-demo.tsx`](../../packages/patterns/profile-roster-live-demo.tsx)
+  [`patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`](../../patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx)
   renders *every* participant with a live, visitable
   **`<cf-profile-badge $profile={p.profile} />`** bound to their real profile
   cell — current data, verified seal, bio/pinned tooltip, navigable to each
   contributor's profile. Verified end-to-end across multiple real identities.
 - **Snapshot (self-containment variant):**
-  [`packages/patterns/shared-profile-roster/main.tsx`](../../packages/patterns/shared-profile-roster/main.tsx)
-  renders participants via **`<cf-avatar src={p.avatar} name={p.name} />`** from
-  strings copied at join time, with the current viewer's own identity on a
+  [`patterns/examples/shared-profile-roster/main.tsx`](../../patterns/examples/shared-profile-roster/main.tsx)
+  renders participants via
+  **`<cf-avatar blob={p.pictureBlob} bytes={p.picture} name={p.name} />`**
+  from values copied at join time, with the current viewer's own identity on a
   trusted `<cf-profile-badge>`. Verified deployed (`cf piece new … main.tsx`): 0
-  console errors; participant rows show image/emoji/initials avatars; the viewer
+  console errors; participant rows show avatars; the viewer
   badge shows the profile (or a graceful "Unknown profile" fallback).
 
 ## References
 
 - [Shared Profile Space](shared-profile-space.md) — CT-1645 shared profile
   space, `wish` profile targets, owner-protected profile writes.
-- `packages/runner/src/builtins/wish.ts` — `#profile`, `#profileName`,
-  `#profileAvatar` resolution and the `WishState` result shape.
-- `packages/patterns/system/profile-home.tsx` — `ProfileHomeOutput`
-  (`name`, `avatar`, `elements`, `initialNameApplied`) that `#profile` resolves
+- `runtime/runner/src/builtins/wish.ts` — `#profile` and `#profileName`
+  resolution and the `WishState` result shape.
+- `patterns/system/profile-home/profile-home.tsx` — `ProfileHomeOutput`
+  (`name`, `picture`, `elements`, `initialNameApplied`) that `#profile` resolves
   to.
-- `packages/patterns/profile-roster-live-demo.tsx` — canonical live-link roster:
-  every participant on a visitable `<cf-profile-badge>` bound to their real cell.
-- `packages/patterns/shared-profile-demo/main.tsx` — minimal `#profile` consumer.
-- `packages/ui/src/v2/components/cf-profile-badge/` — trusted, visitable identity
+- `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx` —
+  canonical live-link roster: every participant on a visitable
+  `<cf-profile-badge>` bound to their real cell.
+- `patterns/examples/shared-profile-demo/main.tsx` — minimal `#profile` consumer.
+- `runtime/ui/src/v2/components/cf-profile-badge/` — trusted, visitable identity
   badge (verified seal + bio / pinned-piece tooltip).
-- `packages/patterns/scrabble/scrabble.tsx`,
-  `packages/patterns/scoped-user-directory/main.tsx`,
-  `packages/patterns/scoped-group-chat/main-plain-inputs.tsx` — `PerSpace`
+- `patterns/showcase/scrabble/scrabble.tsx`,
+  `patterns/examples/scoped-user-directory/main.tsx`,
+  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx` — `PerSpace`
   roster + join-handler precedents.
 - `docs/common/patterns/multi-user-patterns.md` — scope-boundary guidance.

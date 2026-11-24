@@ -1,0 +1,449 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CatalogEntry": {
+        "properties": {
+          "blurb": {
+            "description": "What the pattern does: the index's description.",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "When the version was published (ISO 8601).",
+            "type": "string"
+          },
+          "patternId": {
+            "description": "The published version's content hash.",
+            "type": "string"
+          },
+          "quality": {
+            "$ref": "#/$defs/CatalogQuality"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "A short heading: the published name, else the start of the blurb.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "patternId",
+          "title"
+        ],
+        "type": "object"
+      },
+      "CatalogQuality": {
+        "enum": [
+          "penalized",
+          "unproven",
+          "proven"
+        ]
+      },
+      "CatalogStatus": {
+        "properties": {
+          "asOf": {
+            "description": "When the catalog last heard from its source (ISO 8601).",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "remedy": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "GetItAnswer": {
+        "properties": {
+          "placed": {
+            "description": "A host's handle on what it placed, for opening it.",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "started",
+              "placed",
+              "failed",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "GetItRequest": {
+        "properties": {
+          "destination": {
+            "type": "string"
+          },
+          "host": {
+            "description": "The catalog's `host` at the tap: only that host acts on the request.",
+            "type": "string"
+          },
+          "patternId": {
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Unique per tap; a host answers each id once.",
+            "type": "string"
+          },
+          "requestedAt": {
+            "description": "When the tap happened (ms since the epoch); a host acts within a window.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "requestId",
+          "patternId",
+          "destination",
+          "requestedAt",
+          "host"
+        ],
+        "type": "object"
+      },
+      "GetItRequests": {
+        "ifc": {
+          "uiContract": {
+            "action": "PatternCatalogRequestGetIt",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "PatternCatalogGetIt"
+            ],
+            "trustedPattern": "PatternCatalogGetIt"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/pattern-catalog/pattern-catalog.tsx",
+              "moduleIdentity": "hXXniLQcIXhZMQjuMekiLqwjKNa_vWxnK2FLowM7Nqc",
+              "path": [
+                "requestGetIt"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/GetItRequest"
+        },
+        "type": "array"
+      }
+    },
+    "description": "What `FakeCatalog` takes; every input has a default.",
+    "properties": {
+      "entries": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/CatalogEntry"
+        },
+        "type": "array"
+      },
+      "getItAnswers": {
+        "additionalProperties": {
+          "$ref": "#/$defs/GetItAnswer"
+        },
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "properties": {},
+        "type": "object"
+      },
+      "getItRequests": {
+        "$ref": "#/$defs/GetItRequests",
+        "asCell": [
+          "cell"
+        ],
+        "default": []
+      },
+      "host": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "fake-host",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/CatalogStatus",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "state": "ready"
+        }
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "system/pattern-catalog/fake-catalog.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CatalogEntry": {
+        "properties": {
+          "blurb": {
+            "description": "What the pattern does: the index's description.",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "When the version was published (ISO 8601).",
+            "type": "string"
+          },
+          "patternId": {
+            "description": "The published version's content hash.",
+            "type": "string"
+          },
+          "quality": {
+            "$ref": "#/$defs/CatalogQuality"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "A short heading: the published name, else the start of the blurb.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "patternId",
+          "title"
+        ],
+        "type": "object"
+      },
+      "CatalogPage": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/$defs/CatalogEntry"
+            },
+            "type": "array"
+          },
+          "next": {
+            "description": "Pass as `after` to ask for the entries that follow; absent at the end.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/CatalogStatus"
+          }
+        },
+        "required": [
+          "status",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "CatalogPageRequest": {
+        "properties": {
+          "after": {
+            "description": "A `next` from an earlier answer to the same text.",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "result"
+        ],
+        "type": "object"
+      },
+      "CatalogQuality": {
+        "enum": [
+          "penalized",
+          "unproven",
+          "proven"
+        ]
+      },
+      "CatalogStatus": {
+        "properties": {
+          "asOf": {
+            "description": "When the catalog last heard from its source (ISO 8601).",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "remedy": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "GetItAnswer": {
+        "properties": {
+          "placed": {
+            "description": "A host's handle on what it placed, for opening it.",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "started",
+              "placed",
+              "failed",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "GetItRequest": {
+        "properties": {
+          "destination": {
+            "type": "string"
+          },
+          "host": {
+            "description": "The catalog's `host` at the tap: only that host acts on the request.",
+            "type": "string"
+          },
+          "patternId": {
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Unique per tap; a host answers each id once.",
+            "type": "string"
+          },
+          "requestedAt": {
+            "description": "When the tap happened (ms since the epoch); a host acts within a window.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "requestId",
+          "patternId",
+          "destination",
+          "requestedAt",
+          "host"
+        ],
+        "type": "object"
+      },
+      "GetItRequests": {
+        "ifc": {
+          "uiContract": {
+            "action": "PatternCatalogRequestGetIt",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "PatternCatalogGetIt"
+            ],
+            "trustedPattern": "PatternCatalogGetIt"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/system/pattern-catalog/pattern-catalog.tsx",
+              "moduleIdentity": "hXXniLQcIXhZMQjuMekiLqwjKNa_vWxnK2FLowM7Nqc",
+              "path": [
+                "requestGetIt"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/GetItRequest"
+        },
+        "type": "array"
+      }
+    },
+    "description": "The catalog, plus the stream that stands in for a host acting.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "answerGetItRequests": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Answers every get request naming `host` that has no answer yet."
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/CatalogEntry"
+        },
+        "type": "array"
+      },
+      "getItAnswers": {
+        "additionalProperties": {
+          "$ref": "#/$defs/GetItAnswer"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "getItRequests": {
+        "$ref": "#/$defs/GetItRequests"
+      },
+      "host": {
+        "type": "string"
+      },
+      "page": {
+        "$ref": "#/$defs/CatalogPageRequest",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "status": {
+        "$ref": "#/$defs/CatalogStatus"
+      }
+    },
+    "required": [
+      "status",
+      "entries",
+      "page",
+      "getItRequests",
+      "getItAnswers",
+      "host",
+      "answerGetItRequests",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

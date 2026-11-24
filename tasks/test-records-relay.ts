@@ -35,9 +35,10 @@ import {
   readEnv,
   RECORD_SCHEMA_VERSION,
   type RunContext,
+  shippedArtifact,
   type TestRecord,
 } from "@commonfabric/test-support/records";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   ciSubmissionsPrefix,
   REPO,
@@ -225,7 +226,7 @@ async function readArtifactRecords(dir: string): Promise<TestRecord[]> {
     if (line.length === 0) continue;
     const record = parseRecordLine(line);
     if (record === undefined) {
-      console.warn(`test records: dropped an unparsable line in ${dir}`);
+      console.warn(`test records: dropped a line no reader accepts in ${dir}`);
       continue;
     }
     records.push(record);
@@ -254,11 +255,11 @@ export async function relayArtifacts(options: RelayOptions): Promise<string[]> {
   const names: string[] = [];
   for await (const entry of Deno.readDir(options.artifactsDir)) {
     if (!entry.isDirectory) continue;
-    const attempt = entry.name.match(/-a(\d+)$/)?.[1];
+    const attempt = shippedArtifact(entry.name)?.attempt;
     if (attempt === undefined) {
       console.error(`test records: ${entry.name} names no attempt`);
       failed.push(entry.name);
-    } else if (Number(attempt) === options.run.runAttempt) {
+    } else if (attempt === options.run.runAttempt) {
       names.push(entry.name);
     } else {
       console.log(`test records: ${entry.name} is another attempt's`);
@@ -313,12 +314,8 @@ export async function relayArtifacts(options: RelayOptions): Promise<string[]> {
   return failed;
 }
 
-function usage(): never {
-  console.error(
-    "usage: test-records-relay.ts --artifacts <dir> [--run-json <file>]",
-  );
-  Deno.exit(2);
-}
+const USAGE =
+  "usage: test-records-relay.ts --artifacts <dir> [--run-json <file>]";
 
 /** Parses the command line; undefined means a malformed one. */
 export function parseRelayArgs(
@@ -409,13 +406,20 @@ export async function runRelay(options: RelayRunOptions): Promise<number> {
   return 0;
 }
 
-async function main(): Promise<void> {
-  const parsed = parseRelayArgs(Deno.args);
-  if (parsed === undefined) usage();
-  const code = await runRelay(parsed);
-  if (code !== 0) Deno.exit(code);
+/**
+ * Runs the relay a command line asks for and returns the process's exit
+ * code, 2 for a malformed command line.
+ */
+export async function runRelayCommand(
+  args: readonly string[],
+  options: Pick<RelayRunOptions, "env" | "fetchImpl"> = {},
+): Promise<number> {
+  const parsed = parseRelayArgs(args);
+  if (parsed === undefined) {
+    console.error(USAGE);
+    return 2;
+  }
+  return await runRelay({ ...options, ...parsed });
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) Deno.exit(await runRelayCommand(Deno.args));

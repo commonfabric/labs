@@ -22,6 +22,11 @@ long way without a query-dependency analyzer.
   invalidation pass a narrower cell (e.g. a per-table or per-topic cell they bump
   themselves from the same handler that writes), trading precision for manual
   bookkeeping. v1 does not parse SQL to compute fine-grained read sets.
+- A query over an
+  [indexed collection](../../features/indexed-collections.md#queries) follows
+  the collection's `rev` without `reactOn`, and keeps `rev` out of its request
+  hash. A re-run for a new `rev` writes no pending claim: the result cell
+  changes only where the returned rows differ.
 - **A row document is immutable.** The write-back stores each result row as
   an entity document of its own under the query's result cell, keyed on the
   row's content and on the label that content is written under (CFC spec
@@ -60,12 +65,12 @@ into the write's own commit:
 - `db.exec` records the `sqlite` op onto the caller's transaction **and** does a
   read-modify-write of `rev` on the handle cell **in the same commit** (one
   commit = cell ops + the `sqlite` op + the `rev`-incremented handle value). See
-  [`packages/runner/src/cell.ts`](../../../packages/runner/src/cell.ts) and
+  [`runtime/runner/src/cell.ts`](../../../runtime/runner/src/cell.ts) and
   Section [04](./04-server-execution-and-transactions.md).
 - The scheduler lets an action see its *own* uncommitted writes within a
   transaction and propagates to other readers only after commit (per the
   scheduler's transaction model and own-commit-source skip in
-  [`packages/runner/src/scheduler/`](../../../packages/runner/src/scheduler/)).
+  [`runtime/runner/src/scheduler/`](../../../runtime/runner/src/scheduler/)).
   Because the `rev` change rides the write commit, a query depending on the
   handle is notified only once that commit lands — exactly when the SQLite write
   is durable. There is no window where the query re-runs before the write is

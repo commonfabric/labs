@@ -58,7 +58,7 @@ written — a handling that failed, or a deployment not writing them — there i
 nothing to collide with, and the replay executes and commits again. What v1 has
 no spelling for is the wait half: `cf`'s `--wait <seconds>` patience bound, and
 its `--no-wait`, which exits at the commit acknowledgment carrying the receipt's
-address (`resolveWaitControl`, `packages/cli/commands/piece.ts`). Both belong at
+address (`resolveWaitControl`, `runtime/cli/commands/piece.ts`). Both belong at
 shuttle's `call` when a slow verb makes them worth typing, and collecting a
 detached outcome is then an ordinary `get` of that address: no second read path,
 and the handler does not run again.
@@ -150,7 +150,7 @@ decisions point here where they defer.
   switch — which also honors the one-connection-per-process limit the
   seam work records.
 - **The `fuse/` facet.** The FUSE layout mirrored at the space root, for
-  mutual legibility between the two tools. Shuttle reuses `packages/fuse`
+  mutual legibility between the two tools. Shuttle reuses `runtime/fuse`
   naming and hydration work regardless; the facet is the presentation
   half, and it waits.
 - **Fabric-to-fabric redirection.** `get topics/3 > drafts/copy` as a
@@ -194,7 +194,8 @@ decisions point here where they defer.
   which is what its escaping exists to keep (`place.ts`). This form makes no
   such promise, so it is where a spelling for them belongs, and the storage
   codec already has one to borrow: `Undefined@1` beside the `BigInt@1` that
-  `get` writes as `$bigint` today (`packages/data-model/src/codec-json/`).
+  `get` writes as `$bigint` today
+  (`base/data-model/src/codec-json/`).
 - **Vim keybindings, as a `where` dimension.** Modal editing at the prompt,
   an option and never a default. What it costs is a second binding table
   over motions the line editor already drives, plus the mode the table

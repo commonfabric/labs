@@ -1,0 +1,624 @@
+/**
+ * The host's half of giving Home its private inbox: it finds the inbox a
+ * profile already advertises, vets it, and sends Home's `ensurePrivateInbox`
+ * with the inbox to adopt, if any. Vetting reads the inbox's access list and
+ * two of its members, in the inbox's own space, which a Home handler cannot
+ * do. It is also the client that requests the inbox from Home, as a loom
+ * daemon does, and reads Home's answer; `docs/features/private-inbox.md`
+ * describes the whole arrangement.
+ */
+
+import type { JSONSchema } from "@commonfabric/api";
+import { debugStr } from "@commonfabric/data-model";
+import type { DID } from "@commonfabric/identity";
+import { hasConcreteOwner, isACL } from "@commonfabric/memory/acl";
+import {
+  ACLManager,
+  type Cancel,
+  type Cell,
+  isCell,
+  isStream,
+  loadProfileCandidates,
+  type NormalizedFullLink,
+  orderProfileCandidates,
+  readDurable,
+  type Runtime,
+  sendEvent,
+  transactionFailureMessage,
+} from "@commonfabric/runner";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { accessRefused } from "./space-access.ts";
+
+const logger = getLogger("piece.private-inbox");
+
+/** Every code for why an advertised inbox is not adopted. */
+export const INBOX_ADOPTION_REFUSALS = [
+  "inbox-home-space",
+  "inbox-profile-space",
+  "inbox-access-refused",
+  "inbox-adoption-acl-mismatch",
+  "inbox-offers-invalid",
+  "inbox-receive-missing",
+] as const;
+
+/** Why an advertised inbox is not adopted. */
+export type InboxAdoptionRefusal = typeof INBOX_ADOPTION_REFUSALS[number];
+
+/**
+ * The name Home creates its own private inbox's space under, in Home's space,
+ * as `PRIVATE_INBOX_SPACE_NAME` in
+ * `patterns/system/private-inbox/private-inbox.tsx` names it. An inbox in that
+ * space is one Home made, from any runtime, and runs Home's own program.
+ */
+export const PRIVATE_INBOX_SPACE_NAME = "private-inbox";
+
+/**
+ * What {@link ensurePrivateInboxOf} found, and so what it sent: `held` when
+ * Home keeps the inbox it holds, the deciding profile advertising it or no
+ * profile advertising any; `none-advertised` when Home holds none and no
+ * profile advertises one; `adopt` when the deciding profile's inbox passed
+ * vetting and is one Home made; `replace` when Home holds an inbox it did not
+ * make, such as a loom daemon's, or the deciding profile's inbox passed
+ * vetting and is one Home did not make, so Home holds an inbox of its own in
+ * their place and goes on reading them: `inboxes` names each, the one Home
+ * holds first; `refused` when the deciding profile's inbox failed vetting, for
+ * `reason`, which `replace` names as its `refused` when Home holds an inbox it
+ * did not make too. `profile` is the deciding profile, which `held` names only
+ * when that profile advertises the inbox Home holds. `abandoned` is an ensure
+ * stopped before its send, which sent nothing, and `unavailable` one over a
+ * Home without the stream.
+ */
+export type PrivateInboxEnsure =
+  | { outcome: "unavailable" }
+  | { outcome: "abandoned" }
+  | { outcome: "held"; profile?: Cell<unknown> }
+  | { outcome: "none-advertised" }
+  | { outcome: "adopt"; inbox: Cell<unknown>; profile: Cell<unknown> }
+  | {
+    outcome: "replace";
+    inboxes: Cell<unknown>[];
+    profile?: Cell<unknown>;
+    refused?: InboxRefusal;
+  }
+  | ({ outcome: "refused"; profile: Cell<unknown> } & InboxRefusal);
+
+/** The host's refusal of the inbox the deciding profile advertises. */
+export type InboxRefusal = {
+  reason: InboxAdoptionRefusal;
+  inbox: Cell<unknown>;
+};
+
+/**
+ * The link the host reads an inbox pointer through: a link to a piece naming
+ * its name and nothing else, as `ShareInboxPiece` in
+ * `patterns/system/profile-home/profile-home.tsx` types it. A pointer read through
+ * an untyped link joins the inbox's confidentiality label, which is what
+ * `docs/features/private-inbox.md` says every reader avoids.
+ */
+export const inboxPieceLinkSchema = {
+  type: "object",
+  properties: { $NAME: { type: "string" } },
+  asCell: ["cell"],
+} as const satisfies JSONSchema;
+
+const pointerSchema = {
+  type: "object",
+  properties: { piece: inboxPieceLinkSchema },
+} as const satisfies JSONSchema;
+
+/**
+ * Sends `home`'s `ensurePrivateInbox`, after vetting the inbox the deciding
+ * profile points at. `home` is a Home result: its `privateInbox`, `profiles`,
+ * `defaultProfile`, `legacyDefaultProfile`, `mru` and `ensurePrivateInbox` are
+ * read and sent as Home's are, and `identity` is the identity it belongs to.
+ * The deciding profile is the first, in the order `#profile` answers in
+ * (`orderProfileCandidates()`), that points at an inbox.
+ *
+ * The event names the deciding profile's inbox to adopt, and that profile,
+ * when the inbox passes every check, is one Home made (it lives in the space
+ * Home's space names {@link PRIVATE_INBOX_SPACE_NAME}), and Home holds none,
+ * or holds another. Inboxes Home did not make are named to replace instead:
+ * the inbox Home holds, when Home holds one it did not make, whatever the
+ * profiles advertise, and the deciding profile's inbox when it passes every
+ * check, with that profile, both when both are. Home then holds an inbox of
+ * its own and keeps reading each one replaced, so that Home's own program,
+ * which keeps everything a sender's offer says, receives what senders deliver
+ * from then on. When the deciding profile's inbox fails a check, the event
+ * names the refusal, with its reason, the refused inbox and the deciding
+ * profile, for Home to record, beside the inbox Home holds when it names that
+ * one to replace, and the refusal is logged as a warning too; Home neither
+ * adopts nor replaces the refused inbox. When the deciding profile advertises
+ * the inbox Home holds, the event names that profile, and the inbox when it is
+ * one to replace; a profile and nothing else Home takes as the end of a
+ * refusal it recorded. When no profile advertises an inbox, the event names
+ * the inbox Home holds when it is one to replace, and nothing otherwise, and
+ * Home takes an inbox of its own only if it holds none. A Home without the
+ * stream is left as it is.
+ *
+ * Before the event, when Home may need an inbox of its own for it and has
+ * none, which is when the event names nothing to adopt and either names
+ * inboxes to replace or Home holds none, sends Home's `createOwnPrivateInbox`,
+ * whose run creates one reading nothing labeled, and waits for that run to
+ * commit. Home's ensure would otherwise hand its event on to that step in a
+ * run nothing waits for, as it does for a Home without the stream.
+ *
+ * Resolves once Home's handler has run on the event and its run has
+ * committed, on the server that runs it under server execution, so that a
+ * caller waiting on the ensure waits for Home's handling of it too. Rejects
+ * when that handling fails, or when the creation it waited for first failed,
+ * having then sent no event. Rejects, sending nothing, when a profile ordered
+ * ahead of the deciding one cannot be loaded, since which profile decides is
+ * then unknown. Sends nothing more, and returns `abandoned`, when `signal` has
+ * aborted or `runtime` has begun disposal by the time the reads are done, or
+ * by the time the creation it waited for has committed, so that an ensure its
+ * caller has stopped waiting for sends no event after teardown.
+ */
+export async function ensurePrivateInboxOf(
+  runtime: Runtime,
+  home: Cell<unknown>,
+  identity: DID,
+  signal?: AbortSignal,
+): Promise<PrivateInboxEnsure> {
+  const ensure = home.key("ensurePrivateInbox");
+  if (ensure.getRaw() === undefined) return { outcome: "unavailable" };
+  const found = await vetAdvertisedInbox(runtime, home, identity);
+  if (stopped(runtime, signal)) return { outcome: "abandoned" };
+  const refusal = found.outcome === "refused"
+    ? found
+    : found.outcome === "replace"
+    ? found.refused
+    : undefined;
+  if (refusal !== undefined) {
+    logger.warn("adoption-refused", () => [
+      `Not adopting the inbox a profile advertises (${refusal.reason}):`,
+      refusal.inbox.getAsNormalizedFullLink(),
+    ]);
+  }
+  const createOwn = home.key("createOwnPrivateInbox");
+  const createFirst = createOwn.getRaw() !== undefined &&
+    await needsOwnInbox(home, found);
+  if (stopped(runtime, signal)) return { outcome: "abandoned" };
+  if (createFirst) {
+    await handled(createOwn, {});
+    if (stopped(runtime, signal)) return { outcome: "abandoned" };
+  }
+  await handled(ensure, ensureEventOf(found));
+  return found;
+}
+
+/**
+ * Whether an ensure is to send nothing more: `signal` has aborted, or
+ * `runtime` has begun disposal.
+ */
+function stopped(runtime: Runtime, signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true || runtime.writeTeardownSignal.aborted;
+}
+
+/**
+ * Sends `event` to `stream`, and resolves once the handler's run has
+ * committed, on the server that runs it under server execution; rejects when
+ * that run fails.
+ */
+function handled(stream: Cell<unknown>, event: unknown): Promise<void> {
+  return new Promise<void>((resolve, reject) =>
+    sendEvent(stream, event, (tx) => {
+      const status = tx.status();
+      if (status.status === "error") {
+        reject(new Error(transactionFailureMessage(status.error)));
+      } else resolve();
+    })
+  );
+}
+
+/**
+ * Whether Home may need an inbox of its own for the event sent for what the
+ * host `found`, and has none: Home's `ownPrivateInbox` holds none, the event
+ * names nothing to adopt, and it names inboxes to replace or Home holds none.
+ * This is the test Home's ensure applies before handing its event on to the
+ * step that creates one.
+ */
+async function needsOwnInbox(
+  home: Cell<unknown>,
+  found: Exclude<PrivateInboxEnsure, { outcome: "unavailable" | "abandoned" }>,
+): Promise<boolean> {
+  if (found.outcome === "adopt") return false;
+  if (await storedPointer(home.key("ownPrivateInbox")) !== undefined) {
+    return false;
+  }
+  return found.outcome === "replace" ||
+    await storedPointer(home.key("privateInbox")) === undefined;
+}
+
+/**
+ * What {@link requestPrivateInboxOf} learned from Home: `ensured` once the
+ * profile the request named points at the inbox Home holds, which `inbox`
+ * links as the profile's pointer does; `unlisted` when that profile is not in
+ * Home's list; `unpointable` when it has no `setInbox`, so Home never points
+ * it; `not-held` when it points at an inbox Home does not hold, or Home holds
+ * none and takes none because another profile advertises one.
+ * `unavailable` is a Home without the stream, which is sent nothing, and
+ * `abandoned` a request whose caller stopped waiting before Home answered.
+ */
+export type PrivateInboxRequestOutcome =
+  | { status: "unavailable" }
+  | { status: "abandoned" }
+  | { status: "ensured"; inbox: Cell<unknown> }
+  | { status: "unlisted" }
+  | { status: "unpointable" }
+  | { status: "not-held" };
+
+/** How {@link requestPrivateInboxOf} reads Home's answer in its receipt. */
+const answerSchema = {
+  type: "object",
+  properties: { status: { type: "string" } },
+} as const satisfies JSONSchema;
+
+/**
+ * Sends `home`'s `requestPrivateInbox`, naming `profile`, and resolves with
+ * Home's answer once it is no longer `pending`, so that an `ensured` answer
+ * arrives only once `profile` points at the inbox Home holds. `home` is a Home
+ * result, and `profile` the profile the caller finds the owner by, the one
+ * `#profile` answers with. Home ensures its inbox as an event naming nothing
+ * has its `ensurePrivateInbox` do, so it has an inbox of its own created
+ * whenever it holds none and has none of its own, takes that inbox only when
+ * no profile advertises one, and adopts none.
+ *
+ * Home answers in the handling's receipt, whose address the send's completion
+ * carries: a final answer, or a link to Home's answer for the profile, which
+ * changes as Home's holder and the profile's pointer do. This subscribes to
+ * the receipt, through the link, and settles on the first answer that is not
+ * `pending`; for `ensured`, it then reads the inbox from the profile's pointer,
+ * waiting for it to name one. It reads both past this runtime's own
+ * speculation, so under server execution it settles on what the server wrote,
+ * never on this runtime's preview of Home's answer. Returns `unavailable`,
+ * sending nothing, for a Home without the stream, and `abandoned` once
+ * `signal` aborts: sending nothing when it has aborted already, and otherwise
+ * at whatever point it is waiting, Home's handling of a request already sent
+ * going on regardless.
+ *
+ * @throws When the send fails, when Home's handling of it fails or writes no
+ *   receipt, or when Home answers with a status this host does not know.
+ */
+export async function requestPrivateInboxOf(
+  runtime: Runtime,
+  home: Cell<unknown>,
+  profile: Cell<unknown>,
+  signal?: AbortSignal,
+): Promise<PrivateInboxRequestOutcome> {
+  const request = home.key("requestPrivateInbox");
+  if (request.getRaw() === undefined) return { status: "unavailable" };
+  if (signal?.aborted) return { status: "abandoned" };
+  const handled = new Promise<NormalizedFullLink>((resolve, reject) =>
+    sendEvent(request, { from: profile }, (tx) => {
+      const status = tx.status();
+      if (status.status === "error") {
+        reject(new Error(transactionFailureMessage(status.error)));
+      } else if (tx.handlingReceiptLink === undefined) {
+        reject(new Error("Home's handling of the request wrote no receipt"));
+      } else resolve(tx.handlingReceiptLink);
+    })
+  );
+  const receipt = await untilAborted(handled, signal);
+  if (receipt === undefined) return { status: "abandoned" };
+  const status = await firstPicked(
+    runtime,
+    runtime.getCellFromLink(receipt, answerSchema),
+    (answer) =>
+      answer?.status === undefined || answer.status === "pending"
+        ? undefined
+        : answer.status,
+    signal,
+  );
+  switch (status) {
+    case undefined:
+      return { status: "abandoned" };
+    case "unlisted":
+    case "unpointable":
+    case "not-held":
+      return { status };
+    case "ensured": {
+      const inbox = await firstPicked(
+        runtime,
+        profile.key("inbox").asSchema(pointerSchema),
+        // The read's transaction closes once the read is done, so the cell
+        // handed back is detached from it.
+        (pointer) =>
+          isCell(pointer?.piece) ? pointer.piece.withTx() : undefined,
+        signal,
+      );
+      return inbox === undefined
+        ? { status: "abandoned" }
+        : { status: "ensured", inbox };
+    }
+    default:
+      throw new Error(debugStr`Home answered the request with $quote${status}`);
+  }
+}
+
+/**
+ * Helper for {@link requestPrivateInboxOf}, which resolves as `promise` does,
+ * or with `undefined` once `signal` aborts, whichever comes first.
+ */
+function untilAborted<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T | undefined> {
+  if (signal === undefined) return promise;
+  const { promise: aborted, resolve } = Promise.withResolvers<undefined>();
+  const abandon = () => resolve(undefined);
+  signal.addEventListener("abort", abandon);
+  return Promise.race([promise, aborted]).finally(() =>
+    signal.removeEventListener("abort", abandon)
+  );
+}
+
+/**
+ * Helper for {@link requestPrivateInboxOf}, which resolves with what `pick`
+ * makes of the first of `cell`'s durable values that `pick` makes anything of,
+ * or with `undefined` once `signal` aborts. A durable value is one read past
+ * this runtime's speculation overlay (`readDurable()`), so under server
+ * execution it is what the server wrote, never this runtime's own preview of
+ * it, which can mix values from different moments. It reads again on each
+ * change a subscription to `cell` delivers, and once the speculation layers
+ * over what it read have settled, since a change beneath a layer delivers
+ * nothing.
+ */
+function firstPicked<T, R>(
+  runtime: Runtime,
+  cell: Cell<T>,
+  pick: (value: Readonly<T>) => R | undefined,
+  signal?: AbortSignal,
+): Promise<R | undefined> {
+  const { promise, resolve } = Promise.withResolvers<R | undefined>();
+  // Where `sink()`'s cancel is kept: a callback can run before it returns.
+  const subscription: { cancel?: Cancel } = {};
+  let settled = false;
+  const settle = (picked: R | undefined) => {
+    if (settled) return;
+    settled = true;
+    signal?.removeEventListener("abort", abandon);
+    subscription.cancel?.();
+    resolve(picked);
+  };
+  const abandon = () => settle(undefined);
+  const check = () => {
+    if (settled) return;
+    const { value, speculationSettled } = readDurable(
+      runtime,
+      (tx) => pick(cell.withTx(tx).get()),
+    );
+    if (value !== undefined) settle(value);
+    else speculationSettled?.then(check);
+  };
+  if (signal?.aborted) {
+    abandon();
+    return promise;
+  }
+  signal?.addEventListener("abort", abandon);
+  subscription.cancel = cell.sink(check);
+  if (settled) subscription.cancel();
+  return promise;
+}
+
+/** The event {@link ensurePrivateInboxOf} sends Home for what it `found`. */
+function ensureEventOf(
+  found: Exclude<PrivateInboxEnsure, { outcome: "unavailable" | "abandoned" }>,
+): Record<string, unknown> {
+  switch (found.outcome) {
+    case "adopt":
+      return { adopt: found.inbox, from: found.profile };
+    case "refused":
+      return {
+        from: found.profile,
+        refused: { reason: found.reason, inbox: found.inbox },
+      };
+    case "replace":
+      return {
+        replace: found.inboxes,
+        ...(found.profile === undefined ? {} : { from: found.profile }),
+        ...(found.refused === undefined ? {} : { refused: found.refused }),
+      };
+    case "held":
+      return found.profile === undefined ? {} : { from: found.profile };
+    case "none-advertised":
+      return {};
+  }
+}
+
+/**
+ * Decides which inboxes, if any, `home` adopts or replaces. An inbox Home holds
+ * that it did not make, one outside the space Home's space names
+ * {@link PRIVATE_INBOX_SPACE_NAME}, is replaced whatever the profiles
+ * advertise. Otherwise Home keeps an inbox it holds while the deciding profile
+ * advertises it, or while no profile advertises one. When the deciding profile
+ * advertises another inbox, that one is vetted, whether or not Home keeps the
+ * one it holds: adopted if it passes every check and Home made it, replaced
+ * beside any inbox replaced already if it passes every check and Home did not,
+ * and refused beside it otherwise. A profile whose stored pointer is not an
+ * object holding a link advertises nothing.
+ */
+async function vetAdvertisedInbox(
+  runtime: Runtime,
+  home: Cell<unknown>,
+  identity: DID,
+): Promise<
+  Exclude<PrivateInboxEnsure, { outcome: "unavailable" | "abandoned" }>
+> {
+  const held = await storedPointer(home.key("privateInbox"));
+  // The space Home's own inbox lives in, or `undefined` while Home has made
+  // none, when no inbox is one Home made.
+  const own = await runtime.recordedInSpaceName(
+    home.space,
+    PRIVATE_INBOX_SPACE_NAME,
+  );
+  const deciding = await decidingProfile(runtime, home, identity);
+  // The inbox Home holds when it is one Home did not make, to replace.
+  const replacing = held !== undefined && await reachedSpace(held) !== own
+    ? [held]
+    : [];
+  if (deciding === undefined) {
+    return replacing.length > 0
+      ? { outcome: "replace", inboxes: replacing }
+      : { outcome: held === undefined ? "none-advertised" : "held" };
+  }
+  const { profile, piece } = deciding;
+  if (held !== undefined && await isSameDocument(piece, held)) {
+    return replacing.length > 0
+      ? { outcome: "replace", inboxes: replacing, profile }
+      : { outcome: "held", profile };
+  }
+  const inbox = piece.resolveAsCell();
+  const reason = await refusalOf(runtime, inbox, {
+    home: home.space,
+    profile: profile.space,
+    identity,
+  });
+  if (reason !== undefined) {
+    return replacing.length > 0
+      ? {
+        outcome: "replace",
+        inboxes: replacing,
+        profile,
+        refused: { reason, inbox },
+      }
+      : { outcome: "refused", reason, inbox, profile };
+  }
+  return inbox.space === own
+    ? { outcome: "adopt", inbox, profile }
+    : { outcome: "replace", inboxes: [...replacing, inbox], profile };
+}
+
+/**
+ * The first of `home`'s profiles, in the order `#profile` answers in, that
+ * points at an inbox, with the link it holds; `undefined` when none does.
+ * The candidates are the ones `loadProfileCandidates()` loads, as `#profile`
+ * collects them, `identity` being the person whose profiles they are: a
+ * retired profile, one whose document is absent, or one that is not
+ * `identity`'s own is left out, and one whose document failed to load, or
+ * whose space refuses this runtime, is ordered with the rest.
+ *
+ * @throws When a profile ordered ahead of the one found failed to load, since
+ *   whether it advertises an inbox is then unknown.
+ */
+async function decidingProfile(
+  runtime: Runtime,
+  home: Cell<unknown>,
+  identity: DID,
+): Promise<{ profile: Cell<unknown>; piece: Cell<unknown> } | undefined> {
+  const { candidates, failures } = await loadProfileCandidates(
+    runtime,
+    home,
+    identity,
+  );
+  if (candidates.length === 0) return undefined;
+  for (const profile of candidates) {
+    if (!failures.has(profile) && accessRefused(runtime, profile.space)) {
+      failures.set(profile, new Error("access refused"));
+    }
+  }
+  const { ordered } = orderProfileCandidates(
+    runtime,
+    home,
+    home.space,
+    candidates,
+  );
+  for (const profile of ordered) {
+    if (failures.has(profile)) {
+      throw new Error(
+        `Cannot read the profile that decides Home's private inbox: ${profile.space}`,
+        { cause: failures.get(profile) },
+      );
+    }
+    const piece = await storedPointer(profile.key("inbox"));
+    if (piece !== undefined) return { profile, piece };
+  }
+  return undefined;
+}
+
+/**
+ * The space of the document `link` reaches, following the links on the way,
+ * once the document it names has loaded.
+ */
+async function reachedSpace(link: Cell<unknown>): Promise<string> {
+  await link.sync();
+  return link.resolveAsCell().space;
+}
+
+/**
+ * Whether links `a` and `b` reach one document, as Home's handler compares
+ * them, once the documents they name have loaded.
+ */
+async function isSameDocument(
+  a: Cell<unknown>,
+  b: Cell<unknown>,
+): Promise<boolean> {
+  await Promise.all([a.sync(), b.sync()]);
+  return a.equals(b);
+}
+
+/**
+ * The link a pointer holder, Home's `privateInbox` or a profile's `inbox`,
+ * holds under `piece`, or `undefined` when it holds none. A holder whose stored
+ * value is not an object, or whose `piece` is not a link, holds none.
+ */
+async function storedPointer(
+  holder: Cell<unknown>,
+): Promise<Cell<unknown> | undefined> {
+  const container = await holder.asSchema({ asCell: ["cell"] }).pull();
+  const stored = isCell(container) ? container.getRaw() : container;
+  if (!isObjectNotArray(stored) || !isObjectNotArray(stored.piece)) {
+    return undefined;
+  }
+  const pointer = await holder.asSchema(pointerSchema).pull();
+  return isCell(pointer?.piece) ? pointer.piece : undefined;
+}
+
+/**
+ * Why `inbox` cannot become Home's, or `undefined` when it can: it lives in a
+ * space of its own, neither Home's nor the advertising profile's, which grants
+ * `identity` `OWNER` and every principal `WRITE`, and it holds a list of offers
+ * and a `receive` stream.
+ */
+async function refusalOf(
+  runtime: Runtime,
+  inbox: Cell<unknown>,
+  spaces: { home: DID; profile: DID; identity: DID },
+): Promise<InboxAdoptionRefusal | undefined> {
+  if (inbox.space === spaces.home || inbox.space === spaces.identity) {
+    return "inbox-home-space";
+  }
+  if (inbox.space === spaces.profile) return "inbox-profile-space";
+  let stored;
+  let offers;
+  let receive;
+  try {
+    stored = await new ACLManager(runtime, inbox.space).getStored();
+    // The stored list rather than a projection of it: an array schema would
+    // project malformed data into an empty list. A stream is read without a
+    // schema, since a stream schema answers a stream at any path.
+    offers = await storedValue(inbox.key("offers"));
+    receive = await inbox.key("receive").pull();
+  } catch (error) {
+    if (accessRefused(runtime, inbox.space)) return "inbox-access-refused";
+    throw error;
+  }
+  if (accessRefused(runtime, inbox.space)) return "inbox-access-refused";
+  // An access list that is malformed or names no concrete owner is one this
+  // identity does not own.
+  const acl = isACL(stored) && hasConcreteOwner(stored) ? stored : undefined;
+  if (acl?.[spaces.identity] !== "OWNER" || acl?.["*"] !== "WRITE") {
+    return "inbox-adoption-acl-mismatch";
+  }
+  if (!Array.isArray(offers)) return "inbox-offers-invalid";
+  if (!isStream(receive)) return "inbox-receive-missing";
+  return undefined;
+}
+
+/** The value stored where `cell` leads, following the links on the way. */
+async function storedValue(cell: Cell<unknown>): Promise<unknown> {
+  await cell.sync();
+  const target = cell.resolveAsCell();
+  await target.sync();
+  return target.getRaw();
+}

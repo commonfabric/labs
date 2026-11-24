@@ -1,0 +1,209 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Contact": {
+        "properties": {
+          "company": {
+            "default": "",
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "email": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "phone": {
+            "default": "",
+            "type": "string"
+          },
+          "tags": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "phone",
+          "company",
+          "tags",
+          "notes",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "Relationship": {
+        "properties": {
+          "fromName": {
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "type": "string"
+          },
+          "toName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromName",
+          "toName",
+          "label"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "contacts": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Contact"
+        },
+        "type": "array"
+      },
+      "relationships": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Relationship"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "contacts",
+      "relationships"
+    ],
+    "type": "object"
+  },
+  "pattern": "apps/contacts/contact-book.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Contact": {
+        "properties": {
+          "company": {
+            "default": "",
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "email": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "phone": {
+            "default": "",
+            "type": "string"
+          },
+          "tags": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "phone",
+          "company",
+          "tags",
+          "notes",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "Relationship": {
+        "properties": {
+          "fromName": {
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "type": "string"
+          },
+          "toName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromName",
+          "toName",
+          "label"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "contacts": {
+        "items": {
+          "$ref": "#/$defs/Contact"
+        },
+        "type": "array"
+      },
+      "mentionable": {
+        "items": {
+          "$ref": "#/$defs/Contact"
+        },
+        "type": "array"
+      },
+      "onAddContact": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "relationships": {
+        "items": {
+          "$ref": "#/$defs/Relationship"
+        },
+        "type": "array"
+      },
+      "summary": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "contacts",
+      "relationships",
+      "mentionable",
+      "summary",
+      "onAddContact",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

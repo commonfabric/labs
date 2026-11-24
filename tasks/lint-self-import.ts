@@ -39,7 +39,7 @@
 
 import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, relative, resolve } from "@std/path";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { isTestFile } from "./test-files.ts";
 
 /** The file names a Deno configuration is allowed to take. */

@@ -1,0 +1,427 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "BuiltInLLMContent": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/BuiltInLLMContentPart"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "BuiltInLLMContentPart": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BuiltInLLMTextPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMImagePart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolCallPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolResultPart"
+          }
+        ]
+      },
+      "BuiltInLLMImagePart": {
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "image"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "image"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMMessage": {
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/BuiltInLLMContent"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant",
+              "tool"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMTextPart": {
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolCallPart": {
+        "properties": {
+          "input": {
+            "additionalProperties": true,
+            "properties": {},
+            "type": "object"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-call"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "input"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolResultPart": {
+        "properties": {
+          "output": {
+            "anyOf": [
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "text"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "json"
+                    ],
+                    "type": "string"
+                  },
+                  "value": true
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-result"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "output"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "messages": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The conversation with the graph analyst, empty until a build asks.",
+        "items": {
+          "$ref": "#/$defs/BuiltInLLMMessage"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "system/knowledge-graph/knowledge-graph.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CellScope": {
+        "enum": [
+          "space",
+          "user",
+          "session"
+        ]
+      },
+      "CompoundNode": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "linkedPieces": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "linkedPieces",
+          "summary",
+          "$NAME"
+        ],
+        "type": "object"
+      },
+      "GraphEdge": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/$defs/MentionablePiece"
+          },
+          "fromName": {
+            "type": "string"
+          },
+          "to": {
+            "$ref": "#/$defs/MentionablePiece"
+          },
+          "toName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "fromName",
+          "toName",
+          "description"
+        ],
+        "type": "object"
+      },
+      "JSXElement": {
+        "anyOf": [
+          {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          {
+            "$ref": "#/$defs/UIRenderable"
+          },
+          {
+            "properties": {},
+            "type": "object"
+          }
+        ]
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isMentionable": {
+            "type": "boolean"
+          },
+          "mentionable": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/MentionablePiece"
+                },
+                "type": "array"
+              },
+              {
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          },
+          "mentioned": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "Pattern": {
+        "properties": {
+          "argumentSchema": true,
+          "defaultScope": {
+            "$ref": "#/$defs/CellScope"
+          },
+          "resultSchema": true
+        },
+        "required": [
+          "argumentSchema",
+          "resultSchema"
+        ],
+        "type": "object"
+      },
+      "UIRenderable": {
+        "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          }
+        },
+        "required": [
+          "$UI"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "#/$defs/JSXElement"
+      },
+      "compoundNodes": {
+        "items": {
+          "$ref": "#/$defs/CompoundNode"
+        },
+        "type": "array"
+      },
+      "edges": {
+        "items": {
+          "$ref": "#/$defs/GraphEdge"
+        },
+        "type": "array"
+      },
+      "getNeighbors": {
+        "properties": {
+          "extraParams": {
+            "properties": {
+              "edges": {
+                "items": {
+                  "$ref": "#/$defs/GraphEdge"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "edges"
+            ],
+            "type": "object"
+          },
+          "pattern": {
+            "$ref": "#/$defs/Pattern"
+          },
+          "useResultSchemaForObservation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pattern",
+          "extraParams"
+        ],
+        "type": "object"
+      },
+      "searchGraph": {
+        "properties": {
+          "extraParams": {
+            "properties": {
+              "compoundNodes": {
+                "items": {
+                  "$ref": "#/$defs/CompoundNode"
+                },
+                "type": "array"
+              },
+              "edges": {
+                "items": {
+                  "$ref": "#/$defs/GraphEdge"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "edges",
+              "compoundNodes"
+            ],
+            "type": "object"
+          },
+          "pattern": {
+            "$ref": "#/$defs/Pattern"
+          },
+          "useResultSchemaForObservation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pattern",
+          "extraParams"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "edges",
+      "compoundNodes",
+      "getNeighbors",
+      "searchGraph"
+    ],
+    "type": "object"
+  }
+}

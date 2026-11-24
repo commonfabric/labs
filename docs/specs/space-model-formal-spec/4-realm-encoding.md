@@ -46,8 +46,8 @@ most of a value passes through untouched and tagging is reserved for what
 genuinely needs it.
 
 Tagging is not the same question as what the transport can carry, and the two
-should not be conflated. A `FabricRegExp` is tagged here even though cloning
-carries a native `RegExp` perfectly well, because it is a class instance and
+should not be conflated. A `FabricBytes` is tagged here even though cloning
+carries a native `Uint8Array` perfectly well, because it is a class instance and
 reconstructing one is a codec's job under any format.
 
 ### 1.1 Transport Requirements
@@ -283,9 +283,9 @@ A value that a codec claims is encoded as a three-element array:
 [marker, tag, state]
 ```
 
-`tag` is the wire type tag (`3-json-encoding.md` Section 2 defines the
-`<Type>@<Version>` syntax, which is shared). `state` is the codec's encoded
-state — final for a terminal codec, and itself walked for a nonterminal one.
+`tag` is the wire type tag, of the syntax every interchange format shares
+(`1-fabric-values.md` Section 2.5). `state` is the codec's encoded state —
+final for a terminal codec, and itself walked for a nonterminal one.
 
 **A terminal state is opaque, and that bounds every other rule here.** The walk
 hands it to its codec without descending, so nothing inside one is traversed
@@ -293,8 +293,9 @@ and nothing inside one is validated except by the codec itself, reading the
 fields it knows (Section 7.1). The reserved-key rule of Section 3.2, the cycle
 rule of Section 4, and the refusals of Section 6 all describe values the walk
 reaches; none of them reaches into a terminal state. A `Hash@1` state carrying
-a `constructor` key or a reference back to itself therefore decodes, because
-its codec reads `tag` and `hash` and never looks.
+a `constructor` key or a reference back to itself is therefore not refused by
+the walk. Its codec refuses it instead, reading `tag` and `hash` and refusing a
+state holding any other field (Section 7.1).
 
 This is what terminality buys and what it costs. A codec that wants its state
 examined declares itself nonterminal, and then every rule here applies to that
@@ -316,9 +317,13 @@ form.
 | `FabricEpochDay` | `EpochDay@1` | `bigint` |
 | `FabricEpochNsec` | `EpochNsec@1` | `bigint` |
 | `FabricKeyPair` | `KeyPair@1` | `{ algorithm: string, publicKey: ArrayBuffer, privateKey: ArrayBuffer }`, or `{ publicKey: CryptoKey, privateKey: CryptoKey }` |
-| `FabricRegExp` | `RegExp@1` | `{ source, flags, flavor }` |
-| `FabricUnavailable` | `Unavailable@1` | `{ reason }`, or for reason `error` `{ reason, errorKind }` or `{ reason, errorKind, errorMessage }` |
+| `FabricUnavailable` | `Unavailable@1` | `{ reason }`, or for reason `error` `{ reason, errorKind }` or `{ reason, errorKind, message }` |
 | `symbol` | `Symbol@1` | `string` (the registry key) |
+
+The `tag` of a `Hash@1` state is the hash's algorithm tag, which is in the
+general tag syntax (`1-fabric-values.md` Section 1.4.9): an encoder does not
+write one outside it, and a decoder refuses such a state as malformed (Section
+7.1).
 
 Bytes travel as a bare `ArrayBuffer` rather than as a view onto one, that being
 what `postMessage()` can *transfer*: a caller assembling a transfer list finds
@@ -326,12 +331,12 @@ the transferable object in the tree rather than having to reach through a view
 and reason about its offset. Both byte-carrying types do this. A bare
 `Uint8Array` is therefore not a form this format emits.
 
-Four of these differ from their JSON counterparts in kind rather than in
+Three of these differ from their JSON counterparts in kind rather than in
 spelling, which is most of the reason this format exists, and they differ along
 two axes.
 
 `FabricBytes` carries bytes as bytes, where JSON must represent them as
-base64url text. `FabricRegExp` and `FabricUnavailable` are terminal here and
+base64url text. `FabricUnavailable` is terminal here and
 nonterminal under JSON — concrete proof that terminality belongs to the pair
 (class, format) rather than to the class. `FabricHash` differs on **both** axes
 at once: terminal here and nonterminal under JSON, and carrying its hash as a
@@ -430,7 +435,7 @@ mutable values. Which containers a caller sees returned by identity therefore
 varies with what needed decoding; whether any of them is mutable does not.
 
 An engine constructed with `mutable` as `true` (`1-fabric-values.md` Section
-2.9) freezes none of them instead, and copies a container that needed no
+2.10) freezes none of them instead, and copies a container that needed no
 decoding when it arrived frozen, that being the one way to hand it back
 mutable. A frozen container can arrive only from a decode in the realm that
 built the tree, since cloning produces none.
@@ -482,9 +487,9 @@ leniency:
   it is legitimate only as the state under a byte-carrying tag.
 - A key this runtime reserves, per Section 3.2, in a plain container it
   traverses.
-- A tag that is not syntactically a tag, per Section 9 of
-  [3-json-encoding.md](./3-json-encoding.md), whose tag syntax this format
-  shares.
+- A tag that is not syntactically a tag, per Section 2.5 of
+  [1-fabric-values.md](./1-fabric-values.md), whose tag syntax this format
+  shares with every other.
 - A cycle, per Section 4, among the values it traverses.
 
 A tag that is *syntactically* a tag but that no codec claims is not a refusal:
@@ -525,11 +530,11 @@ for.
 
 A codec **validates the state it is handed and rejects what it will not
 accept**, rather than coercing it: a `Bytes@1` whose state is a string, a
-`Hash@1` whose `tag` is not a string, a `Symbol@1` whose state is not a string
-— each is a malformation, settled against leniency like any other, and never a
-value built from whatever arrived. Such a state means the two ends disagree
-about the type, which is a version difference or a bug, and either way is
-something to report rather than to guess at.
+`Hash@1` whose `tag` is not a string in the general tag syntax, a `Symbol@1`
+whose state is not a string — each is a malformation, settled against leniency
+like any other, and never a value built from whatever arrived. Such a state
+means the two ends disagree about the type, which is a version difference or a
+bug, and either way is something to report rather than to guess at.
 
 This is a requirement rather than an observation. An implementation that
 coerced instead would satisfy every other claim in this document while
@@ -548,28 +553,28 @@ which arrive intact. Nothing here emits one, which is what rules them out --
 the assumption at the top of this section, and the one place it does load-
 bearing work.
 
-**A field of a codec's state that the codec does not read is ignored, not
-refused.** A state is matched by what it must carry, so a record arriving with
-more than that decodes as though the extra were absent. Two implementations
-would otherwise be free to disagree — one ignoring, one refusing — over data
-that cloning carries perfectly well and that a peer can send.
+**A state holding a field that its codec does not read is refused.** A codec
+reads the whole of a state it decodes, so a record arriving with more than that
+is one it did not write, and decoding it without the extra would build a value
+that re-encodes and hashes differently from what was sent. It is a malformation
+like any other, and settles against leniency into a `ProblematicValue` that
+keeps the state as it arrived. This agrees with the JSON format's "Decoding
+validation" note (Section 3 of [3-json-encoding.md](./3-json-encoding.md)). A
+codec whose state is open-ended by design reads every field it is handed, so
+the rule refuses nothing there: `Error@1` reads each field beyond its fixed
+ones as one of the error's own properties, and `Link@1`'s state is its payload
+whole.
 
 **An absent field is not the same as one present holding `undefined`.** Where a
-codec gives a field a default, the default applies to a field that is *absent*;
-a field that is present and not of the type the codec requires is a
-malformation, `undefined` included. The distinction is worth stating because
-this format carries `undefined` directly, so unlike under JSON a peer can send
-one on purpose — and defaulting it would silently answer a question the wire
-did ask.
+codec's state has an optional field, what its absence means applies to a field
+that is *absent*; a field that is present and not of the type the codec
+requires is a malformation, `undefined` included. The distinction is worth
+stating because this format carries `undefined` directly, so unlike under JSON
+a peer can send one on purpose — and reading it as absent would silently answer
+a question the wire did ask.
 
-`RegExp@1` is the codec this reaches. All three of its fields default: `flavor`
-to `es2025`, and `source` and `flags` to the empty string, so `{}` decodes to
-an empty `es2025` pattern. That is what lets a narrower encoder omit what it
-has nothing to say about. `{ source: undefined }` is refused, being a `source`
-that is present and not a string.
-
-`Unavailable@1` has the same distinction on its two optional fields. An absent
-`errorKind` is the state of a transient reason and an absent `errorMessage`
-that of an error with no stored message; `{ reason: "error", errorKind:
-undefined }` and `{ reason: "error", errorKind: "sync", errorMessage:
-undefined }` are refused, each being a field that is present and not a string.
+`Unavailable@1` is the codec this reaches, on its two optional fields. An absent
+`errorKind` is the state of a transient reason and an absent `message` that of
+an error with no stored message; `{ reason: "error", errorKind: undefined }`
+and `{ reason: "error", errorKind: "sync", message: undefined }` are refused,
+each being a field that is present and not a string.

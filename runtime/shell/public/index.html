@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/assets/cf.svg" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+    // Apply saved theme preference before first paint to prevent flash
+    try {
+      const t = localStorage.getItem("cf-theme-preference");
+      if (t === "light" || t === "dark") {
+        document.documentElement.setAttribute("data-theme", t);
+      }
+    } catch (e) {}
+    </script>
+    <title>Common Fabric</title>
+    <!-- cf-code-editor loads KaTeX by this name when it first draws math. -->
+    <script type="importmap">
+    { "imports": { "cf-katex-render": "/scripts/katex-render.js" } }
+    </script>
+    <link rel="stylesheet" href="/styles/index.css" />
+    <link rel="stylesheet" href="/styles/katex-fonts.css" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#f3f3f3" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Common Fabric" />
+    <link
+      rel="apple-touch-icon"
+      href="/assets/icons/cf-apple-touch-icon.png"
+    />
+  </head>
+  <body>
+    <x-root-view></x-root-view>
+    <script type="module" src="/scripts/index.js"></script>
+  </body>
+</html>

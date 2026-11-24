@@ -35,9 +35,10 @@ import {
   collectCoverageDebtMetricsFromCoverage,
   collectMeasuredSetDebt,
   type CoverageDebtMetric,
+  lcovKey,
 } from "./coverage-metrics.ts";
 import { addLcovReport, type LcovFileCoverage } from "./lcov.ts";
-import { collectSetReports } from "./coverage-gate.ts";
+import { collectSetReports, markedSets } from "./coverage-gate.ts";
 import { appendSummary } from "./step-summary.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 import { loadTopology } from "./test-topology.ts";
@@ -45,12 +46,8 @@ import {
   measuredSetDirectory,
   measuredSetName,
   measuredSets,
-} from "./test-selection/coverage.ts";
-import {
-  COMPILE_CACHE_STATE_FILE,
-  COVERAGE_FAILURE_MARKER,
-  measuredSetOfReport,
-} from "./ci-lane.ts";
+} from "./test-topology/coverage-gates.ts";
+import { COMPILE_CACHE_STATE_FILE } from "./ci-lane.ts";
 
 /** What the command line asked for. */
 export interface ReportOptions {
@@ -106,17 +103,21 @@ export interface LaneReports {
 }
 
 /**
- * Every LCOV report under a directory, and the record each lane that opened
- * the compile byte cache left of whether it found the cache restored.
+ * Every LCOV report under a directory, keyed by {@linkcode lcovKey} against
+ * `root`, and the record each lane that opened the compile byte cache left of
+ * whether it found the cache restored.
  */
-export async function collectReports(at: string): Promise<LaneReports> {
+export async function collectReports(
+  at: string,
+  root: string,
+): Promise<LaneReports> {
   const coverage = new Map<string, LcovFileCoverage>();
   const cacheStates = new Set<string>();
   try {
     for await (const entry of walk(at, { includeDirs: false })) {
       if (path.extname(entry.path) === ".lcov") {
         addLcovReport(coverage, await Deno.readTextFile(entry.path), {
-          mapPath: path.normalize,
+          mapPath: (sourcePath) => lcovKey(root, sourcePath),
         });
       } else if (path.basename(entry.path) === COMPILE_CACHE_STATE_FILE) {
         cacheStates.add((await Deno.readTextFile(entry.path)).trim());
@@ -236,34 +237,6 @@ export async function measuredSetFigures(
   return figures;
 }
 
-/**
- * The measured sets some lane marked as measured through a failing test,
- * by the directory a lane writes a set's report under.
- *
- * Walked for rather than looked for beside a report, because a lane
- * writes the marker whether or not it also wrote a report there: a lane
- * that ran a set's unit and saw it fail may have collected no profile
- * for it, and the set's baseline still must not be published from
- * another lane's report.
- */
-export async function markedSets(reportsDir: string): Promise<Set<string>> {
-  const marked = new Set<string>();
-  try {
-    for await (
-      const entry of walk(reportsDir, { includeDirs: false, exts: [".txt"] })
-    ) {
-      if (path.basename(entry.path) !== COVERAGE_FAILURE_MARKER) continue;
-      const set = measuredSetOfReport(entry.path);
-      if (set !== undefined) marked.add(set);
-    }
-  } catch (error) {
-    // Nothing was downloaded, which the caller reads the same way
-    // `collectReports` does.
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
-  return marked;
-}
-
 /** Says what this run measured, in the job summary. */
 export function summarize(figures: readonly CoverageDebtMetric[]): string {
   const workspace = figures.find((figure) =>
@@ -289,7 +262,7 @@ export async function report(
   options: ReportOptions,
   env: Environment,
 ): Promise<string> {
-  const reports = await collectReports(reportsDirectory(options));
+  const reports = await collectReports(reportsDirectory(options), options.root);
   const figures = [
     ...await repositoryFigures(options, reports),
     ...await measuredSetFigures(options),

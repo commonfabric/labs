@@ -20,16 +20,20 @@ export function sampleManifest(fields: Partial<Manifest> = {}): Manifest {
 }
 
 /**
- * A new repository in a temporary directory whose one commit was made at
- * `committed`, for a case about which manifest a commit resolves. The
- * caller removes the directory. Throws where git refuses a step, having
- * removed the directory, since a repository with no commit would read as
- * one whose date cannot be read.
+ * A new repository in a temporary directory, made under `parent` where one
+ * is given, whose one commit was made at `committed`, for a case about which
+ * manifest a commit resolves. The caller removes the directory. Throws where
+ * git refuses a step, having removed the directory, since a repository with
+ * no commit would read as one whose date cannot be read.
  */
 export async function repositoryCommittedAt(
   committed: string,
+  parent?: string,
 ): Promise<string> {
-  const root = await Deno.makeTempDir({ prefix: "committed-at-" });
+  const root = await Deno.makeTempDir({
+    prefix: "committed-at-",
+    ...(parent === undefined ? {} : { dir: parent }),
+  });
   const git = async (...args: string[]) => {
     const result = await new Deno.Command("git", {
       args,

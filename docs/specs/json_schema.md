@@ -19,7 +19,7 @@ from standard implementations in several ways.
 
 We add several custom fields to the schema that are meaningful to our system.
 The authoritative field inventory is the `JSONSchema` type in
-`packages/api/index.ts`; this section summarizes, it does not define.
+`base/api/index.ts`; this section summarizes, it does not define.
 
 - **`asCell`**: an **array** of wrapper entries describing how the value is
   held rather than stored inline. Entries name the wrapper kind — for example
@@ -27,7 +27,7 @@ The authoritative field inventory is the `JSONSchema` type in
   (a stream interface for connecting events to listeners), or
   `asCell: ["opaque"]` (pass-through-only). Nesting composes:
   `Cell<Cell<T>>` becomes `asCell: ["cell", "cell"]`. See `AsCellType` in
-  `packages/api/index.ts` for the entry shape, and
+  `base/api/index.ts` for the entry shape, and
   [Streams](#streams-are-declarations-not-views) for the one entry that is not
   a view onto a value. (A separate boolean-style `asStream` field existed
   historically; it is no longer part of the type and is not emitted — a couple
@@ -61,7 +61,7 @@ stream and a readable value at the same place.
 
 The `ifc` extension attaches Information Flow Control metadata to schema
 nodes. The key set is defined by the `ifc` field of the `JSONSchema` type in
-`packages/api/index.ts` — as of this writing: `confidentiality`, `integrity`,
+`base/api/index.ts` — as of this writing: `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
 `writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
 `observes`, and `uiContract`. The compile-time side (CFC authoring aliases and
@@ -236,9 +236,18 @@ directly to JSON Schema.
 
 ### Handling of `undefined`
 
-- In objects: Properties with `undefined` values are removed entirely (both key
-  and value)
-- In arrays: `undefined` values are replaced with `null`
+`undefined` is a value (`space-model-formal-spec/1-fabric-values.md`). An
+object property that holds `undefined` is present, which is not the same as
+absent, and an array element that holds `undefined` keeps it.
+
+- An optional property, `x?: T`, is one that may be absent. It stays out of
+  `required`, and its schema is `T`'s: the `?` adds no `"undefined"`
+  alternative. Patterns are type-checked with `exactOptionalPropertyTypes`,
+  which reads `?` the same way, so writing `undefined` into a declared `x?: T`
+  is an error. To leave the property out, leave the key out.
+- An `undefined` the type names, as in `x?: T | undefined` or
+  `x: T | undefined`, is a value the property may hold, and its schema carries
+  `{ "type": "undefined" }` for it.
 
 ### Handling of `void`
 
@@ -260,9 +269,17 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   gets it.
 - `{ "type": "undefined" }` — preserved as an explicit union member (e.g.
   `string | undefined`) so optionality survives schema round-trips.
+- `{ "type": "integer" }` accepts a `bigint` as well as a whole `number`: a
+  `bigint` is an integer, and `"integer"` is a subtype of `"number"`, so a
+  `number` schema accepts one too. The schema generator types a TypeScript
+  `bigint` as `integer`, and a bigint literal type as the number of its
+  value, so a whole-number `enum` or `const` member matches the bigint of
+  that value; no other member matches across the two types. A
+  `FabricPrimitive` wrapping one, such as a `FabricEpochNsec`, is its own type
+  below, not an integer.
 - `FabricPrimitive` types — `"FabricBytes"`, `"FabricDurationDay"`,
   `"FabricDurationNsec"`, `"FabricEpochDay"`, `"FabricEpochNsec"`,
-  `"FabricHash"`, `"FabricKeyPair"`, `"FabricRegExp"`, `"FabricUnavailable"` —
+  `"FabricHash"`, `"FabricKeyPair"`, `"FabricUnavailable"` —
   each naming a
   concrete `FabricPrimitive` class from the data-model. A value matches by
   prototype (`instanceof`), not by structure: these values are opaque leaves
@@ -276,21 +293,22 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   `required: ["length"]` but not `required: ["x"]`) — mirroring the
   TypeScript structural rule that a `FabricBytes` is assignable to
   `{length: number}`. The nominal brand key (`FABRIC_SPECIAL_OBJECT_BRAND` in
-  `packages/runner/src/fabric-special-object-brand.ts`), which schemas from
+  `runtime/runner/src/fabric-special-object-brand.ts`), which schemas from
   pre-vocabulary compilations name in `required` (current generator emissions
   omit it everywhere), has no runtime existence and counts as present on any
   `FabricSpecialObject`. Property sub-schemas are
   still not walked against a primitive: presence is checked, shapes are not, so
-  `{ "type": "object", "properties": { "source": { "type": "number" } } }`
-  matches a `FabricRegExp` even though its `source` is a string. Schemas
+  `{ "type": "object", "properties": { "length": { "type": "string" } } }`
+  matches a `FabricBytes` even though its `length` is a number. Schemas
   generated from the real class types cannot express such a mismatch; only
   hand-written schemas can, and they get no shape enforcement on opaque
   leaves. Each name is the one its class's instances report as `.schemaType`,
   and no list of them is written out: the type `FabricPrimitiveSchemaType`
-  (`packages/data-model/src/api.ts`, which `@commonfabric/api` re-exports) is
-  derived from the class declarations there, and the runtime list
+  (`base/data-model/src/api.ts`, which `@commonfabric/api`
+  re-exports) is derived from the class declarations there, and the runtime list
   `FABRIC_PRIMITIVE_SCHEMA_TYPES`
-  (`packages/data-model/src/fabric-primitives/impl.ts`) from the classes.
+  (`base/data-model/src/fabric-primitives/impl.ts`) from the
+  classes.
 
 A generated schema places each named type in its root `$defs` and refers to
 it by `#/$defs/<name>`. The full TypeScript→schema mapping is specified in
@@ -543,4 +561,13 @@ what the cursor declares about its type decides how:
 - An `allOf` is not read a child out of: a conjunction beside no `type`
   narrows to `false`. Traversal evaluates a conjunction whole, merging the
   keywords beside it into each part, which is where a property only a part
-  declares is reached.
+  declares is reached. A conjunction beside a declared `type` narrows through
+  the keywords beside it alone, and its parts are not consulted: under
+  `{ "type": "object", "properties": { "y": … }, "allOf": [{ "type": "object", "properties": { "x": { "type": "string" } } }] }`,
+  `x` narrows to `true`, where a read of the parent, which evaluates the part,
+  does not return an `x` holding a number. Both are limits of narrowing rather
+  than answers about the conjunction, and a caller meets each as the answer it
+  looks like: `Cell.key()` under the first carries `false` and selects a
+  property the parent reads, and under the second carries the wildcard and
+  reads a property the parent does not
+  ([The read entry](link-schema-precedence.md#the-read-entry)).

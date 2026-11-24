@@ -139,7 +139,7 @@ The three largest groups:
   starting point, since a plain unit test can drive them directly.
 - **`gideon-tests/`, 3,269 lines, untouched.** Twenty-five regression fixtures,
   each pinning down one runtime behavior. They are tiered "fixture — never
-  imitate" in [index.md](../../../../packages/patterns/index.md), and several
+  imitate" in [index.md](../../../../patterns/index.md), and several
   are written to fail. Whether they should be covered at all is a question
   worth answering before covering them.
 - **The partly-run large patterns.** `record/extraction/extractor-module.tsx`

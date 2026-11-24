@@ -1,0 +1,761 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ClassifiableInput": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "receivedAt",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "ClassificationResult": {
+        "properties": {
+          "classification": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "decidedBy": {
+            "enum": [
+              "rules",
+              "llm",
+              "user"
+            ]
+          },
+          "inputId": {
+            "type": "string"
+          },
+          "matchedRules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reasoning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "inputId",
+          "classification",
+          "confidence",
+          "reasoning",
+          "decidedBy",
+          "matchedRules"
+        ],
+        "type": "object"
+      },
+      "ClassificationRule": {
+        "properties": {
+          "caseInsensitive": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "evaluationCount": {
+            "type": "number"
+          },
+          "falseNegatives": {
+            "type": "number"
+          },
+          "falsePositives": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isShared": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "number"
+          },
+          "predicts": {
+            "type": "boolean"
+          },
+          "recall": {
+            "type": "number"
+          },
+          "sharedFrom": {
+            "type": "string"
+          },
+          "targetField": {
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/$defs/Tier"
+          },
+          "trueNegatives": {
+            "type": "number"
+          },
+          "truePositives": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "targetField",
+          "pattern",
+          "caseInsensitive",
+          "predicts",
+          "precision",
+          "recall",
+          "tier",
+          "evaluationCount",
+          "truePositives",
+          "falsePositives",
+          "trueNegatives",
+          "falseNegatives",
+          "createdAt",
+          "isShared"
+        ],
+        "type": "object"
+      },
+      "ClassifierConfig": {
+        "properties": {
+          "autoClassifyThreshold": {
+            "type": "number"
+          },
+          "enableLLMFallback": {
+            "type": "boolean"
+          },
+          "harmAsymmetry": {
+            "enum": [
+              "fp",
+              "fn",
+              "equal"
+            ]
+          },
+          "minExamplesForRules": {
+            "type": "number"
+          },
+          "prefillThreshold": {
+            "type": "number"
+          },
+          "question": {
+            "type": "string"
+          },
+          "suggestionThreshold": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "question",
+          "minExamplesForRules",
+          "autoClassifyThreshold",
+          "prefillThreshold",
+          "suggestionThreshold",
+          "harmAsymmetry",
+          "enableLLMFallback"
+        ],
+        "type": "object"
+      },
+      "LabeledExample": {
+        "properties": {
+          "confidence": {
+            "type": "number"
+          },
+          "decidedBy": {
+            "enum": [
+              "user",
+              "auto",
+              "suggestion-accepted"
+            ]
+          },
+          "input": {
+            "$ref": "#/$defs/ClassifiableInput"
+          },
+          "interestingReason": {
+            "type": "string"
+          },
+          "isInteresting": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "boolean"
+          },
+          "labeledAt": {
+            "type": "number"
+          },
+          "originalPrediction": {
+            "type": "boolean"
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "wasCorrection": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "input",
+          "label",
+          "decidedBy",
+          "reasoning",
+          "confidence",
+          "labeledAt",
+          "wasCorrection",
+          "isInteresting"
+        ],
+        "type": "object"
+      },
+      "PendingClassification": {
+        "properties": {
+          "input": {
+            "$ref": "#/$defs/ClassifiableInput"
+          },
+          "result": {
+            "$ref": "#/$defs/ClassificationResult"
+          }
+        },
+        "required": [
+          "input",
+          "result"
+        ],
+        "type": "object"
+      },
+      "Tier": {
+        "enum": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      }
+    },
+    "properties": {
+      "config": {
+        "$ref": "#/$defs/ClassifierConfig",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "autoClassifyThreshold": 0.85,
+          "enableLLMFallback": true,
+          "harmAsymmetry": "equal",
+          "minExamplesForRules": 5,
+          "prefillThreshold": 0.7,
+          "question": "",
+          "suggestionThreshold": 0.5
+        }
+      },
+      "currentItem": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ClassifiableInput"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null
+      },
+      "examples": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/LabeledExample"
+        },
+        "type": "array"
+      },
+      "pendingClassifications": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/PendingClassification"
+        },
+        "type": "array"
+      },
+      "rules": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/ClassificationRule"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "config",
+      "examples",
+      "rules",
+      "pendingClassifications",
+      "currentItem"
+    ],
+    "type": "object"
+  },
+  "pattern": "self-improving-classifier.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ClassifiableInput": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "receivedAt",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "ClassificationResult": {
+        "properties": {
+          "classification": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "decidedBy": {
+            "enum": [
+              "rules",
+              "llm",
+              "user"
+            ]
+          },
+          "inputId": {
+            "type": "string"
+          },
+          "matchedRules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reasoning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "inputId",
+          "classification",
+          "confidence",
+          "reasoning",
+          "decidedBy",
+          "matchedRules"
+        ],
+        "type": "object"
+      },
+      "ClassificationRule": {
+        "properties": {
+          "caseInsensitive": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "evaluationCount": {
+            "type": "number"
+          },
+          "falseNegatives": {
+            "type": "number"
+          },
+          "falsePositives": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isShared": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "number"
+          },
+          "predicts": {
+            "type": "boolean"
+          },
+          "recall": {
+            "type": "number"
+          },
+          "sharedFrom": {
+            "type": "string"
+          },
+          "targetField": {
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/$defs/Tier"
+          },
+          "trueNegatives": {
+            "type": "number"
+          },
+          "truePositives": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "targetField",
+          "pattern",
+          "caseInsensitive",
+          "predicts",
+          "precision",
+          "recall",
+          "tier",
+          "evaluationCount",
+          "truePositives",
+          "falsePositives",
+          "trueNegatives",
+          "falseNegatives",
+          "createdAt",
+          "isShared"
+        ],
+        "type": "object"
+      },
+      "ClassifierConfig": {
+        "properties": {
+          "autoClassifyThreshold": {
+            "type": "number"
+          },
+          "enableLLMFallback": {
+            "type": "boolean"
+          },
+          "harmAsymmetry": {
+            "enum": [
+              "fp",
+              "fn",
+              "equal"
+            ]
+          },
+          "minExamplesForRules": {
+            "type": "number"
+          },
+          "prefillThreshold": {
+            "type": "number"
+          },
+          "question": {
+            "type": "string"
+          },
+          "suggestionThreshold": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "question",
+          "minExamplesForRules",
+          "autoClassifyThreshold",
+          "prefillThreshold",
+          "suggestionThreshold",
+          "harmAsymmetry",
+          "enableLLMFallback"
+        ],
+        "type": "object"
+      },
+      "LabeledExample": {
+        "properties": {
+          "confidence": {
+            "type": "number"
+          },
+          "decidedBy": {
+            "enum": [
+              "user",
+              "auto",
+              "suggestion-accepted"
+            ]
+          },
+          "input": {
+            "$ref": "#/$defs/ClassifiableInput"
+          },
+          "interestingReason": {
+            "type": "string"
+          },
+          "isInteresting": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "boolean"
+          },
+          "labeledAt": {
+            "type": "number"
+          },
+          "originalPrediction": {
+            "type": "boolean"
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "wasCorrection": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "input",
+          "label",
+          "decidedBy",
+          "reasoning",
+          "confidence",
+          "labeledAt",
+          "wasCorrection",
+          "isInteresting"
+        ],
+        "type": "object"
+      },
+      "PendingClassification": {
+        "properties": {
+          "input": {
+            "$ref": "#/$defs/ClassifiableInput"
+          },
+          "result": {
+            "$ref": "#/$defs/ClassificationResult"
+          }
+        },
+        "required": [
+          "input",
+          "result"
+        ],
+        "type": "object"
+      },
+      "RuleSuggestion": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "targetField": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "targetField",
+          "pattern",
+          "predicts",
+          "reasoning"
+        ],
+        "type": "object"
+      },
+      "Tier": {
+        "enum": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      }
+    },
+    "description": "Self-improving binary classifier with LLM + regex rules. #classifier #learning",
+    "properties": {
+      "addRule": {
+        "$ref": "#/$defs/RuleSuggestion",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "config": {
+        "$ref": "#/$defs/ClassifierConfig"
+      },
+      "confirmClassification": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "inputId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "inputId"
+        ],
+        "type": "object"
+      },
+      "correctClassification": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "correctLabel": {
+            "type": "boolean"
+          },
+          "inputId": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "inputId",
+          "correctLabel"
+        ],
+        "type": "object"
+      },
+      "dismissClassification": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "inputId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "inputId"
+        ],
+        "type": "object"
+      },
+      "examples": {
+        "items": {
+          "$ref": "#/$defs/LabeledExample"
+        },
+        "type": "array"
+      },
+      "pendingClassifications": {
+        "items": {
+          "$ref": "#/$defs/PendingClassification"
+        },
+        "type": "array"
+      },
+      "removeRule": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "ruleId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ruleId"
+        ],
+        "type": "object"
+      },
+      "rules": {
+        "items": {
+          "$ref": "#/$defs/ClassificationRule"
+        },
+        "type": "array"
+      },
+      "stats": {
+        "properties": {
+          "autoClassified": {
+            "type": "number"
+          },
+          "correctionRate": {
+            "type": "number"
+          },
+          "negativeExamples": {
+            "type": "number"
+          },
+          "positiveExamples": {
+            "type": "number"
+          },
+          "totalExamples": {
+            "type": "number"
+          },
+          "totalRules": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "totalExamples",
+          "positiveExamples",
+          "negativeExamples",
+          "autoClassified",
+          "correctionRate",
+          "totalRules"
+        ],
+        "type": "object"
+      },
+      "submitItem": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "config",
+      "examples",
+      "rules",
+      "pendingClassifications",
+      "stats",
+      "submitItem",
+      "confirmClassification",
+      "correctClassification",
+      "dismissClassification",
+      "addRule",
+      "removeRule"
+    ],
+    "tags": [
+      "classifier",
+      "learning"
+    ],
+    "type": "object"
+  }
+}

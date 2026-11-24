@@ -1,0 +1,95 @@
+[
+  {
+    "role": "user",
+    "content": "Input cells for this run:\n- cfh:a:jvhdg — the operator's notes"
+  },
+  {
+    "role": "user",
+    "content": "Read the notes and summarize them."
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "toolCalls": [
+      {
+        "id": "call-attested",
+        "type": "function",
+        "function": {
+          "name": "bash",
+          "arguments": "{\"command\":\"echo attested\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "toolCallId": "call-attested",
+    "toolName": "bash",
+    "content": "{\"outputId\":\"cfc-audit-fixture:bash:1\",\"stdout\":\"attested\\n\",\"stderr\":\"\",\"exitCode\":0,\"cwd\":\"/workspace\",\"cfc\":{\"version\":1,\"stdout\":{\"channel\":\"stdout\",\"policy\":\"observed\",\"label\":{\"confidentiality\":[\"fixture-source\"]}},\"stderr\":{\"channel\":\"stderr\",\"policy\":\"observed\",\"label\":{}},\"exitCode\":{\"policy\":\"observed\",\"label\":{},\"value\":0}}}",
+    "resultRef": {
+      "type": "cf-harness.tool-result-ref",
+      "outputId": "cfc-audit-fixture:bash:1",
+      "toolId": "bash",
+      "runId": "cfc-audit-fixture",
+      "artifactPath": "/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture/tool-outputs/cfc-audit-fixture_bash_1-bash.json"
+    }
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "toolCalls": [
+      {
+        "id": "call-unattested",
+        "type": "function",
+        "function": {
+          "name": "bash",
+          "arguments": "{\"command\":\"echo cfh:a:jvhdg\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "toolCallId": "call-unattested",
+    "toolName": "bash",
+    "content": "{\"type\":\"cf-harness.observation-denied\",\"reason\":\"not-observable\",\"detail\":\"bash output did not include trusted CFC mediation metadata\",\"handle\":{\"type\":\"cf-harness.opaque-handle\",\"handleId\":\"cfc-audit-fixture:bash:2:output\",\"scope\":\"run\",\"createdAt\":\"2026-09-02T02:06:50.433Z\"}}",
+    "resultRef": {
+      "type": "cf-harness.tool-result-ref",
+      "outputId": "cfc-audit-fixture:bash:2",
+      "toolId": "bash",
+      "runId": "cfc-audit-fixture",
+      "artifactPath": "/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture/tool-outputs/cfc-audit-fixture_bash_2-bash.json"
+    }
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "toolCalls": [
+      {
+        "id": "call-delegate",
+        "type": "function",
+        "function": {
+          "name": "delegate_task",
+          "arguments": "{\"goal\":\"Summarize cfh:a:jvhdg for the operator.\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "toolCallId": "call-delegate",
+    "toolName": "delegate_task",
+    "content": "{\"type\":\"cf-harness.delegate-task-output\",\"outputId\":\"cfc-audit-fixture:delegate_task:3\",\"subagent\":{\"type\":\"cf-harness.subagent-result\",\"childRunId\":\"cfc-audit-fixture.subagent.1\",\"status\":\"completed\",\"summary\":\"The child summarized the notes.\",\"model\":\"fixture-model\",\"modelTurns\":1,\"runState\":{\"status\":\"completed\",\"cfcEnforcementMode\":\"enforce-explicit\",\"createdAt\":\"2026-09-02T02:06:50.437Z\",\"updatedAt\":\"2026-09-02T02:06:50.450Z\",\"endedAt\":\"2026-09-02T02:06:50.442Z\",\"artifactRoot\":\"/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture.subagent.1\",\"transcriptPath\":\"/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture.subagent.1/transcript.json\",\"runReportPath\":\"/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture.subagent.1/run-report.json\",\"terminalReason\":\"assistant_completed\",\"policyEventCounts\":{\"total\":0,\"warnings\":0,\"denied\":0},\"failureCount\":0},\"manifest\":{\"type\":\"cf-harness.subagent-run-manifest\",\"version\":1,\"parentRunId\":\"cfc-audit-fixture\",\"parentToolCallId\":\"call-delegate\",\"childRunId\":\"cfc-audit-fixture.subagent.1\",\"profile\":\"default\",\"depth\":1,\"cfcEnforcementMode\":\"enforce-explicit\",\"modelProvider\":\"openai-compatible-gateway\",\"modelAuthSource\":\"api-key\",\"model\":\"fixture-model\",\"modelSource\":\"parent\",\"allowedToolIds\":[\"bash\",\"read_file\",\"view_image\",\"edit_file\",\"write_file\"],\"hostToolIds\":[],\"maxModelTurns\":8,\"returnPolicy\":{\"type\":\"cf-harness.subagent-return-policy\",\"channel\":\"summary-and-sanitized-state\",\"includeSummary\":true,\"includeSanitizedRunState\":true,\"includeManifest\":true,\"includeTranscript\":false,\"includeRawFailureRecords\":false},\"createdAt\":\"2026-09-02T02:06:50.437Z\",\"inputSummary\":{\"type\":\"cf-harness.subagent-input-summary\",\"goalBytes\":39,\"goalDigest\":\"sha256:34598b1728f61c0ec1dcc9c5d59f3f261f646d5e68375342b1bcd5120b49df96\"}}}}",
+    "resultRef": {
+      "type": "cf-harness.tool-result-ref",
+      "outputId": "cfc-audit-fixture:delegate_task:3",
+      "toolId": "delegate_task",
+      "runId": "cfc-audit-fixture",
+      "artifactPath": "/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture/tool-outputs/cfc-audit-fixture_delegate_task_3-delegate_task.json"
+    }
+  },
+  {
+    "role": "assistant",
+    "content": "Done."
+  }
+]

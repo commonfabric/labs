@@ -1,0 +1,27 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "url": {
+        "default": "/api/patterns/index.md",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  },
+  "pattern": "pattern-index.tsx",
+  "resultSchema": {
+    "description": "A URL to a #patternIndex",
+    "properties": {
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  }
+}

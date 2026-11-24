@@ -1,0 +1,112 @@
+import { isPlainObject } from "@commonfabric/js-values/types";
+import { ACL, ACLUser, ANYONE, Capability, DID, DIDKey } from "./interface.ts";
+import { isDID } from "@commonfabric/identity/did";
+
+export type { ACL, ACLUser, ANYONE, Capability, DID, DIDKey };
+
+export const ANYONE_USER: ANYONE = "*";
+
+/**
+ * Entity id of a space's ACL document. The id used to be hand-built as
+ * `of:${space}` independently by the memory server, the runner's storage
+ * manager, `ACLManager`, the CFC space-membership reader and the write
+ * chokepoint; all of those now call this. Tests still spell the id out
+ * literally on purpose — a test that derived the id from the same helper the
+ * code under test uses would agree with a wrong helper.
+ *
+ * The document has a non-standard write contract — see INV-12 in
+ * `docs/specs/memory-v2/09-invariants.md`: a mutation must be an ACL-only
+ * commit carrying a single whole-document `set`. Value-surface writes are
+ * refused client-side at the runner's write chokepoint.
+ */
+export const aclDocId = (space: string): string => `of:${space}`;
+
+export function isACLUser(value: unknown): value is ACLUser {
+  return value === ANYONE_USER || isDID(value);
+}
+
+export function isCapability(value: unknown): value is Capability {
+  return value === "READ" || value === "WRITE" || value === "OWNER";
+}
+
+/**
+ * The value that replaces a deleted space's access list, naming the principal
+ * that deleted it, and holding nothing else (INV-15 in
+ * `docs/specs/memory-v2/09-invariants.md`).
+ */
+export type DeletionTombstone = { deleted: { by: DID } };
+
+/**
+ * Whether `value` is a deletion tombstone: `{ deleted: { by } }`, with `by` a
+ * DID, and no other field at either level. Anything else, a tombstone with an
+ * extra field included, is not one.
+ */
+export function isDeletionTombstone(
+  value: unknown,
+): value is DeletionTombstone {
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== "deleted") return false;
+  const deleted = value.deleted;
+  if (!isPlainObject(deleted)) return false;
+  const inner = Object.keys(deleted);
+  return inner.length === 1 && inner[0] === "by" && isDID(deleted.by);
+}
+
+export function isACL(value: unknown): value is ACL {
+  if (!isPlainObject(value)) return false;
+  for (const [did, cap] of Object.entries(value)) {
+    if (!isACLUser(did)) return false;
+    if (!isCapability(cap)) return false;
+  }
+  return true;
+}
+
+/** An enforceable ACL must retain an OWNER tied to a concrete DID. A wildcard
+ *  OWNER may coexist with one, but cannot by itself administer the ACL. */
+export function hasConcreteOwner(acl: ACL): boolean {
+  return Object.entries(acl).some(([principal, capability]) =>
+    principal !== ANYONE_USER && capability === "OWNER"
+  );
+}
+
+/**
+ * The principal that owns `space` under `acl`: the space itself where the
+ * list names it `OWNER`, a self-owned space such as a home; else the first of
+ * its concrete `OWNER` principals in DID order; `undefined` where the list
+ * names none.
+ */
+export function aclOwner(acl: ACL, space: string): string | undefined {
+  const byPrincipal = acl as Record<string, Capability | undefined>;
+  if (byPrincipal[space] === "OWNER") return space;
+  return Object.entries(byPrincipal)
+    .filter(([principal, capability]) =>
+      principal !== ANYONE_USER && capability === "OWNER"
+    )
+    .map(([principal]) => principal)
+    .sort()[0];
+}
+
+/** Whether a stored ACL document is exactly `expected`: same principals,
+ *  same capabilities, nothing more. Key order is not part of the contract. */
+export function sameAcl(stored: unknown, expected: ACL): boolean {
+  if (!isPlainObject(stored)) return false;
+  const actual = stored as Record<string, unknown>;
+  const expectedKeys = Object.keys(expected);
+  return Object.keys(actual).length === expectedKeys.length &&
+    expectedKeys.every((key) => actual[key] === expected[key as ACLUser]);
+}
+
+const CapabilityMap: Record<Capability, number> = {
+  READ: 0,
+  WRITE: 1,
+  OWNER: 2,
+};
+
+export function isCapable(
+  capability: Capability,
+  requirement: Capability,
+): boolean {
+  return CapabilityMap[capability] >=
+    CapabilityMap[requirement];
+}

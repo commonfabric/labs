@@ -1,0 +1,564 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "IframeOutputData": {
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Color of the notes this user places; `null` selects one from the user."
+          },
+          "mutedRingIds": {
+            "description": "Identifiers of the rings this user has silenced.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "volume": {
+            "description": "Playback volume from 0 to 1.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "color",
+          "volume",
+          "mutedRingIds"
+        ],
+        "type": "object"
+      },
+      "RingLoopsSetup": {
+        "properties": {
+          "rings": {
+            "description": "Rings from the innermost outward.",
+            "items": {
+              "$ref": "#/$defs/RingSpec"
+            },
+            "type": "array"
+          },
+          "rootMidi": {
+            "description": "MIDI note number of the lowest lane of an untransposed ring.",
+            "type": "number"
+          },
+          "scale": {
+            "description": "Semitones each lane sits above the root; its length is the lane count.",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "Heading shown above the controls.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "rings",
+          "rootMidi",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "RingSpec": {
+        "properties": {
+          "beats": {
+            "description": "Whole beats the ring's hand takes to complete one turn.",
+            "type": "number"
+          },
+          "id": {
+            "description": "Stable identifier that placed notes name their ring by.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Name shown beside the ring's mute control.",
+            "type": "string"
+          },
+          "transpose": {
+            "description": "Semitones added to the root for this ring's lanes; drums ignore it.",
+            "type": "number"
+          },
+          "voice": {
+            "$ref": "#/$defs/RingVoice",
+            "description": "Instrument the ring's notes sound on."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "voice",
+          "beats",
+          "transpose"
+        ],
+        "type": "object"
+      },
+      "RingVoice": {
+        "enum": [
+          "drums",
+          "bass",
+          "pluck",
+          "bell"
+        ]
+      }
+    },
+    "description": "What a piece of Ring Loops is instantiated with.",
+    "properties": {
+      "input": {
+        "$ref": "#/$defs/RingLoopsSetup",
+        "default": {
+          "rings": [
+            {
+              "beats": 4,
+              "id": "drums",
+              "label": "Drums",
+              "transpose": 0,
+              "voice": "drums"
+            },
+            {
+              "beats": 5,
+              "id": "bells",
+              "label": "Bells",
+              "transpose": 12,
+              "voice": "bell"
+            },
+            {
+              "beats": 6,
+              "id": "bass",
+              "label": "Bass",
+              "transpose": -24,
+              "voice": "bass"
+            },
+            {
+              "beats": 8,
+              "id": "pluck",
+              "label": "Pluck",
+              "transpose": 0,
+              "voice": "pluck"
+            }
+          ],
+          "rootMidi": 57,
+          "scale": [
+            0,
+            3,
+            5,
+            7,
+            10
+          ],
+          "title": "Ring Loops"
+        },
+        "description": "The rings and the scale. Left out, four rings in A minor pentatonic."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": {
+          "color": null,
+          "mutedRingIds": [],
+          "volume": 0.7
+        },
+        "description": "The caller's own color, volume, and muted rings."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "iframe-ring-loops/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddNoteEvent": {
+        "properties": {
+          "agentName": {
+            "description": "Name of the agent placing the notes, shown as their author. Left out, the\nnotes carry the caller's profile name.",
+            "type": "string"
+          },
+          "color": {
+            "description": "One of the eight note colors, as the hex string `output.color` holds.\nLeft out, a color is picked from the author's name.",
+            "type": "string"
+          },
+          "lane": {
+            "description": "Lane within the ring, from 0; `rings` lists what each lane plays.",
+            "type": "number"
+          },
+          "ring": {
+            "description": "Id of the ring, as `rings` lists it.",
+            "type": "string"
+          },
+          "step": {
+            "description": "Step along the ring, from 0; a step is a sixteenth note.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ring",
+          "step",
+          "lane"
+        ],
+        "type": "object"
+      },
+      "AddNotesEvent": {
+        "properties": {
+          "agentName": {
+            "description": "Name of the agent placing the notes, shown as their author. Left out, the\nnotes carry the caller's profile name.",
+            "type": "string"
+          },
+          "color": {
+            "description": "One of the eight note colors, as the hex string `output.color` holds.\nLeft out, a color is picked from the author's name.",
+            "type": "string"
+          },
+          "notes": {
+            "description": "The cells to place notes in, each by ring id, step, and lane.",
+            "items": {
+              "$ref": "#/$defs/NoteSpec"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "notes"
+        ],
+        "type": "object"
+      },
+      "ClearNotesEvent": {
+        "properties": {
+          "ring": {
+            "description": "Id of the one ring to clear. Left out, every ring is cleared.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Color of the notes this user places; `null` selects one from the user."
+          },
+          "mutedRingIds": {
+            "description": "Identifiers of the rings this user has silenced.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "volume": {
+            "description": "Playback volume from 0 to 1.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "color",
+          "volume",
+          "mutedRingIds"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "notes": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PlacedNote"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Notes by cell key; `null` marks a cell whose note was removed.",
+            "properties": {},
+            "type": "object"
+          },
+          "tempoBpm": {
+            "description": "Tempo every browser plays at, in beats per minute.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "notes",
+          "tempoBpm"
+        ],
+        "type": "object"
+      },
+      "NoteSpec": {
+        "properties": {
+          "lane": {
+            "description": "Lane within the ring, from 0 at its inner edge; picks what plays.",
+            "type": "number"
+          },
+          "ring": {
+            "description": "Identifier of the ring, such as `drums`.",
+            "type": "string"
+          },
+          "step": {
+            "description": "Step along the ring, from 0 at the top; a step is a sixteenth note.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ring",
+          "step",
+          "lane"
+        ],
+        "type": "object"
+      },
+      "NoteView": {
+        "properties": {
+          "by": {
+            "description": "Name of whoever placed the note.",
+            "type": "string"
+          },
+          "lane": {
+            "description": "Lane within the ring, from 0 at its inner edge.",
+            "type": "number"
+          },
+          "plays": {
+            "description": "What the note plays: a drum sound, or a note name such as `A3`.",
+            "type": "string"
+          },
+          "step": {
+            "description": "Step along the ring, from 0 at the top; a step is a sixteenth note.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "step",
+          "lane",
+          "plays",
+          "by"
+        ],
+        "type": "object"
+      },
+      "PlacedNote": {
+        "properties": {
+          "authorId": {
+            "description": "Per-user instance that placed the note.",
+            "type": "string"
+          },
+          "authorName": {
+            "description": "Name its author went by when placing it; absent where none was known.",
+            "type": "string"
+          },
+          "color": {
+            "description": "CSS color the note is drawn in, as its author chose it.",
+            "type": "string"
+          },
+          "lane": {
+            "description": "Lane within the ring's band, from 0 at its inner edge; picks the pitch.",
+            "type": "number"
+          },
+          "ringId": {
+            "description": "Identifier of the ring holding the note.",
+            "type": "string"
+          },
+          "step": {
+            "description": "Sixteenth-note position along the ring, clockwise from the top.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ringId",
+          "step",
+          "lane",
+          "authorId",
+          "color"
+        ],
+        "type": "object"
+      },
+      "RemoveNoteEvent": {
+        "properties": {
+          "lane": {
+            "description": "Lane within the ring, from 0.",
+            "type": "number"
+          },
+          "ring": {
+            "description": "Id of the ring, as `rings` lists it.",
+            "type": "string"
+          },
+          "step": {
+            "description": "Step along the ring, from 0.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ring",
+          "step",
+          "lane"
+        ],
+        "type": "object"
+      },
+      "RingView": {
+        "properties": {
+          "id": {
+            "description": "Identifier to name the ring by when adding or removing a note.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Name the ring is shown under.",
+            "type": "string"
+          },
+          "lanes": {
+            "description": "What each lane plays, by lane number from 0.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "description": "Notes on the ring, in the order its hand reaches them.",
+            "items": {
+              "$ref": "#/$defs/NoteView"
+            },
+            "type": "array"
+          },
+          "steps": {
+            "description": "Steps in one loop of the ring; valid steps run from 0 to one less.",
+            "type": "number"
+          },
+          "voice": {
+            "$ref": "#/$defs/RingVoice",
+            "description": "Instrument the ring's notes sound on."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "voice",
+          "steps",
+          "lanes",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "RingVoice": {
+        "enum": [
+          "drums",
+          "bass",
+          "pluck",
+          "bell"
+        ]
+      },
+      "SetTempoEvent": {
+        "properties": {
+          "bpm": {
+            "description": "Beats per minute, from 40 to 200.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bpm"
+        ],
+        "type": "object"
+      },
+      "SetVolumeEvent": {
+        "properties": {
+          "volume": {
+            "description": "Playback volume, from 0 for silence to 1 for full.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "volume"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A loop sequencer several people play at once. Notes sit in cells on\nconcentric rings; each ring loops at its own length, so the rings drift\nagainst each other. Everyone shares the notes and the tempo, and each\nbrowser plays them from its own start. Read `rings` to see what is there,\nthen place and remove notes by ring id, step, and lane.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addNote": {
+        "$ref": "#/$defs/AddNoteEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Place one note. A note already in that cell is replaced."
+      },
+      "addNotes": {
+        "$ref": "#/$defs/AddNotesEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Place several notes in one call, all by the same author. Nothing is placed\nunless every cell named is valid."
+      },
+      "clearNotes": {
+        "$ref": "#/$defs/ClearNotesEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Remove every note, or every note on one ring. This is for everyone."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "description": "The caller's own note color, playback volume, and muted rings."
+      },
+      "removeNote": {
+        "$ref": "#/$defs/RemoveNoteEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Remove the note in one cell."
+      },
+      "rings": {
+        "description": "Every ring with its loop length in steps, what each of its lanes plays,\nand the notes on it with who placed each. Start here. It is derived from\n`state` when the piece runs: a caller that reads without running the\npiece, as `cf cell get` does without `--step`, sees it as of the last run.",
+        "items": {
+          "$ref": "#/$defs/RingView"
+        },
+        "type": "array"
+      },
+      "setTempo": {
+        "$ref": "#/$defs/SetTempoEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Set the tempo everyone plays at."
+      },
+      "setVolume": {
+        "$ref": "#/$defs/SetVolumeEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Set the caller's own playback volume. Nobody else's changes."
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "The stored form, current on every read: `tempoBpm`, and the notes by cell\nkey, where `null` marks a removed note. `rings` is the same notes in a\nform that says what each plays."
+      }
+    },
+    "required": [
+      "rings",
+      "state",
+      "output",
+      "addNote",
+      "addNotes",
+      "removeNote",
+      "clearNotes",
+      "setTempo",
+      "setVolume",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -12,7 +12,7 @@ disciplines it leans on are in
   `q` returns to the prompt exactly where it was. Moving is always an
   explicit act (a `cd` from inside the view's command line).
 - **Views are pure logic plus injected terminal deps**, the architecture
-  `packages/cli/lib/view` already proves out: raw-mode terminal handling
+  `runtime/cli/lib/view` already proves out: raw-mode terminal handling
   sits in one module, and state and key handling are pure and testable
   without a terminal.
 - **Everything live obeys the settle discipline**: one repaint per quiet
@@ -188,7 +188,7 @@ arrives.
   remote path; if it disappoints, the fallback is a capped deep sink with
   an honest "watching first N" label.
 - **The raw subscription serves the base scope only.**
-  `SpaceReplica.sinkDocument` (`packages/runner/src/storage/v2.ts`) accepts
+  `SpaceReplica.sinkDocument` (`runtime/runner/src/storage/v2.ts`) accepts
   no scope and keys its subscriber set with `docKey(uri, "space")` — the
   base instance — so under `@user` or `@session` it would watch base
   membership while the frame claimed to show an overlay. A list view
@@ -200,7 +200,7 @@ arrives.
   `instance ?? normalizeCellScope(scope)` — so what has to grow a scope
   parameter is that one signature, not the storage model. #6534's seam must
   be scope-aware end to end before the raw path can serve an overlay.
-- Guard-plus-`idle()` settling, per `renderVDomToHtml`'s form.
+- Guard-plus-`idle()` settling, with the guard `renderVDomToHtml` uses.
 - The connection's state is visible in the frame (`● live`, cold banner,
   or a reconnecting marker), read from the relay B1 builds —
   the storage layer publishes no connection state today

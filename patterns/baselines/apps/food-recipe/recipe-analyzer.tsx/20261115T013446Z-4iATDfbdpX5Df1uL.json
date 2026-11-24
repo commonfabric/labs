@@ -1,0 +1,149 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Ingredient": {
+        "properties": {
+          "amount": {
+            "description": "Free text so \"1 1/2\", \"2-3\" and \"a handful\" all fit.",
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "amount",
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "category": {
+        "default": "other",
+        "type": "string"
+      },
+      "ingredients": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Ingredient"
+        },
+        "type": "array"
+      },
+      "recipeName": {
+        "default": "",
+        "type": "string"
+      },
+      "tags": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/food-recipe/recipe-analyzer.tsx",
+  "resultSchema": {
+    "$defs": {
+      "DietaryCompatibility": {
+        "properties": {
+          "compatible": {
+            "description": "Dietary tags the dish meets: \"vegan\", \"gluten-free\", \"nut-free\", ...",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "incompatible": {
+            "description": "Dietary tags the dish fails.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "primaryIngredients": {
+            "description": "The handful of ingredients that define the dish, for \"no-X\" matching.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "Readable caveats: \"Contains dairy (butter)\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "compatible",
+          "incompatible",
+          "warnings",
+          "primaryIngredients"
+        ],
+        "type": "object"
+      },
+      "DietarySource": {
+        "enum": [
+          "analyzed",
+          "stale",
+          "declared",
+          "none"
+        ]
+      }
+    },
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "analyze": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Analyze the recipe as it stands now."
+      },
+      "analyzed": {
+        "description": "A result is on hand.",
+        "type": "boolean"
+      },
+      "dietaryCompatibility": {
+        "$ref": "#/$defs/DietaryCompatibility",
+        "description": "The last analysis, or empty lists before the first."
+      },
+      "dietarySource": {
+        "$ref": "#/$defs/DietarySource",
+        "description": "\"analyzed\", \"stale\", or \"none\" when there is no result."
+      },
+      "error": {
+        "description": "The model's error for the last request, or \"\".",
+        "type": "string"
+      },
+      "pending": {
+        "type": "boolean"
+      },
+      "stale": {
+        "description": "The recipe changed since it was analyzed.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "dietaryCompatibility",
+      "analyzed",
+      "stale",
+      "dietarySource",
+      "pending",
+      "error",
+      "analyze",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

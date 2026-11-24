@@ -2,11 +2,11 @@
 dist
 **/cache
 **/node_modules
-packages/toolshed/shell-frontend
-packages/toolshed/shell-frontend-dev
-packages/toolshed/COMPILED
-packages/toolshed/*.log
-packages/shell/dist
+runtime/toolshed/shell-frontend
+runtime/toolshed/shell-frontend-dev
+runtime/toolshed/COMPILED
+runtime/toolshed/*.log
+runtime/shell/dist
 tutorials
 cf.pem
 *.pem

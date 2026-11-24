@@ -2,7 +2,7 @@
 
 How nested CFC render boundaries (`<cf-cfc-render-boundary>`,
 `<cf-cfc-authorship>`) combine in the HTML worker reconciler
-(`packages/html/src/worker/reconciler.ts`, `childRenderPolicyForNode`).
+(`runtime/html/src/worker/reconciler.ts`, `childRenderPolicyForNode`).
 
 ## Invariant: boundaries compose monotonically
 
@@ -31,20 +31,39 @@ unbounded child boundary" in `test/worker-reconciler-cfc-render-policy.test.ts`.
 
 The ceiling in force at a node gates what reaches the page from that node by
 the same fit (`canRenderLabelUnderPolicy`). The fit is a set of functions in
-`packages/html/src/worker/display-fit.ts`, taking the policy and the sources a
+`runtime/html/src/worker/display-fit.ts` and `display-fit-atoms.ts`, taking the policy and the sources a
 decision consults (the exchange-rule resolver, and the membership and
 module-policy providers a decision watches), so that every display sink in
 the worker decides by the same code. Each read that a value reaches the
 page through is decided on the labels of the cell the read starts from and on
 the labels the read consumed, and the ceiling has to admit each. The cell's
-labels are its own, which include a label its handle carries, and, when its
-path resolves through links to another place, the label there, which gathers
-every link the resolution followed (spec §8.2.7). A label that cannot be read
-is refused. The consumed labels are those of
+labels are those at its own node, which include a label its handle carries and
+what its ancestors' labels cover, and, when its path resolves through links to
+another place, the labels at the node there, which gather every link the
+resolution followed (spec §8.2.7). A field labeled below the node decides the
+read only where the read reaches it and so consumes its label, since a
+dereference is decided on the observations actually made (spec §8.2.4). A
+label that cannot be read is refused. The consumed labels are those of
 every document the read passed through, including one behind a link crossed
 part way along the path and one a link inside the value leads to, and those of
 each slot holding a link the read followed, which a dereference retains
 (spec §4.6.3).
+
+The ceiling at the root is the one the host declares when it initializes the
+worker (`renderConfidentialityCeiling`), and the worker renders and answers a
+host's reads under it. A host that declares none is given the default display
+ceiling for the principal the runtime acts as (`defaultDisplayCeiling()`),
+which admits that principal's own identity atoms and the prompt-caveat family,
+with author declassification denied, since a display boundary that no authored
+policy covers is fitted against that ceiling (spec §8.10.6). A host that wants
+no ceiling declares `null`, and then nothing it reads is gated and nothing it
+renders is, beyond the authored boundaries around it, whose declassification
+it denies or allows as it declares. The shell's per-profile opt-out
+(`cfcRenderCeiling`, `docs/development/EXPERIMENTAL_OPTIONS.md`) is that
+declaration, with declassification allowed. A
+`WorkerReconciler` built outside the worker, such as the in-process renderer
+and the test VDOM materializer, takes the ceiling it is given and none when it
+is given none.
 
 - A cell child, and a cell mounted as the root, renders as the blocked
   placeholder while the ceiling refuses its read. A text child
@@ -52,22 +71,42 @@ each slot holding a link the read followed, which a dereference retains
   is decided on that document's label as well as the table's. A view a child
   reaches through a link, as a pattern's output does through `[UI]`, is part
   of the child's read, so a refused view renders as the placeholder.
-- A property whose value is read through a link, or is an object, is read by a
-  sink of its own and decided on that read. A property the ceiling refuses is
-  not set, and is removed if it was. That covers a cell passed as a property
-  (`<span title={cell}>`) and, in a view read from a cell, as a pattern's view
-  is, a property that links to one and an object or `style` property holding
-  such a link. A literal property is decided with the props object it sits in:
-  it is set directly while the ceiling admits that object's own label, and
-  read by a sink of its own, like the others, while it does not, as when the
-  view or its props are linked from a document of their own. An object written
-  inline in a view built outside a cell sends a cell it holds as a link, not as
-  the cell's value.
+- A property whose value is read through a link, or is an object the view's
+  schema does not state, is read by a sink of its own and decided on that
+  read. A property the ceiling refuses is not set, and is removed if it was.
+  That covers a cell passed as a property (`<span title={cell}>`) and, in a
+  view read from a cell, as a pattern's view is, a property that links to one
+  and an object or `style` property holding such a link. A literal property,
+  a `style` object holding no link among them, is decided with the props
+  object it sits in: it is set directly while the ceiling admits that object's
+  own label, and read by a sink of its own, like the others, while it does
+  not, as when the view or its props are linked from a document of their own.
+  An object written inline in a view built outside a cell sends a cell it
+  holds as a link, not as the cell's value.
 - A `$` binding is made only while the ceiling admits the worker's read of
-  the bound cell, under the cell's schema; a nested render root is decided on
-  the reads its component makes instead, as the nested-render paragraphs
-  below describe. The worker keeps reading the bound cell and removes the
-  binding when a write leaves that read consuming a label the ceiling
+  the bound cell, under the cell's schema. A binding whose component read
+  contract entry (`runtime/runner/src/component-read-contract.ts`) is
+  `complete`, its `schema` reading everything the component shows from it, is
+  decided on that read instead, so a field the component does not read does
+  not withhold it and a field it reads decides it however the handle is
+  typed. `cf-profile-badge` `profile` is one: the badge shows a profile's name
+  and picture, which a viewer may see even when the profile's private share
+  inbox pointer is refused. `cf-code-editor`'s mention lists are not, since
+  the editor reads each mention's destination, a cell its read hands it, for
+  the name it shows. The entry decides whether the component is handed the
+  handle; each read the component makes through it is decided again by the
+  host read gate, as the next item says, so a read beyond the entry is
+  refused where the root ceiling refuses it. Inside a boundary that lowers
+  the ceiling, or under an authorship boundary, a complete binding is
+  decided on everything the bound cell reaches instead, as a nested render
+  root there is, since the host read gate does not hold the component's
+  reads to that boundary. A browser test mounts each complete entry's
+  component over a handle that records what it reads, and fails on a read
+  outside the entry that it does not list with its reason, as it lists the
+  badge's read of its space's root for the seal. A nested render root is
+  decided on the reads its component makes as well, as the nested-render
+  paragraphs below describe. The worker keeps reading the bound cell and
+  removes the binding when a write leaves that read consuming a label the ceiling
   refuses, or while the read cannot complete, as when a space it reads is out
   of reach: a read that cannot complete is never taken for an empty one. While
   a `cf-render` or `cf-picker` binding is withheld because the space of the
@@ -76,12 +115,37 @@ each slot holding a link the read followed, which a dereference retains
   reach space renders as, and the component shows its children while it holds
   no value for the binding. The placeholder carries nothing read from the
   space, and goes once the read completes and decides the binding again. A
-  binding withheld for any other reason leaves the element empty. The
-  binding hands the host a live
-  handle, and the worker answers the host's reads through it without the
-  ceiling: a read that follows a link the worker's read did not, and the
-  host's own subscription to the cell, which can deliver the write that causes
-  a removal before the removal arrives.
+  binding withheld for any other reason leaves the element empty.
+- The binding hands the host a live handle. Each read the host makes through it,
+  and through any cell it opens by address, is answered by the worker's host
+  read gate (`runtime/runtime-client/src/backends/host-read-gate.ts`), which
+  decides it as a render at the root is decided: on the labels the read
+  consumed, under the root ceiling, with the same exchange-rule resolver and
+  membership and module-policy providers. That covers a get, a pull, an
+  initialization that finds a stored value, a subscription, decided again as a
+  render is, a record's field list, and a metadata read. A refused read reaches
+  the host as a refusal, never as an empty value. The refusal names the kind of
+  label that refused it, and nothing of the label: one stored at the cell's node
+  or above it (`stored`), one the read consumed below the node or behind a link
+  (`consumed`), the one the cell's schema declares where nothing stored applies
+  (`schema`), or labels that could not be read (`unreadable`). A read reaching a
+  document whose stored envelope this build cannot interpret is refused as
+  `unreadable`, and so is a read under a schema that cannot be walked for its
+  labels, as one nesting a schema that carries its own definitions cannot yet
+  be. The host knows the read it made, and could learn the first three by making
+  narrower reads; the kind tells it whether a label refused the read or a
+  failure to read one did. A read answered once first loads the access lists and
+  policy manifests its decision consults and does not already admit, since
+  nothing would decide it again when one arrived; it waits on the spaces holding
+  them, and one that fails to load leaves the decision to what the replica
+  holds. The gate holds a read to the root ceiling, not to a boundary around the
+  element, which is why a complete or nested-render binding inside a boundary
+  that lowers the ceiling is decided on everything its cell reaches. Two host
+  reads are still answered without the gate, and each is an open gap, since each
+  consumes labels (spec §8.2.4): resolving a cell's links to the address they
+  land on, which is how the profile badge reads its space's root for the seal,
+  and a cell's label view, including one carried on a ref or a link inside a
+  value, which names the paths of its labeled fields.
 
 Each decision is made again when what its read consumed changes, labels
 included, and when the membership those labels name changes, and only a
@@ -99,11 +163,13 @@ Regression guards: `test/worker-reconciler-cfc-prop-ceiling.test.ts`.
 
 `cf-render` shows what its `cell` binding names only through renders of its
 own, each mounted from the cell's reference under the root ceiling, the way the
-shell mounts a piece opened by its address. What reaches the page through it
+shell mounts a piece opened by its address. A render that displays the piece
+opens it the way navigating to it does (`getPiece` with `runIt`); running it
+adds values to render and changes no gate. What reaches the page through it
 passes the same confidentiality gates as opening the piece, the blocked
 placeholder included, with the exceptions listed below. Such a binding is a
 nested render root. The component read contract
-(`packages/runner/src/component-read-contract.ts`) gives each bound property a
+(`runtime/runner/src/component-read-contract.ts`) gives each bound property a
 `schema`, the read the component makes of it, and for a nested render root
 `renders`, the paths from the bound value to the references the component
 mounts a render from. A path is a list of steps, each a property name or `"*"`
@@ -112,6 +178,7 @@ for every element of an array, and the empty path names the binding itself:
 | Component and property | `renders` |
 | --- | --- |
 | `cf-render` `cell` | `[[]]` |
+| `cf-cell-link` `cell` | `[[]]` |
 | `cf-picker` `items` | `[["*"]]` |
 | `cf-map` `value` | `[["markers", "*", "popup"], ["circles", "*", "popup"]]` |
 
@@ -127,7 +194,13 @@ change it. `cf-render` reads its own cell that way. `cf-picker` reads its list
 with `pieceListSchema`, each item a reference. `cf-map` reads its value under
 the schema its binding stores, so a value whose schema reads each popup as a
 reference is decided popup by popup, and a value read under `any` is decided on
-everything its popups reach.
+everything its popups reach. `cf-cell-link` reads its cell as `cf-render`
+does: it follows the reference to the cell it lands on, shows that cell's
+`[NAME]` through a host read of its own, and mounts a drag preview's render
+from it. A FabriChat room's row is the case this decides: the link to the room
+stores the room's schema, which reads every profile on its roster, and decided
+on that schema, the binding would be withheld from a viewer for any room whose
+roster holds a profile someone else owns.
 
 Each reference is read at the slot holding it in the document the links on the
 way resolve to, so a schema stored on one of those links, which can declare the
@@ -145,17 +218,21 @@ one.
 A component qualifies for `renders` when its own reads of the binding go no
 further than its `schema` and the documents its references land on, and
 everything it shows from beyond them comes through a render mounted from a
-reference. The entry is reviewed like the component itself. The replication
-walk reads a property by its `schema` and does not read the empty path, which
-is the nested render's to read.
+reference, or through a host read of a cell a reference lands on, which the
+worker's host read gate decides under the same display fit as a render
+(`runtime/runtime-client/src/backends/host-read-gate.ts`). The entry is
+reviewed like the component itself. The replication walk reads a property by
+its `schema` and does not read the empty path, which is the nested render's to
+read.
 
 The exceptions hold for every reference a nested render root decides:
 
 - The binding is withheld while the ceiling refuses the reference: when the
   viewer may not see the entry holding it, when a document along its chain of
-  links is refused, and when the piece's own document is refused, because
-  resolving the reference reads that document's label, a conservative
-  over-approximation (CFC §8.2.5). A label the slot's schema declares decides
+  links is refused, and when the piece's own node is refused, because
+  resolving the reference reads the labels there. A field of the piece
+  labeled below its node is decided by the nested render, when that render
+  reads it. A label the slot's schema declares decides
   only where the read consumed no stored label. A `cf-render` or `cf-picker`
   whose binding is withheld shows nothing, and a `cf-map` whose binding is
   withheld shows no value, where opening a refused piece shows the
@@ -180,9 +257,10 @@ The exceptions hold for every reference a nested render root decides:
   caveated view inside the piece would load from loading, as opening the piece
   does.
 - The component's own reads through the bound handle, such as the piece menu's
-  Data panel, are answered without the ceiling, as for every binding.
+  Data panel, are each decided by the host read gate, as for every binding.
 
-Regression guards: `test/worker-reconciler-cfc-nested-render.test.ts`.
+Regression guards: `test/worker-reconciler-cfc-nested-render.test.ts` and
+`test/worker-reconciler-cfc-cell-link.test.ts`.
 
 ## Text integrity (`requiredTextIntegrity` / `allowLiteralText`)
 
@@ -241,9 +319,9 @@ The labels a sub-pattern's result document carries are the ones its own fields
 earned. A field aliasing an argument cell carries that cell's label through the
 link machinery. A field fed by a lift or a sub-pattern carries the join
 that module makes onto its own result (`applyArgumentIfcToResult`, called from
-`packages/runner/src/builder/module.ts`), and every module's output cells carry
+`runtime/runner/src/builder/module.ts`), and every module's output cells carry
 the join of its input cells' labels (`connectInputAndOutputs`, defined in
-`packages/runner/src/builder/node-utils.ts` and called from `module.ts` and
+`runtime/runner/src/builder/node-utils.ts` and called from `module.ts` and
 `pattern.ts`), which covers a built-in whose result is written at run time
 rather than declared. And under
 `cfcFlowLabels: "persist"` the per-transaction join is written as a `derived`
@@ -272,7 +350,7 @@ over that node's own edges. Neither takes a join over a pattern's argument as a
 whole, so a field a lift or a sub-pattern produces carries what its own edge
 carries: a confidential argument field's label reaches the fields that read it,
 and a public field beside it stays public.
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` measures both
+`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` measures both
 halves of that over one result.
 
 A handler's write targets take no build-time label, and that is the division
@@ -293,7 +371,7 @@ A built-in that writes its own schema over its output's link composes that
 label back in rather than replacing it. Four do: `mapWithPattern`,
 `filterWithPattern` and `flatMapWithPattern` stamp a result-container schema
 onto the cell their node factory has just labeled, and a named aggregate stamps
-a scalar one. `schemaCarryingLinkIfc` in `packages/runner/src/cell.ts` carries
+a scalar one. `schemaCarryingLinkIfc` in `runtime/runner/src/cell.ts` carries
 the label onto what they write. CFC §8.5.4.3 requires it: a decomposed
 collection operation's coordinator taints its own structural writes —
 container, membership, order, length — with what its journal consumed. §8.9.2's
@@ -304,11 +382,11 @@ at the container root, which is the conservative shape rather than the
 pointwise one: `joinSchema` flattens a source's member-level atoms in with its
 container-level ones, so what §8.5.6.1 keeps apart as member and structural
 confidentiality arrives together.
-`packages/runner/test/list-result-schema.test.ts` measures a labeled source and
+`runtime/runner/test/list-result-schema.test.ts` measures a labeled source and
 an unlabeled one. An aggregate reduces without per-value attribution, so
 §8.17.1 gives its scalar the join of its contributors — a count and a sum are
 that section's own examples — and
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` measures one.
+`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` measures one.
 
 The declared result schema adds none of its own: `factoryFromPattern` stores
 the schema the author declared, so a pattern that accepts a confidential
@@ -334,9 +412,9 @@ result binding (`recordOutputSchemaPolicyInputs`) is the schema at that
 binding's own path rather than one raised by a root entry, which narrows the
 grant — the direction that refuses rather than admits.
 
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` holds each builder
-against its own schema, and `packages/runner/test/pattern.test.ts` measures
+`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` holds each builder
+against its own schema, and `runtime/runner/test/pattern.test.ts` measures
 where the label reaches the result instead.
-`packages/runner/test/cfc-builtin-output-ifc.test.ts` holds each LLM built-in
+`runtime/runner/test/cfc-builtin-output-ifc.test.ts` holds each LLM built-in
 to the input join, at both dial settings. The `cfc-render-policy-demo`
 integration test drives the composed case under the ceiling.

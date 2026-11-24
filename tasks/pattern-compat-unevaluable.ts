@@ -16,7 +16,7 @@
  * the gate entirely, which the aggressively auto-updating roots may never be
  * (`pattern-break-registry-guards.ts`).
  *
- * An entry is the pattern key (path relative to `packages/patterns`). An
+ * An entry is the pattern key (path relative to `patterns`). An
  * entry may name a real `export default pattern(...)` rather than a helper
  * module, so anyone who created a piece from one back when it worked has a
  * piece that this gate does not protect.

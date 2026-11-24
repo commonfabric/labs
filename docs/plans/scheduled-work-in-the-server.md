@@ -67,7 +67,7 @@ export default pattern("Feed reader", ({ url, items }) => ({
 ```
 
 `[SCHEDULE]` would join the reserved keys in
-[`framework-result-keys.ts`](../../packages/utils/src/framework-result-keys.ts).
+[`framework-result-keys.ts`](../../base/pattern-contract/src/framework-result-keys.ts).
 That file already states the contract these keys live under: the spellings
 belong to the framework, the runner reads them back off the result, and the
 transformer decides what a pattern may declare about them.
@@ -132,8 +132,8 @@ The declaration is already durable, because it sits on the piece's result. What
 is missing is an index the host can consult without loading every piece in
 every space.
 
-The proposal is a row on the direct-engine plane, alongside the existing
-`execution_lease` table: for each space, when its next scheduled wake is due.
+The proposal is a row on the direct-engine plane: for each space, when its next
+scheduled wake is due.
 That plane already carries exactly this kind of bookkeeping, under the rule
 that nothing on it is ever a commit.
 
@@ -266,8 +266,8 @@ Meter the wave rather than the action. The wave is already the unit that
 commits, is already counted, and already carries a deadline. Attribute within
 it by action for diagnosis rather than for billing.
 
-Keep a durable per-space ledger on the direct-engine plane, next to the lease
-and the schedule index, so the existing rule holds: bookkeeping never rides the
+Keep a durable per-space ledger on the direct-engine plane, next to the schedule
+index, so the existing rule holds: bookkeeping never rides the
 commit stream.
 
 Enforce at activation rather than mid-wave. Declining to activate a space whose
@@ -337,7 +337,7 @@ what the serving loop's own testing rules already require.
 **Run pieces on a timer in a separate process that acts as a client.**
 Foreclosed by D12. It is also foreclosed independently: with server execution
 on, a runtime that is not the serving runtime loses the derivation-commit path
-([`runtime.ts`](../../packages/runner/src/runtime.ts)), so such a process
+([`runtime.ts`](../../runtime/runner/src/runtime.ts)), so such a process
 could not commit what its pieces derive.
 
 **Make `#now/N` durable instead of adding a declaration.** Attractive, because

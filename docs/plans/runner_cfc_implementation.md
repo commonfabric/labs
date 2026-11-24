@@ -1,7 +1,7 @@
 # CFC Runner Implementation Plan
 
 This document is the implementation plan for adding commit-boundary Contextual
-Flow Control (CFC) enforcement to `packages/runner`.
+Flow Control (CFC) enforcement to `runtime/runner`.
 
 It is intentionally self-contained. It describes:
 
@@ -40,8 +40,8 @@ Use a disciplined per-slice workflow while executing this plan:
 
 ## Goal
 
-Move from schema-guided IFC propagation to a runner/storage boundary that
-enforces CFC at commit time.
+Move from schema-guided information flow control (IFC) propagation to a
+runner/storage boundary that enforces CFC at commit time.
 
 At the end of this work:
 
@@ -373,6 +373,17 @@ therefore carries its own guard:
   with no read at all. The refusal is also the first of these guards to run,
   ahead of the ones keyed by target id, so which document a write names cannot
   decide whether it is asked for an authorization. Meta fields stay readable.
+  The storage transaction beneath the chokepoint, reachable as an extended
+  transaction's `.tx`, refuses a write that changes a meta field unless the
+  write carries the chokepoint's mark (below): an address naming the field, a
+  root write carrying another value or leaving a stored one out, or a root
+  delete. A root write carrying every stored meta field forward unchanged
+  passes there, as it changes nothing. Both guards decide "stored" by the
+  writing transaction's own view, so this holds for the meta fields that view
+  holds. A root write from a transaction that never loaded the document sees
+  no stored field, and can leave every one out; the reserved siblings' guard
+  has the same bound, below. No store check covers the meta fields: the
+  memory engine's envelope check judges declared CFC labels only.
 - The reserved siblings — the `cfc` label map and `source` — are the runtime's,
   and a write reaching either from outside the privileged persistence scope is
   recorded, with the commit boundary turning each record into a fail-closed
@@ -416,7 +427,24 @@ therefore carries its own guard:
   transaction's `accessForTestingOnly` getter, which a lint rule confines to
   tests and benchmarks. The runtime keeps no second door: there is no write
   option, and no exported value, that lets a caller past the guard.
-- The refusal is a record rather than a throw, unlike the meta seam beside it.
+- The guard is the extended transaction's write surface, and the storage
+  transaction beneath it is reachable as its `.tx`. So that storage
+  transaction holds the line itself: it throws on a write, a batch write, or a
+  mergeable op that changes a reserved sibling, as the three shapes above
+  define a change, a delete counting as a write of nothing. The one exception
+  is a single write carrying the mark the extended transaction puts on every
+  write it forwards; a batch request and a mergeable op carry no options, so
+  no mark, and the extended transaction issues both on the value surface
+  only. A write made there directly skipped the
+  record, and so left the commit boundary nothing to refuse over, whether the
+  transaction is then committed through the extended transaction or directly;
+  this refusal therefore holds whatever the enforcement mode. The mark is a
+  symbol of `storage/write-chokepoint.ts`, which no package entry exports: an
+  authorization of the same kind as the meta seam's, and as firmly held as the
+  realm holds it. It says only that the chokepoint saw the write, and the
+  storage transaction asks for it on the meta seam too.
+- At the chokepoint, the refusal is a record rather than a throw, unlike the
+  meta seam beside it.
   A forged label map is a signal whose treatment follows the enforcement mode:
   enforce rejects the commit, observe diagnoses it, and `disabled` keeps the
   record so a mid-transaction escalation still rejects. A deployment running
@@ -432,7 +460,12 @@ therefore carries its own guard:
   the writer supplied. Closing the erasure half means forcing the document into
   view before deciding, which turns every blind root write into a
   read-modify-write, or making the commit boundary establish what the space
-  holds; both are open.
+  holds. The store does the second for declared entries: it refuses a commit
+  that leaves a stored declared confidentiality clause's path with no
+  declared entry, unless the space's owner signs it and the clauses are
+  theirs alone to release ("What the store refuses of a handed envelope" in
+  [`cfc-stored-envelope.md`](../specs/cfc-stored-envelope.md)). An unsynced
+  writer can still erase the other components.
 - A guard on a seam governs writes to it, not the runtime entry points that
   write it while doing their own work. The same reach that hands a handler
   the storage transaction hands it the runtime: `runtime.run` instantiates a
@@ -578,7 +611,9 @@ These must hold once enforcement is enabled:
   invalidates prepare
 - verifier-internal reads never become consumed reads
 - explicit IFC claims fail closed on missing schema, missing metadata, unknown
-  trust state, or unsupported trust-sensitive claims
+  trust state, unsupported trust-sensitive claims, a label list declared as
+  anything but a list in a schema a write or an LLM tool call goes through, or
+  a UI contract trust requirement written in a form the runtime cannot match
 - the commit gate lives at the transaction boundary, not only in scheduler code
 - external side effects happen only after successful commit
 - retries always run in a fresh transaction and recompute prepare
@@ -602,9 +637,9 @@ These must hold once enforcement is enabled:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -629,9 +664,9 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
-- `packages/runner/src/storage/v2-transaction.ts`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/storage/v2-transaction.ts`
 
 Tasks:
 
@@ -663,11 +698,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/v2-transaction.ts`
-- `packages/runner/src/storage/transaction-inspection.ts`
-- `packages/runner/src/storage/reactivity-log.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/v2-transaction.ts`
+- `runtime/runner/src/storage/transaction-inspection.ts`
+- `runtime/runner/src/storage/reactivity-log.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -710,10 +745,10 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/traverse.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/link-utils.ts`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/traverse.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/link-utils.ts`
 
 Tasks:
 
@@ -742,11 +777,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/v2.ts`
-- `packages/runner/src/storage/v2-document.ts`
-- `packages/memory/v2.ts`
-- `packages/memory/v2/engine.ts`
-- `packages/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/v2.ts`
+- `runtime/runner/src/storage/v2-document.ts`
+- `runtime/memory/v2.ts`
+- `runtime/memory/v2/engine.ts`
+- `runtime/runner/src/storage/interface.ts`
 
 Tasks:
 
@@ -780,9 +815,9 @@ Acceptance:
 
 Primary files:
 
-- new files under `packages/runner/src/cfc/`
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/traverse.ts`
+- new files under `runtime/runner/src/cfc/`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/traverse.ts`
 
 Tasks:
 
@@ -835,11 +870,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/scheduler.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/runner.ts`
-- `packages/runner/src/runtime.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/scheduler.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/runner.ts`
+- `runtime/runner/src/runtime.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
 
 Tasks:
 
@@ -875,13 +910,13 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/runner.ts`
-- `packages/runner/src/builder/module.ts`
-- `packages/runner/src/builder/to-encodable-form.ts`
-- `packages/runner/src/harness/executable-registry.ts`
-- `packages/runner/src/storage/interface.ts`
-- `packages/memory/v2.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/runner.ts`
+- `runtime/runner/src/builder/module.ts`
+- `runtime/runner/src/builder/to-encodable-form.ts`
+- `runtime/runner/src/harness/executable-registry.ts`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/memory/v2.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -931,9 +966,9 @@ Acceptance:
 
 Primary files:
 
-- new files under `packages/runner/src/cfc/`
-- `packages/runner/src/builtins/`
-- `packages/runner/src/traverse.ts`
+- new files under `runtime/runner/src/cfc/`
+- `runtime/runner/src/builtins/`
+- `runtime/runner/src/traverse.ts`
 
 Tasks:
 
@@ -953,12 +988,12 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/builtins/fetch.ts`
-- `packages/runner/src/builtins/fetch-program.ts`
-- `packages/runner/src/builtins/stream-data.ts`
-- `packages/runner/src/builtins/llm.ts`
-- `packages/runner/src/builtins/llm-dialog.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/builtins/fetch.ts`
+- `runtime/runner/src/builtins/fetch-program.ts`
+- `runtime/runner/src/builtins/stream-data.ts`
+- `runtime/runner/src/builtins/llm.ts`
+- `runtime/runner/src/builtins/llm-dialog.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -985,10 +1020,10 @@ Acceptance:
 
 Primary files:
 
-- `packages/html/src/`
-- `packages/runner/src/scheduler.ts`
-- `packages/ts-transformers/src/`
-- `packages/schema-generator/src/`
+- `runtime/html/src/`
+- `runtime/runner/src/scheduler.ts`
+- `base/ts-transformers/src/`
+- `base/schema-generator/src/`
 
 Tasks:
 
@@ -1019,6 +1054,12 @@ Implementation notes for spec update:
       `trusted-event` write-policy input and fails closed when a schema declares
       trusted pattern or event-integrity requirements that the renderer did not
       attest
+- [x] A contract's `trustedPattern` is matched only as a nonempty string, and
+      its `requiredEventIntegrity` atoms only as strings, the form the
+      renderer attests; a requirement written otherwise refuses the write. An
+      object atom, a form the specification writes (§8.15), is refused as an
+      unsupported trust-sensitive claim until the specification says how one
+      matches renderer-attested event integrity
 - [x] Current enforcement assumes a trusted host and an embedding model where
       untrusted embedders cannot hide or obscure embedded trusted UIs; future
       spec work should define opaque trusted UI islands and a non-forgeable
@@ -1088,9 +1129,9 @@ content-addressed adjunct read/write APIs.
 
 Primary files:
 
-- `packages/runner/src/storage/`
-- `packages/memory/`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/`
+- `runtime/memory/`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -1121,16 +1162,16 @@ labels, stored link-field labels, diagnostics, and persisted link metadata.
 
 Primary files:
 
-- `packages/runner/src/link-resolution.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/query-result-proxy.ts`
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/data-updating.ts`
-- `packages/runner/src/cfc/types.ts`
-- `packages/runner/src/cfc/canonical.ts`
-- `packages/runner/src/cfc/label-view.ts`
-- `packages/runner/src/cfc/prepare.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/link-resolution.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/query-result-proxy.ts`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/data-updating.ts`
+- `runtime/runner/src/cfc/types.ts`
+- `runtime/runner/src/cfc/canonical.ts`
+- `runtime/runner/src/cfc/label-view.ts`
+- `runtime/runner/src/cfc/prepare.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
 
 Tasks:
 

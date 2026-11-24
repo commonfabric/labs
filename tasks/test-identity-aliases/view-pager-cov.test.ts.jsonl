@@ -1,0 +1,2 @@
+{"date":"2026-11-23","from":{"k":"unit","s":"cli","n":"pager: the semantics prewarm once the first frame is drawn, not before"},"to":{"k":"unit","s":"cli","n":"pager: the semantics prewarm once the first frame is drawn, and are disposed on exit"}}
+{"date":"2026-11-23","from":{"k":"unit","s":"cli","n":"pager: background parses rebuild the document once the parsed source doubles, and at the end"},"to":{"k":"unit","s":"cli","n":"pager: background parses rebuild the document each time a batch of source finishes, and at the end"}}

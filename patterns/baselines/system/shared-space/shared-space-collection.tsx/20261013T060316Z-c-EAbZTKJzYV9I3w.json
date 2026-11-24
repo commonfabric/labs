@@ -1,0 +1,247 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "SharedSpaceCatalogStorage": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "SharedSpaceCollectionView": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SharedSpaceUnavailable"
+          },
+          {
+            "properties": {
+              "archived": {
+                "items": {
+                  "$ref": "#/$defs/SharedSpaceEntry"
+                },
+                "type": "array"
+              },
+              "byKind": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/SharedSpaceKindView"
+                },
+                "properties": {},
+                "type": "object"
+              },
+              "entries": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/SharedSpaceEntry"
+                },
+                "properties": {},
+                "type": "object"
+              },
+              "other": {
+                "items": {
+                  "$ref": "#/$defs/SharedSpaceEntry"
+                },
+                "type": "array"
+              },
+              "saved": {
+                "items": {
+                  "$ref": "#/$defs/SharedSpaceEntry"
+                },
+                "type": "array"
+              },
+              "status": {
+                "enum": [
+                  "ready"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "entries",
+              "saved",
+              "archived",
+              "other",
+              "byKind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SharedSpaceEntry": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lastAction": {
+            "type": "unknown"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "since": {
+            "type": "number"
+          },
+          "space": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "host",
+          "kind",
+          "state",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "SharedSpaceKindView": {
+        "properties": {
+          "archived": {
+            "items": {
+              "$ref": "#/$defs/SharedSpaceEntry"
+            },
+            "type": "array"
+          },
+          "other": {
+            "items": {
+              "$ref": "#/$defs/SharedSpaceEntry"
+            },
+            "type": "array"
+          },
+          "saved": {
+            "items": {
+              "$ref": "#/$defs/SharedSpaceEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "saved",
+          "archived",
+          "other"
+        ],
+        "type": "object"
+      },
+      "SharedSpaceUnavailable": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "loading",
+              "malformed"
+            ]
+          },
+          "status": {
+            "enum": [
+              "unavailable"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "The owned catalog and its validated observation, supplied by Home.",
+    "properties": {
+      "catalog": {
+        "$ref": "#/$defs/SharedSpaceCatalogStorage",
+        "asCell": [
+          "cell"
+        ]
+      },
+      "view": {
+        "$ref": "#/$defs/SharedSpaceCollectionView"
+      }
+    },
+    "required": [
+      "catalog",
+      "view"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/shared-space-collection.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CollectionChoiceEvent": {
+        "properties": {
+          "target": {
+            "properties": {
+              "dataset": {
+                "properties": {
+                  "revision": {
+                    "type": "string"
+                  },
+                  "space": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "space",
+                  "revision",
+                  "state"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "dataset"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "The browser's UI and session-local controls.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "chooseMembership": {
+        "$ref": "#/$defs/CollectionChoiceEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "kind": {
+        "type": "string"
+      },
+      "membership": {
+        "type": "string"
+      },
+      "search": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "search",
+      "kind",
+      "membership",
+      "chooseMembership",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
