@@ -24407,3 +24407,187 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    scoped place would no longer join that value's label for the row's other
    positions. The same change as P451's (CFC question 3 of the first
    continuation), per row; not built.
+
+## Round nineteen, third continuation: a handle at each row a body is handed, and a read of one member
+
+The coordinator's request of 2026-11-24, after the owner's instruction to fix
+the two executor defects that the session `fabrichat-row-rights-68447f` found
+while it moved the FabriChat rows' controls into the rows (its room commits
+`881e54d2e1`, `32928cd2cd` and `dbce784cd9`, on `31d73441f8`). The notes are
+numbered from 1011, the provisional decisions from P453. The fixes are the
+commits `bcf03b2c52` (note 1012) and `59f7d34188` (note 1013), which touch no
+file of the room and apply to `31d73441f8` unchanged. The logs are in the shared
+notes folder of the coordinator's sessions, `fabrichat-row-rights.md`.
+
+1011. **Findings, first.**
+      - _Soundness of the values, fixed: a body that resolves a reference held
+        in each row of a per-element construct was handed a plain value._ An
+        `identity` entry of `Body.computed` at a path through `*` was read as a
+        shallow value, so the body failed and every reader of its result took
+        the error state (note 1012). At `31d73441f8` this put every message row
+        of the FabriChat copy in an error state: the dump of a run at 100
+        messages holds 206 error values, all under `$UI`, all
+        `message.resolveAsCell is not a function`, one for each of 103 rows in
+        each of the two session documents. Note 1008's FabriChat figures (148
+        records, 32 evaluations, 19 documents of 525 to 532 KB at 100 messages)
+        equal that run's: they were taken with every row in an error state.
+      - _Scale, fixed by P453: a read of one member depended on every member._ A
+        member read of a value another cone computes, by a static path or by a
+        key, depended on the whole value, and a `pick` over a container slot
+        read the whole container (note 1013). A `map` whose rows each read one
+        member of a record by the row's key evaluated every row when any member
+        changed: in the FabriChat copy, whose rows are a `map` over the result
+        of a `filter` (another per-element construct) over an array of
+        references, on every send, through the row's `replies`. A send at 100
+        messages evaluates 29 to 31 element bodies where it evaluated 131 to 133
+        with the rows deriving (note 1014).
+      - _Scale, open, unchanged by both fixes: a send changes 2.35 to 2.39 MB at
+        100 messages._ With the rows deriving, the two session documents hold
+        every row (1.29 MB each at 100) and are stored whole when one row
+        changes; that is note 1007, plan (b). At 1,000 messages a run whose rows
+        derive is refused during the seed: arm C below was refused with
+        `MessageTooLargeError` (more than 1,000,000 slots in one storage
+        message) after 30 minutes, at 27 GB resident. Each of the two session
+        documents holds about 550 slots per message, so the limit falls near 900
+        messages.
+      - _Scale, open: a read of a path below the result of a per-element
+        construct still depends on the whole assembly_ (`Host.output` settles
+        the assembly whole before it reads the path). P453 does not cover it.
+
+1012. **A handle at each child an `identity` entry through `*` reaches.**
+      `Executor.#invoke` turned an `identity` entry of `Body.computed` into a
+      handle only where its path held no `*`
+      (`if (observes !== "identity" || at.includes("*")) continue;`). At a path
+      through `*`, `pass()` read the reference as a value under `SHALLOW`, since
+      no `value` entry covered the path. Now `pass()` hands the handle at each
+      path such an entry matches and reads nothing of what it names, and
+      `#handleAt` gives the handle for both kinds of entry (a reference, a
+      marker, or an array a body returned whole). This is the rule ES §2.4
+      states for an `identity` entry, applied at each child, and takes no
+      decision. The fixture `compare/fixtures/element-reference.tsx`: a `map`
+      whose row holds its element's cell, and a `computed` over the result of
+      that `map` (the result of another per-element construct) that resolves
+      each row's cell. Tests in `exec/test/body-argument.test.ts`, over an array
+      of references and over an array of plain values in place: seen failing
+      first with `item.resolveAsCell is not a function`, and a write of a member
+      that neither the rows nor the body read evaluates nothing.
+
+1013. **A read of one member depends on that member alone (provisional decision
+      P453).**
+      - _The emitted code._ The crate emitted a member read as
+        `$h.at(object, [key])` with the object read first: `$h.output(n)` or
+        `$h.value(n)` with the path after it in `$h.at`, and `$h.slot(n)` of the
+        child slot of a `pick`, which read every child (ES §2.2, question 75).
+        Now a member read whose object reads as a path of a value of another
+        cone is `$h.output(n, path)` or `$h.value(n, path)` with the static
+        segments and the key, and one whose object reads as the children of a
+        container is `$h.slot(n, [key])` (`keyed_read` in `src/emit.rs`; a
+        static path alone is `output_code`). The crate compares the object's
+        code with the path read it would emit, so no other form is changed: a
+        value of the same cone held in a local, an object a callee default
+        wraps, and a value the object expression creates keep `$h.at`.
+      - _The executor._ `Host.output` and `Host.value` take the path, and a
+        value output read at a path depends on what the value holds there
+        (`Host.dependAt`, through the stamp that `dependEntry` already had for a
+        path: the stored text at the path when the reader read it, compared when
+        the producing entry changed). `Host.slot` of the child slot takes the
+        key in the place of `*` and reads that child alone, with the schema of
+        the child; with no key it reads every child, as before. An output that
+        is an index or the result of a per-element construct is read whole and
+        then at the path, as before.
+      - _What is covered._ Every member read the crate emits over an output, a
+        value, or the container of a `pick`, by a static path, a key the code
+        computes, or both: `.key(k)` in a `computed` the crate promotes, the
+        computed member `record[k]`, an index into an array, and a static path
+        such as `facts.count`, which depended on all of `facts`. In the
+        FabriChat copy no `$h.at($h.output(n), …)` remains: 69 path reads and 4
+        reads of a chosen child.
+      - _Tests, seen failing first._ `exec/test/member-read.test.ts` over the
+        fixture `compare/fixtures/member-read.tsx`, a `map` over an array of
+        plain values in place whose row reads one member of a record by its
+        element's key, counts the element evaluations a change causes at 10 and
+        at 100 members:
+
+        | change                                                  | before   | after |
+        | ------------------------------------------------------- | -------- | ----- |
+        | a member no row reads added to a stored record          | 10 / 100 | 0 / 0 |
+        | one row's member of a stored record written             | 10 / 100 | 1 / 1 |
+        | an element appended, its key added to a computed record | 11 / 101 | 1 / 1 |
+
+        `tests/emit.rs` checks the two emitted forms.
+      - _The fixtures emitted again._ Of the fixtures under `compare/fixtures/`,
+        12 emit other code and the same plans; they are emitted again. 18 do not
+        emit with the crate at `31d73441f8` either (`cell:unsupported-method`),
+        and keep the code they hold, which the executor still runs.
+      - _Cost._ The stamp of a path is computed when the reader is evaluated, as
+        for a slot read through an element of a computed array: the stored text
+        of what the value holds at the path. In the FabriChat profile at 100
+        messages the stamps cost 2.4 ms over three sends. For a static path to a
+        large member the stamp is the size of that member, where the whole-value
+        stamp cost nothing.
+
+1014. **Measured.** One run of each cell, `SCALE_STAND_INS=table`,
+      `runner room <n>`, three timed sends each, one process at a time, the load
+      average taken before each run. Arm A is `31d73441f8`; arm B the room of
+      `dbce784cd9` with the executor of `31d73441f8`; arm C the room of
+      `31d73441f8` with both fixes (`31d73441f8` with the two commits applied);
+      arm D `59f7d34188`, the changed room with both fixes. Times in
+      milliseconds, the piece's own time in brackets; records are those the
+      adapter is given.
+
+      | arm | messages | load | ms per send (own)       | records | evaluations | element evaluations | documents changed | KB changed    |
+      | --- | -------- | ---- | ----------------------- | ------- | ----------- | ------------------- | ----------------- | ------------- |
+      | A   | 100      | 6.3  | 146–151 (65)            | 148     | 32          | 13                  | 19                | 525–532       |
+      | B   | 100      | 6.1  | 551–565 (189–196)       | 148     | 152–154     | 131–133             | 33                | 2,345–2,388   |
+      | C   | 100      | 5.3  | 449–747 (158–461)       | 148     | 49          | 29                  | 33                | 2,345–2,388   |
+      | D   | 100      | 4.8  | 474–844 (164–527)       | 148     | 50          | 31                  | 33                | 2,345–2,388   |
+      | B   | 500      | 4.5  | 2,469–3,284 (741–852)   | 148     | 552–554     | 531–533             | 33                | 11,020–11,064 |
+      | C   | 500      | 4.3  | 2,365–3,030 (732–1,416) | 148     | 49          | 29                  | 33                | 11,021–11,064 |
+      | D   | 500      | 4.9  | 2,256–2,355 (713–747)   | 148     | 50          | 31                  | 33                | 11,021–11,064 |
+      | A   | 1,000    | 4.5  | 1,118–1,160 (454–466)   | 148     | 32          | 13                  | 19                | 3,862–3,869   |
+
+      - _The rows._ The dumps of arm A hold 206 error values at 100 messages and
+        2,006 at 1,000, all under `$UI`, all
+        `message.resolveAsCell is not a function`; those of B, C and D hold
+        none. So A's figures, as note 1008's, count rows that hold an error.
+      - _What the fixes change._ With the rows deriving (B against C and D), a
+        send evaluates 29 to 31 element bodies at 100 and at 500 messages, the
+        new row's, where it evaluated those and one for each row (131 to 133 at
+        100, 531 to 533 at 500). The bytes changed do not move: 2.35 MB at 100
+        and 11.0 MB at 500, the two session documents (1.29 MB each at 100, 6.27
+        MB each at 500) stored whole. The time follows the bytes: the piece's
+        own time at 500 is 713 to 747 ms in D against 741 to 852 ms in B, and
+        freezing, encoding and checking those documents is most of it (profile
+        of D at 100). One send of C and D at 100, and one of C at 500, took 300
+        to 700 ms more of the piece's own time; a second run of D at 100 had
+        none (184, 165 and 167 ms).
+      - _At 1,000._ C was refused during the seed (above); D, whose documents
+        are C's, and B, refused at 1,000 in the earlier run, were not run again.
+
+1015. **Provisional decision, and what was not verified.** P453: as note 1013;
+      ES §2.2 and question 75, and question 46 of the plan document, state it.
+      Not verified: the arms B and D at 1,000 messages (not run; C was refused);
+      the arm `serving`; more than one run of a cell for the times; the corpus
+      (`compare/runner-corpus.ts`) after the fixes; a member read below the
+      result of a per-element construct, which P453 does not cover; the cost of
+      the stamp of a static path to a large member outside FabriChat; the CFC
+      questions below.
+
+### CFC questions deferred, round nineteen, third continuation
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Note 1013: the child slot of a `pick` is bound to the positions of the chosen
+   child alone, where the read of the whole container bound it to every
+   member's. The `pick` template joins the label of the container's `shape` slot
+   into the choice; that slot is now bound to the chosen child's position, whose
+   label is the container's joined with the child's, and no longer joins the
+   labels of the other members. Whether the key set of a container carries a
+   label of its own that the chosen child's position does not, and so whether
+   the choice now misses it, is open.
+2. Note 1013: a reader of a path of a computed value depends on what the value
+   holds there; a change of another member evaluates nothing, so the reader's
+   stored output keeps the label it was evaluated under. If the producing
+   entry's label changed without the value at the path changing, the reader's
+   label does not follow until it is evaluated again. The same holds for a slot
+   read through an element of a computed array before this change.
