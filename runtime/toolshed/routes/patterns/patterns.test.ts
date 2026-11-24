@@ -102,9 +102,9 @@ describe("Patterns API", () => {
       expect(response.status).toBe(200);
     });
 
-    it("serves showcase/battleship/multiplayer/lobby.tsx", async () => {
+    it("serves showcase/battleship/multiplayer/main.tsx", async () => {
       const response = await app.request(
-        "/api/patterns/showcase/battleship/multiplayer/lobby.tsx",
+        "/api/patterns/showcase/battleship/multiplayer/main.tsx",
       );
       expect(response.status).toBe(200);
     });

@@ -549,11 +549,11 @@ describe("writerClaimPatternFilesCorrespond", () => {
     // corresponds to nothing.
     expect(writerClaimPatternFilesCorrespond(
       "/dice.tsx",
-      "/patterns/showcase/dice/dice.tsx",
+      "/patterns/showcase/dice/main.tsx",
     )).toBe(false);
     expect(writerClaimPatternFilesCorrespond(
       "/api/patterns/dice.tsx",
-      "/patterns/showcase/dice/dice.tsx",
+      "/patterns/showcase/dice/main.tsx",
     )).toBe(false);
   });
 });

@@ -28,7 +28,7 @@ import {
   propValue,
 } from "../../../tools/test-support/vnode-helpers.ts";
 import type { ProfileFaceFields } from "../../../system/profile-face/profile-face.ts";
-import BattleshipLobby, { BattleshipLobbyCore } from "./lobby.tsx";
+import BattleshipLobby, { BattleshipLobbyCore } from "./main.tsx";
 import {
   createInitialShots,
   type GameState,
