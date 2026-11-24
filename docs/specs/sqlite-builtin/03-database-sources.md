@@ -59,10 +59,9 @@ to creation and opaque to the pattern. The handle cell reads back
   and any other change to the pattern's source that leaves the node where it
   is, but never chosen by the pattern. A change that gives the node another
   output spot, such as one that renumbers it among the pattern's anonymous
-  cells, names another handle and so another, empty database, as it moves any
-  state keyed on a place
+  cells, names another handle and so another, empty database
   ([`computed-cell-identity.md`](../computed-cell-identity.md), "Internal cell
-  identity").
+  identity", says what renumbers a cell).
 - A node whose own handle holds nothing keeps a handle its output spot already
   links to, provided the node minted it: either the handle the node's whole
   cause, inputs document included, names for its current inputs, or one whose
