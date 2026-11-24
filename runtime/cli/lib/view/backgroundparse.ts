@@ -8,14 +8,20 @@
  * thread as the worker built them.
  */
 
-import type { Language } from "./languages/language.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+
+import {
+  finishGrammarLoads,
+  type Language,
+  languageForName,
+} from "./languages/language.ts";
 import { plainTextLanguage } from "./languages/plain-text/language.ts";
 import type { Document, Line } from "./model.ts";
 
 /** How many characters of source the first build of a diff parses before it
  * shows the files left over as plain text: a fraction of a second of parsing,
- * so that a small diff opens fully colored. A parse worker sends its outcomes
- * in batches of at least as much source. */
+ * so that a small diff opens fully colored. The pager waits for at least as
+ * much source to finish in the background before it builds the diff again. */
 export const IN_PLACE_PARSE_BUDGET = 128 * 1024;
 
 /** A finished parse: the full document model of a new side, or the colored
@@ -73,14 +79,21 @@ export interface ParseRequest {
   readonly fileName: string | undefined;
 }
 
-/** The message that starts a parse worker: every request it is to parse. */
-export interface ParseWorkerMessage {
-  readonly requests: readonly ParseRequest[];
-}
+/**
+ * A message to a parse worker. The first, `parse`, gives every request it is
+ * to parse, and lets it send one answer. Each `next` lets it send one more,
+ * and is sent once the answer before it has been read. A worker parses one
+ * request past the answers it may send and then waits, so at most one of its
+ * answers waits to be read at a time.
+ */
+export type ParseWorkerMessage =
+  | { readonly kind: "parse"; readonly requests: readonly ParseRequest[] }
+  | { readonly kind: "next" };
 
-/** A batch of outcomes a parse worker sends as it finishes them. */
+/** The outcome of one request, which a parse worker sends as soon as it has
+ * it and may. */
 export interface ParseWorkerAnswer {
-  readonly outcomes: readonly ParseOutcome[];
+  readonly outcome: ParseOutcome;
 }
 
 /** Parses `text` as `language` reads it, into the result `kind` names. */
@@ -93,6 +106,71 @@ export function parse(
   return kind === "document"
     ? { kind, document: language.parseDocument(text, fileName) }
     : { kind, lines: language.highlightLines(text, fileName) };
+}
+
+/**
+ * Returns the function a parse worker gives each message it receives. It
+ * gives the requests of the `parse` message to `parseRequest` in order, and
+ * gives `send` the outcome of each once the messages received so far let it,
+ * one answer for each message.
+ *
+ * @throws {Error} When the function is given a second `parse` message, or a
+ * `next` message before the `parse` message.
+ */
+export function parseWorkerReceiver(
+  send: (answer: ParseWorkerAnswer) => void,
+  parseRequest: (request: ParseRequest) => Promise<ParseOutcome> = outcome,
+): (message: ParseWorkerMessage) => void {
+  let started = false;
+  let allowed = 0;
+  let allow: (() => void) | undefined;
+  const parseAll = async (requests: readonly ParseRequest[]) => {
+    for (const request of requests) {
+      const answer: ParseWorkerAnswer = {
+        outcome: await parseRequest(request),
+      };
+      if (allowed === 0) {
+        await new Promise<void>((resolve) => allow = resolve);
+      }
+      allowed--;
+      send(answer);
+    }
+  };
+  return (message) => {
+    if (message.kind === "parse" ? started : !started) {
+      throw new Error(
+        "A parse worker takes one `parse` message, before any `next`.",
+      );
+    }
+    if (message.kind === "parse") {
+      started = true;
+      parseAll(message.requests);
+    }
+    allowed++;
+    allow?.();
+  };
+}
+
+/** Parses `request` in a parse worker, giving the failure as its outcome
+ * when it throws. */
+async function outcome(request: ParseRequest): Promise<ParseOutcome> {
+  const { index, kind, languageId, text, fileName } = request;
+  try {
+    const language = languageForName(languageId);
+    if (language === undefined) {
+      throw new Error(`No language is named "${languageId}".`);
+    }
+    await language.prepare?.();
+    // A language embedded in another, such as the language an Org source
+    // block names, starts loading its parser when a parse reaches it.
+    let result = parse(kind, language, text, fileName);
+    while (await finishGrammarLoads()) {
+      result = parse(kind, language, text, fileName);
+    }
+    return { kind: "parsed", index, result };
+  } catch (error) {
+    return { kind: "failed", index, failure: describeFailure(error) };
+  }
 }
 
 /**
@@ -248,9 +326,15 @@ interface Parse {
   released: boolean;
 }
 
+/** The message that lets a parse worker send its next answer. */
+const NEXT: ParseWorkerMessage = { kind: "next" };
+
 /**
  * Starts parsing `jobs` in a Worker of this process that `startWorker`
- * starts, giving each batch of outcomes to `deliver` as the worker sends it.
+ * starts, giving each outcome to `deliver` as the worker sends it. The worker
+ * sends each answer only once `deliver` has returned from the one before, so
+ * at most one answer waits to be read at a time, and other events, such as
+ * keys, run between answers.
  * A worker that fails, or sends an answer that cannot be read, gives the
  * failure as the outcome of each job it leaves without one. The worker ends
  * once every job has an outcome, or when the returned function is called,
@@ -273,10 +357,11 @@ export function workerParser(
     deliver(outcomes);
   };
   worker.onmessage = (event: MessageEvent<ParseWorkerAnswer>) => {
-    if (unanswered.size > 0) settle(event.data.outcomes);
+    if (unanswered.size > 0) settle([event.data.outcome]);
+    if (unanswered.size > 0) worker.postMessage(NEXT);
   };
   const fail = (failure: string) =>
-    settle(
+    unanswered.size > 0 && settle(
       [...unanswered].map((index) => ({ kind: "failed", index, failure })),
     );
   worker.onerror = (event) => {
@@ -286,6 +371,7 @@ export function workerParser(
   worker.onmessageerror = () =>
     fail("The parse worker sent an answer that could not be read.");
   const message: ParseWorkerMessage = {
+    kind: "parse",
     requests: jobs.map(({ kind, language, text, fileName }, index) => ({
       index,
       kind,
