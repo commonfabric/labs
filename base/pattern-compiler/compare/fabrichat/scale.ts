@@ -291,7 +291,8 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
   // and has no claim of whose it is.
   // What the commits of the runtime changed: the documents, each counted
   // once for a commit, and the size of each as JSON after the commit.
-  let startedPiece: CompiledPiece | undefined;
+  /** The piece, once it is started, for the list of `SCALE_CHANGES`. */
+  const started: { piece?: CompiledPiece } = {};
   const changedByCommits = { documents: 0, bytes: 0 };
   runtime.storageManager.subscribe({
     // deno-lint-ignore no-explicit-any
@@ -323,9 +324,10 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
    * list document or a label document of the adapter is not.
    */
   const describedDocument = (entity: string): string => {
-    if (startedPiece === undefined) return "";
-    const doc = startedPiece.transactions.documentOf(entity);
-    return startedPiece.instance.store.docs.get(doc)?.kind ??
+    const { piece } = started;
+    if (piece === undefined) return "";
+    const doc = piece.transactions.documentOf(entity);
+    return piece.instance.store.docs.get(doc)?.kind ??
       "not the executor's";
   };
   /**
@@ -399,7 +401,7 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
     await server.close();
     throw error;
   }
-  startedPiece = piece;
+  started.piece = piece;
   runtime.prepareTxForCommit(tx);
   const { error } = await tx.commit().settled;
   await runtime.scheduler.idleWithPendingCommits();

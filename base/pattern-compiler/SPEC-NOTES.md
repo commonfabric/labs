@@ -24591,3 +24591,468 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    entry's label changed without the value at the path changing, the reader's
    label does not follow until it is evaluated again. The same holds for a slot
    read through an element of a computed array before this change.
+
+## Round twenty-one: a scoped read in the body of a per-element construct, stored per row
+
+Round twenty-one (2026-11-24), on the branch
+`claude/compiled-pattern-scoped-rows` from `5db1c2658d`, plan (b) of note 1007.
+The notes are numbered from 1016, the provisional decisions from P454. The logs
+are in the folder `r21-scoped-rows/` of the session. Whenever a note says `map`,
+it names the case. Times are on an Apple M5 Max with 18 cores at the load
+averages given, from other sessions; the counts do not depend on the load.
+
+1016. **Findings, first.**
+      - _Scale, fixed: a row of a per-element construct that reads a value of a
+        scope was of that scope, and the rows were stored whole in each key's
+        scope instance._ The expression of the row that reads the value is now a
+        cone of its own per element key, the row places it, and its value is
+        stored in a document of its own for the row with an instance for each
+        key (notes 1017 to 1019). Over a `map` over an array of references, over
+        an array of plain values in place and over the result of a `filter`, an
+        edit of one item writes that row's place once per key and no document
+        that grows with the rows. A FabriChat send changes 0.57 MB at 100
+        messages, 2.10 MB at 500 and 4.02 MB at 1,000 where it changed 2.35 MB
+        and 11.0 MB, and the seed at 1,000 completes, in 16 minutes at a peak of
+        6.5 GB resident, where it was refused with `MessageTooLargeError` after
+        30 minutes at 27 GB (note 1022). The records, evaluations and
+        evaluations of element bodies of a send are the same at every size.
+      - _Soundness, fixed: an entry marked while it was compared was taken as
+        current with what it had read before._ `Instance.#current` compared the
+        positions a marked entry read before its dependencies, and bringing a
+        dependency up to date can write one of those positions: a cone that
+        reads the place of a value of a scope through the reference it depends
+        on has the place entry as its dependency, the place entry stores the new
+        value, and the reference compares equal. The entry kept its old value
+        and nothing marked it again. The corpus showed it
+        (`apps/cozy-poll/main.tsx`, one event fewer handled); the positions a
+        mark during the check named are now compared after the dependencies
+        (note 1019). The defect is older than this round: P451's places outside
+        every element body had the same shape, where an entry was compared
+        before the place it read was stored.
+      - _Scale, open, the second largest part of what a FabriChat send still
+        stores: the room's rendered tree is of the scope `session`, with every
+        row of the main conversation in it._ The session instance of the room's
+        scoped outputs holds the tree: 190 KB at 100 messages, 880 KB at 500,
+        1.74 MB at 1,000. Two causes were found, each a read the plan cannot see
+        as scoped, and each general. First, the rows' computeds that read the
+        whole message (`message.get()` in `text`, `isEdited`, `isDeletedNow`)
+        follow its `authorProfile`, a link into the sender's state document of
+        the `#profile` wish, which is of the scope `user`: the executor's
+        `Handle.resolveAsCell` returns the handle itself, so the room's
+        `sendMessage` stores a link to the wish's outcome where today's runtime
+        stores one to the profile. Second, the room's own tree places the wish's
+        result (`<cf-profile-badge $profile={myProfile} />`), and
+        `Instance.rootOf` reads the `failed` member of the operation's state
+        document before it gives the reference to the outcome, which is a read
+        of the scope instance. With both changed in a scratch worktree (note
+        1022) the rows' cones are of the space, and the tree is still of the
+        scope through further dependencies that were not traced to the end.
+        Plans in note 1025.
+      - _Soundness, open, with the same cause: a message stores a link of the
+        scope `user`, so each reader resolves it in its own instance._ A link of
+        a scope stored in a document of the space leads every reader to that
+        reader's instance (note 880), so a principal who reads another's message
+        reads its own profile as the author. No test with two principals shows
+        it; FabriChat ran with one user.
+      - _Scale, open: the basis document lists every document the piece made,
+        and a send writes it again._ `StoredBasis.documents` of
+        `runtime/runner/src/compiled/basis.ts` names each document the piece
+        made that is no row, the places of each row and key among them: 199 KB
+        at 100 messages, 948 KB at 500 and 1.88 MB at 1,000 after, 136 KB at 100
+        before, so the places add to a document that grows with the room, and it
+        is now the largest document a send changes. Plan in note 1025.
+      - _Scale, measured as the brief asked (note 1023): what K costs._ A place
+        is made for every key a derivation runs for, so a piece holds R times K
+        place documents, and the first derivation for a key evaluates two
+        entries per row, the row's value and its place. Making a key's places
+        only on a reader's demand is the separate round the handoff names.
+      - _Structure, open: the places of a row whose element key left are left in
+        the store_, one per key that evaluated them; the entries are dropped.
+      - _Harness: under the auto-advance clock, the first commit of a compiled
+        piece under the serving loop can be refused because the memory server's
+        300-second session challenge expired._ A wait on the websocket reads as
+        an idle loop, and the logical clock moves to the 600-second timer of
+        `ExecutorHost.#retainParkedRuntime`. The new runner test was refused so
+        for every shuffle seed but one until its file was listed among the
+        real-clock files, as `scoped-view` is.
+
+1017. **What was built: the crate (provisional decision P454).**
+      - _`Emitter::hoisted_scope` in `src/plan.rs`_ drops its condition that no
+        element body is around. An operator expression that reads a place of a
+        scope narrower than the space is a value of its own, and in an element
+        body its cone has `within: [{ element: n }]`, one instance per element
+        key, as the element's own cone has. The element's cone places
+        `$h.output(k)` and reads neither the scoped value nor what the
+        expression reads of the element.
+      - _`Emitter::eval_placed`_ is used for the value of a member of a record
+        and for the argument of a spread into a record, as for a child or an
+        attribute of a JSX element, so the record a callback returns places such
+        an expression too (FabriChat's `messageRights` spreads one).
+      - _A promoted `computed`_ written at such a position, whose expression
+        reads a place of a scope, is planned apart in the same way: a promoted
+        body is expression code of the cone around it, so
+        `mine: computed(() => note.text === picked.get())` in
+        `fixtures/scoped-rows.tsx` made the row of the scope `user`.
+      - _The value code (`src/emit.rs`, `placed_spread`)._ A spread of a value
+        another cone computes, where the plan places the members the spread
+        gives as paths of that value (the declared members of its type), is
+        emitted as `...$h.spreadMembers(code, [names])` in place of
+        `...$h.v(code)`. `Host.spreadMembers` gives each member as a reference
+        into the place where the value is the reference to the place of a value
+        of a scope key, and reads the value whole otherwise, as the spread did.
+      - _Where it still does not apply._ A callback that returns the operator
+        expression itself (`xs.map((x) => named ? a : b)`), whose row is the
+        value and not a position of one; the predicate of a `filter` or a scan,
+        which decides the membership; a read the plan does not see as scoped
+        (note 1016, `authorProfile`).
+
+1018. **What was built: a place per row (provisional decision P455).**
+      - _`Host.output`_ gives the cone of another value the reference to the
+        place of a value of a scope key in an element body as outside one; the
+        condition that the evaluation has no element keys is dropped. An
+        evaluation that is no cone, an assembly or a place, is given the value,
+        as before.
+      - _`Instance.scopedValue`_ names the place by the output and the element
+        keys the output's cone has in the context of the reader
+        (`#keysIn(collectionsOf(cone), context)`), and `#valuePlace` is the
+        reference entry that stores the value there, kept under those element
+        keys so that it is dropped with them.
+      - _Where the places are stored._ Each place is a document of its own,
+        `#valueDocument`:
+        `#identifier("scoped value", within, keys, { output
+        })`, with a
+        scope instance for each key that evaluated the value, the value at its
+        root. Note 1007 put the places at `[output, ...keys]` of the one
+        document of the scoped values of an instance; that document would hold
+        one value per row, and a change of one row would store it. A document
+        per row and key is what today's runtime does with the cell of a row's
+        node that reads a cell of a scope. The values a cone outside every
+        element body placed (P451) take a document each in the same way, where
+        P451 kept them in one document; the two forms were equally complex, and
+        this one is today's. The root registry `#scopedValuesOf` maps each such
+        document to its instance, output and keys.
+      - _The records._ `#valueWrites` gives a write to a place the record of the
+        output under the row's element keys (`#outputRecord` with the keys of
+        the place, `keysOfPlace`), and of each interim output of the same cone
+        below the root, under its own.
+      - _A refused commit._ `Instance.restore` of a place marks that place alone
+        as not current, for the scope keys of the refused transaction's
+        identity, where it marked every place of the document of the scoped
+        values.
+      - _The row._ It stays a row of the space, a unit of the result and a row
+        document where rows are documents, evaluated once for every key, and it
+        holds the link to its place, whose scope the stored link names.
+
+1019. **The pull by change (provisional decision P456).**
+      - _What it replaces._ `#pullScoped` called every registered pull at every
+        pass: with R rows and K keys that is R times K visits per pass, each
+        bringing back an entry set aside for the acting key and comparing
+        everything it read and used.
+      - _The slot of an entry set aside stays registered._ `#forActing` moves
+        the slot of the entry it sets aside with the entry (`#toAside`): the
+        slot keeps its registrations as a reader of what the entry read and is a
+        user, through `#asideUsers`, of what it used. A write marks it, a change
+        of an entry it used marks it where the change is of its scope key or of
+        the space (`scopeKeyReaches` in `exec/scope-instances.ts`, `#markUsers`
+        with the scope key of the change), and a write to a document of a scope
+        marks the readers of the key the write was made for alone (`#changed`).
+        `#moved`, `markStale` and the restore of a refused commit mark the slots
+        set aside as well (`#staleAside`). An entry brought back (`#fromAside`)
+        is then current where nothing marked it, where it was compared with
+        everything it read and used.
+      - _The pulls due._ A mark of the slot of a pull adds the pull to the set
+        of its scope key, or of every key seen where the slot is of none
+        (`#pullDue`, `#pullsDue`). `#pullScoped` visits the pulls due for the
+        user and the session keys it runs for, and those with an entry compared
+        on every pull (`#alwaysPulls`); for a key it has not run for, every
+        pull. A pull registered while a key acts is due for every other key
+        seen. `Counts.scopedPulls` counts the visits.
+      - _A check compares what a dependency wrote while it was brought up to
+        date._ `#current` compares, after the dependencies, the positions that a
+        mark during the check named, and the entry is not current where one
+        changed (finding of note 1016; test "a branch of a row on another cone
+        of the row of the scope `session`" over
+        `fixtures/scoped-rows-confirm.tsx`, seen failing with the picked row
+        showing the other branch).
+      - _Two changes the pull by change needed._ `#pullScoped` runs after the
+        collections of a pass are brought up to date: an entry kept under an
+        element key that left is then dropped and not pulled with a context
+        whose element is gone, which wrote `undefined` to the place of a plain
+        value whose key changed. And an entry whose value is a reference its
+        evaluation made, the same for every key, is no change when a key first
+        evaluates it to the reference another key's entry held
+        (`#referenceStamps`), so the rows that place it are not evaluated again
+        for each new key.
+
+1020. **Labels, per row.** The argument of note 997, per row.
+      - _The row does not depend on the value._ Its entry holds the reference to
+        the place, the same for every key, and reads nothing of it.
+      - _The positions that hold the reference keep its label._ Of a child or an
+        attribute of JSX, the position has the template `output k` of the
+        expression's output (`*/children/0` of `scoped-view-rows.tsx` has
+        `output 4`). Of a member a spread gives, the position has the template
+        of that member of the value (the plan's `Self::extend`, inlined from the
+        value's entries), which binds the slots of the expression's cone under
+        the row's keys.
+      - _The place carries the record of its output_, under the row's element
+        keys (`#valueWrites`), and a reader that follows the link reads the
+        scope instance and consumes that label, which is today's reading of a
+        reference.
+      - _What stores less label._ A position of a row that does not depend on
+        the scoped value no longer joins its label (CFC question 2 of round
+        nineteen's second continuation, now built). Not checked by a test of
+        stored labels; the tests compare values and writes.
+
+1021. **The tests, seen failing first.**
+      - `tests/plan.rs`: the view case now has the expression in the body of the
+        `map` over an array of references as a cone of its own (seen failing
+        with the cones `named`, `child`, `disabled`, `map`, `$UI`);
+        `an_expression_of_a_row_that_reads_a_value_of_a_scope_is_a_value_of_its_own`,
+        a member and a spread of a record over an array of references, an array
+        of plain values in place and the result of a `filter` (seen failing with
+        one cone in the element); and
+        `a_promoted_computed_of_a_row_that_reads_a_value_of_a_scope_is_a_value_of_its_own`
+        (seen failing the same way). `tests/emit.rs`,
+        `a_value_of_another_cone_spread_into_a_row_is_placed_by_its_declared_members`,
+        seen failing with `...$h.v($h.output(1))`.
+      - `exec/test/scoped-view.test.ts`, two principals at 10 and at 100 items,
+        over `scoped-view-rows.tsx` (a `map` over an array of references whose
+        JSX rows read a value of the scope `session`), `scoped-rows-plain.tsx`
+        (a `map` over an array of plain values in place returning records) and
+        `scoped-rows-filter.tsx` (a `map` over the result of a `filter` over an
+        array of references, spreading the value), six cases each: each
+        principal reads its own rows; the scope instances hold one place per row
+        and key, of a size that does not follow the rows; an edit writes the
+        place of its row once per key and the same documents at both sizes; with
+        2 and 5 principals a derivation for a key brings up to date the edited
+        row's place alone (at most one visit per key, equal at both sizes); a
+        principal's nickname brings up to date that principal's places, at least
+        as many as there are rows, and none of another; a refused commit stores
+        again the place of the acting key and no place of another. And an append
+        writes the new place once per key. Seen failing before: 90 places more
+        at 100 items expected and 0 found; the scope instance written 6,219
+        bytes at 100 items against 639 at 10; 16 pulls where the work at 5
+        principals counted 20; 64 pulls for the other principals after one
+        principal's nickname; 16 pulls after a restore.
+      - `exec/test/scope-instances.test.ts` over `scoped-rows.tsx`: two cases
+        assert the new representation in place of the rows in each principal's
+        instance.
+      - `runtime/runner/test/compiled/scoped-rows.test.ts`, under the serving
+        loop with two principals at 10 and at 100 items: one place per row and
+        session, the largest scope instance as large at 100 as at 10, the same
+        documents of the same sizes delivered to the second client for an edit,
+        no refusal. Seen failing on `5db1c2658d` with as many scope instances at
+        100 items as at 10 (6).
+
+1022. **Measured: FabriChat.** `SCALE_STAND_INS=table`,
+      `compare/fabrichat/scale.ts runner room <n>`, one run of each cell, three
+      timed sends each. Arm C is the room of this branch, arm D the room of
+      round twenty whose rows derive their own controls (`881e54d2e1`,
+      `32928cd2cd` and `dbce784cd9` cherry-picked onto this branch in a scratch
+      worktree). Before is note 1014's figures (load 4 to 6) and a run of C at
+      100 at `5db1c2658d` in this round (load 28 to 45), which gave the same
+      counts. Times in milliseconds, the piece's own time in brackets; records
+      are those the adapter is given; "KB" is the size as JSON after the commit
+      of each document a send's commits changed.
+
+      | arm | messages | when   | load    | ms per send (own)       | records | evaluations | element evaluations | documents | KB changed    |
+      | --- | -------- | ------ | ------- | ----------------------- | ------- | ----------- | ------------------- | --------- | ------------- |
+      | C   | 100      | before | 5.3     | 449–747 (158–461)       | 148     | 49          | 29                  | 33        | 2,345–2,388   |
+      | C   | 100      | after  | 7.7     | 164–419 (75–327)        | 172     | 59          | 31                  | 44        | 568–576       |
+      | C   | 500      | before | 4.3     | 2,365–3,030 (732–1,416) | 148     | 49          | 29                  | 33        | 11,021–11,064 |
+      | C   | 500      | after  | 7.9     | 591–648 (280–306)       | 172     | 59          | 31                  | 44        | 2,095–2,103   |
+      | C   | 1,000    | before |         | refused during the seed |         |             |                     |           |               |
+      | C   | 1,000    | after  | 16      | 1,588–2,195 (687–788)   | 172     | 59          | 31                  | 44        | 4,016–4,025   |
+      | D   | 100      | before | 4.8     | 474–844 (164–527)       | 148     | 50          | 31                  | 33        | 2,345–2,388   |
+      | D   | 100      | after  | 54      | 260–271 (123–134)       | 196     | 70          | 37                  | 50        | 607–616       |
+      | D   | 500      | before | 4.9     | 2,256–2,355 (713–747)   | 148     | 50          | 31                  | 33        | 11,021–11,064 |
+      | D   | 500      | after  | 17      | 860–961 (385–395)       | 196     | 70          | 37                  | 50        | 2,276–2,285   |
+      | D   | 1,000    | after  | 8 to 23 | 1,041–1,641 (456–1,031) | 196     | 70          | 37                  | 50        | 4,374–4,383   |
+
+      - _The seed at 1,000._ C completes the seed, 1,000 sends with none
+        refused, in 979 s (load 7 to 60 during the run, from other sessions), at
+        a peak of 6.46 GB resident; before it was refused with
+        `MessageTooLargeError` after 30 minutes at 27 GB (note 1014). The seed
+        at 500 took 166 s and peaked at 4.33 GB (C), 252 s and 4.12 GB (D). D
+        completes the seed at 1,000 in 832 s (load 8 to 23) at a peak of 7.54
+        GB; before, D at 1,000 was not run (note 1014: its documents are C's,
+        and C was refused).
+      - _The rows._ The dumps of every run after (`SCALE_DUMP`) hold no error
+        value and no `is not a function`; the reader's rights of every message
+        read back (103, 503 and 1,003).
+      - _What a send changes, by document_ (`SCALE_CHANGES`, the third send).
+        Before, at 100 messages: two session documents of 1.05 MB each (the
+        room's tree in the scoped outputs, and the one document of the scoped
+        values of P451, whose value of output 439 held 1.05 MB), the basis 136
+        KB, the result 111 KB and the argument 26 KB. After, at 100, 500 and
+        1,000 messages in C: the basis 199 KB, 948 KB and 1.88 MB; the room's
+        tree in the session instance of the scoped outputs 190 KB, 880 KB and
+        1.74 MB (note 1016); the argument, which holds the stored messages, 26
+        KB, 125 KB and 249 KB; the result 111 KB at every size; a user instance
+        of 17.7 KB at every size; and the places of the new row, each a few
+        hundred bytes. In D the basis is 235 KB, 1.13 MB and 2.24 MB at 100, 500
+        and 1,000, and the tree the same as C's. The documents a send changes
+        are 44 (C) and 50 (D) where they were 33: the new row's places, one per
+        scope key that derives them.
+      - _The records and evaluations of a send_ are more than before (172
+        against 148 in C, 196 against 148 in D; 59 against 49 and 70 against 50
+        evaluations): the new row's places are entries of their own, each with a
+        record. None of them grows with the room.
+      - _With `Handle.resolveAsCell` following links and `Instance.rootOf`
+        reading no `failed` member of a state document of a scope_, both changed
+        in a scratch worktree and not built (note 1025), C at 100: 135 records,
+        54 evaluations, 31 element evaluations, 39 documents of 1.63 to 1.66 MB.
+        The cones of the rows are then of the space, and the room's tree is
+        still of the scope `session` and now holds each row's profile in place,
+        1.32 MB.
+
+1023. **Measured: Topics, the serving path, and what K costs.**
+      - _Topics, the arm `serving` on `filing-order`_, the boards of the
+        measurement branch copied in, before at `5db1c2658d` and after, one run
+        each (loads 23 to 32 before, 41 to 55 after). An edit of a title runs 1
+        derivation and 5 evaluations and gives 9 records at 1,000 and 2,000
+        topics, before and after; the second client reads it after 59 to 71 ms
+        before and 62 to 73 ms at 1,000 after, 68 to 78 ms at 2,000 after. A
+        create runs 12 to 13 derivations, with no refusal before or after, and
+        gives 117 to 189 records after against 103 to 172 before at 1,000 (the
+        same at 2,000 after): the created topic's values of a scope each take a
+        document of their own (P455), where P451 kept them in one. The second
+        client reads a create after 518 to 1,025 ms before and 523 to 1,078 ms
+        after at 1,000, 886 to 2,031 ms at 2,000.
+      - _`compare/serving-path.ts 1000`_ after: the piece is found current after
+        the takeover with no evaluation, 6 evaluations at the wake, 11
+        derivations, no refusal, 44.3 ms of its own for its ten events and
+        derivations (load 17 to 20; note 1008: 33.4 ms at 13 to 24).
+      - _What K costs_, `compare/scope-cost.ts` over `fixtures/scoped-rows.tsx`
+        (a `map` over an array of plain values in place whose row says whether
+        the acting user picked it), at 100 and 1,000 rows with 1, 2 and 8
+        principals, before and after (counts; the times were taken at loads of
+        10 and 26 and are not compared). Deriving again with nothing changed
+        evaluated 4 and 16 entries for 2 and 8 principals and re-formed the
+        assembly once per principal; after, nothing. A note posted evaluates 8
+        and 20 entries for 2 and 8 principals (8 and 26 before) and pulls 1 and
+        7 places. A pick by one principal evaluates that principal's 101 (1,001)
+        rows and their places and re-forms no assembly. The scope instances hold
+        one place of 5 bytes per row and principal, 4 KB at 100 rows and 8
+        principals and 40 KB at 1,000, against every row once per principal
+        before, 175 KB and 1.75 MB. What K costs: the first derivation for a
+        principal evaluates two entries per row, the row's value and its place
+        (1,400 for 8 principals at 100 rows against 714 before, 14,000 at 1,000
+        against 7,014), and makes R places; the piece holds R times K place
+        documents and as many entries set aside, 1,400 and 14,000 for 8
+        principals, which is what places made only on a reader's demand would
+        bound.
+
+1024. **The corpus,** `compare/runner-corpus.ts` in its four modes, one run of
+      each, before at `5db1c2658d` (in a scratch worktree) and after at
+      `423f44a346`, as started, every event handled, no commit refused, equal to
+      the executor in memory (and for the resumes, resumed, found current, wrote
+      no document):
+
+      | Mode                  | Before                           | After                            |
+      | --------------------- | -------------------------------- | -------------------------------- |
+      | runner                | 259, 216, 249, 231               | 259, 215, 249, 230               |
+      | serving               | 235, 202, 221, 212               | 235, 201, 221, 211               |
+      | after a resume        | 259, 215, 251, 227; 149, 121, 82 | 259, 215, 251, 227; 148, 121, 82 |
+      | serving with a resume | 235, 201, 221, 210; 81, 72, 0    | 235, 201, 221, 210; 81, 72, 0    |
+
+      - _Modules whose line changes._ `examples/fair-share/main.tsx`: the same
+        refusal for writer fit, the profile's `User` clause in a write of a
+        document outside the executor's store whose writer policy admits none
+        (the class of note 1006), is given twice at every event, 10 times, where
+        it was given at the first two events, 1 to 3 times; after a resume, the
+        whole resume's commit is refused for it, where the resume went through.
+        The events handled and the first difference are unchanged. With every
+        pull visited at every pass, as before P456, the count is the same, so
+        the cause is in P454 or P455; a likely reading, not checked, is that the
+        derivation's transaction now reads the places that hold values of the
+        profile, and a document the runtime writes in it with no record of the
+        plan stores the join of what the transaction read (note 983).
+        `apps/redactor/vault.tsx`: 3 of 4 events handled with 8 refusals on the
+        runner path and under the serving loop in the runs of the four modes
+        side by side, and 4 refusals where 2 under the serving loop with a
+        resume; 4 of 4 with 1 refusal in two runs of the module alone on the
+        runner path (2 refusals before); it varies between runs (note 1001), and
+        was not traced further. `apps/cozy-poll/main.tsx` handled one event
+        fewer at `1bf27fa074`; that was the defect of note 1016, and at
+        `423f44a346` its line is the line before.
+
+1025. **Planned, not built.**
+      - _The reads of a scope the plan cannot see (note 1016)._ Three parts, all
+        general. First, `Handle.resolveAsCell` follows the links at the handle's
+        position to the last one, as `footprint-analysis.md` §7.1 says
+        (`h.resolveAsCell()`: reads through it are reads at `h->`) and today's
+        `Cell.resolveAsCell` does (`#resolveAsCell("value")` of
+        `runtime/runner/src/cell.ts`), with the reads recorded by the host or
+        the handler's transaction; the room's `sendMessage` then stores a link
+        to the profile. That is a conforming implementation of the specification
+        and needs no decision; it changes what every module that stores a
+        resolved handle stores, so it is a round of its own with the corpus
+        compared. Second, `Instance.rootOf` gives a cone that passes the result
+        of an operation of a scope on by reference the reference to the outcome
+        without reading the `failed` member of the state document; where the
+        request failed, the error state would then have to be in the outcome, or
+        read where the reference is read through. Third, the dependencies that
+        keep the room's tree of the scope `session` with both changed are not
+        traced; a read the plan cannot see as scoped makes a row or a tree of a
+        scope at run time, and today's runtime decides the scope of each node by
+        what it read. Planning every operator expression that reads a handle or
+        a value of another cone apart would cover such reads at the cost of a
+        cone instance per row for each, and needs the owner's decision. The
+        experiment of note 1022 changed the first two in a scratch worktree;
+        nothing of it is built.
+      - _The basis document's list of documents._ The documents of a row's
+        places, like those of its rows, could be left out of
+        `StoredBasis.documents`, since a piece with documents of a scope resumes
+        whole (note 892) and derives its places again; or the list could be
+        spread over part documents as `inputs` is. Not built.
+      - _Places on a reader's demand_: the handoff's "a session no client holds
+        any more", which also bounds the R times K documents.
+      - _A place's label after a label change alone._ `#relabel` reads the key
+        of a record as a path of the result document, so a place, keyed with its
+        document, is given no record again; its label follows only when it is
+        written (CFC question below).
+      - _The documents of the places of a key that left_, which no derivation
+        removes.
+
+1026. **Provisional decisions, and what was not verified.** P454: as note 1017.
+      P455: as note 1018. P456: as note 1019. Not verified: the stored labels of
+      a row's positions and of the places under clauses that differ between
+      principals (no test with a confidentiality clause on the scoped value);
+      two sessions of one principal, where a place of the scope `user` is due
+      for the principal's key and pulled by the first session that derives (the
+      tests have one session per principal); FabriChat under the serving loop or
+      with two users; a resume of a piece with places beyond the corpus (whole,
+      note 892); the R times K places under the serving loop with many sessions;
+      the times, each one run at loads of 5 to 60 from other sessions; D at
+      1,000 before (not run, as in note 1014); why
+      `examples/fair-share/main.tsx` is refused twice per event (note 1024).
+
+### CFC questions deferred, round twenty-one
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. P454 and P455: a position of a row that does not depend on the scoped value
+   no longer joins its label (note 1020). A change that stores less label;
+   today's runtime stores the same for a node of its own.
+2. The record of a row's position that holds the link to a place resolves its
+   template with the inputs of the run that stored the row, which is the run of
+   one scope key; where the label of the scoped value differs between keys, the
+   position of the space joins the label of that key's value (CFC question 4 of
+   round nineteen continued, per row). An over-label of the row, not an
+   under-label of the place.
+3. A spread of a scoped value gives each member the type declares as a link into
+   the place, a member the value lacks included, where JavaScript's spread gives
+   no member: the row then stores a link to an absent path, which a reader reads
+   as nothing. What label such a position carries.
+4. A place is given no record again when only a label it read changed
+   (`#relabel`, note 1025), so it keeps the label its last write stored. The
+   same held for the places of P451.
+5. An entry set aside is current where no mark reached its slot (P456). Marks
+   follow writes and changes of values; a change of a label alone reaches a
+   record through `#relabel` and not through a mark. No case is known where the
+   two differ from what the full comparison of the entry gave.
+6. Note 1016: a message stores a link of the scope `user` into the sender's wish
+   state, which each reader resolves in its own instance, so the label a reader
+   consumes through `authorProfile` is that of its own profile and not the
+   sender's.

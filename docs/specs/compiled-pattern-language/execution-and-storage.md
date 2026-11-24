@@ -665,6 +665,28 @@ cell and from its own per-session `pickerOpen` cell
 - **Storage is per scope instance.** A kept output of narrower scope is
   stored in the scope instance, for that key, of the document that holds
   its path (section 4.2).
+- **A value of narrower scope that a cone of the space places.** An
+  operator expression written at a position of a constructed value, a
+  child or an attribute of a JSX element or the value of a member of a
+  record, or the argument of a spread into a record, that reads a value
+  of narrower scope is a value of its own in a cone of its own, and the
+  cone around it places the value without reading it. In the body of a
+  per-element construct the cone has one instance per element key, as
+  the element's own cone has, for a construct over an array of
+  references, over an array of plain values in place, and over the result
+  of another per-element construct. *Provisional (decisions P451 and P454
+  of the prototype):* the value is stored in a document of its own for
+  each output and element keys, in the scope instance of each key that
+  evaluated it, and the position that places it holds a link of that
+  scope to it, so a row that places such a value stays a row of the
+  space, evaluated once for every key, as today's runtime keeps the result
+  of a node of a row that reads a cell of a scope in a cell of its own for
+  the row. A spread of such a value gives each member the type declares
+  as a link into that document. A derivation for one scope key brings up
+  to date the documents whose inputs a change marked for that key or for
+  the space, and every one for a key not evaluated for before. Whether
+  such a document is made only for a key whose reader demands it is
+  question 115.
 
 The scheduler says which scope keys demand an instance. One derivation
 transaction may hold the evaluations for several scope keys, each carrying
@@ -3448,6 +3470,7 @@ says how many scope instances exist.
 | Cache document | The entries of cones the runtime promoted | Section 8.4 | One per scope the promoted cones have |
 | Binding state document | The state of a binding made in a function body: the copied paths, and a link for each cell and each container bound by reference | Section 5.5 | The body's |
 | Output document | One interim output that is a plain array generated from scratch and has to have an address, because a per-element construct is over it or it is given whole to an instance of its own (section 2.5). *Assumed* (`plan-and-label-templates.md` §8, question 157) | Section 5.2 | By the scope of the output's cone instance |
+| Scoped value document | The value of one output of narrower scope that a cone of the space places, under the element keys of its cone (section 1.8). *Provisional* (P454) | Section 5.2, of the output and the element keys | One per scope key that evaluated the value; none of the space |
 | Instances document | Which instances the evaluations of the instance's computations made | Section 2.8 | One per scope the making cone instances have |
 | Stream document | The entries of the events appended to one stream, and the stream's `eventWatermark`. It exists once the stream received an event (section 4.7) | The stream's identifier (sections 5.2 and 5.5) | As today |
 
@@ -7698,6 +7721,20 @@ Added by the ruling that the scheduler is switched per space (section 9):
      `params`. The alternative is a parameters document that the
      factory value links to, shared by every holder of the factory. It
      is question 308 of the continuation plan.
+115. **Where a value of narrower scope that a cone of the space places
+     is stored, and for which keys** (section 1.8). *Assumed,*
+     provisional (P454 and P455 of the prototype, the coordinator's
+     decisions, and not ruled): one document for each output and element
+     keys, with a scope instance for each key that evaluated the value,
+     made for every key a derivation runs for. The alternative named
+     first, one document of the scoped values per instance with each
+     value at the output and the element keys, holds one value per row in
+     a document a change of one row writes, so a change would store a
+     document that grows with the rows. Not decided: whether a key's
+     instances are made only while a reader of that key demands them, as
+     today's runtime derives a cell of a session only for a client that
+     subscribes to it, which also bounds the documents and the memory that
+     follow the keys a piece has seen.
 
 
 ### 11.2 For another document or the prototype
