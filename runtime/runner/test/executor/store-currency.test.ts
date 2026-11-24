@@ -208,6 +208,7 @@ describe("StoreCurrency", () => {
               under: [],
               unvouched: [],
               writes: [],
+              mints: [],
               slices: [{
                 key: "user:alice",
                 unvouched: [],

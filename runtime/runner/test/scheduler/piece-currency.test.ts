@@ -78,11 +78,18 @@ describe("piece-currency", () => {
    * computation that names no piece, clean and live unless it says
    * otherwise, with the document it writes and what it read. With
    * `live: false` the piece's computation is registered and not live.
+   * `minted` are the documents the computation's one run minted and set, or
+   * each instance's run where an instance gives its own.
    */
   const snapshotOf = (options: {
     declared?: CellScope;
     instances?: Array<
-      { key: ScopeKey; identity?: ScopeKeyIdentity; reads?: Read[] }
+      {
+        key: ScopeKey;
+        identity?: ScopeKeyIdentity;
+        reads?: Read[];
+        minted?: Read[];
+      }
     >;
     clean?: ScopeKey[];
     changed?: { at: ScopeKey; by: ScopeKey };
@@ -90,6 +97,7 @@ describe("piece-currency", () => {
     status?: NodeStatus;
     live?: boolean;
     reads?: Read[];
+    minted?: Read[];
     clocks?: Record<string, { intervalMs: number; tick?: number }>;
     sourceSeqs?: Record<string, number>;
     unattributed?: Array<
@@ -108,22 +116,25 @@ describe("piece-currency", () => {
     const node = nodes.register(action, "computation");
     nodes.setStatus(action, options.status ?? "clean");
     node.liveRefs = options.live === false ? 0 : 1;
-    const logOf = (reads: Read[] = []): ReactivityLog => ({
-      reads: reads.map((read) => ({
+    const addressOf = (read: Read) =>
+      ({
         space: SPACE,
         type: "application/json",
         path: [],
         ...read,
-      } as IMemorySpaceAddress)),
+      }) as IMemorySpaceAddress;
+    const logOf = (reads: Read[] = [], minted?: Read[]): ReactivityLog => ({
+      reads: reads.map(addressOf),
       shallowReads: [],
       writes: [],
+      ...(minted !== undefined && { minted: minted.map(addressOf) }),
     });
     if (instances.length > 0) {
       node.fanOut = newFanOutNodeState();
-      for (const { key, identity, reads } of instances) {
+      for (const { key, identity, reads, minted } of instances) {
         node.fanOut.instances.set(key, {
           identity: identity ?? ALICE,
-          log: logOf(reads),
+          log: logOf(reads, minted),
         });
       }
       for (const key of options.clean ?? instances.map(({ key }) => key)) {
@@ -155,8 +166,8 @@ describe("piece-currency", () => {
       scope: options.declared ?? "space",
     } as IMemorySpaceAddress];
     const dependencies = new WeakMap<Action, ReactivityLog>();
-    if (options.reads !== undefined) {
-      dependencies.set(action, logOf(options.reads));
+    if (options.reads !== undefined || options.minted !== undefined) {
+      dependencies.set(action, logOf(options.reads, options.minted));
     }
     const writersByEntity = new Map<SpaceScopeAndURI, Set<Action>>();
     for (const writer of options.unattributed ?? []) {
@@ -261,6 +272,78 @@ describe("piece-currency", () => {
           { slice: session, at: session },
           { slice: session, at: user },
         ]);
+      });
+    });
+
+    describe("a document a run minted", () => {
+      it("is among the piece's mints, and vouched for in the space slice, for a clean run with no fan-out state", () => {
+        const snapshot = snapshotOf({ minted: [{ id: "of:row" }] });
+
+        expect(snapshot.mints).toEqual(["of:row"]);
+        expect(snapshot.writes).toEqual(["computed:out"]);
+        expect(sliceOf(snapshot, "space")?.vouches).toEqual([
+          "computed:out",
+          "of:row",
+        ]);
+      });
+
+      it("is neither among the mints nor vouched for, for a run that is not clean", () => {
+        // A run that was withdrawn, refused, or is owed again leaves its
+        // node invalid.
+
+        const snapshot = snapshotOf({
+          status: "invalid",
+          minted: [{ id: "of:row" }],
+        });
+
+        expect(snapshot.mints).toEqual([]);
+        expect(sliceOf(snapshot, "space")?.vouches).toEqual([]);
+      });
+
+      it("is among the mints, and vouched for by no slice, for a clean run of a computation that is not live", () => {
+        const snapshot = snapshotOf({
+          live: false,
+          minted: [{ id: "of:row" }],
+        });
+
+        expect(snapshot.mints).toEqual(["of:row"]);
+        expect(snapshot.slices).toEqual([]);
+      });
+
+      it("is among the mints, and vouched for by no slice, where it is narrower than a run with no fan-out state", () => {
+        const snapshot = snapshotOf({
+          minted: [{ id: "of:row", scope: "user" }],
+        });
+
+        expect(snapshot.mints).toEqual(["of:row"]);
+        expect(sliceOf(snapshot, "space")?.vouches).toEqual(["computed:out"]);
+      });
+
+      it("is vouched for at a session's key alone, and decided at no broader key, for a run at that session's instance", () => {
+        const snapshot = snapshotOf({
+          instances: [{ key: session, minted: [{ id: "of:row" }] }],
+        });
+
+        expect(sliceOf(snapshot, session)?.vouches).toContain("of:row");
+        expect(
+          snapshot.slices.flatMap((slice) =>
+            [...slice.decides, ...slice.superseded].filter(({ id }) =>
+              id === "of:row"
+            )
+          ),
+        ).toEqual([]);
+      });
+
+      it("is a write in another space, which no slice of the piece is vouched for, where it is in another space", () => {
+        const snapshot = snapshotOf({
+          minted: [{
+            id: "of:row",
+            space: "did:key:z6Mk-piece-currency-other-space" as MemorySpace,
+          }],
+        });
+
+        expect(snapshot.mints).toEqual([]);
+        expect(snapshot.unvouched).toEqual(["foreign-write"]);
       });
     });
 

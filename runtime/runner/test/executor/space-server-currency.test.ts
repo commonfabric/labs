@@ -130,6 +130,36 @@ const ENCLOSING_PROGRAM: RuntimeProgram = {
 };
 
 /**
+ * A piece whose lift mints one document for each of `names`, with
+ * `Writable.for(name)`, and returns the minted documents. `extra` is an input
+ * the lift reads, and below 100 computes nothing from.
+ */
+const MINTING_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { lift, pattern, Writable } from 'commonfabric';",
+      "interface Row { label: string }",
+      "const rowsOf = lift(",
+      "  ({ names, extra }: { names: string[]; extra: number }): Row[] => {",
+      "    const rows: unknown[] = [];",
+      "    for (const name of names) {",
+      "      const label = name.toUpperCase() + (extra > 100 ? '!' : '');",
+      "      rows.push(Writable.for<Row>(name).set({ label }));",
+      "    }",
+      "    return rows as Row[];",
+      "  },",
+      ");",
+      "export default pattern<",
+      "  { names: string[]; extra: number },",
+      "  { rows: Row[] }",
+      ">(({ names, extra }) => ({ rows: rowsOf({ names, extra }) }));",
+    ].join("\n"),
+  }],
+};
+
+/**
  * One demanded document: a watch root, or a document a selector reaches, at
  * the space's instance unless `scopeKey` names another, demanded by the
  * session `viewer` of alice unless `session` names another session or
@@ -1004,6 +1034,224 @@ describe("SpaceServer", () => {
           );
 
           expect(host.stats().currency.underived).toBe(1);
+        });
+      });
+
+      describe("with a demanded document a lift minted", () => {
+        /** The piece's root, the lift's output, and each minted document. */
+        type Minting = {
+          root: NormalizedFullLink;
+          rows: NormalizedFullLink;
+          minted: NormalizedFullLink[];
+        };
+
+        /**
+         * Sets up the minting piece for `names` as a runtime that then stops
+         * it, so the store holds a document for each name with nothing
+         * running.
+         */
+        const setUpMinting = async (names: string[]): Promise<Minting> => {
+          const setup = openRuntime(setupSigner);
+          const compiled = await setup.patternManager.compilePattern(
+            MINTING_PROGRAM,
+            { space },
+          );
+          const argument = setup.getCell<{ names: string[]; extra: number }>(
+            space,
+            "currency minting argument",
+            compiled.argumentSchema,
+          );
+          const result = setup.getCell<{ rows: { label: string }[] }>(
+            space,
+            "currency minting result",
+            compiled.resultSchema,
+          );
+          const tx = setup.edit();
+          argument.withTx(tx).set({ names, extra: 0 });
+          setup.run(tx, compiled, argument, result);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await result.pull();
+          const documentOf = (
+            cell: { getAsNormalizedFullLink(): NormalizedFullLink },
+          ): NormalizedFullLink => {
+            const { space, id, scope } = cell.getAsNormalizedFullLink();
+            return { space, id, scope, path: [] };
+          };
+          const rows = result.key("rows");
+          const minted = names.map((_, at) =>
+            documentOf(rows.key(at).resolveAsCell())
+          );
+          const piece = {
+            root: result.getAsNormalizedFullLink(),
+            rows: documentOf(rows.resolveAsCell()),
+            minted,
+          };
+          setup.runner.stop(result);
+          await setup.idle();
+          await setup.storageManager.synced();
+          await closeLastRuntime();
+          return piece;
+        };
+
+        /** Sets the minting piece's argument, as a runtime that runs nothing. */
+        const setMintingArgument = async (
+          argument: { names: string[]; extra: number },
+        ) => {
+          const writer = openRuntime(setupSigner);
+          const cell = writer.getCell<{ names: string[]; extra: number }>(
+            space,
+            "currency minting argument",
+            {
+              type: "object",
+              properties: {
+                names: { type: "array", items: { type: "string" } },
+                extra: { type: "number" },
+              },
+            },
+          );
+          await cell.sync();
+          const tx = writer.edit();
+          cell.withTx(tx).set(argument);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+        };
+
+        /**
+         * Serves the minting piece until it has settled with its output and
+         * `minted` demanded, as a session that renders the rows does.
+         */
+        const serveMinting = async (
+          piece: Minting,
+          minted = piece.minted,
+        ) => {
+          await demand(
+            { link: piece.root, root: true },
+            { link: piece.rows, root: false },
+            ...minted.map((link) => ({ link, root: false })),
+          );
+          await awaitEach(cycles, () => serves(piece.root));
+          await settled();
+        };
+
+        /**
+         * Parks the space, and has the next tenure, which `change` brings,
+         * demand `root` alone.
+         */
+        const demandAloneAfterPark = async (
+          root: NormalizedFullLink,
+          change: () => Promise<void> = touchSpace,
+        ) => {
+          await host!.spaceServer(space)!.park("test-park");
+          demanded = [{ link: root, root: true }];
+          await change();
+        };
+
+        /** Writes `minted` as a client. */
+        const overwrite = async (minted: NormalizedFullLink) => {
+          const writer = openRuntime(setupSigner);
+          const row = writer.getCellFromLink<{ label: string }>(minted);
+          await row.sync();
+          const tx = writer.edit();
+          row.withTx(tx).set({ label: "typed" });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.storageManager.synced();
+          await closeLastRuntime();
+        };
+
+        it("leaves a root that names one unloaded while the minting piece's record is clean, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpMinting(["a", "b"]);
+          await serveMinting(piece);
+          const refused = { ...host.stats().currency.refused };
+
+          await demandAloneAfterPark(piece.minted[0]);
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.servedFromStore === 1,
+          );
+          await settled();
+
+          expect(host.stats().currency.refused).toEqual(refused);
+          expect(host.stats().structureLoadTerminal).toBe(0);
+          expect(serves(piece.root)).toBe(false);
+        });
+
+        it("leaves such a root unloaded after a run that set every minted document to the value it held, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpMinting(["a", "b"]);
+          await serveMinting(piece);
+          const stored = host.stats().currency.recordsStored;
+
+          await setMintingArgument({ names: ["a", "b"], extra: 1 });
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.recordsStored > stored,
+          );
+          await settled();
+          const refused = { ...host.stats().currency.refused };
+          await demandAloneAfterPark(piece.minted[1]);
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.servedFromStore === 1,
+          );
+
+          expect(host.stats().currency.refused).toEqual(refused);
+        });
+
+        it("refuses such a root once an input of the minting piece changed, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpMinting(["a", "b"]);
+          await serveMinting(piece);
+
+          await demandAloneAfterPark(
+            piece.minted[0],
+            () => setMintingArgument({ names: ["a", "b"], extra: 1 }),
+          );
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.refused.marked === 1,
+          );
+
+          expect(host.stats().currency.servedFromStore).toBe(0);
+        });
+
+        it("refuses such a root once a client overwrote the document, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpMinting(["a", "b"]);
+          await serveMinting(piece);
+
+          await demandAloneAfterPark(
+            piece.minted[0],
+            () => overwrite(piece.minted[0]),
+          );
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.refused.marked === 1,
+          );
+
+          expect(host.stats().currency.servedFromStore).toBe(0);
+        });
+
+        it("refuses a root that names a document the lift minted before and no longer mints, under `skip`", async () => {
+          host = newHost("skip");
+          const piece = await setUpMinting(["a", "b"]);
+          await serveMinting(piece);
+          const stored = host.stats().currency.recordsStored;
+          await setMintingArgument({ names: ["a"], extra: 0 });
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.recordsStored > stored,
+          );
+          await settled();
+
+          await demandAloneAfterPark(piece.minted[1]);
+          await awaitEach(
+            cycles,
+            () => host!.stats().currency.refused["unvouched-instance"] === 1,
+          );
+
+          expect(host.stats().currency.servedFromStore).toBe(0);
         });
       });
 

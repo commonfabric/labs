@@ -544,6 +544,7 @@ export class StoreCurrency {
         under: taken.under,
         vouched: reasons.length === 0,
         writes: taken.writes,
+        ...(taken.mints.length > 0 && { mints: taken.mints }),
         owned: facts?.owned ?? [],
         // The loop follows a recorded origin before it leaves a root that
         // rests on the piece unstarted (serving-loop.md §3e).

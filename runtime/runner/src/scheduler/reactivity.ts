@@ -14,6 +14,7 @@ import type {
   TransactionReactivityLog,
 } from "../storage/interface.ts";
 import { localReadWakeDependencies } from "../storage/local-read-policy.ts";
+import { mintedWritesOfTx } from "../storage/reactivity-log.ts";
 import { getTransactionWriteDetails } from "../storage/transaction-inspection.ts";
 import type {
   AnnotatedEventHandler,
@@ -152,7 +153,13 @@ export function txToReactivityLog(
 ): ReactivityLog {
   const log = toSchedulerReactivityLog(tx.getReactivityLog());
   const wakes = localReadWakeDependencies(tx);
-  return wakes.length === 0 ? log : { ...log, reads: [...log.reads, ...wakes] };
+  const minted = mintedWritesOfTx(tx);
+  if (wakes.length === 0 && minted.length === 0) return log;
+  return {
+    ...log,
+    ...(wakes.length > 0 && { reads: [...log.reads, ...wakes] }),
+    ...(minted.length > 0 && { minted }),
+  };
 }
 
 function toSchedulerReactivityLog(

@@ -243,6 +243,7 @@ import {
   internalVerifierRead,
   markReadAsAttemptedWrite,
   mergeableOpRead,
+  noteMintedWriteTx,
   writeDestinationRead,
 } from "./storage/reactivity-log.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
@@ -1485,6 +1486,14 @@ interface CauseContainer {
   space: MemorySpace | undefined;
   // Cause for creating the entity ID
   cause: unknown | undefined;
+  // The cause of the lift's frame the id was derived under, where it was
+  // derived from a cause `.for()` gave. The id then follows from that
+  // computation's own cause, so no other computation writes the document, and
+  // `set()` in a run of that computation notes it as one the run minted
+  // (`noteMintedWriteTx()`). The frame's cause is kept rather than the frame,
+  // which holds its run's transaction, so that a sibling made without one, as
+  // `#identityCell()` makes it, does not keep that transaction alive.
+  mintedUnder?: unknown;
 }
 
 /**
@@ -1918,6 +1927,12 @@ export class CellImpl<T extends FabricValue>
     // All siblings will see this update
     this.#causeContainer.id = id;
     this.#causeContainer.space = space;
+    if (
+      this.#causeContainer.cause !== undefined &&
+      this.#frame?.frameKind === "lift" && this.#frame.cause !== undefined
+    ) {
+      this.#causeContainer.mintedUnder = this.#frame.cause;
+    }
 
     // Update this cell's link
     this.#_link = frozenLink({ ...this.#_link, id, space });
@@ -3363,6 +3378,23 @@ export class CellImpl<T extends FabricValue>
       // alias, a sibling field) covers no intent at all. Only a write at or
       // above an op's array poisons it.
       this.#tx.poisonMergeableOp?.(writeLink);
+
+      // A run that sets the whole of a document it minted vouches for it,
+      // whether or not the diff found anything to change. The set is to be
+      // made in a run of the computation whose cause the id was derived
+      // under, in that run's transaction. A write that a redirect took into
+      // another document is not one of these.
+      const minted = this.#causeContainer.mintedUnder;
+      const frame = minted === undefined ? undefined : getTopFrame();
+      if (
+        frame?.frameKind === "lift" && frame.cause === minted &&
+        frame.tx === this.#tx &&
+        writeLink.id === this.#causeContainer.id &&
+        writeLink.space === this.#causeContainer.space &&
+        writeLink.path.length === 0
+      ) {
+        noteMintedWriteTx(this.#tx, toMemorySpaceAddress(writeLink));
+      }
 
       // Register commit callback if provided. (Bound to a local: the
       // stream branch above reassigns `onCommit` for the durable-ack

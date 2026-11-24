@@ -29,6 +29,9 @@ export function setSchedulerDependencies(
     reads,
     shallowReads,
     writes: state.writeIndex.getSchedulingWrites(action) ?? [],
+    // Kept with the run's reads for the currency index, and scheduled by
+    // nothing.
+    ...(log.minted !== undefined && { minted: log.minted }),
   };
   state.dependencies.set(action, schedulingLog);
   return { previousLog, reads, shallowReads, log: schedulingLog };

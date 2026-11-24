@@ -225,6 +225,16 @@ export type CurrencyRecord = {
    */
   writes: readonly string[];
 
+  /**
+   * The ids of the documents a computation of the piece minted from its own
+   * cause and set in a run. No other computation derives such a document's
+   * id, so each stays among the piece's write rows once a record names it,
+   * whatever later records say: a record that no longer names it, as one
+   * taken after a run that did not mint it, leaves it written by the piece
+   * and vouched for by none of its slices. Absent for a record with none.
+   */
+  mints?: readonly string[];
+
   /** The ids of the cells the piece owns and owes a default. */
   owned: readonly string[];
 
@@ -471,13 +481,15 @@ SELECT entity_space, entity, entity_scope_key, derived, seq FROM currency_read
 WHERE branch = :branch AND slice = :slice AND piece = :piece
 `),
   deleteWrites: engine.prepare(`
-DELETE FROM currency_write WHERE branch = :branch AND piece = :piece
+DELETE FROM currency_write
+WHERE branch = :branch AND piece = :piece AND minted = 0
 `),
   insertWrite: engine.prepare(`
-INSERT INTO currency_write (branch, piece, id, owned)
-VALUES (:branch, :piece, :id, :owned)
+INSERT INTO currency_write (branch, piece, id, owned, minted)
+VALUES (:branch, :piece, :id, :owned, :minted)
 ON CONFLICT (branch, piece, id)
-DO UPDATE SET owned = MIN(owned, excluded.owned)
+DO UPDATE SET owned = MIN(owned, excluded.owned),
+  minted = MAX(minted, excluded.minted)
 `),
   selectWrites: engine.prepare(`
 SELECT id FROM currency_write
@@ -1860,10 +1872,13 @@ export const storeCurrencyRecords = (
         statements.deleteOrigin.run({ branch, piece });
       }
       for (const id of record.writes) {
-        statements.insertWrite.run({ branch, piece, id, owned: 0 });
+        statements.insertWrite.run({ branch, piece, id, owned: 0, minted: 0 });
+      }
+      for (const id of record.mints ?? []) {
+        statements.insertWrite.run({ branch, piece, id, owned: 0, minted: 1 });
       }
       for (const id of record.owned) {
-        statements.insertWrite.run({ branch, piece, id, owned: 1 });
+        statements.insertWrite.run({ branch, piece, id, owned: 1, minted: 0 });
       }
       for (const slice of slices) {
         const ref = { piece, slice: slice.key };

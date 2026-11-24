@@ -406,6 +406,46 @@ export function isLazyMaterializationTx(tx: object): boolean {
   return false;
 }
 
+/**
+ * The documents a run of a computation minted from a cause of its own and set,
+ * by space, scope and id. One map is shared by every layer of a transaction.
+ */
+const mintedWrites = new WeakMap<object, Map<string, IMemorySpaceAddress>>();
+
+/**
+ * Records that the run whose transaction is `tx` set the whole of the
+ * document at `address`, whose id the run derived from a cause `.for()` gave
+ * it in the run's own frame. Such a document is the run's: no other
+ * computation derives its id, so the currency index records it as written,
+ * and vouched for, by the run's piece (`snapshotPieceCurrency()`). A run that
+ * sets the value the document already holds is recorded too, where the
+ * transaction's own write log has nothing for it.
+ */
+export function noteMintedWriteTx(
+  tx: object,
+  address: IMemorySpaceAddress,
+): void {
+  let written: Map<string, IMemorySpaceAddress> | undefined;
+  for (const layer of transactionLayers(tx)) {
+    written ??= mintedWrites.get(layer);
+  }
+  written ??= new Map();
+  for (const layer of transactionLayers(tx)) mintedWrites.set(layer, written);
+  written.set(
+    `${address.space}\0${normalizeCellScope(address.scope)}\0${address.id}`,
+    address,
+  );
+}
+
+/** The documents `noteMintedWriteTx()` recorded for `tx`, in no set order. */
+export function mintedWritesOfTx(tx: object): IMemorySpaceAddress[] {
+  for (const layer of transactionLayers(tx)) {
+    const written = mintedWrites.get(layer);
+    if (written !== undefined) return [...written.values()];
+  }
+  return [];
+}
+
 // A refusal recorded on the transaction, so it survives being caught. A reader
 // can swallow a `SchemaMismatchError` — its own `try`/`catch`, or an `await`
 // that discards the rejection — and still hand back a plausible-looking result.

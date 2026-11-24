@@ -108,6 +108,9 @@ key, so reading one viewer's slices reads no other viewer's rows:
   the declared write surface of every computation registered under it,
   whether or not that computation has run, and the ids of the cells it owns.
   The enclosing pieces are kept beside them.
+- **What the piece minted**: one row per document a clean run of one of its
+  computations minted and set, kept among the write rows by every later
+  record ("A document a computation mints", below).
 
 The write rows are what let a mark travel through a document no session
 demands: they say which pieces a stale piece makes stale, and which absent
@@ -140,6 +143,58 @@ nothing to put in the slice's place, so:
   that is marked or of another epoch passes no judgment, and left in place
   it would stay so, with its piece started on each demand, for as long as no
   session demands what its computations wrote.
+
+### A document a computation mints
+
+A computation can create a document in its run whose id it derives from a
+cause given in its own frame, and set it: `Writable.for(topic).set(...)` in a
+lift, as the Topics board's `cardRowsByActivity` does for each card. The id
+is `createRef({ frame: cause }, frameCause)`, and the frame's cause names the
+computation's inputs, outputs and implementation, so no other computation
+derives that id. The computation is the document's one deriving writer by
+construction.
+
+The scheduler does not schedule by such a document (scheduler v2 §4.3), and
+the run's transaction cannot say it was written: a run that sets the value
+the document already holds writes nothing to it. So the cell layer notes it
+where the run sets it. A cell's id derived in `#ensureLink()` from a
+`.for()` cause, under a lift's frame, records that frame's cause
+(`CauseContainer.mintedUnder`); a whole-value `set()` of that cell in a run
+of the same computation, in that run's transaction, landing in that document
+and not through a redirect into another, is noted on the transaction
+(`noteMintedWriteTx()`). Three
+things are not noted: a `.for()` cell that is never set, a write through a
+cell the computation was handed or reached through a link, and a write
+below the document's root. The run's log carries the list
+(`ReactivityLog.minted`), and the scheduler keeps it with the run's reads,
+so each run replaces it: a withdrawn or refused run leaves its node
+invalid, and a fresh runtime has no list until the computation runs.
+
+A snapshot reads the list of each clean run (`snapshotPieceCurrency()`):
+
+- Each minted id in the piece's space joins the record's `mints`. The index
+  keeps a minted row among the piece's write rows once a record names it
+  (`currency_write.minted`), whatever later records say. A run that no
+  longer mints a document leaves it written by the piece and vouched for by
+  no slice, so each slice that reads it is marked `1` and a root that names
+  it is refused as `unvouched-instance`. A mark of the piece reaches its
+  readers through the same rows.
+- A live, clean run vouches for each minted document whose instance is at
+  the run's own key: the shared instance for a run at the space, of a
+  document minted in the space. A run for a viewer that writes the document
+  at a broader key decides nothing there, since which run wrote such a slot
+  last is tracked only for the documents a node declares
+  (`fanOutHoldsSlot()`), so a root that rests on that slot is refused.
+
+A client, a handler, or another computation that holds a link can still
+write a minted document. A client's write is a commit no serving loop made:
+its revision is above the vouch row, so it marks the slice that vouches for
+the instance, and a later record does not take that back, as for any other
+output ("How a slice becomes marked"). A write the serving loop makes for a
+handler or another computation is an ordinary change: it marks the slices
+that read the document, and the minting piece keeps its vouch. The lift sets
+the document to what it computes the next time it runs for its own reasons,
+and a reader reads the other writer's value until then ("Known limits").
 
 ### When a record is taken
 
@@ -717,16 +772,25 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
   only instantiates others registers no computation under its own result
   document, so no snapshot is taken of it, and a root that leads to it is
   loaded.
-- **A write a computation makes outside its declared surface is not in the
-  write rows.** A document written that way reads as an input nothing
-  computes. The documents a lift writes through `Writable.for(...).set()`,
-  one for each element of the list it returns, are written that way: a
-  root that names one is refused as `no-record` and loaded each tenure.
-  The run's own writes cannot supply the rows, since a run that computes
-  what a document already holds writes nothing to it.
+- **A write a computation makes outside its declared surface, to a
+  document it did not mint, is not in the write rows.** A document written
+  that way reads as an input nothing computes. A write through a cell the
+  computation was handed is one, which a materializer's envelope bounds;
   [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
-  under "Computations that run without demand", is the plan for it and for
-  a materializer's envelope.
+  under "Computations that run without demand", is the plan for it. Three
+  kinds of minted write are not recorded either, and a root that names such
+  a document is refused: an object in an array that a `set()` or a lift's
+  result stores as a document of its own (`frameAnchorIds()`), whose id is
+  derived from the run's frame as well; a write below a minted document's root, or through
+  `update()` or `push()`; and the instance at a broader key that a run for a
+  viewer writes.
+- **A minted document another writer changed is read as that writer left
+  it.** A served handler or another computation that writes a minted
+  document through a link is not told apart from the minting lift: the
+  minting piece keeps its vouch, and the document holds the other writer's
+  value until the lift next runs because one of its own inputs changed. A
+  root that names the document is served that value meanwhile. This is
+  accepted in place of starting the minting piece to catch such writes.
 - **A view plan names no producers for a piece that is not started**
   (`viewExecutionNodes`). A browser client renders such a piece from the
   store, checked on a counter in the shell; a pattern whose view depends on
@@ -907,6 +971,16 @@ of which exist:
     derivation wrote is not (`runtime/memory/test/v2-server-currency.test.ts`).
     Under `skip` the loop parks an underived root unloaded, and loads it
     once a client commits to it (`space-server-currency.test.ts`).
+30. A document a lift minted with `Writable.for(cause)` and set is among
+    its piece's write rows and vouched for by the slice of the run that set
+    it, including after a run that set the value it held; a record of a run
+    that no longer mints it keeps it written and vouches for it no longer,
+    which marks its readers `1` and refuses its root as
+    `unvouched-instance`; and a client's overwrite of it marks the piece
+    (`v2-currency-index.test.ts`, `piece-currency.test.ts`). Under `skip` a
+    session root that names one is left unloaded while the minting piece is
+    clean, and refused once an input of that piece changed or a client
+    overwrote the document (`space-server-currency.test.ts`).
 
 ## Related
 

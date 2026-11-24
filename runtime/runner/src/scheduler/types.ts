@@ -138,6 +138,14 @@ export type ReactivityLog = {
   shallowReads: IMemorySpaceAddress[];
 
   writes: IMemorySpaceAddress[];
+
+  /**
+   * The documents a computation's run minted from a cause of its own and set
+   * whole (`noteMintedWriteTx()`), absent for a run that minted none. They
+   * are not part of the write surface the scheduler schedules by (scheduler
+   * v2 §4.3); the currency index records them as written by the run's piece.
+   */
+  minted?: IMemorySpaceAddress[];
 };
 
 export type EventPreflightTraceContext = SchedulerEventPreflightStats & {

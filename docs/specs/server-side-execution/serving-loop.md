@@ -1295,14 +1295,21 @@ executing:
   instances). Per slice it holds the document instances its live
   computations read, the instances its clean computations vouch for, and a
   mark; per piece, the declared write surface of every computation
-  registered under it. It passes the test above, ids + seqs overwritten in
+  registered under it, and every document a computation of it minted from
+  its own cause (`Writable.for(cause)` in the computation's run) and set.
+  It passes the test above, ids + seqs overwritten in
   place, with the slice as the overwrite unit in place of the (action,
   instance), and the slice leads every key, so reading one viewer's slices
   reads no other viewer's rows. Three things set it apart from the basis
   index:
   - It records WRITE links. A piece's write rows are what carry a mark to
     the slices that read what it writes, through documents no session
-    demands, and what say which absent document a piece would write.
+    demands, and what say which absent document a piece would write. A
+    minted document's id follows from the minting computation's own cause,
+    so that piece is its one writer, and its row stays once a record names
+    it: a later record of a run that did not mint it leaves it written by
+    the piece and vouched for by no slice, so its readers are stale and a
+    root that names it is refused.
   - Its rows are written by the memory server on the serving loop's
     request, in a transaction of their own after the wave's commit has
     landed, never inside it and never at admission. A record lost between
@@ -1446,6 +1453,14 @@ executing:
   one of which records an origin, is stored marked instead: an origin is
   followed through one result document.
   A clean computation vouches for
+  the documents its latest run minted and set, at the run's own key, whether
+  or not the set changed them: the run reports each one where it sets it,
+  which a run that writes the value a document already holds does too. A
+  write the loop makes to such a document for another computation or a
+  handler marks the slices that read it and leaves the vouch in place, so the
+  document is served as that writer left it until the minting computation
+  next runs for its own inputs; this staleness is accepted. It
+  vouches as well for
   the instances its runs wrote: for a run at a fan-out instance, the
   narrower of that instance and the write's declared scope as the run's
   identity resolves it, and each broader slot up to the declared scope,

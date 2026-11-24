@@ -626,7 +626,12 @@ settled.
   envelope's links, and not from the envelope's own addresses. The scheduler
   keeps a run's reads and replaces its writes with the declared write
   surface (`setSchedulerDependencies()`), so what a run wrote beyond that
-  surface is not kept today for a computation that runs once.
+  surface is not kept for a computation that runs once. The one exception
+  is a document the run minted from its own cause and set, which the run
+  reports where it sets it and the index records as written by the piece
+  (the first plan's "A document a computation mints"). That holds because
+  such a document has one deriving writer by construction, which a document
+  an envelope leads to does not.
 - **A document a materializer writes into can have other writers.** A cell
   handed to a computation is one a client may write too, and the index of a
   collection is written by a materializer for each element in it
@@ -641,7 +646,9 @@ settled.
   Within one space as across spaces, a reader's stale read starts the piece
   the index records as writing the instance (the first plan's stage 5, and
   step 5 here). A document a materializer wrote within its envelope is in
-  no record's write rows, so a reader of it starts nothing.
+  no record's write rows, so a reader of it starts nothing. A document a
+  computation minted is in its piece's write rows, so a reader's stale read
+  of one starts that piece.
 
 ### A write into another space at an undeclared destination
 

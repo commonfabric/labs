@@ -125,6 +125,8 @@ describe("currency-index", () => {
     expiresAt?: number;
     /** Whether the piece records a source origin. */
     followsOrigin?: boolean;
+    /** Ids a computation of the piece minted from its own cause and set. */
+    mints?: string[];
   };
 
   /** A record of `piece`, vouched for, with `parts` over the empty ones. */
@@ -180,6 +182,7 @@ describe("currency-index", () => {
       under: parts.under ?? [],
       vouched: parts.vouched ?? true,
       writes: [...(parts.writes ?? []), ...(parts.produces ?? [])],
+      ...(parts.mints !== undefined && { mints: parts.mints }),
       owned: parts.owned ?? [],
       ...(parts.followsOrigin === true && { followsOrigin: true }),
       slices: [...slices.values()],
@@ -1279,6 +1282,96 @@ describe("currency-index", () => {
         store(changed, [{ ...forBob, slices: [forBob.slices[0]] }]);
 
         expect(markOf("of:piece", BOB_USER)).toBe(0);
+      });
+    });
+
+    describe("with a document a piece minted", () => {
+      /** The piece minted `of:row` from `of:i` and vouches for it. */
+      const minting = record("of:piece", {
+        reads: [input("of:i")],
+        mints: ["of:row"],
+        vouches: [{ id: "of:row", scopeKey: "space" }],
+      });
+
+      /** The piece as a run that minted nothing records it. */
+      const mintingNothing = record("of:piece", { reads: [input("of:i")] });
+
+      /** A piece that read `of:row`. */
+      const reader = record("of:reader", { reads: [input("of:row")] });
+
+      /** The demand row for the shared instance of `of:row`. */
+      const ROW = { id: "of:row", scopeKey: "space" };
+
+      /** Stores `minting` and `reader` over `of:piece`, `of:i` and `of:row`. */
+      const storeMinted = (): number => {
+        const asOf = write("of:piece", "of:reader", "of:i", "of:row");
+        store(asOf, [minting, reader]);
+        return asOf;
+      };
+
+      it("records the piece as the one that writes it", () => {
+        storeMinted();
+
+        expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:row" }))
+          .toBe("of:piece");
+      });
+
+      it("judges servable the piece for a session that demands it, while the piece is clean", () => {
+        storeMinted();
+
+        expect(
+          judgeCurrencyRoots(engine, {
+            space: SPACE,
+            roots: ["of:piece"],
+            rows: [ROW],
+            epoch: EPOCH,
+          }).servable,
+        ).toEqual(["of:piece"]);
+      });
+
+      it("keeps the piece as its writer through a record of a run that did not mint it, and vouches for it no longer", () => {
+        const asOf = storeMinted();
+
+        store(asOf, [mintingNothing]);
+
+        expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:row" }))
+          .toBe("of:piece");
+        expect(
+          judgeCurrencyRoots(engine, {
+            space: SPACE,
+            roots: ["of:piece"],
+            rows: [ROW],
+            epoch: EPOCH,
+          }).refused,
+        ).toEqual([{ root: "of:piece", reason: "unvouched-instance" }]);
+      });
+
+      it("marks `1` a reader of it once a record of the piece no longer vouches for it, and clears the reader once one vouches for it again", () => {
+        const asOf = storeMinted();
+
+        store(asOf, [mintingNothing]);
+        expect(markOf("of:reader")).toBe(1);
+
+        store(asOf, [minting]);
+        expect(markOf("of:reader")).toBe(0);
+      });
+
+      it("marks `1` a reader of it when the piece is marked", () => {
+        storeMinted();
+
+        write("of:i");
+
+        expect(advance()).toEqual(["of:piece", "of:reader"]);
+        expect(markOf("of:reader")).toBe(1);
+      });
+
+      it("marks `2` the piece when a client overwrites it", () => {
+        storeMinted();
+
+        write("of:row");
+
+        expect(advance()).toContain("of:piece");
+        expect(markOf("of:piece")).toBe(2);
       });
     });
 

@@ -568,12 +568,16 @@ CREATE INDEX IF NOT EXISTS idx_currency_read_entity
   ON currency_read (branch, entity_space, entity, entity_scope_key);
 -- What a piece writes, whoever it runs for: the declared write surface of
 -- every computation registered under it (owned = 0), and the cells it owns
--- (owned = 1), which are state a write to is no staleness of.
+-- (owned = 1), which are state a write to is no staleness of. minted = 1 is a
+-- document a computation of the piece minted from its own cause and set in a
+-- run, which a later record of the piece does not remove
+-- (migrateCurrencyWriteMinted).
 CREATE TABLE IF NOT EXISTS currency_write (
   branch TEXT    NOT NULL,
   piece  TEXT    NOT NULL,
   id     TEXT    NOT NULL,
   owned  INTEGER NOT NULL,
+  minted INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (branch, piece, id)
 );
 CREATE INDEX IF NOT EXISTS idx_currency_write_id
@@ -2652,6 +2656,20 @@ const dropCurrencyRecordsBeforeDecides = (database: Database): void => {
 };
 
 /**
+ * Adds `currency_write.minted` to a store whose index was recorded before a
+ * record named the documents a piece's computations minted. Every row such a
+ * store holds is one a later record of its piece replaces, which is what
+ * `minted = 0` says, so the rows stay as they are.
+ */
+const migrateCurrencyWriteMinted = (database: Database): void => {
+  if (hasColumn(database, "currency_write", "minted")) return;
+  database.exec(`
+ALTER TABLE currency_write
+ADD COLUMN minted INTEGER NOT NULL DEFAULT 0;
+`);
+};
+
+/**
  * Brings a store's tables to the current schema: drops the layouts the schema
  * replaces, creates whatever it lacks, and migrates what remains.
  */
@@ -2670,6 +2688,7 @@ const prepareSchema = (database: Database): void => {
   migrateExecutionOutboxPayloadEncoding(database);
   migrateSchedulerObservationTablesToBasis(database);
   migrateIntegratedOperationIds(database);
+  migrateCurrencyWriteMinted(database);
 };
 
 /**

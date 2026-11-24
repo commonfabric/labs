@@ -340,6 +340,23 @@ they were redesigned recently and are sound. What v2 removes is run-time
 write-surface discovery and historical expansion for ordinary computations;
 `currentKnownWrites` is the fixed registered surface described by P4.
 
+**Documents a run mints.** A computation's run can create a document whose
+id it derives from a cause given in its own frame (`Writable.for(cause)` in a
+lift) and set it. No other computation derives that id, so the computation
+is the document's one deriving writer. Such a document is not part of the
+write surface: the scheduler does not add it from what a run did, so it has
+no writer entry, no reader edge, and no demand. A reader reaches it through a
+link that another document holds, the computation's primary output as a
+rule, and is ordered after the computation and keeps it live through that
+document. A reader that holds the link without reading the document that
+carries it keeps nothing live, and reads what the computation set last. The
+run reports each document it minted and set whole, whether or not the set
+changed it (`ReactivityLog.minted`, filled by `noteMintedWriteTx()`), and the
+scheduler keeps that list with the run's reads, replaced by each run. The
+currency index is its only reader: it records such a document as written by
+the computation's piece, and vouched for while a clean run set it
+(`docs/specs/server-side-execution/serving-loop.md` §3b).
+
 ### 4.4 Registration and removal
 
 ```typescript

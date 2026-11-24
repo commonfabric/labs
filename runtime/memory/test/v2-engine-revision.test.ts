@@ -49,6 +49,31 @@ Deno.test("memory v2 engine drops the records of a currency index laid out befor
   }
 });
 
+Deno.test("memory v2 engine adds the minted column to a currency index's write rows that lack it, and keeps the rows as rows a later record replaces", async () => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  close(await open({ url: toFileUrl(path) }));
+  const raw = await new Database(path);
+  raw.exec(`
+    ALTER TABLE currency_write DROP COLUMN minted;
+    INSERT INTO currency_write VALUES ('', 'of:piece', 'of:out', 0);
+  `);
+  raw.close();
+
+  const engine = await open({ url: toFileUrl(path) });
+
+  try {
+    assertEquals(
+      engine.database.prepare(
+        "SELECT piece, id, owned, minted FROM currency_write",
+      ).all(),
+      [{ piece: "of:piece", id: "of:out", owned: 0, minted: 0 }],
+    );
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
 Deno.test("memory v2 engine drops a currency index laid out one row per piece", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const raw = await new Database(path);

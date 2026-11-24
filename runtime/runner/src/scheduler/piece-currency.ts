@@ -2,8 +2,9 @@
  * What a serving loop records of one piece for the currency index
  * (docs/specs/server-side-execution/serving-loop.md §3b), read off the
  * scheduler's own state: what the piece's live computations read, what its
- * computations declare they write, which document instances the clean ones
- * vouch for, and whether the piece can be vouched for at all.
+ * computations declare they write and the documents their runs minted, which
+ * document instances the clean ones vouch for, and whether the piece can be
+ * vouched for at all.
  */
 
 import {
@@ -138,6 +139,14 @@ export type PieceCurrencySnapshot = {
 
   /** The ids in the declared write surface of every node of the piece. */
   writes: string[];
+
+  /**
+   * The ids of the documents a clean run of a node of the piece minted from
+   * the node's own cause and set (`ReactivityLog.minted`), live or not. No
+   * other computation derives such a document's id, so the piece is its one
+   * writer.
+   */
+  mints: string[];
 
   /**
    * The slices a live computation of the piece ran at. A slice none ran at
@@ -323,6 +332,7 @@ export function snapshotPieceCurrency(
   );
   const under = (identity.demandRootIds ?? []).filter((id) => id !== piece);
   const writes = new Set<string>();
+  const mints = new Set<string>();
 
   /** What each slice gathers, by its scope key. */
   const slices = new Map<ScopeKey, {
@@ -364,8 +374,18 @@ export function snapshotPieceCurrency(
       }
       writes.add(write.id);
     }
-    if (!isLive(state.liveness, node)) continue;
+    const live = isLive(state.liveness, node);
     for (const run of runsOf(state, node)) {
+      // A run that is not clean may not have committed what it minted.
+      const minted = run.clean ? run.log?.minted ?? [] : [];
+      for (const write of minted) {
+        if (write.space !== space) {
+          unvouched.add("foreign-write");
+          continue;
+        }
+        mints.add(write.id);
+      }
+      if (!live) continue;
       const slice = sliceAt(run.key);
       for (
         const read of [
@@ -406,6 +426,21 @@ export function snapshotPieceCurrency(
             : slice.superseded;
           slots.set(`${key}\0${write.id}`, { id: write.id, scopeKey: key });
         }
+      }
+      // A document the run minted is vouched for at the run's own key alone.
+      // Which run wrote an instance at another key last is known only for
+      // the documents the node declares (`fanOutHoldsSlot()`), so such a
+      // slot is answered for by no slice, and refuses a root that rests on
+      // it.
+      for (const write of minted) {
+        if (write.space !== space) continue;
+        const declared = normalizeCellScope(write.scope);
+        const keys: ScopeKey[] = node.fanOut !== undefined
+          ? writtenKeys(declared, run.key, run.identity)
+          : declared === "space"
+          ? ["space"]
+          : [];
+        if (keys.includes(run.key)) slice.vouches.add(write.id);
       }
     }
   }
@@ -466,6 +501,7 @@ export function snapshotPieceCurrency(
     under,
     unvouched: [...unvouched],
     writes: [...writes],
+    mints: [...mints],
     readsUnstarted,
     slices: [...slices].map(([key, slice]) => {
       const reads: PieceCurrencySlice["reads"] = [];
