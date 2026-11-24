@@ -2,9 +2,14 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import type { EntityDocument } from "../v2.ts";
+import {
+  type EntityDocument,
+  resetServerExecutionConfig,
+  setServerExecutionConfig,
+} from "../v2.ts";
 import type { CurrencyRecord } from "../v2/currency-index.ts";
 import * as Engine from "../v2/engine.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import { Server } from "../v2/server.ts";
 import { connectPeer, openSession } from "./support/wire-peer.ts";
 import {
@@ -370,15 +375,15 @@ describe("Server", () => {
 
       it("returns no result for missing records, invalid back-links, or a cycle", async () => {
         write({
-          "of:plain": { value: 1 },
           "of:invalid": { value: 2, result: link("of:missing") },
           "of:cycle": { value: 3, result: link("of:cycle") },
+          "of:unstarted": { value: 4, patternIdentity: "pattern" },
         });
 
         expect(
           await server.judgeCurrencyRoots(
             SPACE,
-            ["of:missing", "of:plain", "of:invalid", "of:cycle"],
+            ["of:missing", "of:invalid", "of:cycle", "of:unstarted"],
             { epoch: EPOCH },
           ),
         ).toEqual({
@@ -387,6 +392,228 @@ describe("Server", () => {
           upstream: [],
           refused: { "no-record": 4 },
           marked: [],
+        });
+      });
+
+      describe("for a root that carries neither a back-link nor a pattern pointer", () => {
+        const ELEMENT = "of:element";
+
+        /**
+         * Seeds the piece, and stores a record of it that writes `ELEMENT`
+         * beside `OUTPUT`, vouching for it where `vouches` says so. Returns
+         * the seq the record was taken at.
+         */
+        const seedWriter = async (vouches = true): Promise<number> => {
+          const asOf = write({
+            [PIECE]: { value: {} },
+            [INPUT]: { value: 1 },
+            [OUTPUT]: { value: "computed", result: link(PIECE) },
+            [ELEMENT]: { value: { title: "one" } },
+          });
+          const base = record();
+          await server.storeCurrencyRecords(SPACE, {
+            asOf,
+            seen: [],
+            epoch: EPOCH,
+            records: [{
+              ...base,
+              writes: [OUTPUT, ELEMENT],
+              slices: [{
+                ...base.slices[0],
+                vouches: vouches ? [OUTPUT, ELEMENT] : [OUTPUT],
+              }],
+            }],
+          });
+          return asOf;
+        };
+
+        it("returns the one piece recorded as writing it", async () => {
+          await seedWriter();
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, [ELEMENT], { epoch: EPOCH }),
+          ).toEqual({
+            servable: [{ root: ELEMENT, piece: PIECE, origins: [] }],
+            held: [],
+            upstream: [],
+            refused: {},
+            marked: [],
+          });
+        });
+
+        it("refuses it where two recorded pieces write it", async () => {
+          await seedWriter();
+          await server.storeCurrencyRecords(SPACE, {
+            asOf: Engine.serverSeq(engine),
+            seen: [],
+            epoch: EPOCH,
+            records: [{
+              piece: "of:other",
+              under: [],
+              vouched: true,
+              writes: [ELEMENT],
+              owned: [],
+              slices: [{ key: "space", vouched: true, reads: [], vouches: [] }],
+            }],
+          });
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, [ELEMENT], { epoch: EPOCH }),
+          ).toMatchObject({ servable: [], refused: { "no-record": 1 } });
+        });
+
+        it("refuses it where an input of the piece that writes it changed", async () => {
+          await seedWriter();
+          write({ [INPUT]: { value: 2 } });
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, [ELEMENT], { epoch: EPOCH }),
+          ).toMatchObject({ servable: [], refused: { marked: 1 } });
+        });
+
+        it("refuses it where the piece that writes it does not vouch for it, with no session demanding it", async () => {
+          await seedWriter(false);
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, [ELEMENT], { epoch: EPOCH }),
+          ).toMatchObject({
+            servable: [],
+            refused: { "unvouched-instance": 1 },
+          });
+        });
+
+        it("refuses it once a client overwrote what the piece vouched for", async () => {
+          await seedWriter();
+          write({ [ELEMENT]: { value: { title: "typed over" } } });
+          await server.storeCurrencyRecords(SPACE, {
+            asOf: Engine.serverSeq(engine),
+            seen: [],
+            epoch: EPOCH,
+            records: [{
+              ...record(),
+              writes: [OUTPUT, ELEMENT],
+              slices: [{ ...record().slices[0], vouches: [OUTPUT, ELEMENT] }],
+            }],
+          });
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, [ELEMENT], { epoch: EPOCH }),
+          ).toMatchObject({ servable: [], refused: { marked: 1 } });
+        });
+
+        it("returns it as underived where nothing derives it", async () => {
+          write({ "of:data": { value: { title: "typed" } } });
+          await seed();
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, ["of:data"], {
+              epoch: EPOCH,
+            }),
+          ).toEqual({
+            servable: [],
+            underived: ["of:data"],
+            held: [],
+            upstream: [],
+            refused: {},
+            marked: [],
+          });
+        });
+
+        it("returns it as underived in a space with no record at all", async () => {
+          write({ "of:data": { value: 1 } });
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, ["of:data"], {
+              epoch: EPOCH,
+            }),
+          ).toMatchObject({ underived: ["of:data"], refused: {} });
+        });
+
+        it("judges it as the piece it leads to once a client gives it a back-link", async () => {
+          await seed();
+          write({ "of:data": { value: 1 } });
+          write({ "of:data": { value: 1, result: link(PIECE) } });
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, ["of:data"], {
+              epoch: EPOCH,
+            }),
+          ).toEqual({
+            servable: [{ root: "of:data", piece: PIECE, origins: [] }],
+            held: [],
+            upstream: [],
+            refused: {},
+            marked: [],
+          });
+        });
+
+        it("judges it as the piece a later record says writes it", async () => {
+          write({ [ELEMENT]: { value: { title: "typed" } } });
+          expect(
+            await server.judgeCurrencyRoots(SPACE, [ELEMENT], { epoch: EPOCH }),
+          ).toMatchObject({ underived: [ELEMENT] });
+
+          await seedWriter();
+
+          expect(
+            await server.judgeCurrencyRoots(SPACE, [ELEMENT], { epoch: EPOCH }),
+          ).toEqual({
+            servable: [{ root: ELEMENT, piece: PIECE, origins: [] }],
+            held: [],
+            upstream: [],
+            refused: {},
+            marked: [],
+          });
+        });
+
+        describe("that a serving loop's derivation wrote", () => {
+          let holder: string;
+
+          beforeEach(() => {
+            setServerExecutionConfig(true);
+            holder = executionLeaseHolder(`service:${SPACE}`);
+            engine.executionLeases.acquire(SPACE, holder);
+          });
+
+          afterEach(() => {
+            resetServerExecutionConfig();
+          });
+
+          it("refuses it where no recorded piece writes it", async () => {
+            write({ [ELEMENT]: { value: { title: "typed" } } });
+            Engine.applyWaveCommit(engine, {
+              sessionId: holder,
+              space: SPACE,
+              commitClass: "derived",
+              holder,
+              commit: {
+                localSeq: ++localSeq,
+                reads: { confirmed: [], pending: [] },
+                operations: [{
+                  op: "set",
+                  id: ELEMENT,
+                  value: { value: { title: "derived" } },
+                }],
+              },
+              annotations: [{ op: 0 }],
+              waveBasis: {
+                basisSeq: Engine.serverSeq(engine),
+                rebasedHeads: [],
+              },
+            });
+
+            expect(
+              await server.judgeCurrencyRoots(SPACE, [ELEMENT], {
+                epoch: EPOCH,
+              }),
+            ).toEqual({
+              servable: [],
+              held: [],
+              upstream: [],
+              refused: { "no-record": 1 },
+              marked: [],
+            });
+          });
         });
       });
 
