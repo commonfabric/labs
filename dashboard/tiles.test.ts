@@ -14,16 +14,16 @@ import { TILE_LAYOUT_FIXTURES } from "./tile-layout-fixtures.ts";
 import { type Ctx, type Run, runSource, type RunSource } from "./types.ts";
 import {
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
   WEAVER_CI_WORKFLOW,
   WEAVER_REPO,
 } from "./config.ts";
-import { labsCiTrust, loomCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
+import { labsCiTrust, cfsCiTrust, weaverCiTrust } from "./tiles/ci-trust.ts";
 import {
   labsCiDuration,
-  loomCiDuration,
+  cfsCiDuration,
   weaverCiDuration,
 } from "./tiles/ci-duration.ts";
 import { recentCommits } from "./tiles/recent-commits.ts";
@@ -192,7 +192,7 @@ Deno.test("labs ci trust: only first-attempt success counts as green", async () 
 Deno.test("ci trust: each tile links to its repository's page, and each cell to its run", async () => {
   const cases = [
     { tile: labsCiTrust, page: "/repos?name=labs" },
-    { tile: loomCiTrust, page: "/repos?name=cfs" },
+    { tile: cfsCiTrust, page: "/repos?name=cfs" },
     { tile: weaverCiTrust, page: "/repos?name=weaver" },
   ];
   for (const { tile, page } of cases) {
@@ -204,10 +204,10 @@ Deno.test("ci trust: each tile links to its repository's page, and each cell to 
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run that never started is left out of the share", async () => {
+Deno.test("labs and cfs ci trust: a cancelled run that never started is left out of the share", async () => {
   const cases = [
     { tile: labsCiTrust, repo: REPO },
-    { tile: loomCiTrust, repo: LOOM_REPO },
+    { tile: cfsCiTrust, repo: CFS_REPO },
   ];
   for (const { tile, repo } of cases) {
     const cancelled = [
@@ -239,10 +239,10 @@ Deno.test("labs and loom ci trust: a cancelled run that never started is left ou
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run that stopped a job on a runner counts as a failure", async () => {
+Deno.test("labs and cfs ci trust: a cancelled run that stopped a job on a runner counts as a failure", async () => {
   const cases = [
     { tile: labsCiTrust, repo: REPO },
-    { tile: loomCiTrust, repo: LOOM_REPO },
+    { tile: cfsCiTrust, repo: CFS_REPO },
   ];
   for (const { tile, repo } of cases) {
     const timedOut = run({ conclusion: "cancelled" });
@@ -273,13 +273,13 @@ Deno.test("labs and loom ci trust: a cancelled run that stopped a job on a runne
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run is left out of the share only when a concurrency group stopped the jobs it ran", async () => {
+Deno.test("labs and cfs ci trust: a cancelled run is left out of the share only when a concurrency group stopped the jobs it ran", async () => {
   // A concurrency group that cancels in progress stops a run's jobs on their
   // runners when a newer run starts. A timeout or a person stopping them
   // instead says something about the commit.
   const cases = [
     { tile: labsCiTrust, repo: REPO },
-    { tile: loomCiTrust, repo: LOOM_REPO },
+    { tile: cfsCiTrust, repo: CFS_REPO },
   ];
   const reasons = [
     { annotations: REASONS.replaced, color: "var(--status-unknown)" },
@@ -414,13 +414,13 @@ Deno.test("labs ci trust: annotations GitHub does not return fail the collection
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run whose cancelled jobs never reached a runner is left out of the share", async () => {
+Deno.test("labs and cfs ci trust: a cancelled run whose cancelled jobs never reached a runner is left out of the share", async () => {
   // A job-level concurrency group replaces the waiting job rather than the
   // run, so the run lists the job, cancelled with an empty runner name, beside
   // the jobs that ran.
   const cases = [
     { tile: labsCiTrust, repo: REPO },
-    { tile: loomCiTrust, repo: LOOM_REPO },
+    { tile: cfsCiTrust, repo: CFS_REPO },
   ];
   for (const { tile, repo } of cases) {
     const replaced = run({ conclusion: "cancelled" });
@@ -1127,7 +1127,7 @@ Deno.test("ci-duration: a run's job counts are forgotten once it leaves the snap
 
 Deno.test("ci trust: every repository keeps its strip at the tile bottom", async () => {
   const one = ctx([run({ conclusion: "success" })]);
-  for (const tile of [labsCiTrust, loomCiTrust, weaverCiTrust]) {
+  for (const tile of [labsCiTrust, cfsCiTrust, weaverCiTrust]) {
     assertEquals((await tile.collect(one)).alignChartBottom, true);
   }
 });
@@ -1153,20 +1153,20 @@ Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
     { repo, workflow, scope: "pull requests" },
   ];
   assertEquals(labsCiTrust.runSources, main(REPO, CI_WORKFLOW));
-  assertEquals(loomCiTrust.runSources, main(LOOM_REPO, LOOM_CI_WORKFLOW));
+  assertEquals(cfsCiTrust.runSources, main(CFS_REPO, CFS_CI_WORKFLOW));
   assertEquals(
     weaverCiTrust.runSources,
     main(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   );
   assertEquals(labsCiDuration.runSources, pulls(REPO, CI_WORKFLOW));
-  assertEquals(loomCiDuration.runSources, pulls(LOOM_REPO, LOOM_CI_WORKFLOW));
+  assertEquals(cfsCiDuration.runSources, pulls(CFS_REPO, CFS_CI_WORKFLOW));
   assertEquals(
     weaverCiDuration.runSources,
     pulls(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   );
   assertEquals(recentCommits.runSources, [
     ...main(REPO, CI_WORKFLOW),
-    ...main(LOOM_REPO, LOOM_CI_WORKFLOW),
+    ...main(CFS_REPO, CFS_CI_WORKFLOW),
     ...main(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   ]);
 });

@@ -17,6 +17,7 @@ import {
   ciGanttOptions,
   ciGanttProgressResponse,
   ciHistoryDays,
+  ciHistorySource,
   type CiHistorySample,
   type CiHistorySource,
   type CiJobFetchProgress,
@@ -49,8 +50,8 @@ import { CiGanttDetailStore, ganttDetailDirectory } from "./ci-gantt-detail.ts";
 import {
   CI_RUNS_MAX,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "./config.ts";
 import {
@@ -559,24 +560,32 @@ Deno.test("CI job history duration sort puts the longest latest value first", ()
   );
 });
 
-Deno.test("CI job history page can select the loom workflow", () => {
+Deno.test("CI job history reads `cfs` and the repository's former name, `loom`, as cfs, and anything else as labs", () => {
+  assertEquals(ciHistorySource("cfs"), CI_HISTORY_SOURCES.cfs);
+  assertEquals(ciHistorySource("loom"), CI_HISTORY_SOURCES.cfs);
+  for (const value of ["labs", "loom-scripts", "weaver", null]) {
+    assertEquals(ciHistorySource(value), CI_HISTORY_SOURCES.labs);
+  }
+});
+
+Deno.test("CI job history page can select the cfs workflow", () => {
   const html = ciJobHistoryPage(
     buildCiJobHistory(historySamples()),
     "job",
     undefined,
     {
-      source: CI_HISTORY_SOURCES.loom,
+      source: CI_HISTORY_SOURCES.cfs,
       days: 14,
     },
   );
 
-  assertStringIncludes(html, `${LOOM_REPO} · ${LOOM_CI_WORKFLOW}`);
-  assertStringIncludes(html, '<option value="loom" selected>loom</option>');
+  assertStringIncludes(html, `${CFS_REPO} · ${CFS_CI_WORKFLOW}`);
+  assertStringIncludes(html, '<option value="cfs" selected>cfs</option>');
   assertStringIncludes(html, 'value="14"');
   assertStringIncludes(html, "selected 14-day trend");
   assertStringIncludes(
     html,
-    'href="/bench?view=gantt&amp;repo=loom&amp;days=14&amp;sort=job&amp;stat=p99">CI run Gantt</a>',
+    'href="/bench?view=gantt&amp;repo=cfs&amp;days=14&amp;sort=job&amp;stat=p99">CI run Gantt</a>',
   );
 });
 
@@ -658,7 +667,7 @@ Deno.test("CI job history page exposes live collection progress without disablin
 Deno.test("CI job history page reports workflow discovery requests", () => {
   const progress: CiJobFetchProgress = {
     id: "loom-discovery",
-    source: "loom",
+    source: "cfs",
     days: 45,
     phase: "discovering",
     discoveryRequestsMade: 3,
@@ -679,7 +688,7 @@ Deno.test("CI job history page reports workflow discovery requests", () => {
     updatedAt: NOW,
   };
   const html = ciJobHistoryPage(null, "job", undefined, {
-    source: CI_HISTORY_SOURCES.loom,
+    source: CI_HISTORY_SOURCES.cfs,
     days: 45,
     progress,
   });
@@ -704,7 +713,7 @@ Deno.test("CI fetch progress panel retains a completed collection warning", () =
   const html = progressPanel(
     {
     id: "gantt-cached-warning",
-    source: "loom",
+    source: "cfs",
     days: 45,
     phase: "complete",
     discoveryRequestsMade: 1,
@@ -853,7 +862,7 @@ Deno.test("CI job history update check uses the selected repository and window",
   const cached = buildCiJobHistory(historySamples());
   const progress: CiJobFetchProgress = {
     id: "loom-9-check",
-    source: "loom",
+    source: "cfs",
     days: 9,
     phase: "discovering",
     discoveryRequestsMade: 0,
@@ -894,7 +903,7 @@ Deno.test("CI job history update check uses the selected repository and window",
   );
   const state = await response.json();
 
-  assertEquals(selected?.source, CI_HISTORY_SOURCES.loom);
+  assertEquals(selected?.source, CI_HISTORY_SOURCES.cfs);
   assertEquals(selected?.days, 9);
   assertEquals(state.progress, progress);
   assertEquals(state.lastRequestError, null);
@@ -2270,7 +2279,7 @@ Deno.test("CI job history joins a wider repair before taking the short-range fre
   }
 });
 
-Deno.test("CI job history keeps labs fresh while loom has a pending cache write", async () => {
+Deno.test("CI job history keeps labs fresh while cfs has a pending cache write", async () => {
   const directory = await Deno.makeTempDir({
     prefix: "ci-job-history-source-cache-test-",
   });
@@ -2306,7 +2315,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
   const collector = new CiJobHistoryCollector(store);
   const labsRun = workflowRun(8_926, Date.now() - DAY);
   const loomRun = workflowRun(8_927, Date.now() - DAY, {
-    html_url: `https://github.com/${LOOM_REPO}/actions/runs/8927`,
+    html_url: `https://github.com/${CFS_REPO}/actions/runs/8927`,
   });
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
@@ -2318,7 +2327,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/workflows/${LOOM_CI_WORKFLOW}/runs?`,
+        `/repos/${CFS_REPO}/actions/workflows/${CFS_CI_WORKFLOW}/runs?`,
       )
     ) {
       return Promise.resolve(Response.json(runList([loomRun])));
@@ -2332,7 +2341,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/runs/${loomRun.id}/attempts/1/jobs`,
+        `/repos/${CFS_REPO}/actions/runs/${loomRun.id}/attempts/1/jobs`,
       )
     ) {
       return Promise.resolve(Response.json({ jobs: [apiJob("Loom", 70)] }));
@@ -2351,7 +2360,7 @@ Deno.test("CI job history keeps labs fresh while loom has a pending cache write"
 
     const loom = collector.startRefresh(
       staticGitHubCredential("source-token"),
-      CI_HISTORY_SOURCES.loom,
+      CI_HISTORY_SOURCES.cfs,
       7,
     );
     pending.push(loom.result);
@@ -4780,7 +4789,7 @@ Deno.test("CI Gantt progress endpoint streams collection failures", async () => 
     const response = ciGanttProgressResponse(
       new Request("http://dashboard/bench/gantt-progress"),
       new URL(
-        "http://dashboard/bench/gantt-progress?repo=loom&limit=12&mainOnly=1&allConclusions=1",
+        "http://dashboard/bench/gantt-progress?repo=cfs&limit=12&mainOnly=1&allConclusions=1",
       ),
       collector,
       undefined,
@@ -4788,7 +4797,7 @@ Deno.test("CI Gantt progress endpoint streams collection failures", async () => 
     assertEquals(response.headers.get("content-type"), "text/event-stream");
     const events = await response.text();
     assertStringIncludes(events, "event: progress");
-    assertStringIncludes(events, '"source":"loom"');
+    assertStringIncludes(events, '"source":"cfs"');
     assertStringIncludes(events, '"phase":"error"');
     assertStringIncludes(events, '"error":"set GH_TOKEN"');
   } finally {
@@ -5453,10 +5462,10 @@ Deno.test("CI job history reports a cache write failure and retries without refe
   }
 });
 
-Deno.test("CI job history reads loom when that repository is selected", async () => {
+Deno.test("CI job history reads cfs when that repository is selected", async () => {
   const test = await temporaryCollector();
   const run = workflowRun(9_151, NOW, {
-    html_url: `https://github.com/${LOOM_REPO}/actions/runs/9151`,
+    html_url: `https://github.com/${CFS_REPO}/actions/runs/9151`,
   });
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
@@ -5465,14 +5474,14 @@ Deno.test("CI job history reads loom when that repository is selected", async ()
     calls.push(url);
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/workflows/${LOOM_CI_WORKFLOW}/runs?`,
+        `/repos/${CFS_REPO}/actions/workflows/${CFS_CI_WORKFLOW}/runs?`,
       )
     ) {
       return Promise.resolve(Response.json(runList([run])));
     }
     if (
       url.includes(
-        `/repos/${LOOM_REPO}/actions/runs/${run.id}/attempts/1/jobs`,
+        `/repos/${CFS_REPO}/actions/runs/${run.id}/attempts/1/jobs`,
       )
     ) {
       return Promise.resolve(Response.json({ jobs: [apiJob("Tests", 75)] }));
@@ -5484,10 +5493,10 @@ Deno.test("CI job history reads loom when that repository is selected", async ()
     const snapshot = await test.collector.collect(
       staticGitHubCredential("loom-token"),
       NOW,
-      CI_HISTORY_SOURCES.loom,
+      CI_HISTORY_SOURCES.cfs,
     );
     assertEquals(snapshot.jobs[0].name, "Tests");
-    assert(calls.every((call) => call.includes(`/repos/${LOOM_REPO}/`)));
+    assert(calls.every((call) => call.includes(`/repos/${CFS_REPO}/`)));
   } finally {
     globalThis.fetch = originalFetch;
     await test.cleanup();

@@ -45,9 +45,6 @@ const workflowSchema = z.object({
 /** Fields of a workflow step that these protocol checks consume. */
 type Step = z.infer<typeof stepSchema>;
 
-/** The repository each notify job of `notify-rapids.yml` dispatches to. */
-const NOTIFIED_REPOSITORY = { infra: "infra", loom: "cfs" };
-
 /** Reads the committed workflow and validates the fields these tests consume. */
 async function workflow(name: string) {
   return workflowSchema.parse(parse(
@@ -704,7 +701,7 @@ describe("rapids-workflows", () => {
     });
   });
 
-  it("notifies infra of every main deployment outcome and Loom only of green main CI", async () => {
+  it("notifies infra of every main deployment outcome and cfs only of green main CI", async () => {
     const notify = await workflow("notify-rapids.yml");
     expect(notify.permissions).toEqual({});
     expect(notify.on).toEqual({
@@ -725,7 +722,7 @@ describe("rapids-workflows", () => {
       head_branch: "main",
       head_repository: { full_name: "commonfabric/labs" },
     };
-    for (const [target, repository] of Object.entries(NOTIFIED_REPOSITORY)) {
+    for (const target of ["infra", "cfs"]) {
       const job = notify.jobs[`notify-${target}`];
       // These guards use the shared boolean/property subset of Actions and JS.
       const accepts = new Function(
@@ -770,7 +767,7 @@ describe("rapids-workflows", () => {
         (step) =>
           step.uses?.startsWith("actions/create-github-app-token@") ?? false,
       );
-      expect(token.with.repositories).toBe(repository);
+      expect(token.with.repositories).toBe(target);
       expect(token.with["permission-actions"]).toBe("write");
       expect(token.with["permission-contents"]).toBe("read");
       expect(job.steps.some((step) => step.uses?.includes("checkout@")))
@@ -780,7 +777,7 @@ describe("rapids-workflows", () => {
 
   it("sends paired producer hints for CI and an empty-input reconciliation for deployment", async () => {
     const notify = await workflow("notify-rapids.yml");
-    for (const [target, repository] of Object.entries(NOTIFIED_REPOSITORY)) {
+    for (const target of ["infra", "cfs"]) {
       const job = notify.jobs[`notify-${target}`];
       const send = oneStep(
         job.steps,
@@ -816,7 +813,7 @@ describe("rapids-workflows", () => {
           "api",
           "--method",
           "POST",
-          `repos/commonfabric/${repository}/actions/workflows/${endpoint}/dispatches`,
+          `repos/commonfabric/${target}/actions/workflows/${endpoint}/dispatches`,
         ];
         expect(result.calls.split("\n")).toEqual(
           path === ".github/workflows/deno.yml"

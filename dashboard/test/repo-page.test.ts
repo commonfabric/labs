@@ -113,7 +113,7 @@ const DURATION = tile("labs ci duration", {
   repo: LABS,
   runSources: [LABS_PRS],
 });
-const LOOM_TRUST = tile("loom ci trust", {
+const LOOM_TRUST = tile("cfs ci trust", {
   repo: LOOM,
   runSources: [runSource(LOOM, "test-fast.yml", "main")],
 });
@@ -282,14 +282,14 @@ describe("repo-page", () => {
             extra: `<svg id="trust-chart"></svg>`,
             href: "/bench?view=ci",
           },
-          "loom ci trust": { status: "good", value: "12.0%" },
+          "cfs ci trust": { status: "good", value: "12.0%" },
         }),
         collection(),
         "?name=labs",
       );
       expect(html).toContain(`<a class="card good" data-focus-key="labs ci trust" href="/bench?view=ci">`);
       expect(html).toContain(`<svg id="trust-chart"></svg>`);
-      expect(html).not.toContain("loom ci trust");
+      expect(html).not.toContain("cfs ci trust");
       expect(html).not.toContain("12.0%");
     });
 

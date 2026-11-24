@@ -3,7 +3,7 @@
  * organization that the dashboard's credential can read, newest first and
  * interleaved across repositories: each commit that landed a pull request
  * opened by an account GitHub does not mark as a bot, and each commit that one
- * of the followed main CI workflows (those of labs, loom, and weaver) ran on
+ * of the followed main CI workflows (those of labs, cfs, and weaver) ran on
  * after a push. The rest are left out: a commit pushed without a pull request,
  * and a bot's pull request, such as an automated deployment's, unless a
  * followed workflow ran on it. Each row is tagged with its repository.
@@ -65,8 +65,8 @@ import {
 import type { GitHubCredential } from "../github-auth.ts";
 import {
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   RECENT_DISPLAY,
   RECENT_WINDOW,
   REPO,
@@ -651,7 +651,7 @@ function rowHtml({ commit, run }: CommitRow, runs: readonly Run[]): string {
 
 const sources = [
   runSource(REPO, CI_WORKFLOW, "main"),
-  runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+  runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"),
   runSource(WEAVER_REPO, WEAVER_CI_WORKFLOW, "main"),
 ];
 

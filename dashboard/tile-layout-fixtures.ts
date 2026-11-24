@@ -76,12 +76,12 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "loom ci trust",
+    label: "cfs ci trust",
     view: {
       status: "warn",
       value: "73.8%",
       sub: "first-try green · last 160 runs",
-      extra: trustStrip("loom-runs", 4),
+      extra: trustStrip("cfs-runs", 4),
       duration: 30 * DAY,
       alignChartBottom: true,
       href: "/repos?name=cfs",
@@ -128,7 +128,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "loom ci duration",
+    label: "cfs ci duration",
     view: {
       status: "good",
       value: "6m",
@@ -136,7 +136,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra: history(),
       duration: 30 * DAY,
       hint: "jobs ↗",
-      href: "/bench?repo=loom",
+      href: "/bench?repo=cfs",
     },
   },
   {

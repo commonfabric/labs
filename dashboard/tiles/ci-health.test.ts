@@ -12,8 +12,8 @@ import { stub } from "@std/testing/mock";
 import {
   CI_FAILURE_FRESH_HOURS,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "../config.ts";
 import { RunLists } from "../github-runs.ts";
@@ -105,9 +105,9 @@ const labsCi = (runs: RunSpec[]): WorkflowSpec => ({
   file: CI_WORKFLOW,
   runs,
 });
-const loomCi = (runs: RunSpec[]): WorkflowSpec => ({
+const cfsCi = (runs: RunSpec[]): WorkflowSpec => ({
   name: "Tests (fast)",
-  file: LOOM_CI_WORKFLOW,
+  file: CFS_CI_WORKFLOW,
   runs,
 });
 const green: RunSpec[] = [{ conclusion: "success", minutesAgo: 30 }];
@@ -377,15 +377,15 @@ const pondPages = (wire: Wire) =>
 
 const standingOrg = (
   labsRuns: RunSpec[],
-  loomRuns: RunSpec[],
+  cfsRuns: RunSpec[],
   extra: RepoSpec[] = [],
 ): RepoSpec[] => [
   { name: REPO.split("/")[1], workflows: [labsCi(labsRuns)] },
-  { name: LOOM_REPO.split("/")[1], workflows: [loomCi(loomRuns)] },
+  { name: CFS_REPO.split("/")[1], workflows: [cfsCi(cfsRuns)] },
   ...extra,
 ];
 
-Deno.test("ci: every job passing keeps labs and loom green in the body", async () => {
+Deno.test("ci: every job passing keeps labs and cfs green in the body", async () => {
   await withGitHub(standingOrg(green, green), async () => {
     const tile = createCiHealth();
     const view = await collectSwept(tile);
@@ -719,8 +719,8 @@ Deno.test("ci: a job gated off after it passed stays green however many runs ski
     [
       { name: REPO.split("/")[1], workflows: [labsCi(green)] },
       {
-        name: LOOM_REPO.split("/")[1],
-        workflows: [{ ...loomCi(gated), fileChangedMinutesAgo: 30 * 24 * 60 }],
+        name: CFS_REPO.split("/")[1],
+        workflows: [{ ...cfsCi(gated), fileChangedMinutesAgo: 30 * 24 * 60 }],
       },
     ],
     async () => {
@@ -798,7 +798,7 @@ Deno.test("ci: a main build whose snapshot has a problem is unreadable, and the 
     const context: Ctx = {
       ...ctx(),
       runSourceProblem: (source) =>
-        source.repo === LOOM_REPO ? "GitHub 503 Service Unavailable" : undefined,
+        source.repo === CFS_REPO ? "GitHub 503 Service Unavailable" : undefined,
     };
     const tile = createCiHealth();
     const view = await collectSwept(tile, context);
@@ -1054,9 +1054,9 @@ Deno.test("ci: a failure made after the workflow's last change still counts", as
     [
       { name: REPO.split("/")[1], workflows: [labsCi(green)] },
       {
-        name: LOOM_REPO.split("/")[1],
+        name: CFS_REPO.split("/")[1],
         workflows: [{
-          ...loomCi([{ conclusion: "failure", minutesAgo: 180 }]),
+          ...cfsCi([{ conclusion: "failure", minutesAgo: 180 }]),
           fileChangedMinutesAgo: 300,
         }],
       },
@@ -1074,9 +1074,9 @@ Deno.test("ci: a pinned build changed since its failure reads gray and says why"
     [
       { name: REPO.split("/")[1], workflows: [labsCi(green)] },
       {
-        name: LOOM_REPO.split("/")[1],
+        name: CFS_REPO.split("/")[1],
         workflows: [{
-          ...loomCi([{ conclusion: "failure", minutesAgo: 180 }]),
+          ...cfsCi([{ conclusion: "failure", minutesAgo: 180 }]),
           fileChangedMinutesAgo: 60,
         }],
       },
@@ -1098,7 +1098,7 @@ Deno.test("ci: a failure stands when its workflow's history cannot be read", asy
   await withGitHub(
     standingOrg(green, [{ conclusion: "failure", minutesAgo: 180 }]).map(
       (repo) =>
-        repo.name === LOOM_REPO.split("/")[1]
+        repo.name === CFS_REPO.split("/")[1]
           ? { ...repo, commitsStatus: 403 }
           : repo,
     ),
@@ -1233,13 +1233,13 @@ Deno.test("ci: the page links a job to its run in progress, and not to one queue
       )).text();
       // The loom workflow's runs are numbered from the oldest, so the one in
       // progress is its second.
-      const loomCiId = workflowId(LOOM_REPO, LOOM_CI_WORKFLOW) * 100 + 1;
+      const cfsCiId = workflowId(CFS_REPO, CFS_CI_WORKFLOW) * 100 + 1;
       assertStringIncludes(
         page,
-        `>Tests (fast)</a><a class="dot run" href="https://github.com/${LOOM_REPO}/actions/runs/${loomCiId}"`,
+        `>Tests (fast)</a><a class="dot run" href="https://github.com/${CFS_REPO}/actions/runs/${cfsCiId}"`,
       );
       // The queued run, its third, is linked from nowhere on the page.
-      assert(!page.includes(`/actions/runs/${loomCiId + 1}"`));
+      assert(!page.includes(`/actions/runs/${cfsCiId + 1}"`));
       // The labs job has nothing going, so only loom's carries the dot.
       assertEquals(page.match(/class="dot run"/g)?.length, 1);
     },
@@ -1387,7 +1387,7 @@ Deno.test("ci: a failure stands when its workflow's history makes no sense", asy
     await withGitHub(
       standingOrg(green, [{ conclusion: "failure", minutesAgo: 30 }]).map(
         (repo) =>
-          repo.name === LOOM_REPO.split("/")[1]
+          repo.name === CFS_REPO.split("/")[1]
             ? { ...repo, commitsBody: testCase.body }
             : repo,
       ),
@@ -1573,7 +1573,7 @@ Deno.test("ci: a tile with everything to list does not also carry a line saying 
   await withGitHub(
     [
       { name: REPO.split("/")[1], workflowsStatus: 403 },
-      { name: LOOM_REPO.split("/")[1], workflowsStatus: 403 },
+      { name: CFS_REPO.split("/")[1], workflowsStatus: 403 },
     ],
     async () => {
       const view = await collectSwept(createCiHealth());

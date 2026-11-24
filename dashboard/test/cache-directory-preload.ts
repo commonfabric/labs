@@ -9,7 +9,7 @@
 // It also removes the variables that configure the dashboard's GitHub
 // credentials. A test that wants one sets it, and a credential the shell
 // happened to hold would otherwise reach GitHub, or take precedence over the
-// one the test set. It removes the variables that name the loom and weaver
+// one the test set. It removes the variables that name the cfs and weaver
 // repositories too, so the tests read the repositories the dashboard follows by
 // default.
 
@@ -21,6 +21,7 @@ globalThis.addEventListener("unload", () => {
 
 for (
   const variable of [
+    "DASHBOARD_CFS_REPO",
     "DASHBOARD_LOOM_REPO",
     "DASHBOARD_WEAVER_REPO",
     "GH_APP_CLIENT_ID",
