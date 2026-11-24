@@ -23813,3 +23813,274 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 2. Note 992: a run that P450 holds back reads nothing and writes nothing, and
    the run asked for at the end of the first derivation's transaction reads what
    that transaction stored, labels included; no label decision changes.
+
+## Round nineteen, continued: an expression of a scope planned as a value of its own
+
+The coordinator's continuation of 2026-11-23 on the branch
+`merge-attempt/serving-m6`, from `223bd9d007`. The notes are numbered from 996,
+the provisional decisions from P451. The logs are in the folder
+`r19-topics-edit/c2/` of the session. P451 is the coordinator's provisional
+decision, taken on plan (A) of note 993.
+
+996. **What was built (provisional decision P451).**
+     - _The crate._ `Emitter::eval_placed` in `src/plan.rs` evaluates an
+       expression written at a position of a constructed value, a child of a JSX
+       element or the value of an attribute, in a cone of its own where
+       `Emitter::hoisted_scope` says so: the expression is an operator
+       expression (a conditional, a logical, binary or unary operator, or a
+       template literal), it is written outside every element body, in the cone
+       of a value that is being built, and it reads a name whose place is of a
+       scope narrower than the space (`Emitter::place_scope`: a state cell
+       declared of a scope, an operation of a scope, which is a `wish` that
+       resolves through the home of the acting principal, and a value whose cone
+       reads one, through every value it uses; a slot that observes `identity`
+       reads nothing). The value code emitter needs no change: a value of
+       another cone that an expression creates is registered as a value function
+       of its own and referred to as `$h.output(n)`, and a position that places
+       it writes no `$h.v`. On the Topics board the `select` of the profile
+       badge and `!hasProfile` of `disabled` are now values of their own, and
+       the value function of `[UI]` writes `$h.output(n)` at both.
+     - _The executor._ `Host.output` gives, in the cone of another value and
+       outside every element body, the reference to the place of an output's
+       value in the scope instance of a document of its own, the document of the
+       scoped values (`Instance.scopedValue`, `#scopedValues`), where the entry
+       of the value was found to be of a scope key, and the value itself where
+       it is one for every key; the result already had the same for its outputs
+       (`scopedOutput`). The place is kept by `#scopedPlace`, at the number of
+       the output, with the dependency on the reference, which is the same for
+       every key, so the cone that places it is of no scope key on its account.
+       A cone that reads through the reference (`Host.v`) reads the scope
+       instance and is then of that key, as before. A write to the document of
+       the scoped values is recorded under the record of the output and of each
+       interim output of its cone below it (`#valueWrites`), and a refused
+       commit that restores such a document marks the places as not current
+       (`Instance.restore`).
+     - _A defect of the first form, found and fixed._ As first built
+       (`f8d43299ce`), `Host.output` gave the reference to every evaluation
+       other than the result's, among them the entry that keeps the place of an
+       output of the result in a scope instance (`#scopedPlace`), which then
+       stored a link to the place of the same value in the document of the
+       scoped values, and the evaluation of an assembly. On the FabriChat room
+       the reader's rights listed 102 of 103 messages, the first one missing
+       (`compare/fabrichat/scale.ts runner room 100`); with the reference given
+       to the cone of a value alone (`626d7e9333`) they list 103. Test: "holds
+       its value, and no reference to another scoped place, in the scope
+       instance" of `exec/test/scoped-view.test.ts` over `fixtures/scoped.tsx`,
+       seen failing with the link in place of `nobody reads 1`. Which read lost
+       the first message was not traced.
+     - _Where it does not apply._ An expression in the body of a `map` or of
+       another per-element construct, over an array of references, an array of
+       plain values in place or the result of another per-element construct, is
+       not planned apart: a row that reads a value of a scope is of that scope,
+       and its assembly is stored in the scope instance of each principal, as
+       before (note 998). A name placed with no operator, as `{named}`, is no
+       expression to plan apart and gets its reference from the executor. An
+       authored body, a `computed` or a `lift`, is not split.
+
+997. **Why no position that depends on the scoped value loses its label.**
+     Written before the runtime tests and the measurements of this round, after
+     the code was drafted.
+     - _The cone of the tree no longer depends on the value._ After P451 the
+       entry of `[UI]` holds, at the position of the badge and of `disabled`,
+       the reference to the scoped place, which is the same for every scope key.
+       Its evaluation does not read the value: a read of it through `Host.v`
+       resolves the scope instance and makes the entry one of that key again,
+       which is the behavior before P451. So whether the tree is of the space is
+       decided by what its evaluation read, and does not rely on the templates
+       being complete.
+     - _The positions that depend on it keep its label._ The template of a kept
+       output of the tree at such a position is now `output n` of the value
+       planned apart, whose template is that of the expression (a `derive` or a
+       `select` over `hasProfile`), so the record of the result document at the
+       position joins the label of the scoped value as before, though the
+       position now holds a link in place of the value.
+     - _The scoped place carries the label of the value._ A write to the
+       document of the scoped values is given the record of the output whose
+       value it holds (`#valueWrites`), whose inputs are those of the
+       expression's cone. A reader that follows the link at the position of the
+       tree reads the scope instance and consumes that label, which is the
+       reading of a reference in today's runtime.
+     - _What stores less label._ A position of the tree that does not depend on
+       the scoped value, a card or the list of the cards, no longer joins its
+       label, which it did while the whole tree was one entry of the scope. That
+       is the change P451 intends (CFC question 1 below).
+     - _No position found to be under-labeled._ The executor tests and the
+       runner tests of the round compare values, not labels, so the argument
+       above is not checked by a test of stored labels (note 1002).
+
+998. **The tests, seen failing first.**
+     - `tests/plan.rs`,
+       `an_expression_of_a_view_that_reads_a_value_of_a_scope_is_a_value_of_its_own`:
+       a tree that reads a value of the scope `user` in a branch and an
+       attribute beside a `map` over an array of references; the cones are
+       `named`, `child`, `disabled`, `map`, `$UI`, and the tree lists no slot of
+       a state cell. Seen failing with the cones `named`, `map`, `$UI`. An
+       expression that reads nothing of a scope (`count > 1 ? ... : ...`) stays
+       in the tree's cone, and the same expression in the body of the `map`
+       stays in the element's.
+     - `exec/test/scoped-view.test.ts` over `fixtures/scoped-view.tsx` (the
+       reproduction of note 993, moved into the fixtures; the value of the scope
+       is now of the scope `user`, read in a branch and in an attribute), the
+       executor in memory, two principals, at 10 and at 100 items: the scope
+       instances hold 238 bytes as JSON at both sizes, where they held 1,722 and
+       13,062 before; an edit of one item's title writes the same documents at
+       both sizes and no scope instance, where before it wrote the row in the
+       scope instance of each principal; each principal reads the branch and the
+       attribute its own nickname selects. The first two seen failing with the
+       crate's change and without the executor's.
+     - The same file over `fixtures/scoped-view-rows.tsx`, where the body of the
+       `map` over the array of references reads the value too: each principal
+       reads the rows its own nickname selects, and the rows are stored in the
+       scope instance of each principal, whose size follows the rows, and in no
+       document of the space. That is what was stored before P451 for such rows,
+       and it is sound: a row of the scope is stored for its key alone.
+     - The same file over `fixtures/scoped-view-plain.tsx`, a `map` over an
+       array of plain values in place: the scope instances are the same size at
+       10 and 100 items, and an edit of one item writes as many documents at
+       both sizes and no scope instance. Seen failing before P451.
+     - `test/compiled/scoped-view.test.ts`, under the serving loop with two
+       principals at 10 and at 100 items: the executor's scope instances hold
+       330 bytes at both sizes, where they held 2,557 and 19,567 before; the
+       edit of one item's title delivers to the second client the same three
+       documents of the space at both sizes (the item, its row document and one
+       more) and no document of a scope, where before it delivered the scope
+       instance of the user; no refusal. Seen failing on the executor before
+       P451.
+
+999. **Resume, and the two items of the round's first report.**
+     - _Note 892's rule stays._ A piece that has named a document of a scope
+       resumes whole. P451 makes the rows of a collection of the space, whose
+       bodies read nothing of a scope, be units of the result document evaluated
+       once for every key, which is what a wake by units needs of them, and what
+       `PieceUnits.record` writes of their bodies is then the same for every
+       principal. What still stands in the way is the basis: the scoped places
+       are documents of a scope that the piece names, and a basis for each scope
+       key (note 890) is not built. Not built here.
+     - _A session that no client holds is still derived._ The serving loop's
+       demand registry (`scheduler/fan-out.ts` and the demanders it is given)
+       keeps the session of a client that went away; that is code of today's
+       runtime, and withdrawing a demand when a session closes is not small.
+       Left as a note.
+     - _The serving identity's copy._ The scope instance of the serving
+       runtime's own identity now holds the two scoped values and not the tree;
+       the copy is a few hundred bytes. Not changed.
+
+1000. **Measured,** before at `223bd9d007` and after at `626d7e9333`, one run of
+      each cell, one process of the harness at a time with the corpus runs of
+      this round beside them, on an Apple M5 Max with 18 cores; the boards of
+      the measurement branch copied in.
+      - _Topics, the arm `serving` on `filing-order`, counts first._ An edit of
+        a title runs 1 derivation and 5 evaluations after, where it ran 3 and 8
+        before, at 100, 1,000 and 2,000 topics; that is the serving branch alone
+        (note 991). It gives 9 records after, 4 before. The executor's scope
+        instances hold 448 bytes as JSON after, at every size, against 342,058,
+        3,387,662 and 6,777,662 bytes before (both principals' copies of the
+        tree). A create gives 197 to 229 records after and 123 to 187 before, at
+        every size, and is refused once in each run before and after (note 992's
+        remaining refusal); each create adds about 19 KB to the scope instances
+        after, the session state of the created topic's own view.
+      - _Times_ (the second client, then the piece's own time, in milliseconds;
+        load averages 17 to 24 after and 13 to 23 before):
+
+        | Step                               | 100 before    | 100 after     | 1,000 before        | 1,000 after   | 2,000 before        | 2,000 after   |
+        | ---------------------------------- | ------------- | ------------- | ------------------- | ------------- | ------------------- | ------------- |
+        | edit of a title, middle            | 190 / 21.5    | 27 / 3.2      | 1,673 / 203         | 28 / 2.8      | 4,414 / 431         | 69 / 4.1      |
+        | edit of the mentions               | 61 / 4.6      | 62 / 6.0      | 122 / 5.4           | 94 / 5.9      | 169 / 9.0           | 156 / 9.7     |
+        | edit of the `shortName`            | 195 / 24      | 55 / 5.0      | 2,242 / 196         | 70 / 7.8      | 3,576 / 393         | 85 / 7.8      |
+        | create, three turns, second client | 603; 476; 604 | 261; 189; 164 | 2,484; 2,971; 2,809 | 322; 253; 201 | 6,012; 6,554; 6,834 | 415; 306; 278 |
+
+        The piece's own time for a title edit, 2.6 to 6.3 ms after over the
+        three edits of each size, is within the 4 to 8 ms of the serving branch
+        alone.
+      - _FabriChat_ (`SCALE_STAND_INS=table`,
+        `compare/fabrichat/scale.ts
+        runner room 100`): a send gives 148
+        records after and 188 before, 32 evaluations, 554 to 564 positions read,
+        and changes 19 documents of 578 to 585 KB after, 18 of 585 to 592 KB
+        before; 212 to 229 ms after at a load average of 19 to 24. The room's
+        result read after the sends is equal before and after. The crate plans
+        an expression apart in `FabriChatMessageRow`, `SharedSpaceCollection`
+        (two) and the favorites manager of Home; the room's own cones are
+        unchanged, so the difference comes from `Host.output` giving a cone of
+        the room the reference to a scoped place; which 40 records a send no
+        longer gives was not traced.
+      - _`compare/serving-path.ts 1000`:_ before and after, the piece is found
+        current after the takeover with no evaluation, 6 evaluations at the
+        wake, 11 derivations, no refusal; the piece's own time for its ten
+        events and derivations 52.6 ms before and 42.2 ms after (loads 17 to
+        30). The client that watches the whole list in chunks reads a rename
+        after 1.9 to 2.9 s and an add after 16 to 21 s on both sides (note 984).
+
+1001. **The corpus,** `compare/runner-corpus.ts` in its four modes and with
+      `--references`, one run of each, before at `223bd9d007` and after at
+      `626d7e9333`, as started, every event handled, equal to the executor in
+      memory:
+
+      | Mode                  | Before        | After         |
+      | --------------------- | ------------- | ------------- |
+      | runner                | 259, 217, 230 | 259, 216, 230 |
+      | serving               | 235, 202, 212 | 235, 202, 212 |
+      | after a resume        | 260, 217, 229 | 259, 215, 226 |
+      | serving with a resume | 235, 201, 210 | 235, 201, 210 |
+      | `--references`        | 235, 202, 206 | 235, 202, 206 |
+
+      - _Modules whose line changes._ `apps/topics/main.tsx`,
+        `apps/topics/card-text.ts` and
+        `product/collection-naming/mentionable.ts`: not comparable, since the
+        tree of the run before held the Topics boards of the measurement branch,
+        copied in while that run was under way. Varying between runs of the same
+        code, each run again three or four times on each side:
+        `apps/reward-spinner/reward-spinner.tsx` (the first difference from the
+        executor in memory follows a random draw, at `$FS` or at a position of
+        `[UI]`, before as after), `apps/redactor/vault.tsx` after a resume (its
+        whole resume refused for writer fit in every rerun before and after; the
+        run before that resumed is the exception) and
+        `showcase/scrabble/scrabble.tsx` after a resume (the first difference in
+        a shuffled bag). `system/profile-embed/profile-embed.tsx`, on the runner
+        path and after a resume: four events of five fail with "no stream of the
+        binding is stored" behind four refusals for writer fit on the documents
+        of its drafts, in all eight runs after, where the runs before gave that
+        outcome in one of three and all five events handled with two or three
+        refusals in the other two. Not traced; it is the module whose handler
+        `startEditing` copies the name and bio of the profile, values of the
+        scope `user`, into drafts of the space, and after P451 its handler's
+        state holds the reference to the scoped places of those values (CFC
+        question 5).
+      - _Counts that change with no change of outcome._ After a resume, the
+        documents the resume writes grow by one to three in 11 modules with
+        state of a scope (the document of the scoped values) and fall from 7 to
+        5 in `FabriChatMessageRow`; under the serving loop with a resume the
+        evaluations of the load and of the wake grow by 2 to 18 in
+        `topic-workbench/main`, `collection-naming/item`, `wordsearch/play`,
+        `message-row` and `profile-create`, the values planned apart and the
+        places of the scoped values.
+
+1002. **Provisional decision, and what was not verified.** P451: as note 996.
+      Not verified: the stored labels of a tree of the space with a scoped place
+      under clauses that differ (no test with a confidentiality clause on the
+      scoped value); why `profile-embed` now fails four events of five in every
+      run (note 1001); which 40 records a FabriChat send no longer gives; the
+      resume of a piece with scoped places (whole, as before); the remaining
+      refusal of a Topics create (note 992), which the first form of the round
+      did not show and the fixed form does.
+
+### CFC questions deferred, round nineteen continued
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+3. P451: a position of the tree that does not depend on the scoped value no
+   longer joins its label (note 997). A change that stores less label; today's
+   runtime stores the same for a node of its own.
+4. P451: the record of the result document at a position that holds the
+   reference to a scoped place resolves the template `output n` with the inputs
+   of the run that stored the tree, which is the run of one scope key; where the
+   label of the scoped value differs between keys, the position of the space
+   joins the label of that key's value. An over-label of the space position, not
+   an under-label of the place.
+5. Note 1001: a handler whose state holds the reference to the scoped place of a
+   value reads that place, with the label its record stored, where it read the
+   value before. `profile-embed`'s `startEditing`, which copies the profile's
+   name into a draft of the space, is refused for writer fit in every run after
+   P451 and in one of three before. Whether the refusal is the label that the
+   copy owes, and the earlier outcome an under-label, or the scoped place stores
+   a larger label than the value had, is not decided.
