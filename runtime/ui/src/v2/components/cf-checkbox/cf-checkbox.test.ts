@@ -128,40 +128,20 @@ describe("CFCheckbox", () => {
     expect(element.required).toBe(false);
   });
 
-  it("should expose aria-disabled and tabIndex when updated (enabled)", () => {
-    const element = new CFCheckbox();
-    // Trigger the updated lifecycle with a set of changed properties.
-    // aria-disabled and tabIndex are set by _updateAriaAttributes() which
-    // does not require connectedCallback.
-    element.updated(new Map([["disabled", undefined]]));
-
+  it("is a Tab stop while enabled, and none while disabled", async () => {
+    const element = await checkbox();
     expect(element.getAttribute("aria-disabled")).toBe("false");
     expect(element.tabIndex).toBe(0);
-  });
 
-  it("should set tabIndex to 0 when enabled", () => {
-    const element = new CFCheckbox();
-    element.disabled = false;
-    element.updated(new Map([["disabled", true]]));
-
-    expect(element.tabIndex).toBe(0);
-  });
-
-  it("should set tabIndex to -1 when disabled", () => {
-    const element = new CFCheckbox();
     element.disabled = true;
-    element.updated(new Map([["disabled", false]]));
-
-    expect(element.tabIndex).toBe(-1);
-  });
-
-  it("should expose disabled state via aria-disabled", () => {
-    const element = new CFCheckbox();
-    element.disabled = true;
-    element.updated(new Map([["disabled", false]]));
-
+    await element.updateComplete;
     expect(element.getAttribute("aria-disabled")).toBe("true");
     expect(element.tabIndex).toBe(-1);
+
+    element.disabled = false;
+    await element.updateComplete;
+    expect(element.getAttribute("aria-disabled")).toBe("false");
+    expect(element.tabIndex).toBe(0);
   });
 
   describe("render()", () => {
