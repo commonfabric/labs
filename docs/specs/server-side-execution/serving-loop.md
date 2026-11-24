@@ -1360,8 +1360,9 @@ executing:
   time a slice of the space pulled from expires at, or that space's own
   arming with a space it reads runs out: a judgment after that time pulls
   again, the time a judgment returns for its loop to judge again at is that
-  one for its own space, and a record that makes the time earlier tells each
-  space armed for longer. A trigger carries the number of the
+  one for its own space, and a record that makes the time earlier shortens
+  the arming of each space armed for longer to that time and tells it,
+  which leaves it armed. A trigger carries the number of the
   change it leads back to, one with no trigger behind it, and how many
   triggers lead from that change. The same change reaching a space through
   more triggers than before has come round a circle of spaces, and at
