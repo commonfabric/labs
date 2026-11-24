@@ -83,8 +83,6 @@ describe("CFSwitch", () => {
     it("draws a checked switch", async () => {
       const { element } = await switchWith({
         checked: true,
-        name: "alerts",
-        value: "yes",
       });
       expect([...track(element).classList]).toEqual(["switch", "checked"]);
       expect(element.getAttribute("aria-checked")).toBe("true");

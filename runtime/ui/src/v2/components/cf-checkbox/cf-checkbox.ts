@@ -13,8 +13,6 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
  *
  * @attr {boolean|CellHandle<boolean>} checked - Whether the checkbox is checked (supports both plain boolean and CellHandle<boolean>)
  * @attr {boolean} disabled - Whether the checkbox is disabled
- * @attr {string} name - Name attribute for form submission
- * @attr {string} value - Value attribute for form submission
  * @attr {boolean} required - Whether the checkbox is required
  * @attr {boolean} indeterminate - Whether the checkbox is in indeterminate state
  *
@@ -23,7 +21,7 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
  * @fires cf-change - Fired on change with detail: { checked, indeterminate }
  *
  * @example
- * <cf-checkbox name="terms" checked>Accept terms</cf-checkbox>
+ * <cf-checkbox checked>Accept terms</cf-checkbox>
  *
  * @example
  * <!-- Reactive Cell binding -->
@@ -151,16 +149,12 @@ export class CFCheckbox extends BaseElement {
       disabled: { type: Boolean, reflect: true },
       indeterminate: { type: Boolean, reflect: true },
       required: { type: Boolean, reflect: true },
-      name: { type: String },
-      value: { type: String },
     };
 
     declare checked: CellHandle<boolean> | boolean;
     declare disabled: boolean;
     declare indeterminate: boolean;
     declare required: boolean;
-    declare name: string;
-    declare value: string;
 
     private _checkedCellController = createBooleanCellController(this, {
       timing: {
@@ -200,8 +194,6 @@ export class CFCheckbox extends BaseElement {
       this.disabled = false;
       this.indeterminate = false;
       this.required = false;
-      this.name = "";
-      this.value = "on";
     }
 
     private getChecked(): boolean {

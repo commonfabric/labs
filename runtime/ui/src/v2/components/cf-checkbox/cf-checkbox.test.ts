@@ -21,7 +21,7 @@ function checkbox(
   properties: Partial<
     Pick<
       CFCheckbox,
-      "checked" | "disabled" | "indeterminate" | "required" | "name" | "value"
+      "checked" | "disabled" | "indeterminate" | "required"
     >
   > = {},
 ): Promise<CFCheckbox> {
@@ -126,8 +126,6 @@ describe("CFCheckbox", () => {
     expect(element.disabled).toBe(false);
     expect(element.indeterminate).toBe(false);
     expect(element.required).toBe(false);
-    expect(element.name).toBe("");
-    expect(element.value).toBe("on");
   });
 
   it("should expose aria-disabled and tabIndex when updated (enabled)", () => {

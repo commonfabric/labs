@@ -171,8 +171,6 @@ await input.pressSequentially("user@example.com");
 
 - `checked` - boolean
 - `disabled` - boolean
-- `name` - string
-- `value` - string
 - `required` - boolean
 - `indeterminate` - boolean **Events**:
 - `cf-change` - Fired on change with detail: `{ checked, indeterminate }`
@@ -180,7 +178,7 @@ await input.pressSequentially("user@example.com");
 **Example**:
 
 ```html
-<cf-checkbox name="terms" checked>Accept terms</cf-checkbox>
+<cf-checkbox checked>Accept terms</cf-checkbox>
 ```
 
 ### 5. cf-radio
@@ -218,12 +216,11 @@ await input.pressSequentially("user@example.com");
 **Purpose**: Toggle switch **Tag**: `<cf-switch>` **Attributes**:
 
 - `checked` - boolean
-- `disabled` - boolean
-- `name` - string **Events**:
+- `disabled` - boolean **Events**:
 - `cf-change` - Fired on toggle with detail: `{ checked }` **Example**:
 
 ```html
-<cf-switch name="notifications" checked>Enable notifications</cf-switch>
+<cf-switch checked>Enable notifications</cf-switch>
 ```
 
 ### 8. cf-slider

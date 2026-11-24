@@ -12,8 +12,6 @@ import { createBooleanCellController } from "../../core/cell-controller.ts";
  *
  * @attr {boolean|CellHandle<boolean>} checked - Whether the switch is checked/on (supports both plain boolean and CellHandle<boolean>)
  * @attr {boolean} disabled - Whether the switch is disabled
- * @attr {string} name - Name attribute for form submission
- * @attr {string} value - Value attribute for form submission (default: "on")
  *
  * @fires cf-change - Fired when switch state changes with detail: { checked }
  *
@@ -140,14 +138,10 @@ export class CFSwitch extends BaseElement {
   static override properties = {
     checked: { type: Boolean, reflect: true },
     disabled: { type: Boolean, reflect: true },
-    name: { type: String },
-    value: { type: String },
   };
 
   declare checked: CellHandle<boolean> | boolean;
   declare disabled: boolean;
-  declare name: string;
-  declare value: string;
 
   private _checkedCellController = createBooleanCellController(this, {
     timing: {
@@ -163,8 +157,6 @@ export class CFSwitch extends BaseElement {
     super();
     this.checked = false;
     this.disabled = false;
-    this.name = "";
-    this.value = "on";
   }
 
   private getChecked(): boolean {
