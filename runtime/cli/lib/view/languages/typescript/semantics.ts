@@ -790,11 +790,24 @@ export interface ProgramSpec {
   readonly realRoots: readonly string[];
 }
 
+/** How many moves of a program's root each file stays parsed for after the
+ * program stops reaching it, so that going back to a file the viewer asked
+ * about recently parses nothing again. */
+const KEPT_ROOT_MOVES = 16;
+
 /** The program `spec` describes, built on this thread when first queried, or
- * at once by `prewarm`. Every query degrades to null or empty. */
-export function localProgram(spec: ProgramSpec): LocalProgram {
+ * at once by `prewarm`, with its parsed files kept in `registry`. Every query
+ * degrades to null or empty. */
+export function localProgram(
+  spec: ProgramSpec,
+  registry: ts.DocumentRegistry = ts.createDocumentRegistry(),
+): LocalProgram {
   const realRoots = new Set(spec.realRoots);
   let realRoot = spec.realRoots.at(0);
+  // The service's releases of the files the program stopped reaching, by the
+  // move of the root after which it made them, held back until
+  // KEPT_ROOT_MOVES more moves.
+  const heldReleases: (() => void)[][] = [[]];
   const { build, prewarm } = lazyProgram(() => {
     const host = makeHost(
       spec.sections,
@@ -804,22 +817,41 @@ export function localProgram(spec: ProgramSpec): LocalProgram {
       spec.root,
       () => realRoot,
     );
-    // Moving the root to another file releases the files only the old root
-    // reached. This registry keeps them, so that going back to a file parses
-    // nothing again.
-    const registry = ts.createDocumentRegistry();
     const service = ts.createLanguageService(host, {
       ...registry,
-      releaseDocumentWithKey() {},
+      releaseDocumentWithKey: (
+        path: ts.Path,
+        key: ts.DocumentRegistryBucketKey,
+        scriptKind: ts.ScriptKind,
+        impliedNodeFormat?: ts.ResolutionMode,
+      ) => {
+        heldReleases[heldReleases.length - 1].push(() =>
+          registry.releaseDocumentWithKey(
+            path,
+            key,
+            scriptKind,
+            impliedNodeFormat,
+          )
+        );
+      },
     });
     service.getProgram();
     return service;
   });
   // The service, with its program rooted at `fileName` when that is one of
-  // the real roots.
+  // the real roots. The releases held back longest are made once the program
+  // has taken back what it still reaches.
   const serviceFor = (fileName: string) => {
-    if (realRoots.has(fileName)) realRoot = fileName;
-    return build();
+    if (realRoots.has(fileName) && fileName !== realRoot) {
+      realRoot = fileName;
+      heldReleases.push([]);
+    }
+    const service = build();
+    service?.getProgram();
+    if (heldReleases.length > KEPT_ROOT_MOVES) {
+      for (const release of heldReleases.shift() ?? []) release();
+    }
+    return service;
   };
   return {
     prewarm,

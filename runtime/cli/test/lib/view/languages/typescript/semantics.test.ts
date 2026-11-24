@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { basename, join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
+import ts from "typescript";
 
 import {
   _internal,
@@ -20,6 +21,42 @@ const OFFSET_THAT_THROWS = {
     throw new Error("hostile offset");
   },
 } as unknown as number;
+
+/**
+ * A document registry that counts, by base name, how many programs hold each
+ * file it has parsed. The registry keeps a file parsed while its count is
+ * above zero.
+ */
+function countingRegistry(): {
+  readonly registry: ts.DocumentRegistry;
+  readonly held: (name: string) => number;
+} {
+  const inner = ts.createDocumentRegistry();
+  const counts = new Map<string, number>();
+  const count = (path: string, by: number) =>
+    counts.set(basename(path), (counts.get(basename(path)) ?? 0) + by);
+  return {
+    registry: {
+      ...inner,
+      acquireDocumentWithKey: (
+        ...acquire: Parameters<ts.DocumentRegistry["acquireDocumentWithKey"]>
+      ) => {
+        count(acquire[1], 1);
+        return inner.acquireDocumentWithKey(...acquire);
+      },
+      releaseDocumentWithKey: (
+        path: ts.Path,
+        key: ts.DocumentRegistryBucketKey,
+        scriptKind: ts.ScriptKind,
+        impliedNodeFormat?: ts.ResolutionMode,
+      ) => {
+        count(path, -1);
+        inner.releaseDocumentWithKey(path, key, scriptKind, impliedNodeFormat);
+      },
+    },
+    held: (name) => counts.get(name) ?? 0,
+  };
+}
 
 describe("semantics", () => {
   describe("localProgram()", () => {
@@ -75,6 +112,53 @@ describe("semantics", () => {
 
         // A file the spec does not name is never a root.
         expect(program.typeAt(other, "const ".length)).toBeNull();
+      } finally {
+        Deno.removeSync(dir, { recursive: true });
+      }
+    });
+
+    it("keeps parsed the files the latest roots reach, and frees those only older roots reach", () => {
+      // Each `root-N.ts` imports a `dep-N.ts` that no other root reaches.
+
+      const dir = Deno.makeTempDirSync();
+      try {
+        const roots = Array.from({ length: 18 }, (_, n) => {
+          const root = join(dir, `root-${n}.ts`);
+          Deno.writeTextFileSync(
+            join(dir, `dep-${n}.ts`),
+            `export const dep: ${n} = ${n};\n`,
+          );
+          Deno.writeTextFileSync(
+            root,
+            `import { dep } from "./dep-${n}.ts";\nconst a = dep;\n`,
+          );
+          return root;
+        });
+        const { registry, held } = countingRegistry();
+        const program = localProgram({
+          ...SPEC,
+          sections: [],
+          cwd: dir,
+          root: dir,
+          realRoots: roots,
+        }, registry);
+        const depType = (n: number) =>
+          program.typeAt(
+            roots[n],
+            Deno.readTextFileSync(roots[n]).lastIndexOf("dep"),
+          );
+
+        for (let n = 0; n < roots.length; n++) {
+          expect(depType(n)).toBe(`${n}`);
+        }
+        expect(held("dep-0.ts")).toBe(0);
+        expect(held("dep-1.ts")).toBeGreaterThan(0);
+        expect(held("dep-17.ts")).toBeGreaterThan(0);
+
+        expect(depType(0)).toBe("0");
+        expect(held("dep-0.ts")).toBeGreaterThan(0);
+        expect(held("dep-1.ts")).toBe(0);
+        expect(held("dep-2.ts")).toBeGreaterThan(0);
       } finally {
         Deno.removeSync(dir, { recursive: true });
       }
