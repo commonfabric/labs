@@ -80,9 +80,18 @@ export class BoardSession {
     await waitForRuntimeIdle(this.#page);
   }
 
-  /** Waits for the first seeded topic's title and settles the board's view. */
+  /**
+   * Waits for the newest seeded topic's title and settles the board's view.
+   * The board shows its most recently active topics a page at a time, so the
+   * newest topic's card is on the first page at any board size, where the
+   * oldest one's is not once the board holds more than a page.
+   */
   async showBoard(): Promise<void> {
-    await waitForSettledText(this.#page, "body", topicTitle(0));
+    await waitForSettledText(
+      this.#page,
+      "body",
+      topicTitle(this.#target.fixture.topics.length - 1),
+    );
     await settleView(this.#page);
   }
 
