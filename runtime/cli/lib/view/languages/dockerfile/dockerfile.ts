@@ -455,7 +455,6 @@ class Scanner {
 
   /** Colors a `FROM` instruction's image and stage name, and opens a stage. */
   #from(start: number, at: number, end: number): void {
-    const text = this.text;
     const image = this.#word(at, end);
     this.#paint("typeName", at, image.end);
     this.#words(at, image.end, true);
@@ -518,7 +517,6 @@ class Scanner {
     instruction: string,
     nested: boolean,
   ): void {
-    const text = this.text;
     for (at = this.#space(at, end); at < end; at = this.#space(at, end)) {
       const word = this.#word(at, end);
       const nameEnd = word.equals ?? word.end;
