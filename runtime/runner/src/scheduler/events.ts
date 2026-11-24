@@ -3769,14 +3769,31 @@ export async function dispatchQueuedEvent(state: {
         "handlerAction",
       );
       try {
+        const body = () => {
+          if (tx.dispatchedHandlerNotRun !== undefined) return undefined;
+          state.runtime.scheduler.prepareViewAction(tx, implementation);
+          return isGuardedDispatcher(handler)
+            ? implementation(tx, eventValue)
+            : action(tx);
+        };
+        // A serving worker's runtime marks the body on its worker's run
+        // beacon, naming the stream entry a served run handles, whose event
+        // the pool fails if the run holds the worker's thread until the
+        // watchdog ends the worker (serving-loop.md §2, "The watchdog").
+        const beacon = state.runtime.runBeacon;
         const runningPromise = Promise.resolve(
-          state.runtime.harness.invoke(() => {
-            if (tx.dispatchedHandlerNotRun !== undefined) return undefined;
-            state.runtime.scheduler.prepareViewAction(tx, implementation);
-            return isGuardedDispatcher(handler)
-              ? implementation(tx, eventValue)
-              : action(tx);
-          }),
+          beacon === undefined
+            ? state.runtime.harness.invoke(body)
+            : beacon.hold(
+              diagnosticHandler,
+              handlerId,
+              () => state.runtime.harness.invoke(body),
+              served?.streamEntry === undefined ? undefined : {
+                sidecarId: served.streamEntry.sidecarId,
+                eventId: queuedEvent.id,
+                seq: served.streamEntry.seq,
+              },
+            ),
         ).then(() => {
           const trustedEventCandidates =
             trustedEventWriteCandidatesFromTransaction(tx, implementation, [

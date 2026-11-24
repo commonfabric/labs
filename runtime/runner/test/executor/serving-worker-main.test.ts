@@ -48,6 +48,7 @@ describe("serveFromPort()", () => {
       route: undefined,
       compileOnHost: undefined,
       compileCacheDir: undefined,
+      runBeacon: undefined,
     };
     await bridge.init(init);
   };

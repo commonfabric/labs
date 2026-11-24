@@ -233,6 +233,7 @@ import {
   type WaveWriteAnnotation,
 } from "./wave.ts";
 import { servingLocalStore } from "./serving-context.ts";
+import type { RunEvent } from "./run-beacon.ts";
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
@@ -555,10 +556,28 @@ export type RuntimeFactoryContext = {
   route?: RouteOptions;
 };
 
+/**
+ * A space's events whose handler's run held the thread of a serving worker
+ * the pool ended (serving-loop.md §2, "The watchdog"), each with the reason
+ * its consequence states, keyed by event id.
+ */
+export type FailedEvents = Map<
+  string,
+  { readonly event: RunEvent; readonly reason: string }
+>;
+
 export type SpaceServerOptions = {
   space: MemorySpace;
   server: HostMemoryServer;
   engine: Engine.Engine;
+
+  /**
+   * The events of the space whose handlers are not run (events.md §5): the
+   * drain writes each one's reason as its consequence instead, and removes it
+   * from here once that consequence has committed. The host shares the map
+   * across the space's tenures.
+   */
+  failedEvents?: FailedEvents;
 
   /** The service identity (DID) the DR1 holder is minted from — also the
    * loopback session's principal, which is what the read-row admission
@@ -5272,6 +5291,34 @@ export class SpaceServer implements TransactionSealDestination {
           this.#sealEventConsequenceNotice(runtime, entry, streamEntry);
           continue;
         }
+        const failed = this.#options.failedEvents?.get(entry.eventId);
+        if (
+          failed !== undefined &&
+          failed.event.sidecarId === streamEntryAddress.sidecarId &&
+          failed.event.seq === streamEntryAddress.seq
+        ) {
+          // events.md §5: the handler's run held the thread of a worker the
+          // pool ended, so the error is the event's consequence and the
+          // handler does not run for it again. As a terminal notice it holds
+          // the later arrivals until its wave commits, whose outcome removes
+          // it from `failedEvents` and re-arms the scan for them; a seal or a
+          // wave that fails releases the guard, and the next pass seals it
+          // again.
+          if (!this.#drainInFlight.has(entry.eventId)) {
+            this.#drainInFlight.set(entry.eventId, {
+              phase: "marked",
+              wave: undefined,
+            });
+            this.#options.stats.events.failedWithWorker += 1;
+            this.#sealEventConsequenceNotice(
+              runtime,
+              entry,
+              streamEntry,
+              { kind: "error", message: failed.reason },
+            );
+          }
+          break;
+        }
         const pendingCheckpoint = this.#pendingDeliveryCheckpointWrites.get(
           entry.eventId,
         );
@@ -9013,6 +9060,7 @@ export class SpaceServer implements TransactionSealDestination {
     for (const eventId of outcome.committedEventIds) {
       if (releasedBy(eventId)) this.#drainInFlight.delete(eventId);
       this.#requeueCatchUp.delete(eventId);
+      this.#options.failedEvents?.delete(eventId);
     }
     for (const eventId of outcome.requeuedEventIds) {
       if (releasedBy(eventId)) this.#drainInFlight.delete(eventId);

@@ -44,9 +44,11 @@ import {
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
 import { RoutedPlane, type RouteOptions } from "./routed-plane.ts";
+import type { RunEvent } from "./run-beacon.ts";
 import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
+  type FailedEvents,
   LIFECYCLE_VERB_SPACE_PARKED,
   type LifecycleVerb,
   type RuntimeFactoryContext,
@@ -265,6 +267,13 @@ export class ExecutorHost {
    * notices racing a park, and the warm requests of a tenure that ended
    * without serving them (see `#endTenure`). */
   readonly #pendingNotices = new Map<string, AdmittedCommitNotice[]>();
+
+  /**
+   * The events, by space, whose handlers the space's tenures do not run but
+   * write the failure of as the consequence (`failEvent()`), shared by each of
+   * the space's tenures in turn.
+   */
+  readonly #failedEvents = new Map<string, FailedEvents>();
 
   /** The ONE process-lifetime localSeq counter for every sink this host
    * builds (the replay keying — engine-wave-sink.ts): survives
@@ -562,6 +571,19 @@ export class ExecutorHost {
   }
 
   /**
+   * Has the tenures of `space` write `reason` as the consequence of `event`
+   * in place of running its handler (events.md §5): the handler's run held
+   * the thread of a serving worker the pool ended, and the pool hands the
+   * event to the worker the space is placed on next, before anything else for
+   * the space. A tenure already serving the space finds it at its next scan
+   * of the space's events.
+   */
+  failEvent(space: MemorySpace, event: RunEvent, reason: string): void {
+    if (this.#closed) return;
+    this.#failedEventsOf(space).set(event.eventId, { event, reason });
+  }
+
+  /**
    * Tells every tenure this host runs that an admitted commit wrote
    * `space`'s access-list document. `#onCommitAdmitted()` calls it for the
    * commits this host hears of; whoever routes a space's commits to another
@@ -803,6 +825,17 @@ export class ExecutorHost {
     this.#noteOccupancy();
   }
 
+  /** Helper for `failEvent()` and the activation, which returns `space`'s
+   * failed events, as every tenure of the space shares them. */
+  #failedEventsOf(space: MemorySpace): FailedEvents {
+    let failed = this.#failedEvents.get(space);
+    if (failed === undefined) {
+      failed = new Map();
+      this.#failedEvents.set(space, failed);
+    }
+    return failed;
+  }
+
   #activate(space: MemorySpace): Promise<void> {
     // One activation in flight per space: session-open and
     // commit-admitted hooks race, and a second concurrent activation
@@ -860,6 +893,7 @@ export class ExecutorHost {
         space,
         server: this.#options.server,
         engine,
+        failedEvents: this.#failedEventsOf(space),
         serviceIdentity: this.#options.serviceIdentity,
         // A runtime kept from the space's last idle park serves this tenure
         // when the store has not moved since; otherwise the factory builds
