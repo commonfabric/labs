@@ -267,8 +267,9 @@ the one it started with, so this needs the setting to be choosable per run.
 before any timing claim, and that measurement is part of this stage.
 
 Built in [labs#10179](https://github.com/commonfabric/labs/pull/10179): the
-table, the merge across workers, the marker's new fields, and the log line. Not built yet: the sampled read counters with the per-run setting and
-the overhead measurement, and event handlers, whose runs report no duration
+table, the merge across workers, the marker's new fields, and the log line.
+Not built yet: the sampled read counters with the per-run setting and the
+overhead measurement, and event handlers, whose runs report no duration
 (`scheduler.invocation` has none), so a slow handler has no entry.
 
 The entry is written for two readers. An operator reads which action in which
