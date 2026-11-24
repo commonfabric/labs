@@ -180,14 +180,15 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   mention pivot from it; `cardRowsByActivity` takes the seven scalars a card
   uses per topic (`CardSource`: the six it shows, and `createdAt` as the sort's
   fallback for a topic that has never run), orders the topics by activity and
-  builds one row per topic, most recently active first — the badge, title,
-  snippet and caption as plain strings, plus the topic as a reference for the
-  Open link; `mentionableIndex` takes the three display strings per topic and
-  builds the mention universe; `namesTable` takes the namespace map and builds
-  one row per numbered member, for a caller's reverse lookup, without reading
-  through any of them. None expands a topic's thread, verbs, or rendered UI. The
-  card derivation alone reads prose: the body string, whole, which it cuts to
-  its 120-character snippet — and nothing else of the topic.
+  builds one row per topic that has arrived (one still mid-sync gets its row on
+  the next run), most recently active first — the badge, title, snippet and
+  caption as plain strings, plus the topic as a reference for the Open link;
+  `mentionableIndex` takes the three display strings per topic and builds the
+  mention universe; `namesTable` takes the namespace map and builds one row per
+  numbered member, for a caller's reverse lookup, without reading through any of
+  them. None expands a topic's thread, verbs, or rendered UI. The card
+  derivation alone reads prose: the body string, whole, which it cuts to its
+  120-character snippet — and nothing else of the topic.
 
   The card rows are strings, and that is deliberate: the card list is a mapped
   sub-pattern, and every helper call or conditional in a mapped body —
@@ -208,6 +209,10 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   On a copy of the team's board at 3,441 topics, one viewer of the unbounded
   list took a serving worker past its 8 GB heap limit. While the board holds
   more topics than the session shows, a "Show more…" button adds another page.
+  The page bounds what a session shows and demands, not the board-wide
+  derivation: `cardRowsByActivity` builds the rows of every topic, not only of
+  those a session shows, once per change to the board, since a session may ask
+  for any number of them.
 
   How many cards a session shows is that session's own count, a
   `Writable.perSession`, so a press in one session grows no other session's list
