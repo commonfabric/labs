@@ -5,7 +5,7 @@
  * build of a diff parse the files that fit a small budget and leave the rest
  * shown as plain text, and {@link workerParser} parses those in a Worker while
  * the pager takes keys. Results are plain data, so they cross to the pager's
- * thread as the worker built them.
+ * thread as the worker built them, a large one in parts.
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -16,13 +16,25 @@ import {
   languageForName,
 } from "./languages/language.ts";
 import { plainTextLanguage } from "./languages/plain-text/language.ts";
-import type { Document, Line } from "./model.ts";
+import type { Document, Line, StructureNode } from "./model.ts";
 
 /** How many characters of source the first build of a diff parses before it
  * shows the files left over as plain text: a fraction of a second of parsing,
- * so that a small diff opens fully colored. The pager waits for at least as
- * much source to finish in the background before it builds the diff again. */
+ * so that a small diff opens fully colored. */
 export const IN_PLACE_PARSE_BUDGET = 128 * 1024;
+
+/**
+ * Returns how many characters of source the pager waits for to finish in the
+ * background before it builds a diff of `diffLength` characters again. A
+ * build makes again only the file sections whose parses finished, and spends
+ * on each character of the diff about a fifteenth of what a section's build
+ * spends on each character of its complete files. A batch of a sixteenth of
+ * the diff keeps the sections' share of a build no larger than the rest, which
+ * for a diff of 13 MB is some tens of milliseconds.
+ */
+export function recolorBatch(diffLength: number): number {
+  return Math.max(IN_PLACE_PARSE_BUDGET, diffLength / 16);
+}
 
 /** A finished parse: the full document model of a new side, or the colored
  * lines of an old side. */
@@ -90,11 +102,53 @@ export type ParseWorkerMessage =
   | { readonly kind: "parse"; readonly requests: readonly ParseRequest[] }
   | { readonly kind: "next" };
 
-/** The outcome of one request, which a parse worker sends as soon as it has
- * it and may. */
-export interface ParseWorkerAnswer {
-  readonly outcome: ParseOutcome;
-}
+/**
+ * How many items one answer of a parse worker holding lines or structure nodes
+ * holds at most, unless one line alone holds more: a structure node is one
+ * item, and a colored line is as many as its spans, and at least one. Reading
+ * an answer this size takes the pager some tens of milliseconds.
+ */
+export const ANSWER_BUDGET = 32 * 1024;
+
+/**
+ * One of the answers a parse worker sends for a request, each as soon as it
+ * has it and may. The outcome of a request whose result holds more than
+ * {@link ANSWER_BUDGET} items is sent in parts, so that the pager reads no
+ * answer for long: runs of its colored lines, then runs of its structure
+ * nodes, and then the rest of the result. Any other outcome is sent whole.
+ */
+export type ParseWorkerAnswer =
+  /** The next colored lines of the result of the request at `index`. */
+  | {
+    readonly kind: "lines";
+    readonly index: number;
+    readonly lines: readonly Line[];
+  }
+  /**
+   * The next structure nodes of the document of the request at `index`, in
+   * pre-order and each with no children, and the position in that order of
+   * the parent of each, or -1 for a root.
+   */
+  | {
+    readonly kind: "nodes";
+    readonly index: number;
+    readonly nodes: readonly StructureNode[];
+    readonly parents: Int32Array;
+  }
+  /**
+   * The rest of the result of the request at `index`, whose lines and nodes
+   * were sent before it: for a document, what it holds besides its lines and
+   * structure, and the position in pre-order of each node of its flat
+   * structure.
+   */
+  | {
+    readonly kind: "rest";
+    readonly index: number;
+    readonly document?: Omit<Document, "lines" | "structure" | "flatStructure">;
+    readonly flat: Int32Array;
+  }
+  /** The outcome of a request, whole. */
+  | { readonly kind: "outcome"; readonly outcome: ParseOutcome };
 
 /** Parses `text` as `language` reads it, into the result `kind` names. */
 export function parse(
@@ -111,8 +165,9 @@ export function parse(
 /**
  * Returns the function a parse worker gives each message it receives. It
  * gives the requests of the `parse` message to `parseRequest` in order, and
- * gives `send` the outcome of each once the messages received so far let it,
- * one answer for each message.
+ * gives `send` the answers for the outcome of each, as {@link answersFor}
+ * makes them of `budget`, once the messages received so far let it, one
+ * answer for each message.
  *
  * @throws {Error} When the function is given a second `parse` message, or a
  * `next` message before the `parse` message.
@@ -120,20 +175,31 @@ export function parse(
 export function parseWorkerReceiver(
   send: (answer: ParseWorkerAnswer) => void,
   parseRequest: (request: ParseRequest) => Promise<ParseOutcome> = outcome,
+  budget: number = ANSWER_BUDGET,
 ): (message: ParseWorkerMessage) => void {
   let started = false;
   let allowed = 0;
   let allow: (() => void) | undefined;
   const parseAll = async (requests: readonly ParseRequest[]) => {
     for (const request of requests) {
-      const answer: ParseWorkerAnswer = {
-        outcome: await parseRequest(request),
-      };
-      if (allowed === 0) {
-        await new Promise<void>((resolve) => allow = resolve);
+      const outcome = await parseRequest(request);
+      let answers: ParseWorkerAnswer[];
+      try {
+        answers = answersFor(outcome, budget);
+      } catch (error) {
+        const failure = describeFailure(error);
+        answers = [{
+          kind: "outcome",
+          outcome: { kind: "failed", index: request.index, failure },
+        }];
       }
-      allowed--;
-      send(answer);
+      for (const answer of answers) {
+        if (allowed === 0) {
+          await new Promise<void>((resolve) => allow = resolve);
+        }
+        allowed--;
+        send(answer);
+      }
     }
   };
   return (message) => {
@@ -148,6 +214,187 @@ export function parseWorkerReceiver(
     }
     allowed++;
     allow?.();
+  };
+}
+
+/**
+ * Returns the answers a parse worker sends for `outcome`: the outcome whole,
+ * or, when its result holds more than `budget` items, in parts, as {@link
+ * ParseWorkerAnswer} says.
+ *
+ * @throws {Error} When `budget` is not a positive whole number, or when a
+ * document's structure holds a node twice, or its flat structure holds a node
+ * its structure does not.
+ */
+export function answersFor(
+  outcome: ParseOutcome,
+  budget: number,
+): ParseWorkerAnswer[] {
+  if (!Number.isInteger(budget) || budget < 1) {
+    throw new Error(`An answer budget of ${budget} holds nothing.`);
+  }
+  const whole: ParseWorkerAnswer[] = [{ kind: "outcome", outcome }];
+  if (outcome.kind === "failed") return whole;
+  const { index, result } = outcome;
+  const document = result.kind === "document" ? result.document : undefined;
+  const lines = document?.lines ??
+    (result.kind === "lines" ? result.lines : []);
+  // A line counts at least one item, so that a run of lines is bounded
+  // however few spans its lines hold.
+  const items = (line: Line) => Math.max(1, line.spans.length);
+  let size = 0;
+  for (const line of lines) size += items(line);
+  const tree = preorder(document?.structure ?? []);
+  if (size + tree.nodes.length <= budget) return whole;
+  const flat = Int32Array.from(document?.flatStructure ?? [], (node) => {
+    const position = tree.positions.get(node);
+    if (position === undefined) {
+      throw new Error("A flat structure holds a node its structure does not.");
+    }
+    return position;
+  });
+  const answers: ParseWorkerAnswer[] = [];
+  for (let start = 0, held = 0, at = 0; at <= lines.length; at++) {
+    if (
+      at === lines.length
+        ? at > start
+        : held > 0 && held + items(lines[at]) > budget
+    ) {
+      answers.push({ kind: "lines", index, lines: lines.slice(start, at) });
+      start = at;
+      held = 0;
+    }
+    if (at < lines.length) held += items(lines[at]);
+  }
+  for (let start = 0; start < tree.nodes.length; start += budget) {
+    const end = Math.min(start + budget, tree.nodes.length);
+    answers.push({
+      kind: "nodes",
+      index,
+      nodes: tree.nodes.slice(start, end).map((node) => ({
+        ...node,
+        children: [],
+      })),
+      parents: tree.parents.slice(start, end),
+    });
+  }
+  if (document === undefined) {
+    answers.push({ kind: "rest", index, flat });
+  } else {
+    const { lines: _, structure: __, flatStructure: ___, ...rest } = document;
+    answers.push({ kind: "rest", index, document: rest, flat });
+  }
+  return answers;
+}
+
+/**
+ * Helper for {@link answersFor}, which returns the nodes of the trees `roots`
+ * in pre-order, with the position in that order of each one's parent, or -1
+ * for a root, and of each node.
+ *
+ * @throws {Error} When a node appears in the trees twice.
+ */
+function preorder(roots: readonly StructureNode[]): {
+  readonly nodes: readonly StructureNode[];
+  readonly parents: Int32Array;
+  readonly positions: ReadonlyMap<StructureNode, number>;
+} {
+  const nodes: StructureNode[] = [];
+  const parents: number[] = [];
+  const positions = new Map<StructureNode, number>();
+  const pending: [StructureNode, number][] = roots.toReversed().map((root) => [
+    root,
+    -1,
+  ]);
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [node, parent] = next;
+    if (positions.has(node)) {
+      throw new Error("A structure holds a node twice.");
+    }
+    positions.set(node, nodes.length);
+    for (let at = node.children.length - 1; at >= 0; at--) {
+      pending.push([node.children[at], nodes.length]);
+    }
+    nodes.push(node);
+    parents.push(parent);
+  }
+  return { nodes, parents: Int32Array.from(parents), positions };
+}
+
+/**
+ * Returns a function that collects the answers a parse worker sends, and
+ * returns each outcome once its last answer arrives, with its result as the
+ * worker had it.
+ *
+ * The function throws when an answer names a node or a parent it was not
+ * sent, or when an outcome sent whole follows parts of it.
+ */
+function outcomeCollector(): (
+  answer: ParseWorkerAnswer,
+) => ParseOutcome | undefined {
+  const parts = new Map<number, {
+    readonly lines: Line[];
+    readonly nodes: StructureNode[];
+    readonly roots: StructureNode[];
+  }>();
+  const partsOf = (index: number) => {
+    const known = parts.get(index);
+    if (known) return known;
+    const started = { lines: [], nodes: [], roots: [] };
+    parts.set(index, started);
+    return started;
+  };
+  const sentNode = (nodes: readonly StructureNode[], position: number) => {
+    const node = nodes[position];
+    if (node === undefined) {
+      throw new Error(
+        `A parse worker named node ${position} before sending it.`,
+      );
+    }
+    return node;
+  };
+  return (answer) => {
+    if (answer.kind === "lines") {
+      const { lines } = partsOf(answer.index);
+      for (const line of answer.lines) lines.push(line);
+      return undefined;
+    }
+    if (answer.kind === "nodes") {
+      const { nodes, roots } = partsOf(answer.index);
+      for (const [at, node] of answer.nodes.entries()) {
+        const parent = answer.parents[at];
+        (parent < 0 ? roots : sentNode(nodes, parent).children).push(node);
+        nodes.push(node);
+      }
+      return undefined;
+    }
+    if (answer.kind === "rest") {
+      const { index, document, flat } = answer;
+      const { lines, nodes, roots } = partsOf(index);
+      parts.delete(index);
+      return {
+        kind: "parsed",
+        index,
+        result: document === undefined ? { kind: "lines", lines } : {
+          kind: "document",
+          document: {
+            ...document,
+            lines,
+            structure: roots,
+            flatStructure: Array.from(
+              flat,
+              (position) => sentNode(nodes, position),
+            ),
+          },
+        },
+      };
+    }
+    if (parts.has(answer.outcome.index)) {
+      throw new Error(
+        "A parse worker sent an outcome whole after parts of it.",
+      );
+    }
+    return answer.outcome;
   };
 }
 
@@ -223,6 +470,15 @@ export class PendingParses {
   ): readonly Line[] | null {
     const result = this.#parse(key, "lines", language, text, fileName);
     return result?.kind === "lines" ? result.lines : null;
+  }
+
+  /**
+   * Returns whether the parse named `key` was left pending and has not
+   * finished.
+   */
+  waiting(key: string): boolean {
+    const known = this.#parses.get(key);
+    return known !== undefined && known.result === undefined;
   }
 
   /** Hands over the parses the first build left pending, in the order it asked
@@ -356,14 +612,25 @@ export function workerParser(
     if (unanswered.size === 0) worker.terminate();
     deliver(outcomes);
   };
-  worker.onmessage = (event: MessageEvent<ParseWorkerAnswer>) => {
-    if (unanswered.size > 0) settle([event.data.outcome]);
-    if (unanswered.size > 0) worker.postMessage(NEXT);
-  };
   const fail = (failure: string) =>
     unanswered.size > 0 && settle(
       [...unanswered].map((index) => ({ kind: "failed", index, failure })),
     );
+  const collect = outcomeCollector();
+  const take = (answer: ParseWorkerAnswer) => {
+    let outcome: ParseOutcome | undefined;
+    try {
+      outcome = collect(answer);
+    } catch (error) {
+      fail(describeFailure(error));
+      return;
+    }
+    if (outcome) settle([outcome]);
+    if (unanswered.size > 0) worker.postMessage(NEXT);
+  };
+  worker.onmessage = (event: MessageEvent<ParseWorkerAnswer>) => {
+    if (unanswered.size > 0) take(event.data);
+  };
   worker.onerror = (event) => {
     event.preventDefault();
     fail(event.message);
@@ -386,3 +653,6 @@ export function workerParser(
     unanswered.clear();
   };
 }
+
+/** The internals of this module that its tests reach. */
+export const _internal = { outcomeCollector };

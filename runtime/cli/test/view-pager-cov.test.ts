@@ -35,11 +35,11 @@ import { buildView } from "../lib/view/mod.ts";
 import type { GitHubApi } from "../lib/view/github.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import {
-  IN_PLACE_PARSE_BUDGET,
   parse,
   type ParseJob,
   type ParseOutcome,
   PendingParses,
+  recolorBatch,
 } from "../lib/view/backgroundparse.ts";
 
 /** A GitHub API that these tests never reach. */
@@ -661,16 +661,17 @@ Deno.test("pager: a diff colors the files whose parses finish in the background"
   assertEquals(stopped, 1, "the parses are stopped once, when they end");
 });
 
-Deno.test("pager: background parses rebuild the document once the parsed source doubles, and at the end", async () => {
+Deno.test("pager: background parses rebuild the document each time a batch of source finishes, and at the end", async () => {
   // Each entry is how much source one finished parse adds, and whether the
   // document is built again once it lands.
+  const batch = recolorBatch(DOC.text.length);
   const steps: [number, boolean][] = [
-    [IN_PLACE_PARSE_BUDGET / 2, false],
-    [IN_PLACE_PARSE_BUDGET / 2, true],
-    [IN_PLACE_PARSE_BUDGET - 1, false],
+    [batch / 2, false],
+    [batch / 2, true],
+    [batch - 1, false],
     [1, true],
-    [IN_PLACE_PARSE_BUDGET, false],
-    [IN_PLACE_PARSE_BUDGET, true],
+    [batch * 2, true],
+    [1, false],
     [1, true],
   ];
   const jobs: ParseJob[] = steps.map(([size]) => ({

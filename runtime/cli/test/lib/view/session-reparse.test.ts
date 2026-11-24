@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { EditableSource } from "../../../lib/view/editsource.ts";
 import type { FileGateway } from "../../../lib/view/filegateway.ts";
+import type { Document } from "../../../lib/view/model.ts";
 import { Session } from "../../../lib/view/session.ts";
 import { parseDocument } from "../../view-helpers.ts";
 
@@ -73,6 +74,62 @@ describe("Session", () => {
       });
     });
 
+    describe("reparse() with lines whose text differs from the text's", () => {
+      // A source can show lines other than the text's own, as a rendered view
+      // does; what the session derives from the lines follows them.
+
+      /**
+       * Returns how far right `shown` pans, pressing the right arrow until it
+       * stops.
+       */
+      function furthestPan(shown: Session): number {
+        for (let left = -1; left !== shown.view().left;) {
+          left = shown.view().left;
+          shown.handleKey({ name: "right" });
+        }
+        return shown.view().left;
+      }
+
+      /**
+       * Returns a session whose source's parse shows `lines` for the text it
+       * is given.
+       */
+      function showing(lines: (doc: Document) => Document["lines"]) {
+        return session({
+          label: null,
+          editable: false,
+          parse: (text) => {
+            const doc = parseDocument(text);
+            return { ...doc, lines: lines(doc) };
+          },
+          save: () => "Nothing to save.",
+        });
+      }
+
+      it("pans as far as the new lines reach", () => {
+        const wide = `const wide = "${"w".repeat(200)}";`;
+        const shown = showing((doc) =>
+          doc.lines.map((line, i) => i === 0 ? { text: wide, spans: [] } : line)
+        );
+        const before = furthestPan(shown);
+
+        shown.reparse({ force: true });
+
+        expect(furthestPan(shown)).toBeGreaterThan(before + 100);
+      });
+
+      it("pans no further when only the lines' colors change", () => {
+        const shown = showing((doc) =>
+          doc.lines.map((line) => ({ text: line.text, spans: [] }))
+        );
+        const before = furthestPan(shown);
+
+        shown.reparse({ force: true });
+
+        expect(furthestPan(shown)).toBe(before);
+      });
+    });
+
     describe("reparse() with a structure tree numbered differently", () => {
       it("keeps the selected node selected", () => {
         const doc = parseDocument(TEXT);
@@ -105,6 +162,53 @@ describe("Session", () => {
         shown.reparse({ force: true });
 
         expect(shown.view().selected).toBeNull();
+      });
+    });
+
+    describe("opening another file", () => {
+      it("numbers file lines as the new source does, when the new file's text is the same", () => {
+        const diff = [
+          "diff --git a/a.ts b/a.ts",
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "@@ -10,2 +10,2 @@",
+          " const a = 1;",
+          "-const b = 1;",
+          "+const b = 2;",
+        ].join("\n");
+        const plain: EditableSource = {
+          label: null,
+          editable: false,
+          parse: (text) => parseDocument(text),
+          save: () => "Nothing to save.",
+        };
+        const files: FileGateway = {
+          cwd: () => "/work",
+          list: () => [{ name: "a.diff", isDir: false }],
+          open: () => ({ source: { ...plain, isDiff: true }, text: diff }),
+          join: (dir, name) => `${dir}/${name}`,
+          parent: () => "/work",
+          base: (path) => path.split("/").at(-1)!,
+        };
+        const shown = new Session(
+          parseDocument(diff),
+          { color: false, showLineNumbers: false },
+          { width: 80, height: 12 },
+          undefined,
+          plain,
+          files,
+        );
+        shown.handleKey({ name: "#", char: "#" });
+        shown.handleKey({ name: "#", char: "#" });
+        const before = shown.view().lineNumbers;
+
+        shown.handleKey({ name: "ctrl-x" });
+        shown.handleKey({ name: "ctrl-f" });
+        for (const char of "a.diff") shown.handleKey({ name: char, char });
+        shown.handleKey({ name: "enter" });
+
+        expect(before?.[4]).toBe(5);
+        expect(shown.view().lineNumbers?.[4]).toBe(10);
       });
     });
 

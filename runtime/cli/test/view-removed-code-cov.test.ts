@@ -134,7 +134,7 @@ Binary files a/image.png and b/image.png differ
 
 Deno.test("diffdoc cov: complete-line spans reject different source text", () => {
   assertEquals(
-    _dd.shiftCompleteLineSpans("-actual", [{
+    _dd.completeFileLine({ text: "-actual", spans: [] }, "-actual", [{
       col: 0,
       text: "different",
       cls: "identifier",

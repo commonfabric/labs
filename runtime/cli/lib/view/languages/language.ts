@@ -211,17 +211,17 @@ export interface HunkStructureContext {
   readonly sourceOmitsUtf8Bom: boolean;
 
   /** Line starts of the source text `doc` was parsed from. */
-  readonly sourceLineStarts: number[];
+  readonly sourceLineStarts: readonly number[];
 
   /** Last diff line of the hunk (its extent). */
   readonly hunkEnd: number;
 
-  readonly diffLineStarts: number[];
+  readonly diffLineStarts: readonly number[];
 
   /** Code-point columns of the diff text. */
   readonly diffColumnOf: ColumnOf;
 
-  readonly rawLines: string[];
+  readonly rawLines: readonly string[];
 
   /** Name → declaration index the remap contributes to (for `t` peeks). */
   readonly definitions: Map<string, Definition[]>;
