@@ -1423,7 +1423,7 @@ export class RuntimeTransactions implements TransactionHooks {
   #reportLabels(stored = false): void {
     if (this.#touched.size === 0) return;
     const changes: LabelChange[] = [];
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     try {
       for (const doc of this.#touched) {
         this.#metadata.delete(doc);
@@ -1538,7 +1538,7 @@ export class RuntimeTransactions implements TransactionHooks {
       // transaction it hands. The creation makes those reads too, so that
       // what it stores has the label it would have in that transaction
       // where no record gives it one.
-      const creation = this.#runtime.edit();
+      const creation = this.#edit();
       for (const read of this.#load.before) {
         creation.read({
           space: read.space,
@@ -1556,7 +1556,7 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     this.#reportLabels();
     this.#cause = cause;
-    this.#tx = this.#runtime.edit();
+    this.#tx = this.#edit();
     this.#own.set(this.#tx.tx, undefined);
     this.#resetTransaction();
   }
@@ -1585,6 +1585,22 @@ export class RuntimeTransactions implements TransactionHooks {
    * aborted. The executor is told of the labels the commit stored when the
    * replica applies it.
    */
+  /**
+   * A transaction of the runtime's for what the adapter reads or commits
+   * itself. Every transaction a compiled piece commits stores its labels
+   * as version-2 envelopes, each label of more than the inline limit as a
+   * reference to a content-addressed label document of the space
+   * (`docs/specs/content-addressed-cfc-labels.md`), whatever the runtime's
+   * `cfcContentAddressedLabels` says for its other transactions (P452,
+   * ruling Z95). The option only chooses how a label is spelled: either
+   * version reads back as the same labels.
+   */
+  #edit(): IExtendedStorageTransaction {
+    const tx = this.#runtime.edit();
+    tx.setCfcContentAddressedLabels(true);
+    return tx;
+  }
+
   within<T>(
     tx: IExtendedStorageTransaction,
     run: () => T,
@@ -1613,6 +1629,9 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#tx !== undefined || this.#given !== undefined) {
       throw new Error("A transaction was handed while another was open.");
     }
+    // What the piece commits through the handed transaction stores its
+    // labels as references to content-addressed label documents.
+    tx.setCfcContentAddressedLabels(true);
     this.#reportLabels();
     const given: Given = { tx, failed: undefined };
     this.#given = given;
@@ -1862,7 +1881,7 @@ export class RuntimeTransactions implements TransactionHooks {
     acting: ScopeKeyIdentity | undefined,
   ): Restored[] {
     const restored: Restored[] = [];
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     if (acting !== undefined) tx.tx.scopeKeyIdentity = acting;
     try {
       for (const doc of handed.created) this.#streams.delete(doc);
@@ -2161,7 +2180,7 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #metadataOf(doc: string): CfcMetadata | undefined {
     if (!this.#metadata.has(doc)) {
-      const tx = this.#tx ?? this.#runtime.edit();
+      const tx = this.#tx ?? this.#edit();
       try {
         const metadata = this.#storedLabels(tx, doc);
         this.#metadata.set(doc, metadata);
@@ -3098,7 +3117,7 @@ export class RuntimeTransactions implements TransactionHooks {
     // no write.
     if (this.#resume && !list.adopted) {
       list.adopted = true;
-      const read = this.#runtime.edit();
+      const read = this.#edit();
       let stored: number;
       try {
         stored = this.#storedRowLinks(
@@ -3381,7 +3400,7 @@ export class RuntimeTransactions implements TransactionHooks {
       ? undefined
       : this.#rowsApart?.records.get(id);
     if (load !== undefined && apart !== undefined) {
-      tx = load.tx ??= this.#runtime.edit();
+      tx = load.tx ??= this.#edit();
     }
     const attempts = tx.getWriteAttemptLog?.().length;
     tx.writeValueOrThrow(address, this.#encode(value));
@@ -3852,7 +3871,7 @@ export class RuntimeTransactions implements TransactionHooks {
       }
       return;
     }
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     try {
       const stored = this.#storedLabels(tx, doc);
       const entries = entriesOf(stored);
@@ -3882,7 +3901,7 @@ export class RuntimeTransactions implements TransactionHooks {
   #reportUnchanged(unchanged = this.#unchanged, stored = false): void {
     if (unchanged.size === 0) return;
     const changes: LabelChange[] = [];
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     try {
       for (const [doc, before] of unchanged) {
         const now = this.#storedLabels(tx, doc);
@@ -4492,7 +4511,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * links written back as the executor's.
    */
   stored(): Map<string, unknown> {
-    const tx = this.#runtime.edit();
+    const tx = this.#edit();
     try {
       return new Map(
         [...this.#documents].map((
@@ -4589,7 +4608,7 @@ export class RuntimeTransactions implements TransactionHooks {
   #heldDocumentOf(entity: string): string {
     let doc = entity;
     if (this.#owner !== undefined && entity.startsWith("of:")) {
-      const read = this.#runtime.edit();
+      const read = this.#edit();
       try {
         const link = getMetaLink(
           this.#runtime.getCellFromLink(
@@ -4764,7 +4783,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * it reads the instance that one reads.
    */
   #readStored(address: NormalizedFullLink): FabricValue | undefined {
-    const read = this.#runtime.edit();
+    const read = this.#edit();
     try {
       const acting = this.#actingFor ??
         (this.#tx ?? this.#given?.tx)?.tx.scopeKeyIdentity;
@@ -4955,7 +4974,7 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** Whether the replica holds the runtime's stream marker in `entity`. */
   #holdsMarker(entity: URI): boolean {
-    const read = this.#runtime.edit();
+    const read = this.#edit();
     try {
       const held = read.readValueOrThrow({
         space: this.#space,
@@ -5142,7 +5161,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * holds where it holds one.
    */
   heldOwn(doc: string): FabricValue | undefined {
-    const read = this.#runtime.edit();
+    const read = this.#edit();
     let value: FabricValue | undefined;
     try {
       value = read.readValueOrThrow(this.#address(doc, []));
@@ -5231,7 +5250,7 @@ export class RuntimeTransactions implements TransactionHooks {
     found?: StoredArray[];
   } | undefined {
     if (this.#owner === undefined) return undefined;
-    const read = this.#runtime.edit();
+    const read = this.#edit();
     try {
       return this.#heldResultIn(read, rows, arrays);
     } finally {
@@ -5385,7 +5404,7 @@ export class RuntimeTransactions implements TransactionHooks {
     list.adopted = true;
     list.dirty.clear();
     list.chunks = undefined;
-    const read = this.#runtime.edit();
+    const read = this.#edit();
     try {
       const held = read.readValueOrThrow(
         this.#ownAddress(array.doc, array.path),

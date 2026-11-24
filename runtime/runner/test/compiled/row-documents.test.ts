@@ -626,23 +626,23 @@ describe("the rows of a `map` over an array declared as references", () => {
       expect(many.records).toBe(few.records);
     });
 
-    it("writes one link, and gives as many records, for a member added at the end of 4 members as of 40 where the links are in the result document", async () => {
+    it("writes one link, and gives as many records, for a member added at the end of 4 members as of 200 where the links are in the result document", async () => {
       const inPlace: CompiledPieceOptions = { lists: "in-place" };
       const few = await after(5, (cells) => cells, inPlace);
-      const many = await after(41, (cells) => cells, inPlace);
+      const many = await after(201, (cells) => cells, inPlace);
 
       expect(few.links).toBe(1);
       expect(many.links).toBe(1);
       expect(many.records).toBe(few.records);
     });
 
-    it("writes no row document that stayed, and gives as many records, for a member added before 4 members as before 40", async () => {
+    it("writes no row document that stayed, and gives as many records, for a member added before 4 members as before 200", async () => {
       const prepended = (cells: Cell<Record<string, unknown>>[]) => [
         cells.at(-1)!,
         ...cells.slice(0, -1),
       ];
       const few = await after(5, prepended);
-      const many = await after(41, prepended);
+      const many = await after(201, prepended);
 
       expect(rowsOf(few.result)).toEqual(
         ["t4", "t0", "t1", "t2", "t3"].map((title) => ({
@@ -655,11 +655,11 @@ describe("the rows of a `map` over an array declared as references", () => {
       expect(many.records).toBe(few.records);
     });
 
-    it("gives as many records for the first member removed of 4 members as of 40", async () => {
+    it("gives as many records for the first member removed of 4 members as of 200", async () => {
       const removed = (cells: Cell<Record<string, unknown>>[]) =>
         cells.slice(1, -1);
       const few = await after(5, removed);
-      const many = await after(41, removed);
+      const many = await after(201, removed);
 
       expect(rowsOf(few.result)).toEqual(
         ["t1", "t2", "t3"].map((title) => ({
