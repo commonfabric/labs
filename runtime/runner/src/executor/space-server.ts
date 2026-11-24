@@ -465,14 +465,15 @@ export type SpaceServerPolicy = {
    * it. `record` loads every root regardless and counts the roots the store
    * could have served, and the pieces a judgment was wrong about
    * (`currency.falseClean`). `skip` leaves a root the store can serve
-   * unloaded and its piece unstarted, until an input marks the piece or a
-   * session's demand reaches an instance it does not vouch for (§1), and
-   * starts nothing else on the index's account: a root that is stale only
-   * through what is upstream of it is loaded as a refused one is.
-   * `start-upstream` does what `skip` does and starts the pieces upstream of
-   * such a root, and of a running piece that is stale the same way, holding
-   * the watermark meanwhile (§1, "A root stale upstream"). Unset, nothing is
-   * recorded or judged. The toolshed bootstrap reads
+   * unloaded and its piece unstarted, until an input marks the piece, a
+   * slice that read a clock expires (`currency.expiryWakes`), or a session's
+   * demand reaches an instance it does not vouch for (§1), and starts
+   * nothing else on the index's account: a root that is stale only through
+   * what is upstream of it is loaded as a refused one is. `start-upstream`
+   * does what `skip` does and starts the pieces upstream of such a root, and
+   * of a running piece that is stale the same way, holding the watermark
+   * meanwhile (§1, "A root stale upstream"). Unset, nothing is recorded or
+   * judged. The toolshed bootstrap reads
    * SERVER_EXECUTION_CURRENCY_INDEX.
    */
   currencyIndex?: CurrencyIndexMode;
