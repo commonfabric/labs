@@ -22,8 +22,14 @@ import { MEASURED_BATCH_SUFFIX } from "./lane-measurement.ts";
 import { serverExecutionCiLane } from "./server-execution-ci.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
-const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const root = path.dirname(path.dirname(path.fromFileUrl(import.meta.url)));
 const suites = await loadTopology(root);
+
+/**
+ * The suites a lane runs. A suite of verdicts builds no command, since
+ * choosing one of its units runs the units it judges instead.
+ */
+const laneSuites = suites.filter((suite) => suite.judges === undefined);
 
 /** The Deno subcommands a suite's runner is allowed to be. */
 const SUBCOMMANDS = new Set(["task", "test", "run", "check", "fmt", "lint"]);
@@ -60,7 +66,7 @@ describe("the test topology", () => {
     const rootTasks = await tasksOf(root);
     const missing: string[] = [];
     const named: string[] = [];
-    for (const suite of suites) {
+    for (const suite of laneSuites) {
       const requests = suite.units.map((unit) => ({ unit, skip: [] }));
       for (
         const invocation of await suite.command(requests, {
@@ -97,12 +103,14 @@ describe("the test topology", () => {
 
     // A run that read nothing satisfies the check above, and so does one
     // that stopped at the recorder instead of reaching what the recorder
-    // was handed. Every gate whose name begins `check-` runs a task of
-    // that name, so the two counts agree only where each of them was
-    // reached and read past the recorder.
+    // was handed. Every gate whose name begins `check-` runs the task its
+    // first word names, once for each part where it is split into parts,
+    // so the two counts agree only where each of them was reached and read
+    // past the recorder.
     const gates = ["repo-gates", "repo-history-gates"]
       .flatMap((id) => suiteById(suites, id)!.units)
-      .filter((unit) => unit.startsWith("check-"));
+      .filter((unit) => unit.startsWith("check-"))
+      .map((unit) => unit.split(" ")[0]!);
     expect(named.filter((task) => task.startsWith("check-")).toSorted())
       .toEqual(gates.toSorted());
   });
@@ -167,7 +175,7 @@ describe("the test topology", () => {
     const outputDir = await Deno.makeTempDir({ prefix: "topology-whole-" });
     const spoolDir = `${outputDir}/spool`;
     const written: string[] = [];
-    for (const suite of suites) {
+    for (const suite of laneSuites) {
       if (suite.whole.length === 0) continue;
       const requests = suite.whole.map((unit) => ({
         unit,
@@ -204,7 +212,7 @@ describe("the test topology", () => {
     // and taking the first shared unit would make this fail for the
     // wrong reason the day a whole-file skip changes the order.
     const shared = defaults.units.filter((unit) =>
-      opposite.units.includes(unit) && unit.startsWith("packages/runner/")
+      opposite.units.includes(unit) && unit.startsWith("runtime/runner/")
     );
     expect(shared.length > 0).toBe(true);
     // They are distinct execution surfaces, so the same file being a unit
@@ -238,7 +246,13 @@ describe("the test topology", () => {
       { test: { k: "format", s: "repo", n: "deno-fmt" } },
       { test: { k: "gate", s: "repo", n: "check-deno-pins" } },
       { test: { k: "gate", s: "repo", n: "check-test-aliases" } },
-      { test: { k: "gate", s: "repo", n: "pattern-compat annotation.tsx" } },
+      {
+        test: {
+          k: "gate",
+          s: "repo",
+          n: "pattern-compat apps/annotation/annotation.tsx",
+        },
+      },
       // The vintage gate's wrapper record. Its per-fixture records are
       // named after fixtures in the tree, which `test-topology/gates.test.ts`
       // checks against the tree itself.
@@ -247,7 +261,7 @@ describe("the test topology", () => {
         test: {
           k: "typecheck",
           s: "repo",
-          n: "cfcheck packages/patterns/annotation.tsx",
+          n: "cfcheck patterns/apps/annotation/annotation.tsx",
         },
       },
       { test: { k: "typecheck", s: "memory", n: "deno-check" } },
@@ -298,7 +312,7 @@ describe("type checking in a test run", () => {
     const outputDir = await Deno.makeTempDir({ prefix: "topology-no-check-" });
     const checking: string[] = [];
     let started = 0;
-    for (const suite of suites) {
+    for (const suite of laneSuites) {
       const requests = suite.units.map((unit) => ({ unit, skip: [] }));
       for (
         const invocation of await suite.command(requests, {
@@ -374,8 +388,18 @@ describe("reading the topology as a whole", () => {
     }
   });
 
+  it("names no suite with a space, which a hooks measurement's name ends its suite at", () => {
+    // A lane's measurement of a unit's hooks names the suite and then the
+    // unit, and is read back by splitting at the first separator after
+    // the suite, which holds a space. A suite id holding a space could
+    // put that separator inside the suite.
+    for (const suite of suites) {
+      expect([suite.id, suite.id.includes(" ")]).toEqual([suite.id, false]);
+    }
+  });
+
   it("gives every measured set a member with lines a report can name", async () => {
-    // The coverage gate fails a forced set whose reports name no line of
+    // A chosen coverage gate fails where its set's reports name no line of
     // its member, which is sound only where the member has a line a
     // report could name. An empty report charges every such line, so a
     // member it charges nothing has none.
@@ -409,7 +433,7 @@ describe("what the command-line dispatch table becomes", () => {
   /** Every step the dispatch script begins itself. */
   async function recordedSteps(): Promise<string[]> {
     const script = await Deno.readTextFile(
-      new URL("../packages/cli/integration/integration.sh", import.meta.url),
+      new URL("../runtime/cli/integration/integration.sh", import.meta.url),
     );
     return [
       ...new Set(

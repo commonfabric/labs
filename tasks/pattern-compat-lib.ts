@@ -11,15 +11,16 @@
  * (docs/specs/pattern-imports/pattern-updates.md, "The specialized system-source
  * updater does not perform the complete pre-apply structural comparison").
  * An incompatible schema that merges is therefore applied silently to every
- * running piece. CI is the only gate, so this reuses the exact function
- * `setsrc` enforces rather than reimplementing the rule.
+ * running piece. CI is the only gate, so this reuses the exact proof `setsrc`
+ * enforces rather than reimplementing the rule, taking its issues as data
+ * (`patternSchemaIncompatibilities`) rather than as the lines of its refusal.
  *
  * This module is the pure core: no compiling, no filesystem, no git. The task
  * shell (`pattern-compat.ts`) supplies the compiled contracts and the baseline
  * files it read off disk.
  */
 
-import { type JSONSchema, type Pattern } from "@commonfabric/runner";
+import type { JSONSchema, Pattern } from "@commonfabric/runner";
 import { validateSchemaDefinition } from "@commonfabric/runner/cfc";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
@@ -27,13 +28,18 @@ import {
   fabricFromJsonValue,
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { assertPatternSchemasBackwardCompatible } from "../packages/piece/src/schema-compatibility.ts";
+import {
+  formatSchemaIncompatibility,
+  patternSchemaIncompatibilities,
+  schemaWithoutVolatileWriterIdentity,
+} from "../runtime/piece/src/schema-compatibility.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
+import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import { matchesPatternFilter } from "./pattern-files.ts";
 
 /**
  * The two schemas that constitute a pattern's update contract. Nothing else
- * about a pattern participates: `assertPatternSchemasBackwardCompatible` reads
+ * about a pattern participates: `patternSchemaIncompatibilities` reads
  * exactly these four values across its two arguments, which is why a baseline
  * can be a small JSON file rather than a compiled artifact.
  */
@@ -52,11 +58,17 @@ export type Finding =
 
   /** The current contract is not recorded, so nothing pins it for the next PR. */
   | { kind: "missing-baseline"; pattern: string; hash: string }
-  /** The current contract cannot be applied over a deployed one. */
+  /**
+   * One issue that stops the current contract being applied over a deployed
+   * one. `path` is the schema path it blames, `undefined` for an issue at no
+   * path, such as a baseline schema invalid on its own terms; `detail` is the
+   * issue as the proof states it.
+   */
   | {
     kind: "incompatible";
     pattern: string;
     baseline: string;
+    path: string | undefined;
     detail: string;
   }
   /** The current contract is not a well-formed schema on its own terms. */
@@ -76,11 +88,22 @@ const HASH_LENGTH = 16;
  * order (the same machinery `internSchema` hashes through), so a reordered but
  * structurally identical schema addresses to the same baseline instead of
  * minting a spurious one.
+ *
+ * The address is of the contract as the proof reads it, without the volatile
+ * identity of its writer claims (`schemaWithoutVolatileWriterIdentity`). That
+ * identity includes the content hash of the module that authorizes a write, so
+ * any edit to that module, a comment included, changes it. The proof gives the
+ * same verdict for two contracts that differ only in it, so the gate treats
+ * them as one contract: such an edit needs no new baseline, and two changes
+ * that each make one cannot leave the merged result with a contract no
+ * baseline records.
  */
 export function contractHash(contract: PatternContract): string {
   return hashStringOf({
-    argumentSchema: contract.argumentSchema,
-    resultSchema: contract.resultSchema,
+    argumentSchema: schemaWithoutVolatileWriterIdentity(
+      contract.argumentSchema,
+    ),
+    resultSchema: schemaWithoutVolatileWriterIdentity(contract.resultSchema),
   }).slice(0, HASH_LENGTH);
 }
 
@@ -130,7 +153,7 @@ export interface StoredBaseline extends PatternContract {
  * exception that throws). A baseline that silently flattens a value agrees with
  * buggy output instead of catching it, and worse here, it would never match the
  * contract it was recorded from — the gate would report a missing baseline
- * forever. `packages/schema-generator/test/fixtures-runner.test.ts` documents
+ * forever. `base/schema-generator/test/fixtures-runner.test.ts` documents
  * this same hazard for its goldens and solves it the same way.
  *
  * The encoding's prefix tag identifies it on the wire but is not part of the
@@ -156,7 +179,7 @@ export function decodeBaseline(text: string): StoredBaseline {
 }
 
 /**
- * `assertPatternSchemasBackwardCompatible` takes two `Pattern`s but reads only
+ * `patternSchemaIncompatibilities` takes two `Pattern`s but reads only
  * their `argumentSchema` and `resultSchema`. The remaining fields are filled
  * with empty values so a stored contract can be checked without recovering the
  * compiled artifact it came from.
@@ -201,12 +224,14 @@ export function checkPattern(
     contractHash(baseline.contract) === hash
   );
 
-  // An already-recorded contract is unchanged since the run that recorded it,
-  // and it was validated and proved then. Re-doing that work every CI run is
-  // pure waste, and it is not cheap: both the definition validator and the
-  // subset proof blow up combinatorially on some real schemas (validating
-  // lobby/main.tsx's schemas alone takes ~55s). Steady state — no contract
-  // changed in this PR — therefore costs nothing beyond the compile.
+  // A recorded contract is identical to a contract that the run recording it
+  // validated, apart from the writer identity that neither this validation
+  // nor the proof reads, so validating it again here would be pure waste, and
+  // it is not cheap: the definition validator blows up combinatorially on
+  // some real schemas (validating lobby/main.tsx's schemas alone takes ~55s).
+  // The subset proof below still runs against every other baseline, and it
+  // validates both contracts it compares, so that cost recurs once per
+  // baseline.
   if (!recorded) {
     findings.push({ kind: "missing-baseline", pattern, hash });
     for (
@@ -215,7 +240,9 @@ export function checkPattern(
         ["result", current.resultSchema],
       ] as const
     ) {
-      const issue = validateSchemaDefinition(schema);
+      const issue = validateSchemaDefinition(
+        schemaWithoutVolatileWriterIdentity(schema),
+      );
       if (issue !== undefined) {
         findings.push({ kind: "invalid-schema", pattern, role, detail: issue });
       }
@@ -227,17 +254,17 @@ export function checkPattern(
     // An identical contract needs no proof: "can C be applied over C" is
     // trivially yes.
     if (contractHash(baseline.contract) === hash) continue;
-    try {
-      assertPatternSchemasBackwardCompatible(
-        asPattern(baseline.contract),
-        candidate,
-      );
-    } catch (error) {
+    const issues = patternSchemaIncompatibilities(
+      asPattern(baseline.contract),
+      candidate,
+    );
+    for (const issue of issues) {
       findings.push({
         kind: "incompatible",
         pattern,
         baseline: baseline.label,
-        detail: error instanceof Error ? error.message : String(error),
+        path: issue.path,
+        detail: formatSchemaIncompatibility(issue),
       });
     }
   }
@@ -249,7 +276,7 @@ export function checkPattern(
 // Baseline store
 //
 // Parameterized by directory so these are testable against a temp tree rather
-// than only against the real `packages/patterns` layout.
+// than only against the real `patterns` layout.
 //
 
 /** Read every recorded contract for a pattern. Absent directory → none. */
@@ -343,30 +370,6 @@ export const acceptedBreakKey = (pattern: string, baseline: string): string =>
   `${pattern}\x00${baseline}`;
 
 /**
- * The schema paths an incompatibility finding blames.
- *
- * `assertPatternSchemasBackwardCompatible` throws one error listing its issues
- * as `- <path>: <reason>` lines, so a finding's `detail` names which paths
- * failed rather than only that something did. That is what lets an acceptance
- * be scoped to the removal it was granted for.
- *
- * A line that does not parse comes back whole, deliberately. It matches no
- * accepted path, so an unrecognised message shape fails closed — the finding
- * stands — rather than being forgiven on the strength of a format assumption.
- */
-export function incompatibilityPaths(detail: string): string[] {
-  const paths: string[] = [];
-  for (const line of detail.split("\n")) {
-    const issue = line.trimStart();
-    if (!issue.startsWith("- ")) continue;
-    const body = issue.slice(2);
-    const cut = body.indexOf(": ");
-    paths.push(cut === -1 ? body : body.slice(0, cut));
-  }
-  return paths;
-}
-
-/**
  * Split findings into the ones that stand and the accepted breaks among them.
  *
  * Only an `incompatible` finding can be accepted. Everything else — a contract
@@ -374,12 +377,12 @@ export function incompatibilityPaths(detail: string): string[] {
  * that outlived their source — describes work still to do, and an accepted
  * break says nothing about any of them.
  *
- * A finding is forgiven only when EVERY path it blames is one the entry named.
- * The pair alone is not enough: one finding carries every issue the proof found
- * against that baseline, so forgiving by pair would also suppress an unintended
- * break that landed in the same change — and `--update` would then record the
- * broken contract as the new baseline. A finding whose paths cannot be read
- * yields none, which is not a match either.
+ * A finding is forgiven only when the path it blames is one the entry named
+ * for its pair. The pair alone is not enough: the proof reports every issue it
+ * found against that baseline, so forgiving by pair would also suppress an
+ * unintended break that landed in the same change — and `--update` would then
+ * record the broken contract as the new baseline. A finding blaming no path is
+ * not a match either.
  *
  * The forgiven ones come back rather than being dropped, because an exemption
  * nobody sees is an exemption nobody reviews: the run prints what it forgave,
@@ -399,10 +402,64 @@ export function partitionAcceptedBreaks(
     const paths = accepted.get(
       acceptedBreakKey(finding.pattern, finding.baseline),
     );
-    const blamed = incompatibilityPaths(finding.detail);
-    const isAccepted = paths !== undefined && blamed.length > 0 &&
-      blamed.every((path) => paths.has(path));
+    const isAccepted = finding.path !== undefined &&
+      paths?.has(finding.path) === true;
     (isAccepted ? forgiven : standing).push(finding);
   }
   return { standing, forgiven };
+}
+
+/**
+ * The parts of accepted breaks that forgave nothing in a run: each pair no
+ * finding was forgiven against, and for each entry, the paths it names that
+ * no forgiven finding over its pairs blamed.
+ *
+ * An entry forgives exactly the paths it names. The proof reports every issue
+ * it finds, so a named path that none of the entry's pairs blames is an
+ * exemption outliving its break, the same as a pair that needs no forgiving,
+ * and kept, it would silently forgive a later break at that path against the
+ * pairs the entry lists.
+ *
+ * Only entries for the patterns in `examined` are judged, because a run given
+ * `--only` sees no finding for any other pattern, and the run that examined a
+ * pattern is the one that can say what its entries forgave.
+ */
+export function unusedAcceptances(
+  entries: readonly AcceptedContractBreak[],
+  examined: ReadonlySet<string>,
+  forgiven: readonly Finding[],
+): {
+  pairs: string[];
+  paths: { pattern: string; record: string; paths: string[] }[];
+} {
+  const usedPairs = new Set<string>();
+  const usedPaths = new Set<string>();
+  for (const finding of forgiven) {
+    if (finding.kind !== "incompatible" || finding.path === undefined) continue;
+    const pair = acceptedBreakKey(finding.pattern, finding.baseline);
+    usedPairs.add(pair);
+    usedPaths.add(`${pair}\x00${finding.path}`);
+  }
+  const pairs: string[] = [];
+  const paths: { pattern: string; record: string; paths: string[] }[] = [];
+  for (const entry of entries) {
+    if (!examined.has(entry.pattern)) continue;
+    const entryPairs = entry.baselines.map((baseline) =>
+      acceptedBreakKey(entry.pattern, baseline)
+    );
+    for (const pair of entryPairs) {
+      if (!usedPairs.has(pair)) pairs.push(pair);
+    }
+    const unblamed = entry.paths.filter((path) =>
+      !entryPairs.some((pair) => usedPaths.has(`${pair}\x00${path}`))
+    );
+    if (unblamed.length > 0) {
+      paths.push({
+        pattern: entry.pattern,
+        record: entry.record,
+        paths: unblamed,
+      });
+    }
+  }
+  return { pairs, paths };
 }

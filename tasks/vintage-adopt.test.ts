@@ -14,9 +14,13 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   materializeOnCell,
   openFileBackedRuntime,
-} from "../packages/piece/test/state-continuity-harness.ts";
-import { type AdoptRoots, adoptVintage } from "./vintage-adopt.ts";
-import { collectVintages } from "./pattern-vintage-lib.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
+import {
+  type AdoptRoots,
+  adoptVintage,
+  runVintageAdopt,
+} from "./vintage-adopt.ts";
+import { collectVintages, VINTAGES_DIR } from "./pattern-vintage-lib.ts";
 import { replayAll } from "./pattern-vintage-run.ts";
 
 const signer = await Identity.fromPassphrase("pattern vintage fixture");
@@ -353,6 +357,18 @@ describe("vintage adopt", () => {
     expect(await collectVintages(roots.vintagesRoot)).toHaveLength(0);
   });
 
+  it("refuses a child test entry, which is never an upgrade target", async () => {
+    await expect(adopt({
+      children: [{
+        cellId: childCellId,
+        main: "/patterns/adopt-child.test.tsx",
+      }],
+    })).rejects.toThrow(
+      'child "/patterns/adopt-child.test.tsx" (identity ',
+    );
+    expect(await collectVintages(roots.vintagesRoot)).toHaveLength(0);
+  });
+
   it("refuses a served route, which is not identity-compared", async () => {
     // `patternKeyFromMain` maps `/api/patterns/...` too, but the replay
     // accounts served routes apart from identity comparison — the opposite of
@@ -400,5 +416,57 @@ describe("vintage adopt", () => {
     await adopt();
     await expect(adopt()).rejects.toThrow("refusing to overwrite");
     expect(await collectVintages(roots.vintagesRoot)).toHaveLength(1);
+  });
+
+  describe("runVintageAdopt()", () => {
+    const args = () => [
+      snapshotPath,
+      identity,
+      "adopt-subject.test.tsx",
+      `/patterns/${KEY}`,
+      CAUSE,
+    ];
+
+    it("adopts the snapshot and children the arguments name into the tree's vintages", async () => {
+      const logged: string[] = [];
+      const shown = await runVintageAdopt(
+        [...args(), `--child=${childCellId}=/patterns/${CHILD_KEY}`],
+        dir,
+        (line) => logged.push(line),
+      );
+
+      expect(shown).toEqual({ code: 0 });
+      const [vintage] = await collectVintages(`${dir}/${VINTAGES_DIR}`);
+      expect(vintage.testKey).toBe("adopt-subject.test.tsx");
+      expect(logged.at(-1)).toBe(`fixture written: ${vintage.path}`);
+      const readback = logged.find((line) =>
+        line.startsWith("manifest readback: ")
+      );
+      expect(readback).toContain(childCellId);
+    });
+
+    it("returns the usage, adopting nothing, when an argument is missing", async () => {
+      const shown = await runVintageAdopt(args().slice(0, 3), dir, () => {});
+
+      expect(shown.code).toBe(2);
+      expect(shown.err).toMatch(
+        /^usage: vintage-adopt\.ts <snapshot\.sqlite> /,
+      );
+      expect(await collectVintages(`${dir}/${VINTAGES_DIR}`)).toEqual([]);
+    });
+
+    it("returns the malformed-child report for a `--child` naming no cell", async () => {
+      const shown = await runVintageAdopt(
+        [...args(), "--child==/patterns/x.tsx"],
+        dir,
+        () => {},
+      );
+
+      expect(shown).toEqual({
+        err: "malformed --child argument: --child==/patterns/x.tsx",
+        code: 2,
+      });
+      expect(await collectVintages(`${dir}/${VINTAGES_DIR}`)).toEqual([]);
+    });
   });
 });

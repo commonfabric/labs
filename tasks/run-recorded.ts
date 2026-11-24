@@ -16,22 +16,59 @@
  * sweeps for orphans. With neither, it only runs the command.
  */
 
-import { FragmentWriter } from "@commonfabric/test-support/records";
+import {
+  type Environment,
+  FragmentWriter,
+  readEnv,
+} from "@commonfabric/test-support/records";
 import {
   finishRunRecording,
   recordingChildEnv,
   startRunRecording,
 } from "./test-records.ts";
 
-function usage(): never {
-  console.error(
-    "usage: deno task run-recorded <kind> <scope> <name> -- <command...>",
-  );
-  Deno.exit(2);
+const USAGE =
+  "usage: deno task run-recorded <kind> <scope> <name> -- <command...>";
+
+/** Starts a wrapped command and resolves to how it ended. */
+export type Spawn = (
+  command: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string>,
+) => Promise<Deno.CommandStatus>;
+
+/**
+ * Runs `command` in `cwd` with `env` added to the environment, sharing this
+ * process's standard input, output and error.
+ */
+export async function spawnInherited(
+  command: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string>,
+): Promise<Deno.CommandStatus> {
+  return await new Deno.Command(command, {
+    args,
+    cwd,
+    env,
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  }).spawn().status;
 }
 
-async function main(): Promise<void> {
-  const args = [...Deno.args];
+/**
+ * Runs the wrapper for a command line and returns its exit status: the
+ * command's own, 127 when the command cannot be started, and 2 for a
+ * malformed command line.
+ */
+export async function runRecorded(
+  argsIn: readonly string[],
+  env: Environment = Deno.env.get,
+  spawn: Spawn = spawnInherited,
+): Promise<number> {
+  const args = [...argsIn];
   const kind = args.shift();
   const scope = args.shift();
   const name = args.shift();
@@ -41,21 +78,21 @@ async function main(): Promise<void> {
   if (
     kind === undefined || kind.length === 0 ||
     scope === undefined || scope.length === 0 ||
-    name === undefined || name.length === 0
+    name === undefined || name.length === 0 ||
+    args.shift() !== "--" || args.length === 0
   ) {
-    usage();
+    console.error(USAGE);
+    return 2;
   }
-  if (args.shift() !== "--") usage();
-  if (args.length === 0) usage();
 
-  const recording = await startRunRecording();
+  const recording = await startRunRecording(env);
   const childEnv = recordingChildEnv(recording);
 
   // A root deno task runs with the workspace root as its working
   // directory and the invoker's directory in INIT_CWD. The wrapped
   // command belongs where the caller stood — a member-directory step
   // wrapping `deno task <member task>` must resolve that member's task.
-  const initCwd = Deno.env.get("INIT_CWD");
+  const initCwd = readEnv("INIT_CWD", env);
   const childCwd = initCwd !== undefined && initCwd.length > 0
     ? initCwd
     : Deno.cwd();
@@ -63,15 +100,7 @@ async function main(): Promise<void> {
   const startedAt = performance.now();
   let code = 1;
   try {
-    const child = new Deno.Command(args[0]!, {
-      args: args.slice(1),
-      cwd: childCwd,
-      env: childEnv,
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    }).spawn();
-    const status = await child.status;
+    const status = await spawn(args[0]!, args.slice(1), childCwd, childEnv);
     code = status.code;
     if (status.signal !== null) {
       console.error(
@@ -84,30 +113,23 @@ async function main(): Promise<void> {
   }
   const durationMs = performance.now() - startedAt;
 
-  try {
-    const dir = recording.mode === "join"
-      ? recording.dir
-      : recording.mode === "own"
-      ? recording.spool.dir
-      : undefined;
-    if (dir !== undefined) {
-      const writer = FragmentWriter.open(dir);
-      writer?.append({
-        line: "record",
-        test: { k: kind, s: scope, n: name },
-        outcome: code === 0 ? "pass" : "fail",
-        durationMs: Math.round(durationMs),
-      });
-      writer?.close();
-    }
-    await finishRunRecording(recording);
-  } catch (error) {
-    console.warn(`test records: recording ${name} failed: ${error}`);
+  const dir = recording.mode === "join"
+    ? recording.dir
+    : recording.mode === "own"
+    ? recording.spool.dir
+    : undefined;
+  if (dir !== undefined) {
+    const writer = FragmentWriter.open(dir);
+    writer?.append({
+      line: "record",
+      test: { k: kind, s: scope, n: name },
+      outcome: code === 0 ? "pass" : "fail",
+      durationMs: Math.round(durationMs),
+    });
+    writer?.close();
   }
-
-  Deno.exit(code);
+  await finishRunRecording(recording, env);
+  return code;
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) Deno.exit(await runRecorded(Deno.args));

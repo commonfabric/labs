@@ -12,6 +12,7 @@ import {
   testBatchOf,
   unmatchedGlobs,
   unquote,
+  walkTestFiles,
 } from "./deno-task.ts";
 
 /** Every directory a case made, removed when the case is done. */
@@ -681,6 +682,67 @@ describe("a member holding a file where a directory would go", () => {
     await Deno.writeTextFile(`${dir}/src/a.test.ts`, "");
     const files = await memberTestFiles(dir, parseTestTask("deno test .")!);
     expect(files).toEqual(["src/a.test.ts"]);
+  });
+});
+
+describe("walkTestFiles()", () => {
+  /** A directory entry of `kind` named `name`. */
+  function entry(name: string, kind: "file" | "directory"): Deno.DirEntry {
+    return {
+      name,
+      isFile: kind === "file",
+      isDirectory: kind === "directory",
+      isSymlink: false,
+    };
+  }
+
+  /**
+   * A `readDir` over a tree whose directories `tree` names, each holding
+   * the entries given, where reading a directory `failures` names fails
+   * with the error given, and reading any other fails as not there.
+   */
+  function reading(
+    tree: Record<string, Deno.DirEntry[]>,
+    failures: Record<string, Error> = {},
+  ) {
+    return async function* (at: string): AsyncIterable<Deno.DirEntry> {
+      const held = tree[at];
+      if (held === undefined) {
+        throw failures[at] ?? new Deno.errors.NotFound(at);
+      }
+      yield* held;
+    };
+  }
+
+  it("passes over a directory that is gone by the time it is read", async () => {
+    const found: string[] = [];
+    await walkTestFiles(
+      "/m",
+      found,
+      reading({
+        "/m": [
+          entry("gone", "directory"),
+          entry("test", "directory"),
+          entry("a.test.ts", "file"),
+        ],
+        "/m/test": [entry("b.test.ts", "file"), entry("helper.ts", "file")],
+      }),
+    );
+    expect(found.sort()).toEqual(["/m/a.test.ts", "/m/test/b.test.ts"]);
+  });
+
+  it("throws where a directory is there and cannot be read", async () => {
+    const found: string[] = [];
+    await expect(
+      walkTestFiles(
+        "/m",
+        found,
+        reading(
+          { "/m": [entry("locked", "directory")] },
+          { "/m/locked": new Deno.errors.PermissionDenied("/m/locked") },
+        ),
+      ),
+    ).rejects.toThrow(Deno.errors.PermissionDenied);
   });
 });
 

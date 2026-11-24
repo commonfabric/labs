@@ -1,0 +1,211 @@
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+
+import {
+  CODEC_META_TAGS,
+  CODEC_TYPE_TAGS,
+  isCodecTypeTag,
+} from "@/codec-common";
+
+describe("isCodecTypeTag", () => {
+  it("returns `true` for every tag in `CODEC_TYPE_TAGS`", () => {
+    // The constants are the definition of the syntax, so a predicate that
+    // rejected one of them would be wrong whatever it said about anything
+    // else.
+
+    for (const tag of Object.values(CODEC_TYPE_TAGS)) {
+      expect(isCodecTypeTag(tag)).toBe(true);
+    }
+  });
+
+  it("returns `false` for every tag in `CODEC_META_TAGS`", () => {
+    // A meta-tag has no version, so names a form its format handles itself
+    // rather than a type.
+
+    for (const tag of Object.values(CODEC_META_TAGS)) {
+      expect(isCodecTypeTag(tag)).toBe(false);
+    }
+  });
+
+  it("returns `true` for a tag naming a type nothing here defines", () => {
+    // Syntax, not recognition: this is what an `UnknownValue` is made of.
+
+    expect(isCodecTypeTag("FutureType@2")).toBe(true);
+    expect(isCodecTypeTag("X@1")).toBe(true);
+    expect(isCodecTypeTag("Abc123@1234")).toBe(true);
+  });
+
+  it("returns `true` for a tag with namespace prefixes", () => {
+    expect(isCodecTypeTag("core.Boop@1")).toBe(true);
+    expect(isCodecTypeTag("sys.beep.Boop@1")).toBe(true);
+    expect(isCodecTypeTag("aB3.x9.Abc123@1234")).toBe(true);
+  });
+
+  it("returns `true` for prefixes and names in any case", () => {
+    // An initial capital on a type's name is a convention, and not syntax.
+
+    expect(isCodecTypeTag("bytes@1")).toBe(true);
+    expect(isCodecTypeTag("Sys.Boop@1")).toBe(true);
+    expect(isCodecTypeTag("sys.boop@1")).toBe(true);
+    expect(isCodecTypeTag("sys.Beep.Boop@1")).toBe(true);
+    expect(isCodecTypeTag("SYS.BOOP@1")).toBe(true);
+    expect(isCodecTypeTag("quote@1")).toBe(true);
+  });
+
+  describe("limits", () => {
+    // Each component, prefix or name, is at most 100 characters; a tag has at
+    // most ten components; and a version is at most ten digits.
+
+    const longest = "N".repeat(100);
+    const tooLong = "N".repeat(101);
+
+    it("returns `true` for a tag at each limit", () => {
+      expect(isCodecTypeTag("a.b.c.d.e.f.g.h.i.j@1")).toBe(true);
+      expect(isCodecTypeTag(`${longest}.Boop@1`)).toBe(true);
+      expect(isCodecTypeTag(`${longest}@1`)).toBe(true);
+      expect(isCodecTypeTag(`sys.${longest}@1`)).toBe(true);
+      expect(isCodecTypeTag("Abc@1234567890")).toBe(true);
+      expect(isCodecTypeTag("sys.Abc@9999999999")).toBe(true);
+    });
+
+    it("returns `true` for a tag at every limit at once", () => {
+      const components = Array.from({ length: 10 }, () => longest);
+
+      expect(isCodecTypeTag(`${components.join(".")}@9999999999`)).toBe(true);
+    });
+
+    it("returns `false` for a tag with eleven components", () => {
+      expect(isCodecTypeTag("a.b.c.d.e.f.g.h.i.j.k@1")).toBe(false);
+    });
+
+    it("returns `false` for a tag with a prefix of 101 characters", () => {
+      expect(isCodecTypeTag(`${tooLong}.Boop@1`)).toBe(false);
+      expect(isCodecTypeTag(`sys.${tooLong}.Boop@1`)).toBe(false);
+    });
+
+    it("returns `false` for a tag with a name of 101 characters", () => {
+      expect(isCodecTypeTag(`${tooLong}@1`)).toBe(false);
+      expect(isCodecTypeTag(`sys.${tooLong}@1`)).toBe(false);
+    });
+
+    it("returns `false` for a tag with a version of eleven digits", () => {
+      expect(isCodecTypeTag("Abc@12345678901")).toBe(false);
+      expect(isCodecTypeTag("sys.Abc@10000000000")).toBe(false);
+    });
+  });
+
+  describe("underscores", () => {
+    // `_` counts as a letter rather than as a digit, so it may stand anywhere
+    // in a component, including at its start, and may be the whole of one.
+
+    it("returns `true` for a name holding `_` at its start, middle, or end", () => {
+      expect(isCodecTypeTag("_x@1")).toBe(true);
+      expect(isCodecTypeTag("_Boop@1")).toBe(true);
+      expect(isCodecTypeTag("Boop_@1")).toBe(true);
+      expect(isCodecTypeTag("a_b@1")).toBe(true);
+    });
+
+    it("returns `true` for a name that is `_` alone or holds `_` twice in a row", () => {
+      expect(isCodecTypeTag("_@1")).toBe(true);
+      expect(isCodecTypeTag("__@1")).toBe(true);
+      expect(isCodecTypeTag("a__b@1")).toBe(true);
+    });
+
+    it("returns `true` for a prefix holding `_`", () => {
+      expect(isCodecTypeTag("sys_x.Boop@1")).toBe(true);
+      expect(isCodecTypeTag("_.Boop@1")).toBe(true);
+      expect(isCodecTypeTag("A.b_c.D_@2")).toBe(true);
+    });
+
+    it("returns `true` for a component of 100 characters holding `_`", () => {
+      expect(isCodecTypeTag(`${"_".repeat(100)}@1`)).toBe(true);
+      expect(isCodecTypeTag(`_${"N".repeat(98)}_.Boop@1`)).toBe(true);
+    });
+
+    it("returns `false` for a component of 101 characters holding `_`", () => {
+      expect(isCodecTypeTag(`${"_".repeat(101)}@1`)).toBe(false);
+      expect(isCodecTypeTag(`_${"N".repeat(99)}_.Boop@1`)).toBe(false);
+    });
+
+    it("returns `false` for a component starting with a digit before `_`", () => {
+      expect(isCodecTypeTag("1_Bytes@1")).toBe(false);
+      expect(isCodecTypeTag("1_.Boop@1")).toBe(false);
+    });
+  });
+
+  it("returns `false` for a malformed namespace prefix", () => {
+    expect(isCodecTypeTag("sys..Boop@1")).toBe(false);
+    expect(isCodecTypeTag(".Boop@1")).toBe(false);
+    expect(isCodecTypeTag("sys.Boop.@1")).toBe(false);
+    expect(isCodecTypeTag("sys$x.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("sys-x.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("1sys.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("s\u00fcs.Boop@1")).toBe(false);
+  });
+
+  it("returns `false` for a prefixed tag whose version is malformed", () => {
+    expect(isCodecTypeTag("sys.Boop")).toBe(false);
+    expect(isCodecTypeTag("sys.Boop@01")).toBe(false);
+    expect(isCodecTypeTag("sys.Boop@0")).toBe(false);
+  });
+
+  it("returns `false` for a string with no version", () => {
+    // A tag with no prefix and no version is an interchange tag, a hash
+    // algorithm's name among them, but not a type tag.
+
+    expect(isCodecTypeTag("")).toBe(false);
+    expect(isCodecTypeTag("Bytes")).toBe(false);
+    expect(isCodecTypeTag("Bytes@")).toBe(false);
+    expect(isCodecTypeTag("widget")).toBe(false);
+    expect(isCodecTypeTag("fid1")).toBe(false);
+    expect(isCodecTypeTag("core.Globals")).toBe(false);
+  });
+
+  it("returns `false` for a malformed version", () => {
+    expect(isCodecTypeTag("Bytes@0")).toBe(false);
+    expect(isCodecTypeTag("Bytes@01")).toBe(false);
+    expect(isCodecTypeTag("Bytes@-1")).toBe(false);
+    expect(isCodecTypeTag("Bytes@1.0")).toBe(false);
+    expect(isCodecTypeTag("Bytes@1@2")).toBe(false);
+  });
+
+  it("returns `false` for a malformed name", () => {
+    expect(isCodecTypeTag("@1")).toBe(false);
+    expect(isCodecTypeTag("1Bytes@1")).toBe(false);
+    expect(isCodecTypeTag("By tes@1")).toBe(false);
+    expect(isCodecTypeTag("By-tes@1")).toBe(false);
+    expect(isCodecTypeTag("/Bytes@1")).toBe(false);
+  });
+
+  it("returns `false` for a name holding a non-ASCII letter", () => {
+    // The alphabet is ASCII, which Section 2.5 of `1-fabric-values.md` states
+    // and a Unicode-property spelling of the same syntax would not honor. A
+    // tag crosses between systems, so the set of names it can carry cannot
+    // depend on which alphabet a decoder reads it with.
+
+    expect(isCodecTypeTag("\u00c9clair@1")).toBe(false);
+    expect(isCodecTypeTag("Caf\u00e9@1")).toBe(false);
+    expect(isCodecTypeTag("\u0411ytes@1")).toBe(false);
+  });
+
+  it("returns `false` for a tag padded with whitespace or a newline", () => {
+    // The syntax is anchored at both ends and is not multiline, so padding a
+    // tag does not make the string one. The newline pair is the only case in
+    // this file that catches a stray `m` flag; an unanchored match would let
+    // all four through.
+
+    expect(isCodecTypeTag(" Bytes@1")).toBe(false);
+    expect(isCodecTypeTag("Bytes@1 ")).toBe(false);
+    expect(isCodecTypeTag("\nBytes@1")).toBe(false);
+    expect(isCodecTypeTag("Bytes@1\n")).toBe(false);
+  });
+
+  it("returns `false` for a value that is not a string", () => {
+    expect(isCodecTypeTag(undefined)).toBe(false);
+    expect(isCodecTypeTag(null)).toBe(false);
+    expect(isCodecTypeTag(42)).toBe(false);
+    expect(isCodecTypeTag(Symbol("Bytes@1"))).toBe(false);
+    expect(isCodecTypeTag(["Bytes@1"])).toBe(false);
+    expect(isCodecTypeTag(new String("Bytes@1"))).toBe(false);
+  });
+});

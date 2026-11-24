@@ -1,6 +1,6 @@
 # Logger Internals (TypeScript API)
 
-The runtime uses a structured logging system (`@commonfabric/utils/logger`)
+The runtime uses a structured logging system (`@commonfabric/logger`)
 across all packages. Loggers are tagged by module name, support severity
 levels, and track call counts, timing stats, and flags — all accessible at
 runtime. This page covers the TypeScript API for *writing* runtime code. For
@@ -11,7 +11,7 @@ inspecting loggers interactively from the browser console, see
 
 ```typescript
 // Shown at module scope.
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 // Create a logger for your module (disabled by default, debug level)
 const logger = getLogger("my-module", { enabled: false, level: "debug" });
@@ -89,6 +89,16 @@ getLogger("chatty", { logCountEvery: 50 });  // every 50 calls
 getLogger("quiet", { logCountEvery: 0 });    // disable summaries
 ```
 
+### Capturing a logger in a test
+
+`captureLogsForTestingOnly(moduleName)`, from the package's
+`./for-testing-only` entry, turns one logger on at `debug`, lifts the global
+floor, and records each line that logger emits, with its level, key and
+resolved text, instead of printing it, whether or not `LOG_TO_STDERR` is set.
+While a capture holds a logger, the logger prints no count summary, so the
+record holds only the lines the code logged. Disposing the capture puts the
+logger, the floor and the output back as they were.
+
 ## Timing
 
 Loggers can track operation timing with reservoir-sampled percentiles:
@@ -103,9 +113,14 @@ logger.timeEnd("cell", "get");
 // Direct measurement
 logger.time(startTimestamp, "ipc", "CellGet");
 
+// Either form with a detail naming this one measurement: it reaches the
+// slowest measurements the key keeps and the emitted measure, not the key
+logger.timeDetailed("the cell's id", startTimestamp, "ipc", "CellGet");
+
 // Read stats
 logger.getTimeStats("cell/get");
-// { count, min, max, average, p50, p95, lastTime, cdf, ... }
+// { count, min, max, average, p50, p95, lastTime, slowest, cdf, ... }
+// `slowest` holds the longest few, each with when it ended and its detail
 
 logger.timeStats; // all timing stats for this logger
 ```
@@ -167,7 +182,14 @@ These operate across all registered loggers:
 | `resetAllCountBaselines()` | Set count baselines for all loggers |
 | `resetAllTimingBaselines()` | Set timing baselines for all loggers |
 
-All are importable from `@commonfabric/utils/logger` and also registered on
+All are importable from `@commonfabric/logger` and also registered on
 `globalThis.commonfabric` for browser console access. See
 [debugging/console-commands](../development/debugging/console-commands.md) for interactive
 usage.
+
+`setLoggerCountObserver()`, importable only, sets the process's one function
+told of every call a logger counts, with the logger's module name, the message
+key and the level. The module name is `undefined` for the unnamed global
+`log`, which no registry entry holds. The function runs inside the logging
+call, so it can read the caller's async context, which is how `cf test` tells
+a co-hosted serving loop's counts apart from its test's.

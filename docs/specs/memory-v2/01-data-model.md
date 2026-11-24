@@ -480,8 +480,14 @@ current value. Patch operations are inspired by
 **not bound by it**. Key differences from RFC 6902:
 
 - **`add` creates intermediate parents automatically.** Writing to
-  `/person/name` creates the `person` object if it doesn't exist. Numeric path
-  segments create arrays; string segments create objects. When a schema is
+  `/person/name` creates the `person` object if it doesn't exist. A created
+  parent is an array where the segment that follows it is an array index — a
+  non-negative integer with no leading zeros, no larger than 2^32 − 2 — or the
+  `-` append marker, and an object for any other segment, a longer run of
+  digits included. An array created this way is empty, so the op applies only
+  where that segment is `0` or `-` and ends the path. Only a created parent is
+  shaped by the segment after it: beneath an object that is already there, a
+  segment is a key of that object however it is written. When a schema is
   available, it guides the choice between array and object.
 - **Custom `splice` operation** for efficient array manipulation.
 - Collaborative editor operations are a distinct top-level `apply-op` write
@@ -510,8 +516,8 @@ interface AddOp {
   path: JSONPointer;
   value: FabricValue;
   // Creates intermediate parents automatically:
-  // numeric path segments → array, string segments → object,
-  // schema-guided when available.
+  // an array where the next segment is an array index or `-`, an object for
+  // any other segment, schema-guided when available.
 }
 
 interface RemoveOp {
@@ -534,6 +540,14 @@ interface SpliceOp {
   index: number; // Start index
   remove: number; // Number of elements to remove
   add: FabricValue[]; // Elements to insert at the index
+  // Marks a splice diffed under a recursive read of the array, standing for
+  // the per-index writes of the same change: server execution's supersession
+  // reads the indices whose values it changed as overwritten, where an
+  // unmarked splice overwrites nothing. Sent only to a server advertising
+  // `markedSplicesV1`, and admitted only under that read, alone on its array
+  // in the commit (08-conflict-granularity.md, "Array writes and the
+  // leaf-only matcher").
+  pinned?: true;
 }
 
 type PatchOp = ReplaceOp | AddOp | RemoveOp | MoveOp | SpliceOp;

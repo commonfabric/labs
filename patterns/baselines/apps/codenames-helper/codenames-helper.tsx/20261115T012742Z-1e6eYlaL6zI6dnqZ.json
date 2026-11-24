@@ -1,0 +1,423 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "BoardCard": {
+        "properties": {
+          "owner": {
+            "$ref": "#/$defs/Owner",
+            "description": "The key-card color for this position."
+          },
+          "revealed": {
+            "description": "Guessed by a player, so out of play.",
+            "type": "boolean"
+          },
+          "word": {
+            "description": "The word on the card, upper case; \"\" until entered.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word",
+          "owner",
+          "revealed"
+        ],
+        "type": "object"
+      },
+      "Mode": {
+        "enum": [
+          "setup",
+          "play"
+        ]
+      },
+      "Owner": {
+        "enum": [
+          "red",
+          "blue",
+          "neutral",
+          "assassin",
+          "unassigned"
+        ]
+      },
+      "Team": {
+        "enum": [
+          "red",
+          "blue"
+        ]
+      }
+    },
+    "properties": {
+      "board": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/BoardCard"
+        },
+        "type": "array"
+      },
+      "mode": {
+        "$ref": "#/$defs/Mode",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "setup"
+      },
+      "myTeam": {
+        "$ref": "#/$defs/Team",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": "red",
+        "description": "Each spymaster's own team, so two sharing one board don't flip it for\neach other."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/codenames-helper/codenames-helper.tsx",
+  "resultSchema": {
+    "$defs": {
+      "BoardCard": {
+        "properties": {
+          "owner": {
+            "$ref": "#/$defs/Owner",
+            "description": "The key-card color for this position."
+          },
+          "revealed": {
+            "description": "Guessed by a player, so out of play.",
+            "type": "boolean"
+          },
+          "word": {
+            "description": "The word on the card, upper case; \"\" until entered.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word",
+          "owner",
+          "revealed"
+        ],
+        "type": "object"
+      },
+      "ColorReading": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "color": {
+            "enum": [
+              "red",
+              "blue",
+              "neutral",
+              "assassin"
+            ]
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "row",
+          "col",
+          "color"
+        ],
+        "type": "object"
+      },
+      "Mode": {
+        "enum": [
+          "setup",
+          "play"
+        ]
+      },
+      "Owner": {
+        "enum": [
+          "red",
+          "blue",
+          "neutral",
+          "assassin",
+          "unassigned"
+        ]
+      },
+      "PhotoReading": {
+        "properties": {
+          "colors": {
+            "items": {
+              "$ref": "#/$defs/ColorReading"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "board",
+              "keycard",
+              "unknown"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/$defs/WordReading"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "Team": {
+        "enum": [
+          "red",
+          "blue"
+        ]
+      },
+      "WordReading": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "row": {
+            "type": "number"
+          },
+          "word": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "col",
+          "word"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "applyPhotoReading": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Apply what the LLM read from a board or key-card photo.",
+        "properties": {
+          "photoId": {
+            "type": "string"
+          },
+          "reading": {
+            "$ref": "#/$defs/PhotoReading"
+          }
+        },
+        "required": [
+          "reading"
+        ],
+        "type": "object"
+      },
+      "assignOwner": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Give the picked card a key color.",
+        "properties": {
+          "owner": {
+            "$ref": "#/$defs/Owner"
+          }
+        },
+        "required": [
+          "owner"
+        ],
+        "type": "object"
+      },
+      "board": {
+        "description": "Always 25 cards, row-major from the top left.",
+        "items": {
+          "$ref": "#/$defs/BoardCard"
+        },
+        "type": "array"
+      },
+      "clearColors": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "clueRequest": {
+        "description": "The board prompt clue ideas were last requested for, or \"\".",
+        "type": "string"
+      },
+      "editBoard": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "inPlay": {
+        "description": "Cards of each color still in play.",
+        "properties": {
+          "assassin": {
+            "type": "number"
+          },
+          "blue": {
+            "type": "number"
+          },
+          "neutral": {
+            "type": "number"
+          },
+          "red": {
+            "type": "number"
+          },
+          "unassigned": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "red",
+          "blue",
+          "neutral",
+          "assassin",
+          "unassigned"
+        ],
+        "type": "object"
+      },
+      "keyWarnings": {
+        "description": "What is off about the colors entered so far; empty when the key looks\ncomplete.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "mode": {
+        "$ref": "#/$defs/Mode"
+      },
+      "myTeam": {
+        "$ref": "#/$defs/Team"
+      },
+      "requestClues": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "resetBoard": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "selectedIndex": {
+        "description": "The card picked for coloring in setup, or -1.",
+        "type": "number"
+      },
+      "setWord": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "index": {
+            "type": "number"
+          },
+          "word": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "word"
+        ],
+        "type": "object"
+      },
+      "startPlay": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "tapCard": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Setup: pick the card to color. Play: mark it guessed, or undo that.",
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "board",
+      "myTeam",
+      "mode",
+      "selectedIndex",
+      "inPlay",
+      "keyWarnings",
+      "clueRequest",
+      "tapCard",
+      "assignOwner",
+      "setWord",
+      "applyPhotoReading",
+      "clearColors",
+      "resetBoard",
+      "startPlay",
+      "editBoard",
+      "requestClues",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

@@ -1,0 +1,4 @@
+{"date":"2026-10-26","from":{"k":"unit","s":"tasks","n":"buildFilteredTestArgs passes files as explicit paths under relDir"},"to":{"k":"unit","s":"tasks","n":"filteredTestCommand passes files as explicit paths under relDir"}}
+{"date":"2026-10-26","from":{"k":"unit","s":"tasks","n":"buildFilteredTestArgs adds patterns memory and leak flags"},"to":{"k":"unit","s":"tasks","n":"filteredTestCommand adds patterns memory and leak flags"}}
+{"date":"2026-10-26","from":{"k":"unit","s":"tasks","n":"buildFilteredTestArgs uses the generated-patterns subdir and flags"},"to":{"k":"unit","s":"tasks","n":"filteredTestCommand uses the generated-patterns subdir and flags"}}
+{"date":"2026-10-26","from":{"k":"unit","s":"tasks","n":"buildFilteredTestArgs adds a junit path when a junit dir is given"},"to":{"k":"unit","s":"tasks","n":"filteredTestCommand adds a junit path when a junit dir is given"}}

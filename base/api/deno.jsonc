@@ -1,0 +1,25 @@
+{
+  "name": "@commonfabric/api",
+  "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    // No path: the walk is what finds every test file, and two of this
+    // package's sit beside the sources they exercise rather than under
+    // `test/`, which a glob naming that directory passed over. --no-check:
+    // this package is type-checked by `deno task check` (tasks/check.sh).
+    // `test/perf/` loads the TypeScript compiler, which reads the variables
+    // after the first two named here as it loads, and compiles the
+    // type-profiling harness with the pinned `tsc`, which runs under this Deno.
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST,\"TSC_*\",NODE_INSPECTOR_IPC,VSCODE_INSPECTOR_OPTIONS,NODE_ENV --no-check --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\"",
+    "profile-types": "deno run -A perf/run-benchmarks.ts"
+  },
+  "imports": {
+    // Dependency guide: ../../docs/development/DEPENDENCIES.md
+    "typescript": "npm:typescript@6.0.3"
+  },
+  "exports": {
+    ".": "./index.ts",
+    "./cfc-authoring": "./cfc-authoring.ts",
+    "./cfc": "./cfc.ts",
+    "./schema": "./schema.ts"
+  }
+}

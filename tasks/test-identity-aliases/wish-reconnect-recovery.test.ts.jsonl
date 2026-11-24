@@ -1,0 +1,1 @@
+{"date":"2026-10-21","from":{"k":"unit","s":"runner","n":"wish-reconnect-recovery > restores a favorite whose load failed on a dropped connection"},"to":{"k":"unit","s":"runner","n":"wish-reconnect-recovery > finds a favorite whose load a dropped connection caught once the connection is restored"}}

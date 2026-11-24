@@ -5,13 +5,22 @@ import type {
   ManifestRow,
 } from "@commonfabric/runner/cfc/kernel/manifest";
 
-import type { SpecSnapshot } from "./cfc-spec-snapshot.ts";
+import { fromFileUrl } from "@std/path";
+
+import { SNAPSHOT_PATH, type SpecSnapshot } from "./cfc-spec-snapshot.ts";
 import {
   type CheckInput,
+  CITATION_SOURCE,
   collectFindings,
+  declaresSymbol,
   type Exemption,
   exportedFunctions,
+  gatherInput,
+  GOVERNED_SOURCE,
   KERNEL_DIR,
+  readInput,
+  report,
+  show,
   type SourceFile,
   valueImports,
 } from "./check-cfc-correspondence.ts";
@@ -80,6 +89,7 @@ const input = (overrides: Partial<CheckInput>): CheckInput => ({
   exemptions: [],
   markerFiles: [],
   budget: 3,
+  decidedFiles: new Map(),
   ...overrides,
 });
 
@@ -90,7 +100,7 @@ describe("check-cfc-correspondence", () => {
   describe("collectFindings()", () => {
     it("returns no findings for a manifest, kernel and citations that agree with the snapshot", () => {
       const citing: SourceFile = {
-        path: "packages/runner/src/cfc/prepare.ts",
+        path: "runtime/runner/src/cfc/prepare.ts",
         text: "// §8.12.1 decides this, and §8 frames it.\n",
       };
       expect(collectFindings(input({ citationFiles: [citing] }))).toEqual([]);
@@ -224,7 +234,7 @@ describe("check-cfc-correspondence", () => {
         expect(messages(collectFindings(input({ manifest: [row, cnfRow] }))))
           .toEqual([
             "the row for `atomLe` reads `missing`, and " +
-            "packages/runner/src/cfc/kernel/store-labels.ts exports it",
+            "runtime/runner/src/cfc/kernel/store-labels.ts exports it",
           ]);
       });
 
@@ -233,7 +243,7 @@ describe("check-cfc-correspondence", () => {
           messages(collectFindings(input({ kernelFiles: [] }))),
         ).toEqual([
           "the row for `atomLe` names " +
-          "packages/runner/src/cfc/kernel/store-labels.ts, which exports " +
+          "runtime/runner/src/cfc/kernel/store-labels.ts, which exports " +
           "no such function",
         ]);
       });
@@ -243,8 +253,8 @@ describe("check-cfc-correspondence", () => {
         expect(messages(collectFindings(input({ manifest: [row, cnfRow] }))))
           .toEqual([
             "the row for `atomLe` names " +
-            "packages/runner/src/cfc/kernel/label.ts, and " +
-            "packages/runner/src/cfc/kernel/store-labels.ts is where it is " +
+            "runtime/runner/src/cfc/kernel/label.ts, and " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts is where it is " +
             "exported",
           ]);
       });
@@ -356,8 +366,8 @@ export function atomLe(a: unknown, b: unknown): boolean {
             ),
           ),
         ).toEqual([
-          "the row for `atomLe` names packages/runner/src/cfc/kernel/label.ts, " +
-          "and packages/runner/src/cfc/kernel/exchange.ts is where it is " +
+          "the row for `atomLe` names runtime/runner/src/cfc/kernel/label.ts, " +
+          "and runtime/runner/src/cfc/kernel/exchange.ts is where it is " +
           "exported",
         ]);
       });
@@ -374,7 +384,7 @@ export function atomLe(a: unknown, b: unknown): boolean {
         expect(messages(collectFindings(input({ kernelFiles: [file] }))))
           .toEqual([
             "the row for `atomLe` names " +
-            "packages/runner/src/cfc/kernel/store-labels.ts, which exports " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts, which exports " +
             "no such function",
             "`atomLe()` carries no `@spec` header",
           ]);
@@ -402,7 +412,7 @@ export function atomLe(a: unknown, b: unknown): boolean {
           .toEqual([
             "the row for `atomLe` names 08-12-store-label-monotonicity.md " +
             "§8.12.1, and the header of the `atomLe()` " +
-            "packages/runner/src/cfc/kernel/store-labels.ts exports names " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts exports names " +
             "08-12-store-label-monotonicity.md §8.12.4",
             "exports `atomLe()` for 08-12-store-label-monotonicity.md " +
             "§8.12.4, which no manifest row or companion names",
@@ -428,6 +438,22 @@ export { le as atomLe };
         expect(collectFindings(input({ kernelFiles: [file] }))).toEqual([]);
       });
 
+      it("reports an exported function carrying two `@spec` headers", () => {
+        const file = kernelFile(
+          atomLeSource.text.replace(
+            " */\nexport function",
+            ` * @spec ${STORE} §8.12.4 canWrite sha256:${HASH_B}\n */\nexport function`,
+          ),
+        );
+        expect(messages(collectFindings(input({ kernelFiles: [file] }))))
+          .toEqual([
+            "the row for `atomLe` names " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts, which exports " +
+            "no such function",
+            "`atomLe()` carries 2 `@spec` headers",
+          ]);
+      });
+
       it("reports a header written for another function", () => {
         const file = kernelFile(
           atomLeSource.text.replace("atomLe sha256", "canWrite sha256"),
@@ -435,7 +461,7 @@ export { le as atomLe };
         expect(messages(collectFindings(input({ kernelFiles: [file] }))))
           .toEqual([
             "the row for `atomLe` names " +
-            "packages/runner/src/cfc/kernel/store-labels.ts, which exports " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts, which exports " +
             "no such function",
             "`atomLe()` carries a header for `canWrite`",
           ]);
@@ -453,7 +479,7 @@ export { le as atomLe };
           .toEqual([[
             `${KERNEL_DIR}label.ts`,
             "`atomLe()` is also exported by " +
-            "packages/runner/src/cfc/kernel/store-labels.ts; a kernel " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts; a kernel " +
             "function has one home",
           ]]);
       });
@@ -504,6 +530,33 @@ export { le as atomLe };
           ]);
       });
 
+      it("reports an import whose specifier does not percent-decode, or separates with a backslash", () => {
+        const file = kernelFile(
+          `import { a } from "./%E0%A4%A.ts";\n` +
+            `import { b } from "./sub\\..\\..\\prepare.ts";\n` +
+            `import { c } from "./label.ts";\n` +
+            atomLeSource.text,
+        );
+        const findings = collectFindings(input({ kernelFiles: [file] }));
+        expect(findings.map((finding) => [finding.line, finding.message]))
+          .toEqual([
+            [
+              1,
+              "imports `./%E0%A4%A.ts`, which is outside the kernel; a " +
+              "kernel function takes no transaction, reads no dial and " +
+              "calls no hook, and a value it needs from outside is declared " +
+              "inside the kernel",
+            ],
+            [
+              2,
+              "imports `./sub\\..\\..\\prepare.ts`, which is outside the " +
+              "kernel; a kernel function takes no transaction, reads no dial " +
+              "and calls no hook, and a value it needs from outside is " +
+              "declared inside the kernel",
+            ],
+          ]);
+      });
+
       it("ignores an import whose every binding is marked `type` inline", () => {
         const file = kernelFile(
           `import { type Tx, type Meta } from "../../storage/interface.ts";\n` +
@@ -515,7 +568,7 @@ export { le as atomLe };
 
       it("reports value imports reaching outside the kernel, the api package included", () => {
         const file = kernelFile(
-          `import { deepEqual } from "@commonfabric/utils/deep-equal";\n` +
+          `import { deepEqual } from "@commonfabric/js-values/deep-equal";\n` +
             `import type { Tx } from "../../storage/interface.ts";\n` +
             `import { clauseLe } from "./label.ts";\n` +
             `import { atom } from "@commonfabric/api/cfc";\n` +
@@ -526,7 +579,7 @@ export { le as atomLe };
           .toEqual([
             [
               1,
-              "imports `@commonfabric/utils/deep-equal`, which is outside " +
+              "imports `@commonfabric/js-values/deep-equal`, which is outside " +
               "the kernel; a kernel function takes no transaction, reads " +
               "no dial and calls no hook, and a value it needs from outside " +
               "is declared inside the kernel",
@@ -545,7 +598,7 @@ export { le as atomLe };
         const manifest: SourceFile = {
           path: `${KERNEL_DIR}manifest.ts`,
           text:
-            `import { deepEqual } from "@commonfabric/utils/deep-equal";\n` +
+            `import { deepEqual } from "@commonfabric/js-values/deep-equal";\n` +
             `export const rows = () => [];\n`,
         };
         expect(
@@ -553,7 +606,7 @@ export { le as atomLe };
             collectFindings(input({ kernelFiles: [atomLeSource, manifest] })),
           ),
         ).toEqual([
-          "imports `@commonfabric/utils/deep-equal`, which is outside the " +
+          "imports `@commonfabric/js-values/deep-equal`, which is outside the " +
           "kernel; a kernel function takes no transaction, reads no dial " +
           "and calls no hook, and a value it needs from outside is " +
           "declared inside the kernel",
@@ -563,7 +616,7 @@ export { le as atomLe };
 
     describe("citations against the section list", () => {
       const cited = (text: string): SourceFile => ({
-        path: "packages/runner/src/cfc/prepare.ts",
+        path: "runtime/runner/src/cfc/prepare.ts",
         text,
       });
 
@@ -586,12 +639,12 @@ export { le as atomLe };
       it("accepts a citation an exemption names, and reports one it stops writing", () => {
         const exemptions: Exemption[] = [
           {
-            file: "packages/runner/src/cfc/prepare.ts",
+            file: "runtime/runner/src/cfc/prepare.ts",
             citation: "§3.2.1",
             reason: "a labs document's section",
           },
           {
-            file: "packages/runner/src/cfc/prepare.ts",
+            file: "runtime/runner/src/cfc/prepare.ts",
             citation: "§9.9.9",
             reason: "gone",
           },
@@ -608,7 +661,7 @@ export { le as atomLe };
 
       it("reports an exemption with no reason", () => {
         const exemptions: Exemption[] = [{
-          file: "packages/runner/src/cfc/prepare.ts",
+          file: "runtime/runner/src/cfc/prepare.ts",
           citation: "§3.2.1",
           reason: " ",
         }];
@@ -622,7 +675,7 @@ export { le as atomLe };
 
       it("holds an exemption to its own file", () => {
         const exemptions: Exemption[] = [{
-          file: "packages/runner/src/cfc/other.ts",
+          file: "runtime/runner/src/cfc/other.ts",
           citation: "§3.2.1",
           reason: "a labs document's section",
         }];
@@ -639,6 +692,63 @@ export { le as atomLe };
       });
     });
 
+    describe("a `missing` row's runtime symbols", () => {
+      const decidedRow: ManifestRow = {
+        ...cnfRow,
+        decidedToday: [{
+          file: "../../memory/v2/cfc-release-authority.ts",
+          symbol: "clauseReleasableBy",
+        }],
+      };
+
+      it("returns no findings when the file declares each symbol", () => {
+        const decidedFiles = new Map([[
+          "../../memory/v2/cfc-release-authority.ts",
+          "export const clauseReleasableBy = () => true;\n",
+        ]]);
+        expect(
+          collectFindings(
+            input({ manifest: [atomLeRow, decidedRow], decidedFiles }),
+          ),
+        )
+          .toEqual([]);
+      });
+
+      it("returns a finding for a symbol the file does not declare", () => {
+        const decidedFiles = new Map([[
+          "../../memory/v2/cfc-release-authority.ts",
+          "export const somethingElse = () => true;\n",
+        ]]);
+        expect(
+          messages(
+            collectFindings(
+              input({ manifest: [atomLeRow, decidedRow], decidedFiles }),
+            ),
+          ),
+        ).toEqual([
+          "the row for `isMoreRestrictiveCNF` names `clauseReleasableBy` in " +
+          "../../memory/v2/cfc-release-authority.ts, which does not declare it at top level",
+        ]);
+      });
+
+      it("returns a finding for a file that does not exist", () => {
+        const decidedFiles = new Map([[
+          "../../memory/v2/cfc-release-authority.ts",
+          undefined,
+        ]]);
+        expect(
+          messages(
+            collectFindings(
+              input({ manifest: [atomLeRow, decidedRow], decidedFiles }),
+            ),
+          ),
+        ).toEqual([
+          "the row for `isMoreRestrictiveCNF` names " +
+          "../../memory/v2/cfc-release-authority.ts, which does not exist",
+        ]);
+      });
+    });
+
     describe("`SPEC-PENDING` markers", () => {
       const marked = (path: string, text: string): SourceFile => ({
         path,
@@ -649,15 +759,15 @@ export { le as atomLe };
 
       it("accepts markers within budget that name a specs pull request", () => {
         const files = [
-          marked("packages/runner/src/cfc/prepare.ts", ruled + ruled),
-          marked("packages/html/src/worker/reconciler.ts", ruled),
+          marked("runtime/runner/src/cfc/prepare.ts", ruled + ruled),
+          marked("runtime/html/src/worker/reconciler.ts", ruled),
         ];
         expect(collectFindings(input({ markerFiles: files }))).toEqual([]);
       });
 
       it("reports a marker naming no specs pull request, with its line", () => {
         const file = marked(
-          "packages/runner/src/cfc/prepare.ts",
+          "runtime/runner/src/cfc/prepare.ts",
           "const x = 1;\n// SPEC-PENDING: waiting on the ruling\n",
         );
         const findings = collectFindings(input({ markerFiles: [file] }));
@@ -671,7 +781,7 @@ export { le as atomLe };
 
       it("reports markers over budget", () => {
         const file = marked(
-          "packages/runner/src/cfc/prepare.ts",
+          "runtime/runner/src/cfc/prepare.ts",
           ruled + ruled + ruled + ruled,
         );
         expect(messages(collectFindings(input({ markerFiles: [file] }))))
@@ -725,6 +835,15 @@ export { le as atomLe };
         ["sevenAlias", null],
       ]);
     });
+
+    it("returns nothing for an `export { … }` name declared other than as a function", () => {
+      const source = [
+        `import { imported } from "./elsewhere.ts";`,
+        "let counter = 0;",
+        "export { imported, counter };",
+      ].join("\n");
+      expect(exportedFunctions(source)).toEqual([]);
+    });
   });
 
   describe("valueImports()", () => {
@@ -760,6 +879,221 @@ export { le as atomLe };
         "./k.ts",
         "./p.ts",
       ]);
+    });
+  });
+
+  describe("declaresSymbol()", () => {
+    it("returns `true` for a top-level declaration, exported or not, and for an export list", () => {
+      expect(declaresSymbol("export const a = 1;\n", "a")).toBe(true);
+      expect(declaresSymbol("function b() {}\n", "b")).toBe(true);
+      expect(declaresSymbol("export async function c() {}\n", "c")).toBe(true);
+      expect(declaresSymbol("const x = 1;\nexport { x as d };\n", "d"))
+        .toBe(true);
+    });
+
+    it("returns `false` for a declaration written in a comment or a string", () => {
+      expect(declaresSymbol("// export const g = 1;\n", "g")).toBe(false);
+      expect(declaresSymbol("/*\nexport const h = 1;\n*/\n", "h")).toBe(false);
+      expect(
+        declaresSymbol("const s = `\nexport const i = 1;\n`;\n", "i"),
+      ).toBe(false);
+    });
+
+    it("returns `false` for a name declared only inside a body, or a longer name", () => {
+      expect(declaresSymbol("function f() {\n  const e = 1;\n}\n", "e"))
+        .toBe(false);
+      expect(declaresSymbol("export const ef = 1;\n", "e")).toBe(false);
+    });
+  });
+
+  describe("CITATION_SOURCE", () => {
+    it("holds the runner's and the memory package's CFC sources", () => {
+      const held = (path: string) =>
+        CITATION_SOURCE.some((pattern) => pattern.test(path));
+      expect(held("runtime/runner/src/cfc/prepare.ts")).toBe(true);
+      expect(held("runtime/memory/v2/cfc-release-authority.ts")).toBe(true);
+      expect(held("runtime/memory/v2/envelope-admission.ts")).toBe(true);
+      expect(held("runtime/memory/v2/engine.ts")).toBe(false);
+    });
+  });
+
+  describe("GOVERNED_SOURCE", () => {
+    it("names only patterns that each govern a file the repository tracks", async () => {
+      // A pattern that matches no file governs no file, so the check passes
+      // without examining the files it was written for. This happens when a
+      // directory the pattern names is moved.
+
+      const { stdout } = await new Deno.Command("git", {
+        args: ["ls-files", "-z"],
+        cwd: new URL("..", import.meta.url),
+        stdout: "piped",
+      }).output();
+      const tracked = new TextDecoder().decode(stdout).split("\0");
+      const idle = GOVERNED_SOURCE.filter((pattern) =>
+        !tracked.some((path) => pattern.test(path))
+      ).map(String);
+      expect(idle).toEqual([]);
+    });
+  });
+
+  describe("gatherInput()", () => {
+    // The tree holds the snapshot itself, which sits in the kernel directory
+    // and is not a source file.
+
+    const decidedRow: ManifestRow = {
+      ...cnfRow,
+      decidedToday: [
+        { file: "./cfc/../scheduler.ts", symbol: "schedule" },
+        { file: "./cfc/../scheduler.ts", symbol: "unschedule" },
+        { file: "cfc/gone.ts", symbol: "gone" },
+      ],
+    };
+    const tree: Record<string, string> = {
+      [SNAPSHOT_PATH]: JSON.stringify(snapshot),
+      [`${KERNEL_DIR}store-labels.ts`]: atomLeSource.text,
+      "runtime/memory/v2/cfc-release-authority.ts": "// §8.12\n",
+      "runtime/runner/test/cfc-labels.test.ts": "// SPEC-PENDING\n",
+      "runtime/runner/src/scheduler.ts": "export function schedule() {}\n",
+    };
+    const files = Object.keys(tree);
+    const reader = () => {
+      const reads: string[] = [];
+      const read = (path: string): Promise<string> => {
+        reads.push(path);
+        return path in tree
+          ? Promise.resolve(tree[path])
+          : Promise.reject(new Error(`read ${path}`));
+      };
+      return { reads, read };
+    };
+
+    it("sorts the tree's source files into kernel, citation and marker files", async () => {
+      const gathered = await gatherInput(files, reader().read, [
+        atomLeRow,
+        cnfRow,
+      ]);
+      const paths = (sources: readonly SourceFile[]) =>
+        sources.map((source) => source.path);
+      expect(paths(gathered.kernelFiles)).toEqual([
+        `${KERNEL_DIR}store-labels.ts`,
+      ]);
+      expect(paths(gathered.citationFiles)).toEqual([
+        `${KERNEL_DIR}store-labels.ts`,
+        "runtime/memory/v2/cfc-release-authority.ts",
+      ]);
+      expect(paths(gathered.markerFiles)).toEqual([
+        `${KERNEL_DIR}store-labels.ts`,
+        "runtime/memory/v2/cfc-release-authority.ts",
+        "runtime/runner/test/cfc-labels.test.ts",
+      ]);
+      expect(gathered.kernelFiles[0].text).toBe(atomLeSource.text);
+      expect(gathered.snapshot).toEqual(snapshot);
+      expect(gathered.manifest).toEqual([atomLeRow, cnfRow]);
+      expect(gathered.decidedFiles).toEqual(new Map());
+    });
+
+    it("reads each file a `missing` row's `decidedToday` names once, resolved against `runtime/runner/src/`, and an untracked one as absent", async () => {
+      const { reads, read } = reader();
+      const gathered = await gatherInput(files, read, [atomLeRow, decidedRow]);
+      expect(gathered.decidedFiles).toEqual(
+        new Map([
+          ["./cfc/../scheduler.ts", "export function schedule() {}\n"],
+          ["cfc/gone.ts", undefined],
+        ]),
+      );
+      expect(reads.filter((path) => path.endsWith("scheduler.ts"))).toEqual([
+        "runtime/runner/src/scheduler.ts",
+      ]);
+      expect(reads.filter((path) => path.endsWith("gone.ts"))).toEqual([]);
+    });
+  });
+
+  describe("readInput()", () => {
+    it("reads the committed snapshot and the kernel files of the working tree", async () => {
+      const read = await readInput(fromFileUrl(new URL("..", import.meta.url)));
+      expect(read.snapshot.specsCommit).toMatch(/^[0-9a-f]{40}$/);
+      expect(read.kernelFiles.map((file) => file.path)).toContain(
+        `${KERNEL_DIR}manifest.ts`,
+      );
+      expect(
+        read.kernelFiles.every((file) => file.path.startsWith(KERNEL_DIR)),
+      ).toBe(true);
+    });
+  });
+
+  describe("report()", () => {
+    it("returns the findings, each with its line where it has one, and the procedure, with code 1", () => {
+      const citing: SourceFile = {
+        path: "runtime/runner/src/cfc/prepare.ts",
+        text: "// §8.15.12\n",
+      };
+      expect(
+        report(input({ manifest: [atomLeRow], citationFiles: [citing] })),
+      ).toEqual({
+        text: [
+          "",
+          "CFC correspondence against specs 9e751d58:",
+          "",
+          `  ${KERNEL_DIR}manifest.ts`,
+          "      08-12-store-label-monotonicity.md §8.12.1 defines " +
+          "`isMoreRestrictiveCNF`, which is neither a row nor a companion; " +
+          "decide which it is",
+          "  runtime/runner/src/cfc/prepare.ts:1",
+          "      cites §8.15.12, which the specification at 9e751d58 has no " +
+          "section for",
+          "",
+          "docs/development/cfc-spec-correspondence.md is the procedure. A kernel",
+          "header or manifest row that disagrees with the snapshot is re-derived",
+          "from the specification at the recorded commit, or the snapshot is",
+          "regenerated with `deno task cfc-spec-snapshot` from a specs checkout.",
+          "A citation naming a section the specification does not have is",
+          "corrected, or, where it is written on purpose to something else,",
+          "recorded in EXEMPTIONS in tasks/check-cfc-correspondence.ts with the",
+          "file, the citation and the reason.",
+          "",
+        ].join("\n"),
+        code: 1,
+      });
+    });
+
+    it("returns a count of rows, kernel files and citations, with code 0, when nothing is found", () => {
+      const citing: SourceFile[] = [
+        {
+          path: "runtime/runner/src/cfc/prepare.ts",
+          text: "// §8 and § 8.12\n",
+        },
+        { path: "runtime/runner/src/cfc.ts", text: "// §8.12.1\n" },
+      ];
+      expect(report(input({ citationFiles: citing }))).toEqual({
+        text: "CFC correspondence OK against specs 9e751d58: 2 manifest " +
+          "rows, 1 kernel files, 3 citations in 2 files.",
+        code: 0,
+      });
+    });
+  });
+
+  describe("show()", () => {
+    const recorder = () => {
+      const lines: [string, unknown][] = [];
+      return {
+        lines,
+        sink: {
+          log: (text: unknown) => lines.push(["log", text]),
+          error: (text: unknown) => lines.push(["error", text]),
+        },
+      };
+    };
+
+    it("writes a passing report to standard output and returns 0", () => {
+      const { lines, sink } = recorder();
+      expect(show({ text: "fine", code: 0 }, sink)).toBe(0);
+      expect(lines).toEqual([["log", "fine"]]);
+    });
+
+    it("writes a failing report to standard error and returns its code", () => {
+      const { lines, sink } = recorder();
+      expect(show({ text: "broken", code: 1 }, sink)).toBe(1);
+      expect(lines).toEqual([["error", "broken"]]);
     });
   });
 });

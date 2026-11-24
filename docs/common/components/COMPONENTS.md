@@ -7,14 +7,14 @@ Fabric UI library. Division of labor:
 
 - **This file** — complete component index (tag, purpose, bindable props) and
   the usage narrative that is not derivable from source.
-- [`packages/patterns/catalog/catalog.tsx`](../../../packages/patterns/catalog/catalog.tsx)
+- [`patterns/dev/catalog/catalog.tsx`](../../../patterns/dev/catalog/catalog.tsx)
   and the story files under
-  [`packages/patterns/catalog/stories/`](../../../packages/patterns/catalog/stories/)
+  [`patterns/dev/catalog/stories/`](../../../patterns/dev/catalog/stories/)
   — authoritative, type-checked live usage.
 - Component source under
-  [`packages/ui/src/v2/components/`](../../../packages/ui/src/v2/components/)
+  [`runtime/ui/src/v2/components/`](../../../runtime/ui/src/v2/components/)
   — authoritative props, events, and JSDoc.
-- [`packages/ui/LLM-COMPONENT-INSTRUCTIONS.md`](../../../packages/ui/LLM-COMPONENT-INSTRUCTIONS.md)
+- [`runtime/ui/LLM-COMPONENT-INSTRUCTIONS.md`](../../../runtime/ui/LLM-COMPONENT-INSTRUCTIONS.md)
   — HTML attribute tables per component.
 
 ## Bidirectional Binding
@@ -29,20 +29,32 @@ form for Common Fabric controls. No handler is needed for simple updates.
 <cf-select $value={category} items={[...]} />
 ```
 
+A `$` property binds a cell, or a record whose every field is a cell, such as
+`<cf-iframe $context={{ state, output }} />`, whose component reaches each
+field's cell by name. Anything else, a record with a field that is not a cell
+among them, is refused when the view is built, since the binding would have
+nothing live to hand over for it.
+
 **Native HTML inputs are one-way only.** Always use the Common Fabric form
 components for inputs.
 
-Use camelCase for component properties — kebab-case JSX attributes don't map
-correctly:
+A JSX prop sets the element's JavaScript property, so write the property's
+name: `allowCustom`, `defaultSize`, `className`, `htmlFor`. Three kinds of name
+are not properties and keep their hyphens: `data-*` and `aria-*`, which are set
+as attributes, and an event prop, which starts with `on` and is spelled with the
+event's own name (`onClick`, `oncf-change`). Any other hyphenated prop sets
+nothing, since no property has that name, and the compiler refuses it, naming
+the property to write. Because the property name is the only spelling, TypeScript checks every
+prop against the component's declared props.
 
 ```tsx
 // Shown for illustration only.
-// ❌ Kebab-case won't work
-<cf-autocomplete allow-custom={true} />  // Sets element["allow-custom"], not allowCustom
-
-// ✅ CamelCase works
-<cf-autocomplete allowCustom={true} />  // Sets element.allowCustom correctly
+<cf-autocomplete allow-custom={true} />  // error: write `allowCustom`
+<cf-autocomplete allowCustom={true} />
 ```
+
+A component's HTML attribute names, such as `allow-custom` in a component's own
+documentation, are for markup written as HTML, not for pattern JSX.
 
 When a control is already bound to a cell via `$value`, treat that binding as
 the primary value path. Avoid `oncf-change` handlers that simply write the same
@@ -89,7 +101,7 @@ That state follows the rendered checkbox, including values delivered through
 
 ## Component Index
 
-One row per component directory in `packages/ui/src/v2/components/`. "Bindable
+One row per component directory in `runtime/ui/src/v2/components/`. "Bindable
 props" lists cell-bound (`$`-prefixed) properties verified in source; an empty
 cell means none confirmed — check the component source before assuming.
 
@@ -105,9 +117,11 @@ cell means none confirmed — check the component source before assuming.
 | `cf-autocomplete` | Search input with filterable dropdown; single/multi select | `$value`, `$items` |
 | `cf-autolayout` | Responsive multi-panel layout | |
 | `cf-autostart` | Zero-UI element that emits a `start` event once on connect | |
-| `cf-avatar` | Avatar showing data-URI image, emoji glyph, or initials | |
+| `cf-avatar` | Avatar showing image bytes, a data-URI image, an emoji glyph, or initials | |
+| `cf-avatar-input` | Picks an image, cropped square and scaled down, stores it as a blob, and fires its bytes and the blob | |
 | `cf-badge` | Status indicator / label with visual variants | |
 | `cf-bar-mark` | Bar mark rendered inside `cf-chart` | `$data` |
+| `cf-blob-link` | Link that downloads a blob from a space's blob store, given its reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-button` | Interactive button with color/variant/size options | |
 | `cf-calendar` | Month-grid mini calendar | `$value`, `$markedDates` |
 | `cf-canvas` | Fixed-size canvas surface emitting `cf-canvas-click` with x/y | |
@@ -121,7 +135,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-checkbox` | Binary selection input with indeterminate support | `$checked` |
 | `cf-chevron-button` | Minimal chevron button rotating between up/down | |
 | `cf-chip` | Compact pill/label for status, tags, and filters | |
-| `cf-code-editor` | Code/prose editor with highlighting and `[[`-mention completion | `$value`, `$mentionable`, `$mentioned` |
+| `cf-code-editor` | Code/prose editor with syntax highlighting and `[[`-mention completion. With `mode="prose"`, its `math` attribute draws `$…$` and `$$…$$` TeX in Markdown with KaTeX, showing a formula's TeX where the cursor or a selection touches it. Its `highlights` attribute marks ranges of a collaborative field's text, each from one of the field's anchors to another (see [`anchorsOf`](../concepts/types-and-schemas/writable.md#anchoring-text-anchorsof)); `cf-highlight-click` names the highlight a click lands on, and `cf-selection-change` reports the selection with the editor's whole text, which a handler compares with the field before anchoring the selection. `cf-edit` tells an edit the viewer made, where `cf-change` also tells what another collaborator or the bound cell changed. Its element children are shown in a margin beside the text, each child whose `data-anchor` names one of the field's anchors beside the text at that anchor | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
 | `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |
@@ -145,8 +159,9 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
-| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, or service capabilities | |
-| `cf-image-input` | Image capture/upload with compression, EXIF, camera support | |
+| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities, bound as one record of cells, and static `assets` (see [iframe-first patterns](../ai/iframe-pattern-guide.md)) | `$context` |
+| `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
+| `cf-image-input` | Image capture/upload with compression and camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
 | `cf-input-otp` | One-time-password input with individual digit fields | |
 | `cf-kbd` | Inline keyboard hint element | |
@@ -165,10 +180,11 @@ cell means none confirmed — check the component source before assuming.
 | `cf-modal` | Accessible modal dialog with bottom-sheet presentation mode | `$open` |
 | `cf-oauth` | Generic OAuth authentication | `$auth` |
 | `cf-owner-view` | Sets a per-user presentation predicate from the runtime's acting principal and a stored creator attestation (see [owner view](#cf-owner-view)) | `$originator`, `$result` |
+| `cf-pattern-install` | Button that installs one pattern onto one loom and says so in its own words ("Install “title” onto loom"); its real (trusted) click carries the surface's UI integrity, and it takes no text for its button (see [cf-pattern-install](#cf-pattern-install)) | |
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
-| `cf-profile-badge` | The blessed, trusted way to render a profile identity (avatar + name + the generative verification seal — a DID-derived aura ring + cursor glint, no shield icon); navigable to the profile. Variants `full`/`chip`/`circle`/`hero` + `size`/`noNavigate` attrs (CT-1761). Prefer it over a bare name/avatar anywhere an identity appears. | `$profile` |
+| `cf-profile-badge` | The blessed, trusted way to render a profile identity (avatar + name + the generative verification seal — an aura ring derived from the owner's DID and, for a profile, its space, + cursor glint, no shield icon); navigable to the profile. Variants `full`/`chip`/`circle`/`hero` + `size`/`noNavigate` attrs (CT-1761). Prefer it over a bare name/avatar anywhere an identity appears. | `$profile` |
 | `cf-progress` | Progress bar, determinate or indeterminate | |
 | `cf-prompt-input` | Multiline prompt input with `@`-mentions, attachments, voice | `$mentionable`, `$model` |
 | `cf-question` | Asks a single question and collects the answer | |
@@ -189,7 +205,8 @@ cell means none confirmed — check the component source before assuming.
 | `cf-slider` | Range input slider | `$value` |
 | `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
 | `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
-| `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | |
+| `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | `$draft` |
+| `cf-suggestions` | Draws the ranked suggestion cards anchored at one thing, at a fixed size; emits take and seen events for the host to bind (see [cf-suggestions](#cf-suggestions)) | `$items`, `$about` |
 | `cf-svg` | Renders SVG content from a string; safe for untrusted content, and anything that would run script is dropped | |
 | `cf-switch` | Toggle switch for binary on/off state | `$checked` |
 | `cf-tab` | Individual tab button used within `cf-tab-list` | |
@@ -218,6 +235,48 @@ cell means none confirmed — check the component source before assuming.
 | `cf-webhook` | Webhook integration: receives payloads into a stream | `$inbox`, `$config` |
 
 ---
+
+## cf-submit-input
+
+Clicking the submit button or pressing Enter sends a trusted click to the host's
+`onClick` handler. Its `target.value` is the exact displayed text. Without a
+binding, the field clears after dispatching that click; `initialValue` can seed
+it once.
+
+Bind `$draft` to a writable `{ value: string; revision: string }` cell to keep
+drafts across placements and let the caller decide when to clear them. The field
+writes a new revision for every input edit and carries that revision as
+`target.dataset.draftRevision` on the submit click. The handler stores the event's
+text, and clears the bound draft in the accepting transaction only if both its
+revision and value still match the event. Keep the revision when clearing its
+value. A refused send leaves the draft untouched, and a newer edit survives even
+when its text is identical to the submitted text. The bound field uses
+`CellController` to protect pending local edits from stale deliveries.
+
+The draft binding supplies its own initial text and controls clearing; a bound
+field does not use `initialValue` or clear itself after dispatch.
+
+## cf-pattern-install
+
+A trusted surface places it where a tap must authorize installing a pattern.
+Its words are its own: from `patternTitle` (or `patternId` when there is no
+title), an optional `author`, and `destinationName` (left out when absent), it
+shows "Install “title” by author onto loom". It takes no button text, so a
+caller chooses which pattern and which loom it names but cannot make it say
+anything else. The element does not know what its host's `onClick` does, so
+the surface placing it passes the title of the pattern a tap installs, taken
+from the same source as the action. Each name is flattened to one line, with its quotation
+marks turned into apostrophes, cut short when long, and drawn in a chip of its
+own, so it cannot pass for the words around it.
+
+Wire `onClick` on the element together with `data-ui-action`, inside an
+ancestor carrying `data-ui-pattern` and `data-ui-event-integrity`, as with
+`cf-submit-input`. The button is a native `<button>`, so Enter and Space on it
+are trusted clicks as a pointer tap is. Only a trusted click on the enabled
+button reaches the host's `onClick`: a scripted click, a click on the host's
+box around the button, and a second click before the first has been handled
+are stopped by a capture listener on the host. The pattern
+catalog's `GetItButton` (`patterns/system/pattern-catalog/`) is the caller.
 
 ## cf-form
 
@@ -295,9 +354,10 @@ array indices, which drift when lists change.
 
 ### Events and best practices
 
-- `cf-submit` — emitted after validation passes and buffers are flushed.
-  Handlers should read from the bound cell directly (type-safe), not from
-  event detail.
+- `cf-submit` — emitted after validation passes and buffers are flushed. It
+  carries no detail: handlers read from the bound cell directly (type-safe).
+  It is cancelable; `preventDefault()` keeps a form with an `action` from
+  submitting natively.
 - `cf-form-invalid` — emitted when submit is attempted but validation fails;
   detail carries `{ errors: Array<{ element, message? }> }`.
 - Fields use HTML5 constraint validation by default.
@@ -306,7 +366,7 @@ array indices, which drift when lists change.
 
 Contributor-facing internals (FormFieldController, file organization, design
 decisions) live in
-[`packages/ui/docs/forms-internals.md`](../../../packages/ui/docs/forms-internals.md).
+[`runtime/ui/docs/forms-internals.md`](../../../runtime/ui/docs/forms-internals.md).
 
 ---
 
@@ -418,6 +478,11 @@ the policy placeholder in the same places. The exceptions:
   an authorship boundary the piece's own text shows whether or not it carries
   the required endorsement.
 
+Showing a piece bound to `cf-render` (full, its exported tile or chip, or the
+default tile) opens it the way navigating to it does, so a view computed for
+the viewer renders, and the piece keeps running after the display goes, as an
+opened one does. The default chip only names the piece and opens nothing.
+
 `cf-picker` shows each of its `$items` through a `cf-render` of its own, so
 each item passes the same gates as a piece bound to `cf-render`, with the same
 exceptions. Where a `cf-render` would show nothing for one item, the picker
@@ -494,7 +559,7 @@ or a `JSXElement` (a renderable sub-piece), or a reactive value of one, so a
 value of the wrong shape under `[UI]`, `[CHIP_UI]` or `[TILE_UI]` is a compile
 error at the pattern.
 
-See `packages/patterns/examples/ui-variants-demo.tsx` for a full example.
+See `patterns/examples/ui-variants/ui-variants-demo.tsx` for a full example.
 
 > Note: `sidebarUI` is a shell composition **slot**, a separate concept from
 > size variants. Other exported subviews such as `settingsUI` are
@@ -884,12 +949,14 @@ interface MapPolyline {
 | Event | Detail | Description |
 |-------|--------|-------------|
 | `cf-click` | `{ lat, lng }` | Map background clicked |
-| `cf-bounds-change` | `{ bounds, center, zoom }` | Viewport changed |
+| `cf-bounds-change` | `{ bounds, center, zoom, userInitiated }` | Viewport changed; `userInitiated` is true when a person moved the map, false when cf-map did (bound values, fitting, resize) |
 | `cf-marker-click` | `{ marker, index, lat, lng }` | Marker clicked |
 | `cf-marker-drag-end` | `{ marker, index, position, oldPosition }` | Marker drag completed |
 | `cf-circle-click` | `{ circle, index, lat, lng }` | Circle clicked |
 
 **Note:** Polylines do not emit click events. For clickable segments, use circles as waypoints.
+
+**Who moves the map:** while a person is dragging, zooming, or gliding after a drag, cf-map holds its own moves (a feature fit, a bound `center`/`zoom`/ `bounds` value) until their move ends. The person's view then wins: a refit set off by changed features and any queued bound value are dropped, while a fit asked for meanwhile (turning `fitToBounds` on) still runs. The first bound `bounds` value the map is given, the stored view, applies ahead of a bound `center`/`zoom`, whether it is there at mount or loads later; while `fitToBounds` is on, the fit to the features wins over it. Later `bounds` values always apply.
 
 ### Usage
 
@@ -1066,7 +1133,7 @@ and (for the current viewer) a verified seal that user-space cannot forge.
 
 | You are showing… | Use | Why |
 | --- | --- | --- |
-| **any participant** whose live profile cell you hold — the viewer (via `wish`) or anyone who contributed their cell on join | `cf-profile-badge` bound to that cell | trusted; draws name + avatar + a DID-derived verified seal; cross-space reads resolve for every viewer (CT-1667/1687) |
+| **any participant** whose live profile cell you hold — the viewer (via `wish`) or anyone who contributed their cell on join | `cf-profile-badge` bound to that cell | trusted; draws name + avatar + a verified seal; verification attests the owner, and the seal, derived from the owner's DID and the profile's space, tells their profiles apart (a record of the person that is not a profile wears the owner's seal alone); cross-space reads resolve for every viewer (CT-1667/1687) |
 | a person you hold **only a snapshot** for — a self-contained piece, or an offline remote profile space | `cf-avatar` + their name | untrusted fallback, safe for any value; needs no profile cell |
 | a row that **may or may not** carry a profile — one written before the space had profiles, beside rows that do | `cf-profile-badge` with `fallback-name` | one binding for both, so nothing has to test a cell-typed field for presence; the name shows only where no profile resolves |
 
@@ -1088,11 +1155,18 @@ Untrusted avatar primitive — safe for any code to render, for any person.
 
 ```tsx
 // Shown for illustration only.
-<cf-avatar name="Ada Lovelace" src={person.avatar} size="sm" /> // data: URI image
-<cf-avatar name="Grace Hopper" src="🦊" />                       // emoji glyph
-<cf-avatar name="Alan Turing" />                                 // initials "AT"
+<cf-avatar name="Ada Lovelace" bytes={person.picture} size="sm" /> // image bytes
+<cf-avatar name="Ada Lovelace" blob={face.pictureBlob} />           // a blob
+<cf-avatar name="Grace Hopper" src="🦊" />                          // emoji glyph
+<cf-avatar name="Alan Turing" />                                    // initials "AT"
 ```
 
+- `blob`: a blob holding a raster image, `{ space, id }`, such as a profile's
+  `pictureBlob`, shown as the image its space's host serves (`cf-image`'s
+  `blob`). A blob that names a space and an id takes precedence over `bytes`
+  and `src`.
+- `bytes`: the bytes of a raster image, such as a profile's `picture`.
+  Non-empty bytes take precedence over `src`.
 - `src`: a `data:` URI image, an emoji/glyph, or `""`. **Only `data:` URIs render
   as an image** — `http(s)`, `blob:`, and path URLs degrade to initials and are
   never fetched (no tracking/exfil beacon).
@@ -1104,12 +1178,30 @@ self-contained piece, or a participant whose remote profile space is offline. Wh
 you have the live profile cell (which you do for every participant who joined by
 contributing it), prefer `cf-profile-badge`.
 
+### cf-avatar-input
+
+A button that picks an image file, makes it the image's centered square,
+scaled to 128 pixels on each side, stores that as a blob in the blob store of
+the space it is shown in, as `cf-file-input` stores a file, and fires
+`cf-change` with `{ bytes: FabricBytes, blob: { space, id } }`. A profile's
+edit form binds it to the profile's `setPicture` stream, which keeps the blob.
+A file that is not an image, or one that cannot be stored, fires `cf-error`
+with `{ message }` instead.
+
+```tsx
+// Shown for illustration only.
+<cf-avatar-input oncf-change={profile.setPicture} />
+```
+
 ### cf-profile-badge
 
 Trusted presentation of **a participant's profile** — the viewer's own, or anyone
 whose profile cell you stored on join. Bind a profile **cell** (not strings) via
-`$profile`; it renders name + avatar + a verified seal derived from the owner's
-identity that user-space cannot mint.
+`$profile`; it renders name + picture (or, without one, the profile's avatar
+text) + a verified seal derived from the owner's
+identity that user-space cannot mint. It draws the picture or the avatar text
+only when the label of the cell holding it names the owner the seal shows,
+alone, so a picture a visitor set is not drawn as the owner's face.
 
 ```tsx
 // Shown for illustration only.
@@ -1123,14 +1215,16 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   other participants, bind the profile cell they contributed to the shared roster
   on join.
 - `size`: `xs | sm | md | lg | xl`.
-- The verified seal only appears for a live, runtime-attested profile cell (it
-  will not show in stories or `--no-run` checks — that is expected, not a failure).
+- The verified seal only appears for a live, runtime-attested cell: a profile,
+  or another record of the person whose label attests them, which wears the
+  owner's seal alone (it will not show in stories or `--no-run` checks — that
+  is expected, not a failure).
 - **Every participant** with a stored profile cell can be badged — not just the
   viewer. Cross-space profile reads resolve for any authorized viewer (CT-1667/1687),
   so store each person's `#profile` cell in the shared `PerSpace` roster on join and
   bind `$profile={p.profile}`. See
   [multi-user-patterns → Presenting Identity](../patterns/multi-user-patterns.md#presenting-identity)
-  and the live demo `packages/patterns/profile-roster-live-demo.tsx`. Only fall back
+  and the live demo `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`. Only fall back
   to `cf-avatar` when you deliberately hold just a snapshot.
 - ⚠️ **Bind it at a STATIC `[UI]` position.** Like every `$`-bidirectional binding
   (`$value`, `$checked`, …), `$profile` must be bound where the JSX is constructed
@@ -1139,7 +1233,9 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   bound property $profile is not reactive"*, blanking the whole pattern. Resolve
   `wish({query:"#profile"})` once and place the badge in the static JSX; gate only
   its *siblings* reactively, or use `ifElse(cond, staticA, staticB)` as a child of a
-  static wrapper. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
+  static wrapper. Repro:
+  `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal is tested in
+  `runtime/runner/test/h-binding-validation.test.ts`.
 
 ---
 
@@ -1184,9 +1280,16 @@ own `User` ceiling. This permits the default shell to share the user's private
 draft while refusing a source labeled only for another user.
 
 The host displays the exact snapshot and the audience verified by the runtime in
-a native modal dialog. Its disclosure and preview are fixed host UI. The user
-must confirm with a trusted browser gesture; a scripted click cannot publish.
-The source stays private, and future changes are not included in the copy. JSON
+a native modal dialog. Its sentences and styles are fixed host UI, and take no
+theme from the page. Each field of the snapshot appears on its own line, its
+name exactly as stored and its value as data in a monospace style, so a pattern
+cannot pass a field name off as the dialog's own words. Empty values are named
+rather than dropped, and the exact JSON sits under "Exact data". The button that
+opens the dialog is a themed `cf-button`, and a pattern may set its text with
+`buttonText` (attribute `button-text`, default "Review and share"), since
+opening the review releases nothing. The user must confirm with a trusted
+browser gesture; a scripted click cannot publish. The source stays private, and
+future changes are not included in the copy. JSON
 values containing links are refused.
 
 Changing a binding, dismissing the dialog, or disconnecting the component
@@ -1195,6 +1298,63 @@ verified audience changed after preparation. Once the released link is stored
 successfully, the component emits `cf-shared` with no payload. A consuming
 handler reads its bound result cell; the event does not carry source values or
 identity claims.
+
+## cf-suggestions
+
+`cf-suggestions` draws, from a ranked list of suggestion cards, only those
+anchored at one thing. Bind `$items` to the list, best card first, and `$about`
+to the thing whose cards to draw. Set `tags` to draw only cards carrying at
+least one of those tags.
+
+Each card is a flat row with a string `id` and these optional fields:
+
+- `card_revision` — a string the host can re-check before acting on a take;
+- `title` and `body` — the text drawn;
+- `source` — a string naming who suggested it;
+- `anchor` — a link to where the card is drawn inline, or null for a card drawn
+  on no thing;
+- `act_target` — a link to what taking the card acts on, or null;
+- `about` — a JSON string of links to what the card is about, most important
+  first;
+- `tags` — a JSON string of the card's tags.
+
+A card is drawn where its `anchor` names the cell `$about` resolves to: same
+space, entity, scope, and path. `$about` is resolved first because a pattern
+usually binds a cell that holds a link to the thing, as `item` is inside
+`items.map((item) => …)`, and the element follows that link when it moves to
+another thing. It draws nothing until `$about` has resolved. A card's `anchor`
+is compared as the row holds it, so it names the thing itself, as intake writes
+it, not a cell that links to it. A card with no `anchor` field, which has not
+been through intake, is anchored at the first link of its `about`, else at its
+`act_target`. A card with a null `anchor`, and
+a card without a string `id`, is never drawn inline. Cards draw at a fixed size,
+which `--cf-suggestions-card-width` and `--cf-suggestions-card-height` set
+(at least 10rem by 5rem), spaced by `--cf-suggestions-gap`. While it draws no
+card, the element takes no room.
+
+The component performs no act. It emits two events for the host to bind, both
+with detail `{ id, card_revision?, card }`. When `$items` is bound to a list,
+`card` is the link to the card's row that the list holds; when it is a plain
+array, `card` is the row itself:
+
+- `cf-suggestion-take` fires when the person takes a card with its **Take**
+  button. Only a trusted click counts, on a card the browser reports shown (at
+  least half of it on screen) and, where the browser tracks occlusion,
+  unobscured (nothing drawn over it, and no opacity, transform, or filter
+  applied to it), for at least half a second as it is drawn now. A card that
+  has just appeared, moved, or been rewritten starts that half second over. A
+  scripted click takes nothing. The event is one the component dispatches, so
+  the handler receives no gesture provenance with it: these rules decide
+  whether the event fires at all. The same card can be taken more than once, so
+  a host treats a repeated take as a no-op.
+- `cf-suggestion-seen` fires the first time a card is shown, once per card for
+  the life of the element. A host counting impressions dedupes across elements
+  and remounts.
+
+```tsx
+// Shown as JSX element children.
+<cf-suggestions $items={items} $about={piece} />
+```
 
 ## cf-custody-seal
 
@@ -1213,7 +1373,7 @@ be any cell the pattern declares `PolicyOf` its custody rules: the runtime
 reads the policy from that cell's label, where the reference, its module
 identity, digest and room subject, is bound. The box `$box` receives is the one
 document the room's projector reads; reading it is label-gated like any other
-read. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room
+read. `patterns/examples/cfc-exchange-rules/custody-answer-room.tsx` is a room
 built this way, which shows its answer through `cf-custody-answer`.
 
 The button opens a native modal dialog. Its first part comes from what the
@@ -1251,7 +1411,7 @@ nor the key of the actor's entry in the room. The box's entries carry the
 room's policy, and a read through the link carries it, so `$box` need declare
 none. Known limitation: a `$box` whose entries do declare a label makes the
 seal's commit fail (see the `TODO(custody-box-link)` repro in
-`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`). A binding that changes while a commit is in flight
+`patterns/examples/cfc-exchange-rules/custody-answer-room.tsx`). A binding that changes while a commit is in flight
 leaves the component without that event even if the seal committed, so a
 pattern that must know should read the room rather than rely on it; the
 seal still writes the box link to the `$box` bound when the actor reviewed.
@@ -1287,7 +1447,7 @@ the component quiet, and it asks nothing before the room has terms. Any other
 failure, such as a lost worker connection or a slot the seal did not write,
 shows as an alert. It fires `cf-published` once the published answer is shown,
 with `detail.instance` when this component published it.
-`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room built
+`patterns/examples/cfc-exchange-rules/custody-answer-room.tsx` is a room built
 this way; the [custody seal spec](../../specs/cfc-custody-seal.md) says what it
 does not cover.
 

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Donut menu</title>
+    <style>
+    html,
+    body {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    .app {
+      max-width: 36rem;
+      margin: 0 auto;
+      padding: var(--cf-theme-spacing-loose);
+    }
+
+    .app h1 {
+      display: flex;
+      align-items: center;
+      gap: var(--cf-theme-spacing-normal);
+      margin: 0;
+    }
+
+    #menu {
+      display: flex;
+      gap: var(--cf-theme-spacing-loose);
+      padding: 0;
+      list-style: none;
+    }
+
+    #menu img {
+      width: 4rem;
+      height: 4rem;
+      image-rendering: pixelated;
+    }
+
+    #favorite {
+      width: 8rem;
+      height: 8rem;
+      image-rendering: pixelated;
+    }
+    </style>
+  </head>
+  <body>
+    <main class="app cf-stack">
+      <h1>
+        <img id="logo" src="cf-asset:logo" alt="" width="40" height="40">
+        Donut menu
+      </h1>
+      <p class="cf-muted" id="status" aria-live="polite">Loading…</p>
+      <ul id="menu"></ul>
+      <canvas id="favorite" width="32" height="32"
+        aria-label="The favorite donut"></canvas>
+      <p id="error" role="alert"></p>
+    </main>
+  </body>
+</html>

@@ -293,7 +293,7 @@ only id
 and scope would read the right cell only for a reader configured for the same
 space.
 
-`packages/cli/README.md` has the grammar and the supported schema subset.
+`runtime/cli/README.md` has the grammar and the supported schema subset.
 
 ### A result that points back at its container
 
@@ -533,7 +533,11 @@ execution the caller's act is the event append — the serving loop runs the
 handler afterwards — so `committed` arrives as soon as the event is on the
 record, and the readback that follows is what waits for the served handling
 to land before it reads the receipt. A handling the server refuses, drops,
-or fails is reported there, as the readback's failure.
+or fails is reported there, as the readback's failure. A served handling that
+read data its stream's space doesn't admit reports the same thing whether it
+committed or not: the call settles with `"withheld": true` in the envelope and
+no `result`, reads no receipt, and says on stderr that it was handled and its
+outcome withheld.
 
 ### Dispatching now, collecting later
 
@@ -584,13 +588,17 @@ update. Read the pattern's own documentation for what a verb returns, and check
 
 ## Exercising all of it
 
-Everything above is asserted by a walkthrough that lives with the integration
-tests, not with this document:
+Everything above, apart from the withheld outcome, is asserted by a walkthrough
+that lives with the integration tests, not with this document. The withheld
+outcome needs a served handling that reads another space's labeled data, which
+the walkthrough's single space has none of; the runner's
+`runtime/runner/test/executor-events-down.test.ts` and the runtime-client's
+`runtime/runtime-client/test/send-reviewed.test.ts` assert it.
 
-- **`packages/cli/integration/verbs-over-the-cli.sh`** — the runnable
+- **`runtime/cli/integration/verbs-over-the-cli.sh`** — the runnable
   walkthrough. Each step names the property it asserts, so a failure says which
   one broke. A fresh space per run, no prior state.
-- **`packages/cli/integration/pattern/verb-results.tsx`** — the pattern it
+- **`runtime/cli/integration/pattern/verb-results.tsx`** — the pattern it
   deploys, which exists for this walkthrough alone. Nothing else deploys it, so
   a change to a pattern the product ships can never break a demonstration of how
   the verb surface works.
@@ -598,7 +606,7 @@ tests, not with this document:
 Run it against any host:
 
 ```bash
-API_URL=http://localhost:8000 packages/cli/integration/verbs-over-the-cli.sh
+API_URL=http://localhost:8000 runtime/cli/integration/verbs-over-the-cli.sh
 ```
 
 CI runs it as the `integration.sh verbs-walkthrough` unit of the `cli-core`

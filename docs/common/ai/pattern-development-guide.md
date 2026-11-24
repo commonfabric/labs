@@ -38,7 +38,7 @@ growing, revisit the available data and component contracts before adding more.
 Start with:
 
 ```text
-packages/patterns/<name>/main.tsx
+patterns/<category>/<name>/main.tsx
 ```
 
 Only split into `schemas.tsx` or additional modules when:
@@ -64,7 +64,7 @@ to the active user, and which state is local to one session.
 
 ## Reusing CFC Helpers
 
-For CFC policy code, check `packages/patterns/cfc/README.md` before copying
+For CFC policy code, check `patterns/system/cfc/README.md` before copying
 from an existing demo. Reuse the shared helpers there for common admin
 registries, trusted UI actions, trusted surfaces, and prompt-injection
 workflows.
@@ -75,7 +75,7 @@ models should usually stay beside the code that owns them.
 
 If an existing helper is not enough and the code appears reusable, read
 `docs/common/ai/cfc-helper-authoring-guide.md` before promoting it into
-`packages/patterns/cfc/`.
+`patterns/system/cfc/`.
 
 ## Development Loop: Sketch -> Run -> Iterate
 
@@ -394,8 +394,8 @@ left ephemeral.
 
 Start with `docs/common/patterns/`.
 
-For Pattern Factory Build and other implementation work that creates or
-debugs stateful UI, read these foundational references before coding:
+For implementation work that creates or debugs stateful UI, read these
+foundational references before coding:
 
 - `docs/common/concepts/reactivity.md`
 - `docs/common/patterns/new-cells.md`
@@ -409,6 +409,6 @@ Then consult the targeted references as needed:
 - `docs/common/components/COMPONENTS.md`
 - `docs/development/debugging/`
 
-Prefer documentation over existing patterns in `packages/patterns/`. Existing
+Prefer documentation over existing patterns in `patterns/`. Existing
 patterns are useful reference points but may include older idioms or locally
 driven compromises.

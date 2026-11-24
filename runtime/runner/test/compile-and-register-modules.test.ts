@@ -1,0 +1,538 @@
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
+import {
+  Engine,
+  Runtime,
+  signer,
+  StorageManager,
+} from "./engine-test-support.ts";
+import type { RuntimeProgram } from "./engine-test-support.ts";
+import type { Pattern } from "../src/builder/types.ts";
+import { loadCompiledClosure } from "../src/compilation-cache/cell-cache.ts";
+import type { CompiledModuleArtifact } from "../src/harness/types.ts";
+import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
+import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import type { CompileClaims } from "../src/harness/compile-interleave.ts";
+import type { ModuleByteCache } from "../src/runtime.ts";
+
+/**
+ * The pattern-load seam `PatternManager.compileAndRegisterModules` must INDEX
+ * the evaluated artifacts (so a pattern/op gets a content-addressed entry ref and
+ * resolves via its canonical `$patternRef` artifact), while the bare
+ * `Engine.compileAndEvaluateModules` primitive must NOT. This pins the contract
+ * that lets harness callers get the full evaluated namespace without silently
+ * skipping registration — a divergence that would leave map/filter/flatMap
+ * ops falling back to their embedded graphs.
+ */
+describe("PatternManager.compileAndRegisterModules", () => {
+  let runtime: Runtime;
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+
+  const program: RuntimeProgram = {
+    main: "/main.tsx",
+    files: [
+      {
+        name: "/main.tsx",
+        contents: `import { NAME, pattern } from "commonfabric";\n` +
+          `export default pattern(() => ({ [NAME]: "conformance" }));\n`,
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+  });
+
+  afterEach(async () => {
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  it("indexes evaluated artifacts (default export gets an entry ref)", async () => {
+    const result = await runtime.patternManager.compileAndRegisterModules(
+      program,
+    );
+    const entry = result.main!["default"] as object;
+    expect(runtime.patternManager.getArtifactEntryRef(entry)).toBeDefined();
+  });
+
+  it("the bare Engine.compileAndEvaluateModules does NOT index artifacts", async () => {
+    const engine = runtime.harness as Engine;
+    const result = await engine.compileAndEvaluateModules(program);
+    const entry = result.main!["default"] as object;
+    // No registration → no content-addressed entry ref → map/filter/flatMap ops
+    // would fall back to the embedded graph (the hazard the seam exists to
+    // remove).
+    expect(runtime.patternManager.getArtifactEntryRef(entry)).toBeUndefined();
+  });
+
+  it("refuses an authored builder-artifact export in the hoist namespace", async () => {
+    // `__cfPattern_<n>` spellings are how everything downstream tells a
+    // transformer-derived hoist from an authored artifact — the vintage gate
+    // holds hoist refusals back on it. An authored artifact under the name
+    // would wear the wrong provenance, so registration fails the load.
+    const squatter: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: `import { NAME, pattern } from "commonfabric";\n` +
+            `export const __cfPattern_1 = pattern(() => ({ shout: "s" }));\n` +
+            `export default pattern(() => ({ [NAME]: "squatter" }));\n`,
+        },
+      ],
+    };
+    await expect(
+      runtime.patternManager.compileAndRegisterModules(squatter),
+    ).rejects.toThrow("compiler's own hoist namespace");
+  });
+
+  it("accepts a plain value under a hoist-shaped export name", async () => {
+    // Only an artifact is indexable, so only an artifact can wear the wrong
+    // provenance; a constant under the name is inert to every consumer of
+    // the artifact index.
+    const inert: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [
+        {
+          name: "/main.tsx",
+          contents: `import { NAME, pattern } from "commonfabric";\n` +
+            `export const __cfPattern_1 = 41;\n` +
+            `export default pattern(() => ({ [NAME]: "inert" }));\n`,
+        },
+      ],
+    };
+    const result = await runtime.patternManager.compileAndRegisterModules(
+      inert,
+    );
+    const entry = result.main!["default"] as object;
+    expect(runtime.patternManager.getArtifactEntryRef(entry)).toBeDefined();
+  });
+
+  describe("given a persistence space", () => {
+    it("writes the program's source closure into that space", async () => {
+      const space = signer.did();
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        { space },
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored?.files.map((file) => file.name)).toEqual(["/main.tsx"]);
+      // The read above leaves a sync in flight, which teardown would cut off.
+      await runtime.storageManager.synced();
+    });
+
+    it("writes nothing into that space when `when` declines the result", async () => {
+      const space = signer.did();
+      let offered: unknown;
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        {
+          space,
+          when: (evaluated) => {
+            offered = evaluated;
+            return false;
+          },
+        },
+      );
+      expect(offered).toBe(result);
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored).toBeUndefined();
+    });
+
+    it("registers the modules when `when` declines the write", async () => {
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+        undefined,
+        { space: signer.did(), when: () => false },
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      expect(runtime.patternManager.programModuleIdentities(identity))
+        .toBeDefined();
+    });
+
+    it("leaves the modules unregistered when the write fails", async () => {
+      // The entry's identity is a content hash, so a compile in a second
+      // runtime names the same one.
+      const probeStorage = StorageManager.emulate({ as: signer });
+      const probe = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: probeStorage,
+      });
+      let identity: string;
+      try {
+        const probed = await probe.patternManager.compileAndRegisterModules(
+          program,
+        );
+        identity = probe.patternManager.getArtifactEntryRef(
+          probed.main!["default"] as object,
+        )!.identity;
+      } finally {
+        await probe.dispose();
+        await probeStorage.close();
+      }
+
+      runtime.patternManager.accessForTestingOnly.compileCacheWriter = () =>
+        Promise.reject(new Error("write refused"));
+      await expect(
+        runtime.patternManager.compileAndRegisterModules(
+          program,
+          undefined,
+          { space: signer.did() },
+        ),
+      ).rejects.toThrow("write refused");
+      expect(runtime.patternManager.programModuleIdentities(identity))
+        .toBeUndefined();
+    });
+
+    it("supplies an `inSpace()` child's space with the closure under the variant a per-call coverage compile wrote", async () => {
+      // The runtime carries no coverage collector of its own, so the
+      // program's closure is written under the coverage variant only because
+      // the call asked for it. The child's space is supplied from that
+      // closure when the parent instantiates the child there.
+
+      const space = signer.did();
+      const childSpace = (await Identity.fromPassphrase(
+        "compile-and-register-modules child space",
+      )).did();
+      const withChild: RuntimeProgram = {
+        main: "/main.tsx",
+        files: [
+          {
+            name: "/main.tsx",
+            contents: [
+              "import { pattern } from 'commonfabric';",
+              "export const child = pattern<{ label: string }>(",
+              "  ({ label }) => ({ label }),",
+              ");",
+              "export default pattern(() => ({",
+              `  kid: child.inSpace("${childSpace}")({ label: "hi" }),`,
+              "}));",
+            ].join("\n"),
+          },
+        ],
+      };
+      const replicationFailures = () => {
+        const counts = getLoggerCountsBreakdown()["pattern-manager"] as
+          | Record<string, { warn?: number; error?: number }>
+          | undefined;
+        return {
+          parked: counts?.["closure-replication-parked"]?.warn ?? 0,
+          failed: counts?.["closure-replication-failed"]?.error ?? 0,
+        };
+      };
+      const before = replicationFailures();
+
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        withChild,
+        { patternCoverage: new PatternCoverageCollector() },
+        { space },
+      );
+      const tx = runtime.edit();
+      const resultCell = runtime.getCell<Record<string, unknown>>(
+        space,
+        "compile-and-register-modules inSpace parent",
+        undefined,
+        tx,
+      );
+      const running = runtime.run(
+        tx,
+        result.main!["default"] as Pattern,
+        {},
+        resultCell,
+      );
+      await tx.commit().settled;
+      await running.pull();
+      await runtime.idle();
+      await runtime.patternManager.flushCompileCacheWrites();
+      await runtime.storageManager.synced();
+
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["child"] as object,
+      )!;
+      const runtimeVersion = (await runtime.patternManager
+        .compileCacheRuntimeVersion({ patternCoverage: true }))!;
+      const readTx = runtime.edit();
+      const inChildSpace = await loadCompiledClosure(
+        runtime,
+        childSpace,
+        identity,
+        { runtimeVersion },
+        readTx,
+      );
+      readTx.abort?.();
+      expect(inChildSpace.has(identity)).toBe(true);
+      expect(replicationFailures()).toEqual(before);
+    });
+
+    it("writes nothing into a space when none is given", async () => {
+      const space = signer.did();
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        program,
+      );
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["default"] as object,
+      )!;
+      const stored = await runtime.patternManager
+        .getPatternSourceProgramByIdentity(identity, space);
+      expect(stored).toBeUndefined();
+    });
+  });
+
+  it("reuses an injected module byte cache across runtimes and still registers", async () => {
+    // The cf-test harness injects a process-wide module byte cache
+    // (`RuntimeOptions.moduleByteCache`) so repeated pattern compiles across
+    // runtimes skip the transform-and-emit step. Pin that seam here: a fresh
+    // runtime given a previously populated cache must serve the compile from
+    // cached bytes (a COMPLETE set — partial sets recompile) and still register
+    // the evaluated artifacts exactly like a cold compile.
+
+    const entries = new Map<
+      string,
+      { identity: string } & CompiledModuleArtifact
+    >();
+    let completeSetHits = 0;
+    const byteCache: ModuleByteCache = {
+      getCompleteSet(runtimeVersion, identities) {
+        const set = new Map<string, CompiledModuleArtifact>();
+        for (const identity of identities) {
+          const entry = entries.get(`${runtimeVersion}\0${identity}`);
+          if (entry === undefined) return undefined;
+          set.set(identity, entry);
+        }
+        completeSetHits++;
+        return set;
+      },
+      putAll(runtimeVersion, modules) {
+        for (const module of modules) {
+          entries.set(`${runtimeVersion}\0${module.identity}`, module);
+        }
+      },
+    };
+
+    // Cold: compiles, writes the emitted bodies back through putAll.
+    const coldStorage = StorageManager.emulate({ as: signer });
+    const coldRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: coldStorage,
+      moduleByteCache: byteCache,
+    });
+    try {
+      const cold = await coldRuntime.patternManager.compileAndRegisterModules(
+        program,
+      );
+      expect(
+        coldRuntime.patternManager.getArtifactEntryRef(
+          cold.main!["default"] as object,
+        ),
+      ).toBeDefined();
+      expect(entries.size).toBeGreaterThan(0);
+      expect(completeSetHits).toBe(0); // nothing cached yet on the cold pass
+    } finally {
+      await coldRuntime.dispose();
+      await coldStorage.close();
+    }
+
+    // Warm: a fresh runtime with the SAME cache must get a complete set and
+    // still produce a registered, evaluated namespace.
+    const warmStorage = StorageManager.emulate({ as: signer });
+    const warmRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: warmStorage,
+      moduleByteCache: byteCache,
+    });
+    try {
+      const warm = await warmRuntime.patternManager.compileAndRegisterModules(
+        program,
+      );
+      expect(completeSetHits).toBe(1);
+      expect(
+        warmRuntime.patternManager.getArtifactEntryRef(
+          warm.main!["default"] as object,
+        ),
+      ).toBeDefined();
+    } finally {
+      await warmRuntime.dispose();
+      await warmStorage.close();
+    }
+  });
+
+  it("reads the byte cache again once its compile turn comes, and takes the bodies put while it waited", async () => {
+    // The test holds the turn, so the waiting compile's first read misses.
+    // Another runtime, which takes no turns, compiles and puts the bodies
+    // before the turn is released.
+    const entries = new Map<
+      string,
+      { identity: string } & CompiledModuleArtifact
+    >();
+    const reads: boolean[] = [];
+    const firstRead = Promise.withResolvers<void>();
+    const byteCache: ModuleByteCache = {
+      getCompleteSet(runtimeVersion, identities) {
+        const set = new Map<string, CompiledModuleArtifact>();
+        for (const identity of identities) {
+          const entry = entries.get(`${runtimeVersion}\0${identity}`);
+          if (entry !== undefined) set.set(identity, entry);
+        }
+        const hit = set.size === identities.length;
+        reads.push(hit);
+        firstRead.resolve();
+        return hit ? set : undefined;
+      },
+      putAll(runtimeVersion, modules) {
+        for (const module of modules) {
+          entries.set(`${runtimeVersion}\0${module.identity}`, module);
+        }
+      },
+    };
+    // Holds the first turn taken until the test releases it.
+    const released = Promise.withResolvers<void>();
+    const compileTurns: CompileClaims = {
+      async take() {
+        await released.promise;
+        return () => {};
+      },
+    };
+    const storages = [
+      StorageManager.emulate({ as: signer }),
+      StorageManager.emulate({ as: signer }),
+    ];
+    const waiting = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storages[0],
+      moduleByteCache: byteCache,
+      compileTurns,
+    });
+    const putting = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storages[1],
+      moduleByteCache: byteCache,
+    });
+    try {
+      const compiled = waiting.patternManager.compileAndRegisterModules(
+        program,
+      );
+      await firstRead.promise;
+      await putting.patternManager.compileAndRegisterModules(program);
+      expect(reads).toEqual([false, false]);
+      released.resolve();
+
+      const result = await compiled;
+      expect(reads).toEqual([false, false, true]);
+      expect(
+        waiting.patternManager.getArtifactEntryRef(
+          result.main!["default"] as object,
+        ),
+      ).toBeDefined();
+    } finally {
+      await waiting.dispose();
+      await putting.dispose();
+      for (const storage of storages) await storage.close();
+    }
+  });
+
+  it("ends the compile turn it took when the read that follows the turn fails", async () => {
+    // The first read misses, so the compile takes a turn; the read once the
+    // turn comes throws, as a cache whose file cannot be read does.
+    let reads = 0;
+    const byteCache: ModuleByteCache = {
+      getCompleteSet() {
+        reads += 1;
+        if (reads === 1) return undefined;
+        throw new Error("the cache could not be read");
+      },
+      putAll() {},
+    };
+    const keys: string[] = [];
+    let ended = 0;
+    const compileTurns: CompileClaims = {
+      take(key) {
+        keys.push(key);
+        return Promise.resolve(() => {
+          ended += 1;
+        });
+      },
+    };
+    const storage = StorageManager.emulate({ as: signer });
+    const compiling = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+      moduleByteCache: byteCache,
+      compileTurns,
+    });
+    try {
+      await expect(
+        compiling.patternManager.compileAndRegisterModules(program),
+      ).rejects.toThrow("the cache could not be read");
+      expect(keys).toHaveLength(1);
+      expect(ended).toBe(1);
+    } finally {
+      await compiling.dispose();
+      await storage.close();
+    }
+  });
+
+  it("takes the same compile turn for the same modules, and another for others", async () => {
+    const keys: string[] = [];
+    const compileTurns: CompileClaims = {
+      take(key) {
+        keys.push(key);
+        return Promise.resolve(() => {});
+      },
+    };
+    const otherProgram: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { NAME, pattern } from 'commonfabric';",
+          "export default pattern(() => ({ [NAME]: 'another program' }));",
+        ].join("\n"),
+      }],
+    };
+    const storages: ReturnType<typeof StorageManager.emulate>[] = [];
+    const runtimes: Runtime[] = [];
+    /** A runtime with an empty byte cache of its own, taking counted turns. */
+    const compileIn = async (compiled: RuntimeProgram) => {
+      const storage = StorageManager.emulate({ as: signer });
+      storages.push(storage);
+      const built = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+        moduleByteCache: new ProcessModuleByteCache(),
+        compileTurns,
+      });
+      runtimes.push(built);
+      await built.patternManager.compileAndRegisterModules(compiled);
+    };
+    try {
+      await compileIn(program);
+      await compileIn(program);
+      await compileIn(otherProgram);
+      expect(keys).toHaveLength(3);
+      expect(keys[1]).toBe(keys[0]);
+      expect(keys[2]).not.toBe(keys[0]);
+    } finally {
+      for (const built of runtimes) await built.dispose();
+      for (const storage of storages) await storage.close();
+    }
+  });
+});

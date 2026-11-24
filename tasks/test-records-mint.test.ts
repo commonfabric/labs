@@ -12,6 +12,7 @@ import {
   mintKey,
   parseMintArgs,
   runMint,
+  runMintCommand,
   usernameOfDisplayName,
 } from "./test-records-mint.ts";
 import { generateIdentity, open } from "./test-records-crypto.ts";
@@ -159,6 +160,43 @@ describe("test-records-mint", () => {
       expect(log[2]?.body).toContain(
         "serviceAccount:sa@example.iam.gserviceaccount.com",
       );
+    });
+
+    it("adds the account to a grant that names other accounts", async () => {
+      const log: { method: string; url: string; body?: string }[] = [];
+      await ensurePersonFolder(
+        {
+          token: "t",
+          fetchImpl: sequenceFetch([
+            { status: 409 },
+            {
+              status: 200,
+              json: {
+                bindings: [{
+                  role: "roles/storage.objectCreator",
+                  members: [
+                    "serviceAccount:other@example.iam.gserviceaccount.com",
+                  ],
+                }],
+                etag: "e1",
+              },
+            },
+            { status: 200, json: {} },
+          ], log),
+        },
+        "cf-ci-metadata",
+        "labs/test-records",
+        "octocat",
+        "sa@example.iam.gserviceaccount.com",
+      );
+      expect(log[2]?.method).toBe("PUT");
+      expect(JSON.parse(log[2]!.body!).bindings).toEqual([{
+        role: "roles/storage.objectCreator",
+        members: [
+          "serviceAccount:other@example.iam.gserviceaccount.com",
+          "serviceAccount:sa@example.iam.gserviceaccount.com",
+        ],
+      }]);
     });
 
     it("treats an existing folder and grant as done", async () => {
@@ -514,6 +552,23 @@ describe("test-records-mint", () => {
       expect(log).toEqual([]);
     });
 
+    it("refuses a store prefix no key can write under before touching anything", async () => {
+      const log: string[] = [];
+      const identity = await generateIdentity();
+      await expect(runMint({
+        recipient: identity.recipient,
+        username: "octocat",
+        out,
+        client: { token: "t", fetchImpl: mintFetch(log) },
+        env: (name) =>
+          name === "TEST_RECORDS_PREFIX" ? "elsewhere/records" : undefined,
+      })).rejects.toThrow(
+        "the configured store prefix elsewhere/records is not in " +
+          "DATASET_PREFIXES",
+      );
+      expect(log).toEqual([]);
+    });
+
     it("refuses a malformed username before touching anything", async () => {
       const log: string[] = [];
       const identity = await generateIdentity();
@@ -524,6 +579,122 @@ describe("test-records-mint", () => {
         client: { token: "t", fetchImpl: mintFetch(log) },
       })).rejects.toThrow("not a GitHub username");
       expect(log).toEqual([]);
+    });
+  });
+
+  describe("runMintCommand()", () => {
+    let out: string;
+    let errors: string[];
+    const error = console.error;
+    const log = console.log;
+
+    beforeEach(async () => {
+      out = await Deno.makeTempDir({ prefix: "test-records-mint-cli-" });
+      errors = [];
+      console.error = (line: string) => errors.push(line);
+      console.log = () => {};
+    });
+
+    afterEach(async () => {
+      console.error = error;
+      console.log = log;
+      await Deno.remove(out, { recursive: true });
+    });
+
+    /** A store that has never seen the person, recording each request. */
+    function freshStore(requests: string[]): typeof fetch {
+      const keyData = btoa(JSON.stringify({
+        client_email: "test-records-gh-octocat@p.iam.gserviceaccount.com",
+        private_key: "pem",
+        token_uri: "https://oauth2.googleapis.com/token",
+      }));
+      return ((input: URL | RequestInfo, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        requests.push(`${method} ${decodeURIComponent(url)}`);
+        const json = url.includes("/keys?keyTypes=USER_MANAGED")
+          ? { keys: [] }
+          : url.endsWith("/keys")
+          ? { privateKeyData: keyData }
+          : url.endsWith("/iam") && method === "GET"
+          ? { bindings: [] }
+          : {};
+        const status = /\/serviceAccounts\/[^/]+$/.test(url) && method === "GET"
+          ? 404
+          : 200;
+        return Promise.resolve(new Response(JSON.stringify(json), { status }));
+      }) as typeof fetch;
+    }
+
+    it("mints into the bucket the environment names and reports the fingerprint", async () => {
+      const identity = await generateIdentity();
+      const githubOutput = join(out, "github-output.txt");
+      const env: Record<string, string> = {
+        TEST_RECORDS_GCP_TOKEN: "t",
+        TEST_RECORDS_BUCKET: "probe-bucket",
+        GITHUB_OUTPUT: githubOutput,
+      };
+      const requests: string[] = [];
+      const code = await runMintCommand(
+        [
+          "--recipient",
+          identity.recipient,
+          "--username",
+          "octocat",
+          "--out",
+          join(out, "delivery"),
+        ],
+        (name) => env[name],
+        freshStore(requests),
+      );
+      expect(code).toBe(0);
+      expect(requests.some((line) => line.includes("/b/probe-bucket/")))
+        .toBe(true);
+      const fingerprint = (await Deno.readTextFile(githubOutput))
+        .match(/^fingerprint=([0-9a-f]{32})\n$/)?.[1];
+      expect(fingerprint).toBeDefined();
+      const box = JSON.parse(
+        await Deno.readTextFile(
+          join(out, "delivery", `test-records-key-${fingerprint}.sealed`),
+        ),
+      );
+      const key = parsePersonalKeyFile(
+        new TextDecoder().decode(await open(identity, box)),
+      );
+      expect(key?.cf_username).toBe("octocat");
+    });
+
+    it("returns 2 and prints the usage for a command line that names no recipient", async () => {
+      const requests: string[] = [];
+      const code = await runMintCommand(
+        ["--username", "octocat", "--out", out],
+        () => "t",
+        freshStore(requests),
+      );
+      expect(code).toBe(2);
+      expect(errors).toEqual([
+        "usage: test-records-mint.ts --recipient <string> " +
+        "--username <github-login> --out <dir>",
+      ]);
+      expect(requests).toEqual([]);
+    });
+
+    it("throws without the broker token", async () => {
+      const identity = await generateIdentity();
+      const requests: string[] = [];
+      await expect(runMintCommand(
+        [
+          "--recipient",
+          identity.recipient,
+          "--username",
+          "octocat",
+          "--out",
+          out,
+        ],
+        () => undefined,
+        freshStore(requests),
+      )).rejects.toThrow("TEST_RECORDS_GCP_TOKEN is not set");
+      expect(requests).toEqual([]);
     });
   });
 
@@ -568,6 +739,21 @@ describe("test-records-mint", () => {
         },
         "octocat",
       )).rejects.toThrow("creating");
+    });
+
+    it("throws with the text of a refusal that is not JSON", async () => {
+      await expect(ensureServiceAccount(
+        {
+          token: "t",
+          fetchImpl: (input: URL | RequestInfo) =>
+            Promise.resolve(
+              String(input).endsWith("/serviceAccounts")
+                ? new Response("Permission denied", { status: 403 })
+                : new Response("", { status: 404 }),
+            ),
+        },
+        "octocat",
+      )).rejects.toThrow(/^creating \S+ failed: HTTP 403 .*Permission denied/);
     });
 
     it("throws when re-enabling the account fails", async () => {

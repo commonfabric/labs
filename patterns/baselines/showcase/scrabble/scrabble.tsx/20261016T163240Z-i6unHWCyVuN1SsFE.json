@@ -1,0 +1,473 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "GameEvent": {
+        "properties": {
+          "details": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "player": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "join",
+              "submit",
+              "word",
+              "system"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "player",
+          "details",
+          "timestamp"
+        ],
+        "type": "object"
+      },
+      "Letter": {
+        "properties": {
+          "char": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isBlank": {
+            "type": "boolean"
+          },
+          "points": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "char",
+          "points",
+          "id",
+          "isBlank"
+        ],
+        "type": "object"
+      },
+      "PlacedTile": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "letter": {
+            "$ref": "#/$defs/Letter"
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "letter",
+          "row",
+          "col"
+        ],
+        "type": "object"
+      },
+      "Player": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar text a stored player may carry. Nothing writes it; the scoreboard\nshows it for a player with no profile.",
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "profile": {
+            "asCell": [
+              "cell"
+            ],
+            "description": "Live profile cell — present for profile-joined players (the scoreboard\nrenders it via `<cf-profile-badge>`), absent for headless name-only joins\n(test seam), which fall back to `<cf-avatar>`.",
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "color",
+          "score",
+          "joinedAt"
+        ],
+        "type": "object"
+      },
+      "PlayerRoster": {
+        "properties": {
+          "list": {
+            "items": {
+              "$ref": "#/$defs/Player"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "list"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "bag": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Letter"
+        },
+        "type": "array"
+      },
+      "bagIndex": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 0,
+        "type": "number"
+      },
+      "board": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/PlacedTile"
+        },
+        "type": "array"
+      },
+      "gameEvents": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/GameEvent"
+        },
+        "type": "array"
+      },
+      "gameName": {
+        "default": "Scrabble Match",
+        "scope": "space",
+        "type": "string"
+      },
+      "message": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "session"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "myName": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "placed": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/PlacedTile"
+        },
+        "type": "array"
+      },
+      "players": {
+        "$ref": "#/$defs/PlayerRoster",
+        "default": {
+          "list": []
+        },
+        "scope": "space"
+      },
+      "rack": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Letter"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "scrabble/scrabble.tsx",
+  "resultSchema": {
+    "$defs": {
+      "GameEvent": {
+        "properties": {
+          "details": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "player": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "join",
+              "submit",
+              "word",
+              "system"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "player",
+          "details",
+          "timestamp"
+        ],
+        "type": "object"
+      },
+      "Letter": {
+        "properties": {
+          "char": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isBlank": {
+            "type": "boolean"
+          },
+          "points": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "char",
+          "points",
+          "id",
+          "isBlank"
+        ],
+        "type": "object"
+      },
+      "PlacedTile": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "letter": {
+            "$ref": "#/$defs/Letter"
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "letter",
+          "row",
+          "col"
+        ],
+        "type": "object"
+      },
+      "PlayerView": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar text a stored player may carry. Nothing writes it; the scoreboard\nshows it for a player with no profile.",
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "color",
+          "score",
+          "joinedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "bag": {
+        "items": {
+          "$ref": "#/$defs/Letter"
+        },
+        "type": "array"
+      },
+      "bagIndex": {
+        "type": "number"
+      },
+      "board": {
+        "items": {
+          "$ref": "#/$defs/PlacedTile"
+        },
+        "type": "array"
+      },
+      "clearBoard": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "gameEvents": {
+        "items": {
+          "$ref": "#/$defs/GameEvent"
+        },
+        "type": "array"
+      },
+      "joinGame": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "joinWithName": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "message": {
+        "type": "string"
+      },
+      "myName": {
+        "type": "string"
+      },
+      "placeTile": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "letterId": {
+            "type": "string"
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "letterId",
+          "row",
+          "col"
+        ],
+        "type": "object"
+      },
+      "placed": {
+        "items": {
+          "$ref": "#/$defs/PlacedTile"
+        },
+        "type": "array"
+      },
+      "players": {
+        "items": {
+          "$ref": "#/$defs/PlayerView"
+        },
+        "type": "array"
+      },
+      "rack": {
+        "items": {
+          "$ref": "#/$defs/Letter"
+        },
+        "type": "array"
+      },
+      "resetGame": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "submitTurn": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      }
+    },
+    "required": [
+      "myName",
+      "board",
+      "bag",
+      "bagIndex",
+      "players",
+      "gameEvents",
+      "rack",
+      "placed",
+      "message",
+      "joinGame",
+      "joinWithName",
+      "placeTile",
+      "submitTurn",
+      "clearBoard",
+      "resetGame"
+    ],
+    "type": "object"
+  }
+}

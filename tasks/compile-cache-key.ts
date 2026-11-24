@@ -3,14 +3,15 @@
  * Prints the compiler-input fingerprint, for CI to key a pattern compile byte
  * cache on.
  *
- * The runtime's version axis is `cf/esm-compile/` followed by this same
- * fingerprint, so a cache entry named by it holds bytes this compiler produced.
+ * The fingerprint moves with every input that can change what the compiler
+ * emits, so a cache entry named by it holds bytes this compiler produced,
+ * whatever compile-cache version those bytes are stored under.
  * `.github/actions/compile-cache-key` runs this and hands the value to the
  * cache steps as a step output.
  */
 import { fromFileUrl } from "@std/path";
 
-import { computeCompilerFingerprint } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import { computeCompilerFingerprint } from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 
 /**
  * The compiler-input fingerprint of the repository this module sits in. The

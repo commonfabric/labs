@@ -3,12 +3,12 @@ status: historical
 created: 2026-08-07
 archived: 2026-09-01
 reason: "Executed plan; its last live content was Stage 4, which shipped as step 7 putting each command under the noun it acts on."
-superseded-by: docs/plans/cli-surface-shape.md
+superseded-by: docs/history/plans/cli-surface-shape.md
 ---
 
 # The CLI surface — implementation plan
 
-[The CLI surface shape](../../plans/cli-surface-shape.md) describes what `cf` should look
+[The CLI surface shape](cli-surface-shape.md) describes what `cf` should look
 like and lays out seven steps to get there. Steps 1–3 are the read layer, and
 [the verbs plan](../../plans/verbs-implementation.md) builds them. This plan is steps 4–7:
 the part that changes what a caller types.
@@ -34,7 +34,7 @@ quickly.
 Stages 1 through 3 are on main, and step 6b has removed the piece-mounted
 `get`, `set` and `call` — `cf cell get`, `cf cell set` and `cf piece call` are the only
 spellings. Stage 4 is the open work, along with step 7 and the second arc's
-step 10 in [the shape document](../../plans/cli-surface-shape.md).
+step 10 in [the shape document](cli-surface-shape.md).
 
 ## Governing decisions
 

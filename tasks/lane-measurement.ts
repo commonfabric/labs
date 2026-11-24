@@ -61,12 +61,12 @@ const BATCH_MEASUREMENT_LEAD: Record<BatchMeasurementKind, string> = {
  * What a lane's measurement of one batch is called.
  *
  * A lane writes five of these per batch: what the batch spent, what its
- * tests took between them, how many times it opened a unit, how many
- * passes it made, and what the packer charged the lane for the batch. A
- * batch that repeats a unit makes one pass per run, each a fresh
- * invocation of the suite's command over the units still running. The
- * first four are what the calibration is fitted from; the fifth is what
- * says how far the calibration it was charged by was out.
+ * tests and their units' hooks took between them, how many times it
+ * opened a unit, how many passes it made, and what the packer charged the
+ * lane for the batch. A batch that repeats a unit makes one pass per run,
+ * each a fresh invocation of the suite's command over the units still
+ * running. The first four are what the calibration is fitted from; the
+ * fifth is what says how far the calibration it was charged by was out.
  */
 export function batchMeasurementName(
   suite: string,
@@ -114,6 +114,53 @@ export function batchMeasurement(
     return suite.length === 0 ? undefined : { suite, measured, kind };
   }
   return undefined;
+}
+
+/** What a measurement of a unit's hooks is named for. */
+const HOOKS_PREFIX = `${LANE_MEASUREMENT_PREFIX}hooks `;
+
+/** What separates the suite from the unit in a hooks measurement's name. */
+const HOOKS_UNIT = " in ";
+
+/**
+ * What a lane's measurement of the hooks of one unit of a batch is called.
+ *
+ * A lane writes one each time a pass opens a unit whose report says what
+ * its hooks took: what its outermost tests took that no record holds, such
+ * as the setup and teardown its `describe`s declare. The publisher reads
+ * what a unit's hooks take from these, and the packer charges it each time
+ * a pass opens the unit.
+ */
+export function hooksMeasurementName(
+  suite: string,
+  measured: boolean,
+  unit: string,
+): string {
+  return `${HOOKS_PREFIX}${suite}` +
+    `${measured ? MEASURED_BATCH_SUFFIX : ""}${HOOKS_UNIT}${unit}`;
+}
+
+/**
+ * The suite, the coverage marker, and the unit one hooks measurement
+ * names. A suite id holds no space, so the first separator is the one
+ * the name was composed with, whatever the unit holds.
+ */
+export function hooksMeasurement(
+  name: string,
+): { suite: string; measured: boolean; unit: string } | undefined {
+  if (!name.startsWith(HOOKS_PREFIX)) return undefined;
+  const rest = name.slice(HOOKS_PREFIX.length);
+  const at = rest.indexOf(HOOKS_UNIT);
+  if (at === -1) return undefined;
+  const unit = rest.slice(at + HOOKS_UNIT.length);
+  const named = rest.slice(0, at);
+  const measured = named.endsWith(MEASURED_BATCH_SUFFIX);
+  const suite = measured
+    ? named.slice(0, -MEASURED_BATCH_SUFFIX.length)
+    : named;
+  return suite.length === 0 || unit.length === 0
+    ? undefined
+    : { suite, measured, unit };
 }
 
 /** What each of a lane's three measurements of itself is. */

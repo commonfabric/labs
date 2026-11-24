@@ -15,7 +15,7 @@ See the [verifiable-execution document map](README.md) for the spec index.
 
 ### 1.1 Append-Only Log
 
-- [x] SQLite-based revision storage (`packages/memory/v2/engine.ts`)
+- [x] SQLite-based revision storage (`runtime/memory/v2/engine.ts`)
 - [x] Lamport clock sequencing (`seq` field)
 - [ ] Content-addressed entity revisions. Only blobs are content-addressed;
       the JSON write path stores revisions inline, keyed by branch, entity and
@@ -34,7 +34,7 @@ See the [verifiable-execution document map](README.md) for the spec index.
 - [x] ACL with capability levels (`READ`, `WRITE`, `OWNER`)
 - [x] UCAN-based authorization structure
 - [x] Signature verification via `Verifier` interface
-- [x] Access checking in `packages/memory/acl.ts`
+- [x] Access checking in `runtime/memory/acl.ts`
 - [ ] ACL state stored as receipts in the log
 - [ ] Authorization binding in commit records
 
@@ -58,9 +58,9 @@ See the [verifiable-execution document map](README.md) for the spec index.
 
 **Files to modify:**
 
-- `packages/memory/v2/engine.ts` - the revision and commit tables, and the
+- `runtime/memory/v2/engine.ts` - the revision and commit tables, and the
   lookup that joins them
-- `packages/memory/v2/server.ts` - include producing commits in responses
+- `runtime/memory/v2/server.ts` - include producing commits in responses
 
 ### 1.5 Scheduler Staleness Detection
 
@@ -95,8 +95,8 @@ reading ANY part of X - too coarse for efficient scheduling.
 
 **Files to modify:**
 
-- `packages/runner/src/scheduler/` - staleness tracking and comparison
-- `packages/runner/src/storage/v2-transaction.ts` - expose `since` with reads
+- `runtime/runner/src/scheduler/` - staleness tracking and comparison
+- `runtime/runner/src/storage/v2-transaction.ts` - expose `since` with reads
 
 ---
 
@@ -135,15 +135,15 @@ interface CommitData {
 ```
 
 - [ ] Serialize `IMemoryAddress` in commit creation
-      (`packages/runner/src/storage/v2-transaction.ts`)
+      (`runtime/runner/src/storage/v2-transaction.ts`)
 - [ ] Capture journal activity when creating commits
 - [ ] Add activity to `ITransactionJournal.activity()` serialization
 
 **Files to modify:**
 
-- `packages/memory/v2.ts` - extend the committed shape carried over the wire
-- `packages/runner/src/storage/interface.ts` - activity export
-- `packages/runner/src/storage/v2-transaction.ts` - activity serialization in
+- `runtime/memory/v2.ts` - extend the committed shape carried over the wire
+- `runtime/runner/src/storage/interface.ts` - activity export
+- `runtime/runner/src/storage/v2-transaction.ts` - activity serialization in
   `V2TransactionJournal`
 
 ### 2.2 Code Bundle References
@@ -168,9 +168,9 @@ interface ComputationContext {
 
 **Files to modify:**
 
-- `packages/memory/interface.ts` - add computation context types
-- `packages/runner/src/storage/v2-transaction.ts` - capture code context
-- `packages/runner/src/runtime.ts` - pass code identity to transactions
+- `runtime/memory/interface.ts` - add computation context types
+- `runtime/runner/src/storage/v2-transaction.ts` - capture code context
+- `runtime/runner/src/runtime.ts` - pass code identity to transactions
 
 ### 2.3 Input Provenance References
 
@@ -194,8 +194,8 @@ interface ProvenanceData {
 
 **Files to modify:**
 
-- `packages/memory/interface.ts` - provenance types
-- `packages/runner/src/storage/v2-transaction.ts` - track input sources
+- `runtime/memory/interface.ts` - provenance types
+- `runtime/runner/src/storage/v2-transaction.ts` - track input sources
 
 ### 2.4 Receipt Serialization
 
@@ -228,7 +228,7 @@ interface Receipt {
 
 **Files to modify:**
 
-- `packages/memory/v2.ts` - receipt type definition, and the receipt
+- `runtime/memory/v2.ts` - receipt type definition, and the receipt
   implementation this phase adds
 
 ### 2.5 Client State & Commit Validation
@@ -282,11 +282,52 @@ interface CommitLogEntry {
 
 **Files to modify:**
 
-- `packages/memory/v2.ts` - `ClientCommit`, `CommitLogEntry` types
-- `packages/memory/v2/server.ts` - commit processing with validation
-- `packages/memory/v2/engine.ts` - commit log storage with original +
+- `runtime/memory/v2.ts` - `ClientCommit`, `CommitLogEntry` types
+- `runtime/memory/v2/server.ts` - commit processing with validation
+- `runtime/memory/v2/engine.ts` - commit log storage with original +
   resolution
-- `packages/runner/src/storage/v2-transaction.ts` - client-side commit building
+- `runtime/runner/src/storage/v2-transaction.ts` - client-side commit building
+
+### 2.6 Verification After Expiry (Requirements, Not Yet Met)
+
+Recorded in November 2026, when the commit log stopped keeping read sets
+([memory-v2 02-storage.md](../memory-v2/02-storage.md) §3.3). The basis was an
+exercise on a store written with server execution on, then compacted with
+payloads expired and each document's history cut to its head.
+
+Afterward a verifier could still establish three things about an output:
+- which commit wrote it, because a revision's `seq` names that commit even when
+  compaction re-attributes the row;
+- the lease holder a derived commit records;
+- whether the writer was authorized, from the ACL's history, which compaction
+  never truncates.
+
+It could not establish the following, before compaction or after. Each is a
+requirement for verification:
+
+- [ ] **Code identity per output.** Neither a derived commit nor the value it
+      writes names the action that computed it. `scheduler_basis` keys actions
+      as `module:symbol:instance`, but links no output to an action and keeps
+      only each action's latest run.
+- [ ] **Inputs per output or per action run, at the revisions read.**
+  - A wave stores no read set, and an authored commit's read set is kept only
+    as a digest.
+  - A list of parent commits per commit is not enough on its own, because one
+    wave batches many actions' outputs.
+  - A dependency list recorded at admission (the revisions a commit's reads
+    observed, or the commits that wrote them) would serve retention and
+    commit-level provenance.
+- [ ] **A verifiable actor.** A derived commit's row records the lease holder
+      admission checked, not a signature a verifier can check.
+      `invocation_ref` and `authorization_ref` are reserved and unpopulated.
+- [ ] **What a re-run needs.** Recovery recomputes from current state and never
+      replays ([server-side execution](../server-side-execution/README.md)). LLM
+      and fetch results are kept only as the current memoized result. Compaction
+      deletes history below each instance's kept revisions.
+- [ ] **A commitment that survives compaction in one form.** The compaction
+      marker hashes the stored text. So a commit stored whole and the same
+      commit stored in digest form get different marker hashes, and neither is
+      the digest's SHA-256.
 
 ---
 
@@ -440,11 +481,11 @@ The activity tracking from Phase 2 enables intelligent reactive scheduling.
 
 | Area | Primary Files |
 |------|---------------|
-| Commit model | `packages/memory/v2.ts` |
-| Merkle hashing | `packages/data-model/src/value-hash/` |
-| Transaction interface | `packages/runner/src/storage/interface.ts` |
-| Transaction impl | `packages/runner/src/storage/v2-transaction.ts` |
-| Address operations | `packages/runner/src/storage/transaction/address.ts` |
-| Attestation | `packages/runner/src/storage/transaction/attestation.ts` |
-| ACL | `packages/memory/acl.ts` |
-| Space/SQLite | `packages/memory/v2/engine.ts` |
+| Commit model | `runtime/memory/v2.ts` |
+| Merkle hashing | `base/data-model/src/value-hash/` |
+| Transaction interface | `runtime/runner/src/storage/interface.ts` |
+| Transaction impl | `runtime/runner/src/storage/v2-transaction.ts` |
+| Address operations | `runtime/runner/src/storage/transaction/address.ts` |
+| Attestation | `runtime/runner/src/storage/transaction/attestation.ts` |
+| ACL | `runtime/memory/acl.ts` |
+| Space/SQLite | `runtime/memory/v2/engine.ts` |

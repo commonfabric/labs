@@ -10,7 +10,7 @@ half of Phase 3. Assumes [README.md](README.md) §3.2 and
   speculation engine — it REDIRECTS the existing run's writes into an
   overlay instead of a storage transaction.
 - Overlay substrate: the storage stack's transaction/journal layering in
-  `packages/runner/src/storage/` (`extended-storage-transaction.ts`,
+  `runtime/runner/src/storage/` (`extended-storage-transaction.ts`,
   `cache.ts`). The v1 branch validated "drop authority, keep the run"
   against this stack; the concept ports, the code does not.
 
@@ -148,8 +148,9 @@ currency. The existing overlay and retirement rules below still apply.
   whose schema promised a value would crash on the `undefined` (the
   OW51 `splitDefinitions` TypeError, observed on BOTH the client and
   the serving runtime because the read path is shared code). Instead
-  the lazy read REFUSES (when the reader's schema PROMISES a value —
-  see the carve-outs below): it registers the dead-end doc's read (the
+  the lazy read REFUSES (when the reader's schema declares NO default,
+  whether or not its type admits `undefined` — see the carve-outs
+  below): it registers the dead-end doc's read (the
   dependency that re-triggers the run when the doc arrives) and the run
   is disposed as a non-event — **output `undefined`, no action failure,
   re-triggered when any of its reads so far change, exactly like a
@@ -196,6 +197,25 @@ currency. The existing overlay and retirement rules below still apply.
      takes main's interim-undefined-then-heal. No shipped pattern
      routes link chains through user-scoped docs (the #6179 review's
      population audit).
+     A serving runtime's commit reads one such row differently (a
+     corollary that narrows the ruling above): an absent user- or
+     session-scoped instance of a document that another derivation
+     registered in the same serving runtime declares as a write — its
+     output, or a store a builtin keeps (scheduler-v2 README §4.3) — and
+     that has not yet run for that instance is one the serving loop owes
+     and has not produced yet, so it is transit for that runtime, not
+     knowledge. The read still reads `undefined`, but the served run that
+     read it commits nothing (serving-loop.md §3d) and runs again once
+     the instance is produced. A JavaScript derivation whose run for the
+     instance finished without being withdrawn has produced it, whether
+     or not anything is there: a run whose result is `undefined` writes
+     nothing, and the absence is then the instance's state (RULED
+     2026-11-17, owner: "a served run that yields `undefined` counts as
+     having produced its instance"). A run that was itself withdrawn
+     produced nothing, and a builtin, which can write its output after its
+     run returns, is owed until it writes. Only such a writer holds back
+     its served readers' commits for a principal's instance; the client's
+     own echo of it persists (§4's arrival gate).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch
      it) and produces an undefined result through the ordinary result
@@ -205,6 +225,34 @@ currency. The existing overlay and retirement rules below still apply.
      question with the owner), so the built coverage is the
      read-propagation path — the OW51 shape — with the deliberate
      body-throw awaiting that export.
+
+  **A run refused for an input in transit keeps a result its node
+  already holds (DECIDED 2026-11-19, narrowing the 2026-08-21 ruling's
+  "output `undefined`").** Where the read that refused found a document
+  still in transit to this replica, one it has never examined and the
+  store has not reported absent (`IStorageProvider.unexaminedAbsences()`
+  and `storeReportedAbsent()`), and the node's output already holds a
+  value, the disposal writes nothing: the output keeps that value. The
+  same holds for an argument that did not resolve because a document it
+  reads is in transit. Such a run runs again once the loads of those
+  documents have settled, whatever they find, since a document that
+  arrives absent changes nothing its reads could see. A document whose
+  load has settled is no longer in transit, whether the load failed or
+  ended without delivering it, as a load from a space that refuses this
+  replica ends (the store's ledger records no failure for one: the
+  document is absent for its reader), so the run after that clears the
+  result rather than asking for the load again. Everywhere else
+  the disposal is as above: a refusal over an input that has arrived
+  clears the result, as the [2026-09-14 derived-state correction
+  decision](../../history/development/2026-09-14-derived-state-correction.md)
+  requires, and a node whose output holds nothing takes the `undefined`
+  result. So a result derived from an input that had not arrived never
+  replaces one derived from inputs that had. The case this governs is a
+  client starting a piece cold: its first runs read inputs in spaces it
+  has not loaded yet, and each would otherwise commit `undefined` over
+  the stored result, blanking it for every client until the inputs
+  arrived and the run came again. — decided by @danfuzz, 2026-11-19;
+  @seefeldb, who made the 2026-08-21 ruling, is informed.
 
   **The serving-side re-trigger, explicit (RULED 2026-08-21 — the
   option-3 ruling on the demand-closure fork):**
@@ -239,7 +287,7 @@ currency. The existing overlay and retirement rules below still apply.
   crossed no hop, one starting at a handle minted from a stored link,
   asks for its dead-end document itself, as a same-space hop's target
   is asked for, so the withdrawal has a load to wait on. Pinned in
-  `packages/runner/test/executor-cross-space.test.ts` (a served
+  `runtime/runner/test/executor-cross-space.test.ts` (a served
   handler resolving a foreign cell through a document the serving
   runtime has not loaded keeps the document the chain reaches).
 
@@ -247,10 +295,13 @@ currency. The existing overlay and retirement rules below still apply.
   `viaLinkHop`), `schema.ts`'s lazy branch, `schema-view.ts`
   (`UnresolvedInputError`), `cell.ts`'s `resolveAsCell()` with
   `scheduler/handler-load-wait.ts` for the handler withdrawal; pinned in
-  `packages/runner/test/unresolved-input-lift.test.ts` (the hop-target
+  `runtime/runner/test/unresolved-input-lift.test.ts` (the hop-target
   dead-end disposes and re-triggers on arrival; the stated-null
-  control still flows; its case has no previous result, so it does not
-  pin that one is overwritten), with the serving-runtime match
+  control still flows) and in
+  `runtime/runner/test/refused-run-keeps-result.test.ts` (a cold
+  start's refused run leaves a stored result in place and the run after
+  the input arrives writes the new one; a node holding no result writes
+  none until then), with the serving-runtime match
   witnessed by `integration/default-app.test.ts` greening ON (the
   surface whose serving-runtime crash first recorded the bug —
   verification-coverage.md OW51).
@@ -281,7 +332,16 @@ On each pushed `derived` commit with `derivedThrough = W` and
    refused) has already arrived at this client — the local dispatch
    ran late (a load-parked head event, a busy worker) — is jobless on
    the same grounds and is NOT registered: its writes are dropped
-   before any layer is sealed. A
+   before any layer is sealed. They are dropped before the run's
+   commit is prepared, too: the commit asks the overlay whether it
+   would drop the run (`discards`) and skips the CFC boundary pass for
+   a run it would, since writes that reach no layer cross no boundary.
+   A late run can have read state no commit sees — a cascade child
+   running after its ancestor's echo in another space has retired, and
+   before the served write to that space lands, reads that space
+   without the documents the echo held — and the pass would refuse
+   what it read there, a refusal counted and reported for writes that
+   go nowhere. A
    non-idempotent handler's late echo is divergent by construction (it
    re-toggles the already-served state), and its floor sits at the
    served commit's seq, above every W reachable until the next authored
@@ -309,12 +369,28 @@ On each pushed `derived` commit with `derivedThrough = W` and
    speculative run, never a durable entry of its own (a root fire's
    echo carries no thread; another intent's cascade does not reach
    `e`); a retired descendant's id joins the jobless set so a LATE
-   grandchild drops at seal. Cost, stated: when the server's LT1 child
+   grandchild drops at seal. The space an entry sealed into is no part
+   of that scope. An entry lives in the space its run wrote, and an
+   event id names one event in every space, so `e`'s mark, which
+   arrives on the sidecar in the space `e` was fired in, retires `e`'s
+   own echo and its descendants in every space. A handler that sends to
+   a stream in another space leaves its cascade child's echo in that
+   space, where no mark, watermark or arrival would otherwise name it.
+   A handler that writes into another space itself leaves its own echo
+   there. The served handler's write to that space commits apart from
+   the mark, so that echo can go before the write lands, the same
+   one-wave flicker a descendant costs below, and uncounted, as a
+   descendant in another space is.
+   Cost, stated: when the server's LT1 child
    of `e` did not complete in `e`'s appending wave (events.md §4's
    purge; the drain delivers it a wave later), the descendant echo goes
    at `e`'s consequence while the child's own consequence is still a
    wave away — a visible one-wave flicker, COUNTED
-   (`cascade-echo-retired-unarrived`), not hidden; the owner-level
+   (`cascade-echo-retired-unarrived`), not hidden, for a descendant in
+   the mark's own space: the count compares the seq of a document the
+   echo wrote with the mark's, and a seq orders commits within one
+   space, so a descendant in another space is retired uncounted; the
+   owner-level
    alternative (deterministic cascade ids derived from the parent id +
    send ordinal on both sides — which would also make the frame-caused
    entity ids agree, so the arrival gate would carry the echo to the
@@ -322,7 +398,8 @@ On each pushed `derived` commit with `derivedThrough = W` and
    NOT taken here. Impl: `overlay-destination.ts` `retireIntent` (the
    cascade arm) over `OverlayEntry.parentEventId` + `#cascadeParents`;
    pinned in `speculation-intent-listener.test.ts` (W2.1-1…4 scripted,
-   each with its mutation, + the W2.1 e2e lunch-join shape, RED on the
+   each with its mutation, the cases under "an echo sealed into a space
+   other than its intent's", + the W2.1 e2e lunch-join shape, RED on the
    pre-W2.1 tip).
    **The match, and its carrier (RULED 2026-08-18 — the stage-C design
    pass, items 5/6, landed with W2):** the match is on the pushed
@@ -490,11 +567,35 @@ renders the STORED value whatever the layer holds: the store wins,
 the disposition every divergence gets (a divergent speculative cid
 layer is inadmissible content that can never arrive; holding the
 entry for it would strand the entry, and its sibling layers,
-forever). A cid doc with NO confirmed cover still holds the entry:
-nothing has served the schema document yet. Pinned in
-`speculation-arrival-gate.test.ts` — scripted with its mutation, and
-on a real replica for identical, divergent, and unstored cid
-writes.** Carriage: the covering commit's class rides session-frame
+forever). A cid doc with NO confirmed cover holds the entry while an
+arrived document the entry wrote names it — the confirmed version's
+envelope, as the store has it, names it as its schema document or a
+version-2 label document, which a frame delivers apart from the
+envelope, so the cid doc can arrive after the document naming it —
+and while the entry wrote no other document: nothing has served the
+cid doc, and the layer may be all that holds it. Once every other
+document the entry wrote has arrived and none of them names it, it no
+longer holds the entry: the speculative run minted it for an envelope
+the served derivation did not write (a labeled write the serving
+runtime refused, a schema the serving side stamps differently), so
+the store never comes to hold it, and holding the entry for it would
+strand the entry and mask the served values of every document beside
+it. Only the documents the entry wrote are consulted: another
+confirmed document naming the same cid does not hold the entry.
+Retirement drops the cid layer from the replica, so a read of the cid
+doc there finds nothing; CFC schema resolution falls back to the
+realm's schema registry, which holds what the speculative run
+registered as it staged the document (`loadSchemaDocument` in
+`runtime/runner/src/cfc/prepare.ts`). A replica double that reports no
+names (`envelopeDocuments` absent from `speculationRetirementView`)
+holds the entry, as a name would. Pinned in
+`speculation-arrival-gate.test.ts` — scripted with its mutation, on a
+real replica for identical, divergent, and unstored cid writes, and
+scripted for an unstored cid beside arrived documents that do and do
+not name it — and in `served-effect-watching-client.test.ts`, where a
+client watching a served `fetchText` or `generateText` whose first
+request was refused shows the served results.** Carriage: the covering
+commit's class rides session-frame
 upserts as `coverClass` (populated only under the flag — the OFF wire
 is byte-identical), is recorded on the replica's confirmed record
 (frames on integrate; `authored`/`derived` at own-commit promotions),
@@ -516,7 +617,7 @@ scheduler treats the flip of an action's own output like its own
 commit and does not re-run the writer for it (a divergent
 authoritative value would otherwise re-derive, re-speculate, retire,
 and flip forever); downstream readers are unaffected. Impl:
-`packages/runner/src/speculation/overlay-destination.ts` (`#sweep`'s
+`runtime/runner/src/speculation/overlay-destination.ts` (`#sweep`'s
 gate, `#supersedeOlderEntries`), the replica's superseded flip
 (`finalizeSupersededSpeculation` — `IIntegrateNotification.source`),
 and the scheduler's own-source skip (`scheduler/invalidation.ts`);
@@ -657,6 +758,12 @@ pins the export, the scoping, the verify-durable consistency, the
 content-addressed exemption, and the durable-read mark on both a
 direct transaction and a piece start.
 
+The echo a blind write lands over is the speculation of an event whose
+authoritative consequence commits later, and that consequence does not
+land over the write in turn: serving-loop.md §3d supersedes every
+consequence write that a later write of the event's firing session
+overwrote.
+
 ### The durable-read mark, and the piece start that needs it
 
 An authored transaction whose writes must reach the wire can read the
@@ -667,9 +774,19 @@ transaction consumed and what it names stay the same set — the
 verify-durable and name-durable pairing again, one shape wider. A
 document still short of its authoritative value re-derives reactively
 once that value lands, which is the recovery path §6's refusal
-message names. Two callers carry the mark. One is the direct SQLite
-capability's exec, an authored write with no reactive run around it.
-The other is the runner's piece start.
+message names. The direct SQLite capability's exec carries the mark,
+an authored write with no reactive run around it, and so does the
+runner's piece start.
+
+A host read that must not report this runtime's preview carries it
+too, on a read-only transaction: `readConfirmed()` and `readDurable()`
+(`confirmed-read.ts`). Such a reader learns when to read again from a
+subscription, which sees the ordinary view, and a standing layer hides
+two changes to the durable view from it: a write arriving beneath the
+layer, and the layer's retirement over an equal value. The replica's
+`whenSpeculationSettled()` resolves once the layers standing over a
+document have settled, and `readDurable()` hands it back for what it
+read, so the reader reads again then as well.
 
 A piece start mints its own transaction, instantiates the pattern's
 nodes into it, and commits it fire-and-forget as sanctioned

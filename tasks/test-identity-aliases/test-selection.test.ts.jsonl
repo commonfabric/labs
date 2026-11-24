@@ -1,0 +1,2 @@
+{"date": "2026-10-15", "from": {"k": "unit", "s": "tasks", "n": "test-selection > explainLines() > prints the catches behind a score"}, "to": {"k": "unit", "s": "tasks", "n": "test-selection > explainLines() > prints the new real test failures behind a score"}}
+{"date": "2026-10-15", "from": {"k": "unit", "s": "tasks", "n": "test-selection > explainLines() > says a test has never caught anything"}, "to": {"k": "unit", "s": "tasks", "n": "test-selection > explainLines() > says a test has never had a new real test failure"}}

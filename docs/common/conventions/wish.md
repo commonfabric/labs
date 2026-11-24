@@ -26,6 +26,7 @@ const wishResult = wish<{ content: string }>({ query: "#note" });
 | `candidates` | `T[]`   | All matching pieces                                                                                                                                     |
 | `[UI]?`      | `VNode` | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece |
 | `error`      | `any`   | Error message if resolution failed                                                                                                                      |
+| `errorCode`  | `"no-match" \| "failed"` | Set with `error`: `"no-match"` when the wish confirmed nothing matches (a reader may offer to make one), `"failed"` when it could not look or read what it found. Treat an unknown code as `"failed"` |
 
 Access the resolved piece via `wishResult.result`:
 
@@ -56,8 +57,14 @@ profile rules below). If no readable match remains and a candidate load failed,
 Wish reports the load error. The legacy
 `#favorites/<term>` search selects the first readable match. UI loading
 affordances must not depend on an empty `candidates` array. A confirmed empty
-collection produces a no-match error. A failed discovery-collection load, or a
-candidate load failure with no readable match, produces a load error.
+collection produces a no-match error (`errorCode: "no-match"`). A failed
+discovery-collection load, or a candidate load failure with no readable match,
+produces a load error (`errorCode: "failed"`). So does a search that could not
+look: favorites, which live in the home space, cannot be searched without the
+requesting user's identity (a serving runtime whose run names none), and a
+search that finds nothing elsewhere then reports `"failed"`. A reader that acts
+on "nothing there", such as offering to create the missing thing, checks
+`errorCode`, not the message.
 
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
@@ -94,6 +101,11 @@ as an empty box.
 // Shown inside a pattern body.
 return { [UI]: wishResult[UI] };
 ```
+
+The wish holds its view as a handle rather than as a value. A pattern that uses
+`result` alone, as one handing the found piece on to something else does, loads
+none of the found piece's view. The view loads where it is shown, and the
+renderer reads it there.
 
 ## Wishing for a Specific Piece
 
@@ -161,18 +173,48 @@ ordered **default first, then by MRU, then list order**:
 // Shown at module scope.
 wish({ query: "#profile" }) // the single current profile; see [UI] below
 wish({ query: "#profileName" }) // default profile's initialNameApplied
-wish({ query: "#profileAvatar" }) // default profile's avatar
 wish({ query: "#profileBio" }) // default profile's bio (free-text description)
 wish({ query: "#profileSpace" }) // default profile's space cell
 ```
 
+No target answers with a profile's picture or avatar text. A stored picture may
+not be its owner's: earlier releases let anyone set one through `setPicture`,
+and a value can be stored without a label. So a pattern reads the face from the
+profile `#profile` resolves, with `profileFace()` from
+`patterns/system/profile-face/profile-face.ts`, which shows a picture or
+avatar text only when the profile's owner wrote it
+([`principal-of.md`](../../features/principal-of.md) states the rule and what
+it does not cover).
+
 Once profile data is loaded and at least one profile exists,
 `wish({ query: "#profile" }).result` is **the single current profile** —
-the best of the ordered candidates (default → MRU → first) — in **every** mode
+the best of the ordered candidates (default → MRU → first, or the preferred
+profile first, as the next paragraph says) — in **every** mode
 (interactive, headless, and the blessed read). It does not depend on the picker
 sidecar pattern running, so
 consumers can gate on `.result` without stranding in the multi-profile case
 (CT-1829). The `candidates` array holds the ordered profiles that loaded.
+
+A profile the home lists in `retiredProfiles` is not a candidate, and neither is
+one that is not the user's own, by the one rule "Profile" in
+[`HOME_SPACE.md`](HOME_SPACE.md) states: a home's lists may link someone
+else's profile, or a document carrying no label at all. A runtime
+constructed with `preferredProfileSpace`, which a host gives a runtime that acts
+as one of the user's profiles (the Weaver runs one per facet), orders the
+profile in that space ahead of the rest, so `#profile` and the profile-data
+wishes above (`#profileName` and the rest) answer from it. When the home does
+not list that profile, has retired it, or lists one that is not the user's
+own, these wishes fail with an error
+naming the space rather than answer as another profile, even when other
+profiles are live. The home's own default and MRU are unchanged.
+
+Through `#profile`, `preferredProfileSpace` reaches every pattern that reads
+`#profile`, not only the runtime's own wishes. FabriChat's chat manager is one
+such pattern. There is one chat manager per Home, and it keys its direct rooms
+by the counterpart's principal alone. Two profiles of one person would
+therefore share a direct room with the same counterpart, which shows the
+counterpart that the two profiles are one person. Until the manager keeps its
+state per profile, a host runs the chat manager as one profile, the default.
 
 Profile resolution waits for the Home root, default pattern, roster, and
 referenced profile documents to load before publishing a new result or opening
@@ -201,7 +243,20 @@ for `wish({ query: "#profile" })`:
 - **0 profiles:** the trusted profile-create surface (same input as the home
   Profile tab). Submitting a name creates the viewer's first profile and leaves
   the current view in place; the wish reacts once the link exists. `.result` is
-  `undefined` and `error` is set until the first profile exists.
+  `undefined` and `error` is set, with `errorCode: "no-match"`, until the first
+  profile exists. The roster counts as empty when the home lists none of the
+  user's own profiles, or only retired ones (a retired entry whose document is
+  absent included).
+  Otherwise it reports `errorCode: "failed"` and offers no creation: when the
+  selected profile fails to load, and when every profile the home lists and has
+  not retired is confirmed absent ("Profile data is unavailable"). The home
+  says such a profile exists, so its absence is missing data, not "no profile
+  yet", and creating one would add a second profile beside it. When the
+  viewer's host has suggested a profile, the surface starts its name field
+  with the suggested name and shows the suggested picture with a control that
+  removes it (see "A host's profile suggestion" below). The viewer may also
+  choose a picture of their own ("Choose image"), suggested or not, and the
+  profile they create starts with it.
 - **1 profile:** a link to that profile.
 - **2+ profiles, a valid default set:** a link to the default profile.
 - **2+ profiles, no valid default:** the **profile picker**
@@ -232,6 +287,32 @@ surface per process, not on every re-run of the wish behind it.
 When rendering profile data from a shared piece, use a user-scoped result schema
 for the rendered output so each viewer sees their own home profile projection.
 
+### A host's profile suggestion
+
+A host that knows who its user is before they have a profile, as Web Weaver
+does from an invitation made for one person, suggests a name and a picture with
+`RuntimeClient.offerProfileSuggestion()`. The runtime stores the suggestion in
+the user's home space, in a document no pattern can address
+(`offerProfileSuggestion()` in `runtime/runner/src/profile-suggestion.ts`), and
+the wish hands the create surface a link to it as `profileSuggestion`. The
+runtime that builds the surface derives that link from the home space of the
+user the surface is for, so a space server building it on a user's behalf
+hands it that user's suggestion. No pattern supplies one.
+
+The surface offers it and applies nothing on its own: the user edits the name,
+keeps, removes, or replaces the picture, and creates the profile with the same
+trusted click as ever. Removing or choosing a picture is recorded on the
+surface itself; the host's suggestion is left as the host stored it. Unlike the
+create, these two choices are not yet gated to a gesture on the surface (see
+the "CFC debt" section of `patterns/system/profile-create/README.md`). A
+picture the user chose becomes the profile's picture, and once they remove the
+picture the profile starts with none. Only when the user made no picture choice
+does the profile take the picture the suggestion holds. Either picture is set
+through the profile's `setPicture` by the runtime that creates it, so its label
+names the profile's owner, as a reader of a face requires. The suggestion
+stays stored for the host to replace; the surface is shown only while the user
+has no profile.
+
 ### Favorites vs Mentionables vs Profile
 
 | Feature    | Favorites (`~`)            | Mentionables (`.`)              | Profile (`profile`)              |
@@ -245,7 +326,7 @@ for the rendered output so each viewer sees their own home profile projection.
 
 Favorites are pieces added to the user's home space; they are accessible from
 any space. You can wish for the favorites list directly (see
-`system/favorites-manager.tsx` for a full example):
+`system/favorites-manager/favorites-manager.tsx` for a full example):
 
 ```tsx
 // Shown at module scope.
@@ -254,10 +335,14 @@ const wishResult = wish<Array<Favorite>>({ query: "#favorites" });
 ```
 
 The `tags` field holds the discovery tags of the piece pointed to by `cell` —
-the hashtags from its schema's doc comment, lowercased and without the leading
-`#`. The favorites client derives them from the piece's schema when the
-favorite is added (the schema is not reachable from inside the home pattern's
-handler), and the wish system matches against them.
+the hashtags from descriptions across its schema tree, lowercased and without
+the leading `#`. The favorites client derives them from the piece's schema
+when the favorite is added (the schema is not reachable from inside the home
+pattern's handler), and the wish system matches against them. Description text
+is the source even when a stored schema also carries a `tags` annotation. A
+schema with only that annotation and no description hashtags contributes no
+tags. Explicit favorite-tag overrides take precedence; stored favorite tags
+remain the values searched by wish.
 
 Favorites created before the `tags` field instead carry a `tag` field holding
 the piece's serialized result schema; the wish system still reads it,
@@ -302,10 +387,32 @@ These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
 `#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`,
 `#chatManager`, and the `#profile*` targets, which require a signed-in user and
-resolve from that user's home space. `#chatManager` reports an error, naming
-the remedies, when the home pattern holds no chat manager: a system home
-pattern set up before its source had one gains it when the home space is next
-opened, and a custom one holds it only if it says so.
+resolve from that user's home space. A wish reads; it never creates the home
+pattern, the home space's root. The targets that resolve under that root are
+`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, the
+profile create surface `#profile` offers while the user has no profile, and a
+`"~"`-scoped target such as `#default`. While the home space's `defaultPattern`
+slot is empty, as it is before the home space is first opened, a headless wish
+for one of these resolves to nothing, with no result and no error, and a
+`"~"`-scoped one resolves to whatever else its scope reaches. Any other wish for
+one of these hands out a cell through the empty slot, where a read finds
+nothing. A write beneath the empty slot is refused with a
+`SpaceRootMissingError` rather than landing in the space cell itself. When the
+write is a handler's, the slot is that of the user the handler acts for, and
+the refusal escapes the handler, the handler runs again once the root exists,
+so the write lands under the root. A client runtime creates the root first. A
+serving runtime creates none: it waits until the server of the home space
+itself links one, which it does once that space is active. None of these
+creates one, and each leaves the slot empty: a handler that only reads beneath
+the empty slot, a handler that catches the refusal itself, and a write outside
+a handler. A root whose creation fails leaves the handler's refusal standing,
+with the failure as its cause. A slot that already holds something is resolved through as it stands.
+The other `#profile*` targets only read the profile roster through the slot as
+it stands, so for them an empty slot reads as no profiles. `#chatManager` only reads the home
+pattern too, and reports an error, naming the remedies, when there is no home
+pattern or it holds no chat manager: a system home pattern set up before its
+source had one gains it when the home space is next opened, and a custom one
+holds it only if it says so.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |
@@ -315,7 +422,6 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#default`          | Default pattern of the current space                    |
 | `#mentionable`      | Mentionable pieces in the current space                 |
 | `#pieceRegistry`    | All pieces registered in the current space              |
-| `#suggestions`      | Suggestion history of the current space                 |
 | `#summaryIndex`     | Summary index of the current space                      |
 | `#knowledgeGraph`   | Knowledge graph of the current space                    |
 | `#now`              | Piece's first-ever load time, durable — never advances  |
@@ -329,7 +435,6 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#chatManager`      | User's FabriChat manager: their chat rooms (home space) |
 | `#profile`          | User's current profile piece                            |
 | `#profileName`      | User's profile display name                             |
-| `#profileAvatar`    | User's profile avatar                                   |
 | `#profileSpace`     | User's profile space cell                               |
 
 The `#profile*` targets are detailed under

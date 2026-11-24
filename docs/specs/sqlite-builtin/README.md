@@ -36,7 +36,7 @@ distinct (and CFC can gate them independently):
   re-runs when its `reactOn` input changes. Returns
   `Reactive<{ pending, result?: Row[], error? }>`, the same shape as
   `fetchJson`/`generateText`
-  (see [`packages/runner/src/builtins/fetch.ts`](../../../packages/runner/src/builtins/fetch.ts)).
+  (see [`runtime/runner/src/builtins/fetch.ts`](../../../runtime/runner/src/builtins/fetch.ts)).
   A free `sqliteQuery<Row>({ db, sql, ... })` function is equivalent.
 - **`db.exec(sql, params?)`** — writes (`INSERT`/`UPDATE`/`DELETE`). Imperative,
   called inside a handler; returns `void`. It records a `sqlite` op onto the
@@ -65,7 +65,7 @@ Two cross-cutting rules make cell references first-class inside SQLite:
    the same seams rather than inventing parallel infrastructure.
 2. **Server-side execution.** Queries run inside toolshed, which already hosts
    the space and owns the SQLite engine
-   ([`packages/memory/v2/engine.ts`](../../../packages/memory/v2/engine.ts)).
+   ([`runtime/memory/v2/engine.ts`](../../../runtime/memory/v2/engine.ts)).
    The runtime reaches them over the **existing space-scoped websocket** — no
    new connection, no new auth path.
 3. **Atomic writes across cells and SQLite.** SQLite writes ride the *same*

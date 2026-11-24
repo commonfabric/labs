@@ -1,0 +1,1 @@
+{"date": "2026-11-02", "from": {"k": "unit", "s": "patterns", "n": "topics command > findTopic() > throws for a Topic the board does not hold, or a number in another space, naming it once"}, "to": {"k": "unit", "s": "patterns", "n": "topics command > findTopic() > throws for a Topic the board does not hold, naming it once"}}

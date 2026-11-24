@@ -26,6 +26,17 @@ execution and storage primitives. Product catalog schemas and transitions must
 not be added to the runner merely to make them available to authored code.
 Consumers use a narrow structural interface rather than Home's full UI schema.
 
+Home publishes that interface under `sharedSpaces`: independent command,
+collection-view, offer-receipt, and import-undo roles. Host consumers can use the
+projections in `@commonfabric/home-schemas`; patterns discover a role through
+`#default/sharedSpaces/<role>` with `scope: ["~"]`. The flat fields remain
+aliases over the same backing cell and streams. Home's collection browser reads
+the grouped view and invokes membership commands. FabriChat keeps its existing
+flat manager contract; catalog consumers select Home's command and observation
+roles independently.
+Native collection authority still requires the recovery and failure evidence
+below; the grouped interface alone does not switch that authority.
+
 All catalog writes execute in Home. FabriChat's Home-local room manager and
 share intake can use that boundary. An intake caller validates the offered
 target and its access before requesting registration; a catalog receipt records
@@ -119,7 +130,8 @@ authority; landing Home does not switch that authority.
   settled Home or verified source-interface evidence. A consumer that removes
   entries reports the same state for a Home missing `removeSharedSpace`; that
   absence does not make Home outdated for a consumer that only registers or
-  changes membership.
+  changes membership. The same holds of a consumer that retitles entries and a
+  Home missing `retitleSharedSpace`.
 - The authenticated actor reaches their configured Home. Serving execution does
   not substitute the service identity or a pattern-compilation origin for the
   owner or Home route.
@@ -144,9 +156,9 @@ Ordinary source updates and automatic roll-forward repair retain the Home root
 identity. Explicit recreation refuses an identity Home, absent or present,
 before stopping, unlinking, fetching, or compiling, and so does the low-level
 unlink; an unavailable root target is still a root to preserve. No user-facing
-path replaces or unlinks a Home: `cf space set-home` is retired, the shell
-debugger has no recreate action, and `cf space recreate-root`, which remains
-for spaces that are not a Home, refuses one.
+path replaces or unlinks a Home: the shell debugger has no recreate action, and
+`cf space recreate-root`, which remains for spaces that are not a Home, refuses
+one.
 
 Changing the Home application uses an in-place source update. Preserving account
 data by default covers profiles, favorites, navigation, and the catalog

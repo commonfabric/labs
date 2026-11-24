@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  clientsFromEnv,
   hasRecentActivity,
   keyHolderAccounts,
   leaseAction,
@@ -133,6 +134,110 @@ describe("test-records-janitor", () => {
           "2026-07-19",
         ),
       ).toBeUndefined();
+    });
+
+    it("returns unknown for an answer that carries no count", async () => {
+      expect(
+        await hasRecentActivity(
+          clients({ message: "Validation Failed" }),
+          "o",
+          "2026-07-19",
+        ),
+      ).toBeUndefined();
+    });
+
+    it("returns unknown and warns when the lookup cannot reach GitHub", async () => {
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      let active: boolean | undefined;
+      try {
+        active = await hasRecentActivity(
+          {
+            gcpToken: "t",
+            fetchImpl: () => Promise.reject(new TypeError("network down")),
+          },
+          "octocat",
+          "2026-07-19",
+        );
+      } finally {
+        console.warn = warn;
+      }
+      expect(active).toBeUndefined();
+      expect(warned).toEqual([
+        "janitor: activity lookup for octocat failed: TypeError: network down",
+      ]);
+    });
+
+    it("searches the lease repositories with the GitHub token it holds", async () => {
+      const requests: Request[] = [];
+      await hasRecentActivity(
+        {
+          gcpToken: "t",
+          githubToken: "gh-probe",
+          fetchImpl: (input, init) => {
+            requests.push(new Request(input, init));
+            return Promise.resolve(
+              new Response(JSON.stringify({ total_count: 1 })),
+            );
+          },
+        },
+        "octocat",
+        "2026-07-19",
+      );
+      expect(requests.length).toBe(1);
+      expect(requests[0]!.headers.get("authorization")).toBe(
+        "Bearer gh-probe",
+      );
+      expect(new URL(requests[0]!.url).searchParams.get("q")).toBe(
+        "repo:commonfabric/labs type:pr author:octocat updated:>=2026-07-19",
+      );
+    });
+  });
+
+  describe("clientsFromEnv()", () => {
+    const fetchImpl = searchFetch({});
+
+    it("returns the broker token and the GitHub CLI's token", () => {
+      const env: Record<string, string> = {
+        TEST_RECORDS_GCP_TOKEN: "gcp",
+        GH_TOKEN: "gh",
+        GITHUB_TOKEN: "actions",
+      };
+      expect(clientsFromEnv((name) => env[name], fetchImpl)).toEqual({
+        gcpToken: "gcp",
+        githubToken: "gh",
+        fetchImpl,
+      });
+    });
+
+    it("returns the workflow's token where the GitHub CLI's is unset", () => {
+      const env: Record<string, string> = {
+        TEST_RECORDS_GCP_TOKEN: "gcp",
+        GITHUB_TOKEN: "actions",
+      };
+      expect(clientsFromEnv((name) => env[name], fetchImpl).githubToken)
+        .toBe("actions");
+    });
+
+    it("returns no GitHub token for an empty one", () => {
+      const env: Record<string, string> = {
+        TEST_RECORDS_GCP_TOKEN: "gcp",
+        GH_TOKEN: "",
+      };
+      expect(clientsFromEnv((name) => env[name], fetchImpl)).toEqual({
+        gcpToken: "gcp",
+        fetchImpl,
+      });
+    });
+
+    it("throws without the broker token", () => {
+      expect(() =>
+        clientsFromEnv(
+          (name) => name === "TEST_RECORDS_GCP_TOKEN" ? "" : undefined,
+          fetchImpl,
+        )
+      ).toThrow("TEST_RECORDS_GCP_TOKEN is not set");
     });
   });
 

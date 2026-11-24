@@ -14,7 +14,7 @@ removal. This report records source and correctness evidence; it establishes no
 end-to-end latency improvement.
 
 The baseline is `27f10d2d4f02f125c0492e5d6288acb3f0da148b`. The
-[portable archive](../../../../tools/server-execution-topics/evidence/2026-09-10-incremental-watch/README.md)
+[portable archive](../../../../scripts/server-execution-topics/evidence/2026-09-10-incremental-watch/README.md)
 contains exact patches, scripts, manifests, compact raw results, analysis, build
 hashes, and replay instructions. It is an independent change targeting main;
 recommendations 5, 3, and 1 are separate PRs. Shared campaign corrections are

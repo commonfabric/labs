@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import type {
@@ -8,7 +9,7 @@ import type {
 import { loadPackageIntegrationSuites } from "./package-integration.ts";
 import { type Suite, unavailableUnits } from "./suite.ts";
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 
 /** The suites as they stand with a stated first-party default. */
 async function suitesWith(
@@ -58,7 +59,7 @@ describe("the package integration suites", () => {
     // stated here rather than read from the repository, which holds an
     // empty one whenever the ON arm is complete.
 
-    const file = "packages/runner/integration/reconnection.test.ts";
+    const file = "runtime/runner/integration/reconnection.test.ts";
     const skips = {
       patterns: [],
       runner: [{
@@ -90,9 +91,7 @@ describe("the package integration suites", () => {
   it("runs the shell's integration tests without a visible browser", async () => {
     const suites = await suitesWith(serverExecutionCiLane("default").enabled);
     const suite = byId(suites, "package-integration");
-    const unit = suite.units.find((name) =>
-      name.startsWith("packages/shell/")
-    )!;
+    const unit = suite.units.find((name) => name.startsWith("runtime/shell/"))!;
     const [invocation] = await suite.command([{ unit, skip: [] }], {
       root,
       outputDir: await Deno.makeTempDir({ prefix: "package-integration-" }),

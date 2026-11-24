@@ -1,0 +1,1143 @@
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import {
+  ExecutionLeaseCycle,
+  executionLeaseHolder,
+} from "@commonfabric/memory/v2/execution-lease";
+import { resolveScopeKey } from "@commonfabric/memory/v2";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import type { SpaceReplica } from "../src/storage/v2.ts";
+import { experimentalOptionsFromEnv } from "../src/experimental-posture.ts";
+import { Runtime } from "../src/runtime.ts";
+import { entityKey } from "../src/scheduler/keys.ts";
+import type {
+  IExtendedStorageTransaction,
+  IStorageManager,
+  IStorageTransaction,
+} from "../src/storage/interface.ts";
+import { stampWaveRunContext } from "../src/executor/wave.ts";
+import { excludeReadFromConflict } from "../src/storage/reactivity-log.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+
+const { localSessionDocuments } = experimentalOptionsFromEnv(Deno.env.get);
+
+const signer = await Identity.fromPassphrase("absence reconciliation test");
+const space = signer.did();
+
+const valueSchema = {
+  type: "object",
+  properties: { value: { type: "number" } },
+} as const;
+
+describe("editWithRetry absence reconciliation", () => {
+  // A transaction that reads a document this replica never synced records an
+  // absence, which the commit would export as a `seq: 0` confirmed read — a
+  // claim the engine rejects whenever the document exists. `editWithRetry`
+  // loads such documents before committing and re-runs its action locally
+  // when any turn out to exist, so convergence costs local rounds instead of
+  // wire rejections. These tests pin the local path apart from the wire path
+  // by whether the conflict machinery (`awaitCommitRetryReadiness`) is ever
+  // consulted: both paths converge to the same result, only one of them
+  // round-trips a doomed commit to get there.
+  it("re-runs locally against a document another client already wrote, without a wire conflict", async () => {
+    const server = newSharedServer();
+    const smA = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtimeA = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: smA,
+    });
+    let smB: EmulatedStorageManager | undefined;
+    let runtimeB: Runtime | undefined;
+    try {
+      // Client A creates the document and settles it server-side.
+      const txA = runtimeA.edit();
+      runtimeA.getCell(space, "shared-absence-doc", valueSchema, txA)
+        .set({ value: 42 });
+      await txA.commit().settled;
+      await smA.synced();
+
+      // Client B is a cold replica of the same space.
+      smB = EmulatedStorageManager.connectTo(server, { as: signer });
+      runtimeB = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: smB,
+      });
+      let readinessConsulted = 0;
+      const readiness = runtimeB.awaitCommitRetryReadiness.bind(runtimeB);
+      runtimeB.awaitCommitRetryReadiness = (error: unknown) => {
+        readinessConsulted++;
+        return readiness(error);
+      };
+
+      let runs = 0;
+      let observed: { value?: number } | undefined;
+      const result = await runtimeB.editWithRetry((tx) => {
+        runs++;
+        // Reads the foreign document cold: absent on the first run, so the
+        // read would commit as an absence claim over an existing document.
+        observed = runtimeB!.getCell(
+          space,
+          "shared-absence-doc",
+          valueSchema,
+          tx,
+        ).get();
+        runtimeB!.getCell(space, "b-own-doc", valueSchema, tx)
+          .set({ value: runs });
+      });
+
+      expect(result.error).toBeUndefined();
+      // One local re-run: the loaded document changes what the action reads.
+      expect(runs).toBe(2);
+      expect(observed).toEqual({ value: 42 });
+      // The discriminator: convergence never consulted the wire-conflict
+      // machinery. Without the pre-commit load, the same outcome arrives via
+      // a rejected commit and this counter.
+      expect(readinessConsulted).toBe(0);
+    } finally {
+      await runtimeB?.dispose();
+      await runtimeA.dispose();
+      await smB?.close();
+      await smA.close();
+      await server.close();
+    }
+  });
+
+  it("leaves a cold read to the commit verdict over a storage manager that cannot report its loads", async () => {
+    const server = newSharedServer();
+    const smA = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtimeA = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: smA,
+    });
+    let smB: EmulatedStorageManager | undefined;
+    let runtimeB: Runtime | undefined;
+    try {
+      const txA = runtimeA.edit();
+      runtimeA.getCell(space, "shared-absence-doc", valueSchema, txA)
+        .set({ value: 42 });
+      await txA.commit().settled;
+      await smA.synced();
+
+      smB = EmulatedStorageManager.connectTo(server, { as: signer });
+      const capabilities: IStorageManager = smB;
+      capabilities.loadsSettled = undefined;
+      runtimeB = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: smB,
+      });
+      let readinessConsulted = 0;
+      const readiness = runtimeB.awaitCommitRetryReadiness.bind(runtimeB);
+      runtimeB.awaitCommitRetryReadiness = (error: unknown) => {
+        readinessConsulted++;
+        return readiness(error);
+      };
+
+      let observed: { value?: number } | undefined;
+      const result = await runtimeB.editWithRetry((tx) => {
+        observed = runtimeB!.getCell(
+          space,
+          "shared-absence-doc",
+          valueSchema,
+          tx,
+        ).get();
+        runtimeB!.getCell(space, "b-own-doc", valueSchema, tx)
+          .set({ value: 1 });
+      });
+
+      // The same convergence as above, reached through a rejected commit.
+      expect(result.error).toBeUndefined();
+      expect(observed).toEqual({ value: 42 });
+      expect(readinessConsulted).toBeGreaterThan(0);
+    } finally {
+      await runtimeB?.dispose();
+      await runtimeA.dispose();
+      await smB?.close();
+      await smA.close();
+      await server.close();
+    }
+  });
+
+  it("commits on the first run when the absent documents are absent everywhere", async () => {
+    const server = newSharedServer();
+    const sm = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: sm,
+    });
+    try {
+      let runs = 0;
+      const result = await runtime.editWithRetry((tx) => {
+        runs++;
+        // A document nobody ever wrote: the absence is sound, so it commits
+        // as an examined absence rather than forcing a re-run.
+        runtime.getCell(space, "never-written-doc", valueSchema, tx).get();
+        runtime.getCell(space, "own-doc", valueSchema, tx).set({ value: 1 });
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(runs).toBe(1);
+    } finally {
+      await runtime.dispose();
+      await sm.close();
+      await server.close();
+    }
+  });
+
+  it("leaves a document read by address alone to the commit verdict", async () => {
+    const server = newSharedServer();
+    const smA = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtimeA = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: smA,
+    });
+    let smB: EmulatedStorageManager | undefined;
+    let runtimeB: Runtime | undefined;
+    try {
+      const txA = runtimeA.edit();
+      const shared = runtimeA.getCell(
+        space,
+        "address-read-doc",
+        valueSchema,
+        txA,
+      );
+      shared.set({ value: 5 });
+      const address = toMemorySpaceAddress(shared.getAsNormalizedFullLink());
+      await txA.commit().settled;
+      await smA.synced();
+
+      smB = EmulatedStorageManager.connectTo(server, { as: signer });
+      runtimeB = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: smB,
+      });
+      let readinessConsulted = 0;
+      const readiness = runtimeB.awaitCommitRetryReadiness.bind(runtimeB);
+      runtimeB.awaitCommitRetryReadiness = (error: unknown) => {
+        readinessConsulted++;
+        return readiness(error);
+      };
+      let loadsAwaited = 0;
+      const settled = smB.loadsSettled.bind(smB);
+      smB.loadsSettled = (keys) => {
+        loadsAwaited++;
+        return settled(keys);
+      };
+
+      let runs = 0;
+      const result = await runtimeB.editWithRetry((tx) => {
+        runs++;
+        // A read by address starts no load, so nothing is in flight for the
+        // wait to join: the absence claim goes to the server as it stands.
+        tx.read(address);
+        runtimeB!.getCell(space, "address-read-own-doc", valueSchema, tx)
+          .set({ value: runs });
+      });
+
+      expect(result.error).toBeUndefined();
+      // Nothing was waited on locally. The server rejects the claim, and the
+      // conflict machinery converges it: one wire round, one consult of the
+      // retry gate.
+      expect(loadsAwaited).toBe(0);
+      expect(runs).toBe(2);
+      expect(readinessConsulted).toBe(1);
+    } finally {
+      await runtimeB?.dispose();
+      await runtimeA.dispose();
+      await smB?.close();
+      await smA.close();
+      await server.close();
+    }
+  });
+
+  it("does not reconcile reads excluded from the commit conflict set", async () => {
+    const server = newSharedServer();
+    const writerStorage = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+    });
+    const writerRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: writerStorage,
+    });
+    let readerStorage: EmulatedStorageManager | undefined;
+    let readerRuntime: Runtime | undefined;
+    try {
+      const excludedAddress = {
+        space,
+        id: "of:excluded-cold-read-doc" as const,
+        type: "application/json" as const,
+        scope: "space" as const,
+        path: [] as string[],
+      };
+      const seed = writerRuntime.edit();
+      seed.writeValueOrThrow(excludedAddress, { value: 17 });
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await writerStorage.synced();
+
+      readerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
+      readerRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: readerStorage,
+      });
+      let runs = 0;
+      const result = await readerRuntime.editWithRetry((tx) => {
+        runs++;
+        tx.read(
+          excludedAddress,
+          {
+            meta: excludeReadFromConflict,
+            nonRecursive: true,
+            trackReadWithoutLoad: true,
+          },
+        );
+        readerRuntime!.getCell(
+          space,
+          "excluded-cold-read-output",
+          valueSchema,
+          tx,
+        ).set({ value: runs });
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(runs).toBe(1);
+      expect(
+        readerStorage.open(space).replica.getDocument(
+          excludedAddress.id,
+          excludedAddress.scope,
+        ),
+      ).toBeUndefined();
+    } finally {
+      await readerRuntime?.dispose();
+      await writerRuntime.dispose();
+      await readerStorage?.close();
+      await writerStorage.close();
+      await server.close();
+    }
+  });
+
+  it("falls back to the commit verdict when the provider or the awaited loads fail", async () => {
+    const server = newSharedServer();
+    const sm = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: sm,
+    });
+    const provider = sm.open(space);
+    const originalAbsences = provider.unexaminedAbsences;
+    const originalSettled = sm.loadsSettled.bind(sm);
+    const commitsColdRead = async (name: string): Promise<number> => {
+      let runs = 0;
+      const result = await runtime.editWithRetry((tx) => {
+        runs++;
+        runtime.getCell(space, `${name}-cold`, valueSchema, tx).get();
+        runtime.getCell(space, `${name}-output`, valueSchema, tx)
+          .set({ value: 1 });
+      });
+      expect(result.error).toBeUndefined();
+      return runs;
+    };
+    try {
+      provider.unexaminedAbsences = () => {
+        throw new Error("synchronous reconciliation failure");
+      };
+      expect(await commitsColdRead("provider-failure")).toBe(1);
+      provider.unexaminedAbsences = originalAbsences;
+
+      sm.loadsSettled = () => Promise.reject(new Error("awaited load failure"));
+      expect(await commitsColdRead("load-failure")).toBe(1);
+      sm.loadsSettled = originalSettled;
+
+      // The capability is optional. A provider without it keeps the
+      // server-judged commit path.
+      provider.unexaminedAbsences = undefined;
+      expect(await commitsColdRead("provider-without-capability")).toBe(1);
+    } finally {
+      provider.unexaminedAbsences = originalAbsences;
+      sm.loadsSettled = originalSettled;
+      await runtime.dispose();
+      await sm.close();
+      await server.close();
+    }
+  });
+
+  it("counts a document that landed as present when another awaited load failed", async () => {
+    const server = newSharedServer();
+    const smA = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtimeA = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: smA,
+    });
+    let smB: EmulatedStorageManager | undefined;
+    let runtimeB: Runtime | undefined;
+    try {
+      const txA = runtimeA.edit();
+      runtimeA.getCell(space, "landed-beside-failure", valueSchema, txA)
+        .set({ value: 3 });
+      await txA.commit().settled;
+      await smA.synced();
+
+      smB = EmulatedStorageManager.connectTo(server, { as: signer });
+      runtimeB = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: smB,
+      });
+      // Every load settles, then the wait reports one of them failed.
+      const settled = smB.loadsSettled.bind(smB);
+      smB.loadsSettled = (keys) =>
+        settled(keys).then(() => Promise.reject(new Error("one load failed")));
+      let readinessConsulted = 0;
+      const readiness = runtimeB.awaitCommitRetryReadiness.bind(runtimeB);
+      runtimeB.awaitCommitRetryReadiness = (error: unknown) => {
+        readinessConsulted++;
+        return readiness(error);
+      };
+
+      let runs = 0;
+      let observed: { value?: number } | undefined;
+      const result = await runtimeB.editWithRetry((tx) => {
+        runs++;
+        observed = runtimeB!.getCell(
+          space,
+          "landed-beside-failure",
+          valueSchema,
+          tx,
+        ).get();
+        runtimeB!.getCell(space, "landed-beside-failure-own", valueSchema, tx)
+          .set({ value: runs });
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(runs).toBe(2);
+      expect(observed).toEqual({ value: 3 });
+      expect(readinessConsulted).toBe(0);
+    } finally {
+      await runtimeB?.dispose();
+      await runtimeA.dispose();
+      await smB?.close();
+      await smA.close();
+      await server.close();
+    }
+  });
+
+  it("aborts an edit when disposal begins inside its action", async () => {
+    const server = newSharedServer();
+    const sm = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: sm,
+    });
+    let disposing: Promise<void> | undefined;
+    try {
+      const result = await runtime.editWithRetry((tx) => {
+        runtime.getCell(
+          space,
+          "dispose-before-edit-commit",
+          valueSchema,
+          tx,
+        ).set({ value: 1 });
+        // The closing path sets the write gate synchronously before its first
+        // awaited teardown barrier. editWithRetry must abort this prepared
+        // transaction instead of committing behind disposal.
+        disposing = runtime.dispose();
+      });
+
+      expect(result.error?.name).toBe("StorageTransactionAborted");
+      expect(result.error?.message).toContain("runtime is disposing");
+      await disposing;
+    } finally {
+      await disposing?.catch(() => undefined);
+      await sm.close();
+      await server.close();
+    }
+  });
+
+  it("returns a transaction error when commit rejects its promise", async () => {
+    const server = newSharedServer();
+    const sm = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: sm,
+    });
+    const failure = new Error("synthetic commit rejection");
+    let attempted: IExtendedStorageTransaction | undefined;
+    try {
+      const result = await runtime.editWithRetry((tx) => {
+        attempted = tx;
+        tx.commit = (() =>
+          createTransactionCommitReceipt(
+            Promise.reject(failure),
+          )) as typeof tx.commit;
+        return "uncommitted";
+      }, 0);
+
+      expect(result.error?.name).toBe("StorageTransactionAborted");
+      expect(result.error?.message).toContain("synthetic commit rejection");
+      expect((result.error as { reason?: unknown } | undefined)?.reason).toBe(
+        failure,
+      );
+    } finally {
+      attempted?.abort("synthetic commit completed");
+      await runtime.dispose();
+      await sm.close();
+      await server.close();
+    }
+  });
+
+  it("cancels a retry readiness wait when kept-storage disposal begins", async () => {
+    const server = newSharedServer();
+    const sm = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: sm,
+    });
+    const readiness = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<void>();
+    let editing: ReturnType<Runtime["editWithRetry"]> | undefined;
+    let disposed = false;
+    try {
+      editing = runtime.editWithRetry((tx) => {
+        tx.commit = (() =>
+          createTransactionCommitReceipt(Promise.resolve({
+            error: {
+              name: "ConflictError",
+              message: "synthetic conflict with a stuck catch-up gate",
+              readyToRetry: () => {
+                waiting.resolve();
+                return readiness.promise;
+              },
+            },
+          }))) as typeof tx.commit;
+      });
+      await waiting.promise;
+
+      await runtime.dispose({ closeStorage: false });
+      disposed = true;
+
+      const outcome = await editing;
+      expect(outcome.error?.name).toBe("StorageTransactionAborted");
+      expect(outcome.error?.message).toContain("runtime is disposing");
+    } finally {
+      readiness.resolve();
+      await editing?.catch(() => undefined);
+      if (!disposed) await runtime.dispose({ closeStorage: false });
+      await sm.close();
+      await server.close();
+    }
+  });
+
+  it("stops retry readiness before and between waits when teardown is signaled", async () => {
+    const server = newSharedServer();
+    const sm = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: sm,
+    });
+    try {
+      const alreadyAborted = new AbortController();
+      alreadyAborted.abort();
+      let firstGateConsulted = false;
+      await runtime.awaitCommitRetryReadiness({
+        readyToRetry: () => {
+          firstGateConsulted = true;
+          return Promise.resolve();
+        },
+      }, alreadyAborted.signal);
+      expect(firstGateConsulted).toBe(true);
+
+      // Model teardown landing after the catch-up gate has settled but before
+      // the conflict-document pull begins. The helper removes its listener as
+      // it leaves the first wait; making that removal observe the teardown
+      // deterministically exercises the same inter-phase race without timing.
+      let abortedBetweenWaits = false;
+      const interveningSignal = {
+        get aborted() {
+          return abortedBetweenWaits;
+        },
+        addEventListener() {},
+        removeEventListener() {
+          abortedBetweenWaits = true;
+        },
+      } as unknown as AbortSignal;
+      await runtime.awaitCommitRetryReadiness({
+        readyToRetry: () => Promise.resolve(),
+        conflict: { space, of: "of:must-not-be-pulled" },
+      }, interveningSignal);
+      expect(abortedBetweenWaits).toBe(true);
+    } finally {
+      await runtime.dispose();
+      await sm.close();
+      await server.close();
+    }
+  });
+
+  it("does not resume a reconciled edit after runtime disposal", async () => {
+    const server = newSharedServer();
+    const sm = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: sm,
+    });
+    const provider = sm.open(space);
+    const originalSettled = sm.loadsSettled.bind(sm);
+    const reconciliation = Promise.withResolvers<void>();
+    let reconciliationCalled = false;
+    let disposed = false;
+    let outputAddress:
+      | ReturnType<typeof toMemorySpaceAddress>
+      | undefined;
+    try {
+      // The cold read below starts a load, and the wait for it is held
+      // open here across the disposal.
+      sm.loadsSettled = () => {
+        reconciliationCalled = true;
+        return reconciliation.promise;
+      };
+      const editing = runtime.editWithRetry((tx) => {
+        runtime.getCell(
+          space,
+          "dispose-during-reconciliation-input",
+          valueSchema,
+          tx,
+        ).get();
+        const output = runtime.getCell(
+          space,
+          "dispose-during-reconciliation-output",
+          valueSchema,
+          tx,
+        );
+        outputAddress = toMemorySpaceAddress(
+          output.getAsNormalizedFullLink(),
+        );
+        output.set({ value: 1 });
+      });
+      expect(reconciliationCalled).toBe(true);
+
+      await runtime.dispose({ closeStorage: false });
+      disposed = true;
+      reconciliation.resolve();
+      const result = await editing;
+
+      expect(result.error?.name).toBe("StorageTransactionAborted");
+      expect(
+        provider.replica.getDocument(
+          outputAddress!.id,
+          outputAddress!.scope,
+        ),
+      ).toBeUndefined();
+    } finally {
+      sm.loadsSettled = originalSettled;
+      reconciliation.resolve();
+      if (!disposed) await runtime.dispose({ closeStorage: false });
+      await sm.close();
+      await server.close();
+    }
+  });
+
+  for (const scope of ["user", "session"] as const) {
+    it({
+      name: `reconciles the served transaction's ${scope} instance`,
+      ignore: scope === "session" && localSessionDocuments === true,
+      fn: async () => {
+        const actor = await Identity.fromPassphrase(
+          "absence reconciliation served actor",
+        );
+        const service = await Identity.fromPassphrase(
+          "absence reconciliation serving runtime",
+        );
+        const actorIdentity = {
+          principal: actor.did(),
+          sessionId: "absence-actor-session",
+        };
+        const server = newSharedServer();
+        let actorStorage: EmulatedStorageManager | undefined =
+          EmulatedStorageManager.connectTo(server, {
+            as: actor,
+            id: actorIdentity.sessionId,
+          });
+        let actorRuntime: Runtime | undefined = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: actorStorage,
+          experimental: { serverExecution: false, localSessionDocuments },
+        });
+        let servingStorage: EmulatedStorageManager | undefined;
+        let servingRuntime: Runtime | undefined;
+        let lease: ExecutionLeaseCycle | undefined;
+        try {
+          const cell = actorRuntime.getCell<{ value: number }>(
+            space,
+            `served-identity-${scope}`,
+            valueSchema,
+            undefined,
+            scope,
+          );
+          const seed = actorRuntime.edit();
+          cell.withTx(seed).set({ value: 11 });
+          expect((await seed.commit().settled).error).toBeUndefined();
+          await actorStorage.synced();
+          const id = cell.getAsNormalizedFullLink().id;
+          await actorRuntime.dispose();
+          actorRuntime = undefined;
+          await actorStorage.close();
+          actorStorage = undefined;
+
+          const holder = executionLeaseHolder(service.did());
+          servingStorage = EmulatedStorageManager.connectTo(server, {
+            as: service,
+            id: holder,
+            servingHomeSpace: space,
+          });
+          servingRuntime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: servingStorage,
+            servingPosture: true,
+            experimental: { serverExecution: true },
+          });
+          const engine = await server.engineForSpace(space);
+          lease = new ExecutionLeaseCycle({
+            leases: engine.executionLeases,
+            space,
+            holder,
+          });
+          expect(await lease.acquire()).toBe(true);
+
+          const tx = servingRuntime.edit();
+          stampWaveRunContext(tx, {
+            actionId: "reconcile-served-identity",
+            kind: "derivation",
+            scopeKeyIdentity: actorIdentity,
+            actionScopeKey: resolveScopeKey(scope, actorIdentity),
+          });
+          tx.read({
+            space,
+            id,
+            type: "application/json",
+            scope,
+            path: [],
+          }, { trackReadWithoutLoad: true });
+
+          const provider = servingStorage.open(space);
+          const absences = provider.unexaminedAbsences!(tx.tx);
+          expect(absences.map((absence) => absence.id).sort()).toEqual(
+            [id],
+          );
+          // Each names the actor's instance, the way a load for it is keyed.
+          for (const absence of absences) {
+            expect(absence.scopeKey).toBe(
+              resolveScopeKey(absence.scope, actorIdentity),
+            );
+          }
+          expect(provider.presentCount!(absences)).toBe(0);
+          // The loads a served run's reads register name that instance too, and
+          // under the key the runtime waits on; once they land, the absences
+          // count as present.
+          const loads = absences.map((absence) =>
+            servingStorage!.syncCell(
+              servingRuntime!.getCellFromLink({
+                space,
+                id: absence.id,
+                path: [],
+                scope: absence.scope,
+              }),
+              { scopeKeyIdentity: actorIdentity },
+            )
+          );
+          for (const absence of absences) {
+            expect(
+              servingStorage.pendingLoadGeneration(
+                entityKey(absence, servingRuntime.scopeKeyIdentity),
+              ),
+            ).toBeDefined();
+          }
+          await Promise.all(loads);
+          expect(provider.presentCount!(absences)).toBe(1);
+          expect(
+            (provider.replica.getDocument(id, scope, actorIdentity)?.value as
+              | { value?: number }
+              | undefined)?.value,
+          ).toBe(11);
+          // The load names the actor's instance; the serving replica has no
+          // record for its own instance of the document.
+          const replica = provider.replica as SpaceReplica;
+          expect(
+            replica.accessForTestingOnly.hasDocumentRecord(id, scope),
+          ).toBe(false);
+          tx.abort("inspection only");
+        } finally {
+          lease?.release();
+          await servingRuntime?.dispose();
+          await actorRuntime?.dispose();
+          await servingStorage?.close();
+          await actorStorage?.close();
+          await server.close();
+        }
+      },
+    });
+  }
+
+  it("names the unexamined absences through the provider, and counts them present once loaded", async () => {
+    const server = newSharedServer();
+    const smA = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtimeA = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: smA,
+    });
+    let smB: EmulatedStorageManager | undefined;
+    let runtimeB: Runtime | undefined;
+    try {
+      const txA = runtimeA.edit();
+      runtimeA.getCell(space, "provider-level-doc", valueSchema, txA)
+        .set({ value: 7 });
+      await txA.commit().settled;
+      await smA.synced();
+
+      smB = EmulatedStorageManager.connectTo(server, { as: signer });
+      runtimeB = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: smB,
+      });
+      const txB = runtimeB.edit();
+      const present = runtimeB.getCell(
+        space,
+        "provider-level-doc",
+        valueSchema,
+        txB,
+      );
+      const absent = runtimeB.getCell(
+        space,
+        "provider-level-absent",
+        valueSchema,
+        txB,
+      );
+      const presentAddress = toMemorySpaceAddress(
+        present.getAsNormalizedFullLink(),
+      );
+      const absentAddress = toMemorySpaceAddress(
+        absent.getAsNormalizedFullLink(),
+      );
+
+      // Recording the reads loads neither document, so what the provider
+      // names below cannot depend on a load landing first.
+      txB.read(presentAddress, { trackReadWithoutLoad: true });
+      txB.read(absentAddress, { trackReadWithoutLoad: true });
+
+      const provider = smB.open(space);
+      expect(provider.unexaminedAbsences).toBeDefined();
+      expect(provider.unexaminedAbsences!(undefined)).toEqual([]);
+      expect(
+        provider.unexaminedAbsences!({
+          getReadActivities: () => undefined,
+        } as unknown as IStorageTransaction),
+      ).toEqual([]);
+
+      // A write in another space is irrelevant to this replica's own-write
+      // exclusion, and must be skipped rather than keyed here.
+      const otherSpace = (await Identity.fromPassphrase(
+        "absence reconciliation unrelated space",
+      )).did();
+      runtimeB.getCell(otherSpace, "unrelated-write", valueSchema, txB)
+        .set({ value: 1 });
+      // The provider names the documents this replica lacks at the moment
+      // it is asked. The list below rests on `provider-level-doc` being one
+      // of them, which holds once everything the replica owes has
+      // synchronized.
+      await smB.synced();
+      expect(
+        provider.replica.getDocument(presentAddress.id, presentAddress.scope),
+      ).toBeUndefined();
+      const absences = provider.unexaminedAbsences!(txB.tx);
+      expect(absences.map((absence) => absence.id).sort()).toEqual(
+        [presentAddress.id, absentAddress.id].sort(),
+      );
+      for (const absence of absences) {
+        expect(absence.space).toBe(space);
+        expect(absence.scopeKey).toBeUndefined();
+      }
+      expect(provider.presentCount!(absences)).toBe(0);
+      // Once the loads a read would have started land, exactly the document
+      // that exists counts as present.
+      await Promise.all([smB.syncCell(present), smB.syncCell(absent)]);
+      expect(provider.presentCount!(absences)).toBe(1);
+      txB.abort("inspection only");
+
+      // A partial served identity cannot name a session instance on the wire.
+      // Leave that absence for ordinary commit admission.
+      const incomplete = runtimeB.edit();
+      incomplete.tx.scopeKeyIdentity = { principal: signer.did() };
+      incomplete.read({
+        space,
+        id: "of:incomplete-served-session-identity",
+        type: "application/json",
+        scope: "session",
+        path: [],
+      }, { trackReadWithoutLoad: true });
+      expect(provider.unexaminedAbsences!(incomplete.tx)).toEqual([]);
+      incomplete.abort("inspection only");
+    } finally {
+      await runtimeB?.dispose();
+      await runtimeA.dispose();
+      await smB?.close();
+      await smA.close();
+      await server.close();
+    }
+  });
+
+  describe("an action that throws", () => {
+    // Client A stores `stored-doc`, `chain-0` and `chain-1`; `body` runs
+    // against client B, a cold replica of the same space, which has loaded
+    // none of them. A read of a document B has not loaded is what a read after
+    // a release pass dropped that document is, so B's first read of each finds
+    // it absent.
+    const withColdReader = async (
+      body: (reader: {
+        runtime: Runtime;
+        storageManager: EmulatedStorageManager;
+      }) => Promise<void>,
+    ): Promise<void> => {
+      const server = newSharedServer();
+      const smA = EmulatedStorageManager.connectTo(server, { as: signer });
+      const runtimeA = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: smA,
+      });
+      let smB: EmulatedStorageManager | undefined;
+      let runtimeB: Runtime | undefined;
+      try {
+        const txA = runtimeA.edit();
+        runtimeA.getCell(space, "stored-doc", valueSchema, txA)
+          .set({ value: 42 });
+        for (const id of ["chain-0", "chain-1"]) {
+          runtimeA.getCell(space, id, valueSchema, txA).set({ value: 1 });
+        }
+        await txA.commit().settled;
+        await smA.synced();
+
+        smB = EmulatedStorageManager.connectTo(server, { as: signer });
+        runtimeB = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: smB,
+        });
+        await body({ runtime: runtimeB, storageManager: smB });
+      } finally {
+        await runtimeB?.dispose();
+        await runtimeA.dispose();
+        await smB?.close();
+        await smA.close();
+        await server.close();
+      }
+    };
+
+    // Reads `stored-doc` in `tx`, and throws as a check that requires it
+    // does when the read finds it absent.
+    const requireStored = (
+      runtime: Runtime,
+      tx: IExtendedStorageTransaction,
+    ) => {
+      const stored = runtime.getCell(space, "stored-doc", valueSchema, tx)
+        .get();
+      if (stored === undefined) throw new Error("stored-doc is unavailable");
+      return stored;
+    };
+
+    it("runs again once a document it found absent has loaded, and commits", async () => {
+      await withColdReader(async ({ runtime }) => {
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          const stored = requireStored(runtime, tx);
+          runtime.getCell(space, "reader-own-doc", valueSchema, tx)
+            .set({ value: stored.value });
+          return stored.value;
+        });
+
+        expect(result.error).toBeUndefined();
+        expect(result.ok).toBe(42);
+        expect(runs).toBe(2);
+      });
+    });
+
+    it("reports the throw without running again when every document it read is loaded", async () => {
+      await withColdReader(async ({ runtime }) => {
+        await runtime.getCell(space, "stored-doc", valueSchema).sync();
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          requireStored(runtime, tx);
+          throw new Error("refused for another reason");
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.name).toBe("StorageTransactionAborted");
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: refused for another reason",
+        );
+      });
+    });
+
+    it("reports the throw without running again when the documents it found absent are absent everywhere", async () => {
+      await withColdReader(async ({ runtime }) => {
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          runtime.getCell(space, "never-written-doc", valueSchema, tx).get();
+          throw new Error("never-written-doc is unavailable");
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: never-written-doc is unavailable",
+        );
+      });
+    });
+
+    it("reports the throw of the run after the document loaded, when that run throws too", async () => {
+      await withColdReader(async ({ runtime }) => {
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          const stored = requireStored(runtime, tx);
+          throw new Error(`refused at value ${stored.value}`);
+        });
+
+        expect(runs).toBe(2);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: refused at value 42",
+        );
+        const error = result.error as { reason?: unknown } | undefined;
+        expect((error?.reason as Error).message).toBe("refused at value 42");
+      });
+    });
+
+    it("reports the throw without running again when no retry budget is left", async () => {
+      await withColdReader(async ({ runtime }) => {
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          requireStored(runtime, tx);
+        }, 0);
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: stored-doc is unavailable",
+        );
+      });
+    });
+
+    it("runs again once for each document it found absent, until its retry budget is spent", async () => {
+      await withColdReader(async ({ runtime }) => {
+        // Each run reads the chain in order and throws at the first document
+        // it finds absent, so each run finds one more loaded than the last.
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          for (const id of ["chain-0", "chain-1"]) {
+            if (
+              runtime.getCell(space, id, valueSchema, tx).get() === undefined
+            ) {
+              throw new Error(`${id} is unavailable`);
+            }
+          }
+        }, 1);
+
+        expect(runs).toBe(2);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: chain-1 is unavailable",
+        );
+      });
+    });
+
+    it("reports the throw, with its transaction aborted, when naming the documents it found absent fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        storageManager.pendingLoadGeneration = () => {
+          throw new Error("load bookkeeping is unavailable");
+        };
+        let runs = 0;
+        let attempt: IExtendedStorageTransaction | undefined;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          attempt = tx;
+          requireStored(runtime, tx);
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: stored-doc is unavailable",
+        );
+        expect(attempt!.status().status).toBe("error");
+      });
+    });
+
+    it("reports the throw when counting the documents it found absent fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        storageManager.open(space).presentCount = () => {
+          throw new Error("the replica cannot count");
+        };
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          requireStored(runtime, tx);
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: stored-doc is unavailable",
+        );
+      });
+    });
+
+    it("reports its owner's cancellation, without running again, when the owner cancels while the document loads", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        const owner = new AbortController();
+        const loadsSettled = storageManager.loadsSettled.bind(storageManager);
+        storageManager.loadsSettled = (keys) => {
+          owner.abort(new Error("the owner went away"));
+          return loadsSettled(keys);
+        };
+        let runs = 0;
+        const result = await runtime.editWithRetry(
+          (tx) => {
+            runs++;
+            requireStored(runtime, tx);
+          },
+          undefined,
+          { signal: owner.signal },
+        );
+
+        expect(runs).toBe(1);
+        expect(result.error?.name).toBe("StorageTransactionAborted");
+        expect(result.error?.message).toBe(
+          "editWithRetry stopped because its owner canceled",
+        );
+      });
+    });
+
+    it("reports its owner's cancellation when the owner cancels while the document loads and counting then fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        const owner = new AbortController();
+        const loadsSettled = storageManager.loadsSettled.bind(storageManager);
+        storageManager.loadsSettled = (keys) => {
+          owner.abort(new Error("the owner went away"));
+          return loadsSettled(keys);
+        };
+        storageManager.open(space).presentCount = () => {
+          throw new Error("the replica cannot count");
+        };
+        let runs = 0;
+        const result = await runtime.editWithRetry(
+          (tx) => {
+            runs++;
+            requireStored(runtime, tx);
+          },
+          undefined,
+          { signal: owner.signal },
+        );
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry stopped because its owner canceled",
+        );
+      });
+    });
+  });
+});

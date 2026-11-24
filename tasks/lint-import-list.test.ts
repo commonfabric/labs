@@ -1,8 +1,8 @@
 /// <reference lib="deno.unstable" />
 
 /**
- * Runs `cf-import-list/one-statement-per-kind` over short files, and checks
- * which statement it reports and which of its five messages it gives.
+ * Runs the `cf-import-list` rules over short files, and checks which statement
+ * `one-statement-per-kind` reports and which of its five messages it gives.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -47,7 +47,9 @@ function statements(source: string): string[] {
 
 /** What the rule reports over one file, in the order it reports it. */
 function run(source: string): Deno.lint.Diagnostic[] {
-  return Deno.lint.runPlugin(plugin, "sample.ts", source);
+  return Deno.lint.runPlugin(plugin, "sample.ts", source).filter(({ id }) =>
+    id === RULE
+  );
 }
 
 describe("lint-import-list", () => {
@@ -323,5 +325,33 @@ describe("lint-import-list", () => {
         `import { d } from "./mod.ts";`,
       ]);
     });
+  });
+});
+
+describe("cf-import-list/types-are-import-type", () => {
+  const RULE_ID = "cf-import-list/types-are-import-type";
+  const reports = (source: string, file = "sample.ts") =>
+    Deno.lint.runPlugin(plugin, file, source).filter(({ id }) => id === RULE_ID)
+      .length;
+
+  it("reports a value statement naming nothing but types", () => {
+    expect(reports(`import { type A, type B } from "x";\n`)).toBe(1);
+  });
+
+  it("accepts a statement that also binds a value", () => {
+    expect(reports(`import { type A, b } from "x";\n`)).toBe(0);
+  });
+
+  it("accepts `import type` and a bare import", () => {
+    expect(reports(`import type { A } from "x";\nimport "y";\n`)).toBe(0);
+  });
+
+  it("leaves a pattern's source as written", () => {
+    expect(
+      reports(
+        `import { type A } from "x";\n`,
+        "/labs/patterns/apps/sample/main.tsx",
+      ),
+    ).toBe(0);
   });
 });

@@ -4,3 +4,6 @@
 {"date":"2026-10-06","from":{"k":"unit","s":"dashboard","n":"CI job history holds a search only to newest-page runs inside its window"},"to":{"k":"unit","s":"dashboard","n":"CI job history stops at a quiet workflow's first run before its window"}}
 {"date":"2026-10-06","from":{"k":"unit","s":"dashboard","n":"CI job history splits a saturated workflow-run search"},"to":{"k":"unit","s":"dashboard","n":"CI job history reads a busy window's runs past the first thousand"}}
 {"date":"2026-10-06","from":{"k":"unit","s":"dashboard","n":"CI job history paginates workflow searches and honors the reported total"},"to":{"k":"unit","s":"dashboard","n":"CI job history reads a busy window's runs past the first thousand"}}
+{"date":"2026-12-31","from":{"k":"unit","s":"dashboard","n":"CI job history page can select the loom workflow"},"to":{"k":"unit","s":"dashboard","n":"CI job history page can select the cfs workflow"}}
+{"date":"2026-12-31","from":{"k":"unit","s":"dashboard","n":"CI job history keeps labs fresh while loom has a pending cache write"},"to":{"k":"unit","s":"dashboard","n":"CI job history keeps labs fresh while cfs has a pending cache write"}}
+{"date":"2026-12-31","from":{"k":"unit","s":"dashboard","n":"CI job history reads loom when that repository is selected"},"to":{"k":"unit","s":"dashboard","n":"CI job history reads cfs when that repository is selected"}}

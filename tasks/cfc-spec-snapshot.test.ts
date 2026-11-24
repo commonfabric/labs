@@ -1,14 +1,57 @@
-import { describe, it } from "@std/testing/bdd";
+import { join } from "@std/path";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   buildSnapshot,
   compareSections,
   functionsOf,
+  main,
   normalizeBlock,
+  readChaptersAt,
+  renderSnapshot,
+  revision,
   sectionsOf,
   sha256Hex,
+  SNAPSHOT_PATH,
+  specsDirectory,
 } from "./cfc-spec-snapshot.ts";
+import type { Git } from "./repository-files.ts";
+
+const SPECS_COMMIT = "9e751d583760fe44780aad2f4b138edb2667fa1a";
+
+/**
+ * A git that answers each argument list `answers` names, joined by spaces,
+ * and rejects any other; `calls` records each call's directory and arguments.
+ */
+function fakeGit(
+  answers: Readonly<Record<string, string>>,
+  calls: string[][] = [],
+): (directory: string) => Git {
+  return (directory) => (...args) => {
+    calls.push([directory, ...args]);
+    const answer = answers[args.join(" ")];
+    return answer === undefined
+      ? Promise.reject(new Error(`unexpected \`git ${args.join(" ")}\``))
+      : Promise.resolve(answer);
+  };
+}
+
+/** What git says of a specs checkout's `cfc/` directory at `v1`. */
+const SPECS_AT_V1: Readonly<Record<string, string>> = {
+  "rev-parse v1^{commit}": `${SPECS_COMMIT}\n`,
+  "rev-parse --show-prefix": "cfc/\n",
+  [`ls-tree --full-tree --name-only ${SPECS_COMMIT}:cfc/`]:
+    "03-labels.md\nREADME.md\n11-guide.md\n",
+  [`show ${SPECS_COMMIT}:cfc/03-labels.md`]:
+    "# 3. Labels\n## 3.1 Atoms\n```ts\nfunction atom() {}\n```\n",
+  [`show ${SPECS_COMMIT}:cfc/11-guide.md`]: "# 11. Guide\n",
+};
+
+/** An environment holding exactly `vars`. */
+const environment = (vars: Readonly<Record<string, string>>) => ({
+  get: (name: string): string | undefined => vars[name],
+});
 
 const chapter = [
   "# 8. Label Transition Rules",
@@ -64,6 +107,10 @@ describe("cfc-spec-snapshot", () => {
         "8.12.4",
         "10",
       ]);
+    });
+
+    it("returns 0 for a section compared with itself", () => {
+      expect(compareSections("8.12", "8.12")).toBe(0);
     });
   });
 
@@ -192,6 +239,133 @@ describe("cfc-spec-snapshot", () => {
           sha256: sha256Hex("function g() {}"),
         }],
       });
+    });
+  });
+
+  describe("renderSnapshot()", () => {
+    it("returns the snapshot as two-space-indented JSON ending in a newline", () => {
+      expect(
+        renderSnapshot({ specsCommit: "abc", sections: ["1"], functions: [] }),
+      ).toBe(
+        '{\n  "specsCommit": "abc",\n  "sections": [\n    "1"\n  ],\n' +
+          '  "functions": []\n}\n',
+      );
+    });
+  });
+
+  describe("readChaptersAt()", () => {
+    it("returns the numbered chapter files at the commit the revision names", async () => {
+      const calls: string[][] = [];
+      const read = await readChaptersAt(
+        "/specs/cfc",
+        "v1",
+        fakeGit(SPECS_AT_V1, calls),
+      );
+      expect(read).toEqual({
+        specsCommit: SPECS_COMMIT,
+        chapters: [
+          {
+            name: "03-labels.md",
+            text: SPECS_AT_V1[`show ${SPECS_COMMIT}:cfc/03-labels.md`],
+          },
+          { name: "11-guide.md", text: "# 11. Guide\n" },
+        ],
+      });
+      expect(calls.every(([directory]) => directory === "/specs/cfc")).toBe(
+        true,
+      );
+    });
+
+    it("throws what git throws for a revision it cannot resolve", async () => {
+      await expect(readChaptersAt("/specs/cfc", "v2", fakeGit(SPECS_AT_V1)))
+        .rejects.toThrow("unexpected `git rev-parse v2^{commit}`");
+    });
+  });
+
+  describe("specsDirectory()", () => {
+    it("returns `CF_SPECS_DIR` where it is set", () => {
+      expect(
+        specsDirectory(environment({ CF_SPECS_DIR: "/x/cfc", HOME: "/h" })),
+      ).toBe("/x/cfc");
+    });
+
+    it("returns `~/src/specs/cfc` where `CF_SPECS_DIR` is unset or empty", () => {
+      expect(specsDirectory(environment({ HOME: "/h" }))).toBe(
+        join("/h", "src", "specs", "cfc"),
+      );
+      expect(specsDirectory(environment({ CF_SPECS_DIR: "", HOME: "/h" })))
+        .toBe(join("/h", "src", "specs", "cfc"));
+    });
+
+    it("throws where neither `CF_SPECS_DIR` nor `HOME` is set", () => {
+      expect(() => specsDirectory(environment({}))).toThrow(
+        "Set `CF_SPECS_DIR` to the `cfc/` directory of a specs checkout.",
+      );
+    });
+  });
+
+  describe("revision()", () => {
+    it("returns `HEAD` when `--rev` is not given", () => {
+      expect(revision([])).toBe("HEAD");
+    });
+
+    it("returns the argument after `--rev`", () => {
+      expect(revision(["--rev", "origin/main"])).toBe("origin/main");
+    });
+
+    it("throws when `--rev` is last or followed by an option", () => {
+      expect(() => revision(["--rev"])).toThrow("`--rev` takes a revision.");
+      expect(() => revision(["--rev", "--other"])).toThrow(
+        "`--rev` takes a revision.",
+      );
+    });
+  });
+
+  describe("main()", () => {
+    let dir: string;
+
+    beforeEach(async () => {
+      dir = await Deno.makeTempDir();
+    });
+
+    afterEach(async () => {
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    it("writes the snapshot of the revision `--rev` names and returns what it wrote", async () => {
+      const calls: string[][] = [];
+      const target = join(dir, "spec-snapshot.json");
+      const said = await main(["--rev", "v1"], {
+        env: environment({ CF_SPECS_DIR: "/specs/cfc" }),
+        git: fakeGit(SPECS_AT_V1, calls),
+        target,
+      });
+      expect(JSON.parse(await Deno.readTextFile(target))).toEqual({
+        specsCommit: SPECS_COMMIT,
+        sections: ["3", "3.1", "11"],
+        functions: [{
+          file: "03-labels.md",
+          section: "3.1",
+          name: "atom",
+          sha256: sha256Hex("function atom() {}"),
+        }],
+      });
+      expect(said).toBe(
+        `Wrote ${SNAPSHOT_PATH}: specs 9e751d58, 3 sections, 1 functions.`,
+      );
+      expect(calls[0]).toEqual(["/specs/cfc", "rev-parse", "v1^{commit}"]);
+    });
+
+    it("writes nothing when the specs checkout cannot be read", async () => {
+      const target = join(dir, "spec-snapshot.json");
+      await expect(
+        main([], {
+          env: environment({ CF_SPECS_DIR: "/specs/cfc" }),
+          git: fakeGit(SPECS_AT_V1),
+          target,
+        }),
+      ).rejects.toThrow("unexpected `git rev-parse HEAD^{commit}`");
+      await expect(Deno.stat(target)).rejects.toThrow(Deno.errors.NotFound);
     });
   });
 });

@@ -1,0 +1,35 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "userInput": {
+        "default": "a self-watering plant pot",
+        "type": "string"
+      }
+    },
+    "required": [
+      "userInput"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/gideon-tests/test-generateobject-error-handling.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "userInput": {
+        "default": "a self-watering plant pot",
+        "type": "string"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "userInput"
+    ],
+    "type": "object"
+  }
+}

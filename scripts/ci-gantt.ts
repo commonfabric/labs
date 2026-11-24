@@ -41,7 +41,7 @@
 //     --theme NAME          color palette: "default" (light) or "dark"
 //     --colors JSON         override palette keys, e.g. '{"work":"#6ea8fe"}'
 
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import { type Phase, phaseOf } from "../tasks/ci-step-phases.ts";
 
 const args = Deno.args;

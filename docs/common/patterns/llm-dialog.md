@@ -3,7 +3,7 @@
 `llmDialog` runs a model conversation as a reactive builtin: the pattern
 supplies tools and messages, the runtime executes tool calls, and results flow
 back into the dialog. The behaviors below are facts about the builtin
-(`packages/runner/src/builtins/llm-dialog.ts`) that pattern authors cannot
+(`runtime/runner/src/builtins/llm-dialog.ts`) that pattern authors cannot
 derive from its type signature.
 
 ## Turn ownership and cancellation

@@ -33,7 +33,7 @@ account of its own number. Dropping a declared input that deployed topics have
 a link bound at is accepted rather than refused — the candidate declares no
 path there, so the link is neither proved against anything nor written, and it
 stays in the raw argument document unreachable through the new projection. That
-is measured in `packages/cli/test/piece-link-input-visibility.test.ts`, beside
+is measured in `runtime/cli/test/piece-link-input-visibility.test.ts`, beside
 the case that bounds it: a candidate may not stop PUBLISHING a path, and a
 topic never published this one.
 
@@ -74,7 +74,7 @@ procedure. The procedure that ran, including what it had not been rehearsed
 for, is recorded at
 [`namespace-backfill.md`](../history/skills/topics/references/namespace-backfill.md);
 the library's general procedure is in
-`packages/patterns/collection-naming/README.md`.
+`patterns/product/collection-naming/README.md`.
 
 Two things it leaves as they were, and one it leaves behind. The namespace is
 still what a number is allocated over, and `namesTable` is still the reverse
@@ -212,7 +212,7 @@ ruled. A later reversal is a decision recorded here, not a discovery.
    personal binding is built. What the deferral accepts: a space-level name
    whose path selects a member stamps that member's root —
    `cf piece set-slug two /top/2`, which
-   `packages/cli/test/setPieceSlug.test.ts` covers as "names the member a
+   `runtime/cli/test/setPieceSlug.test.ts` covers as "names the member a
    slug's path selects, and stamps that member with the name" — so a member
    answers to `<space>/two` and `<space>/top/2` at once, and a visit by
    identity is rewritten to the first. The spec's step 1 records the same
@@ -243,9 +243,9 @@ ruled. A later reversal is a decision recorded here, not a discovery.
 10. **Estuary is untouched**, read-only calls included, until Mike directs.
     Deployment and the production backfill are Mike's steps, rehearsed on a
     clone first.
-11. **The work lands in `packages/patterns/collection-naming/`**: `naming.ts`
+11. **The work lands in `patterns/product/collection-naming/`**: `naming.ts`
     (the library a collection pattern calls), `board.tsx` and `item.tsx` (the
-    exemplar the demos run on), and tests. `packages/patterns/topics` is not
+    exemplar the demos run on), and tests. `patterns/apps/topics` is not
     edited until S6.
 12. **The Topics-shape rehearsal is a test-only board** in that directory,
     composing the real `Topic` from `../topics/topic.tsx` unmodified through
@@ -300,7 +300,7 @@ round through `stage-loop`. Nothing merges without Mike.
 
 ### S1 — The library and the exemplar board own a member namespace
 
-Scope: `packages/patterns/collection-naming/` (new): `naming.ts`, `board.tsx`,
+Scope: `patterns/product/collection-naming/` (new): `naming.ts`, `board.tsx`,
 `item.tsx`, `topics-shape.test.tsx`, unit tests, `README.md`.
 
 1. `naming.ts` exports what a collection pattern calls: allocate the next
@@ -342,7 +342,7 @@ Scope: `packages/patterns/collection-naming/` (new): `naming.ts`, `board.tsx`,
 10. The Topics-shape rehearsal passes: a test-only board over the unmodified
     `Topic` pattern, wired through `naming.ts`, allocates on create,
     backfills a pre-existing list, and proves the names-table lookup and the
-    reverse lookup for a given topic. `topic.tsx` and `topics/main.tsx` are
+    reverse lookup for a given topic. `topic.tsx` and `apps/topics/main.tsx` are
     untouched by the stage.
 11. `README.md` describes the library and the exemplar; `cfcheck`, pattern
     tests, and coverage green.
@@ -353,8 +353,8 @@ Topics-shape test is green in the same run.
 
 ### S2 — `top/42` resolves at the CLI
 
-Scope: `packages/piece/src/slugs.ts`, `packages/runner/src/slug-resolution.ts`,
-`packages/cli` (`set-slug`, README, completion table).
+Scope: `runtime/piece/src/slugs.ts`, `runtime/runner/src/slug-resolution.ts`,
+`runtime/cli` (`set-slug`, README, completion table).
 
 1. `cf piece set-slug top <board>/names` writes a slug at a non-root path,
    and `cf piece slugs` lists it, naming the containing piece. Both demos run
@@ -371,7 +371,7 @@ Scope: `packages/piece/src/slugs.ts`, `packages/runner/src/slug-resolution.ts`,
 3. A slug resolving to a non-piece with no further path fails with a message
    naming the containing piece.
 4. `//<space>/top/999` fails with "no member 999 in top".
-5. Unit tests in `packages/piece/test/slug.test.ts` and `packages/cli/test`.
+5. Unit tests in `runtime/piece/test/slug.test.ts` and `runtime/cli/test`.
 
 Demo: `cf cell get //<space>/top/2 title` on the local exemplar board.
 
@@ -397,7 +397,7 @@ The first half of the spec's step 2.
    cross-session pair: the claim's read joins the commit's read set, so a
    commit another writer overtakes is rejected and `editWithRetry` re-runs
    the body against what that writer left, which then declines. That is the
-   shape `packages/runner/src/ensure-space-root.ts` states for the space
+   shape `runtime/runner/src/ensure-space-root.ts` states for the space
    root.
 2. Whether a synced read inside `editWithRetry` becomes a commit precondition
    is settled by that test and recorded in the spec's open-questions list.
@@ -421,10 +421,10 @@ that map, so those two shape what it can say about a member.
 
 ### S3 — The shell opens `/<space>/top/42`
 
-Scope: `packages/navigation` (the member in a view and its URL),
-`packages/runtime-client` (the resolution the worker answers),
-`packages/lib-shell` (the hop that carries it, and the piece cache it keys),
-`packages/shell`, and shell integration tests.
+Scope: `runtime/navigation` (the member in a view and its URL),
+`runtime/runtime-client` (the resolution the worker answers),
+`runtime/lib-shell` (the hop that carries it, and the piece cache it keys),
+`runtime/shell`, and shell integration tests.
 
 1. `/<space>/top/42` opens the member piece; the tab shows its title. The
    exemplar item is the member; the Topics-shape test covers the board side
@@ -441,7 +441,7 @@ Scope: `packages/navigation` (the member in a view and its URL),
 
 ### S4 — `#42` in text
 
-Scope: `packages/ui` cf-code-editor mention completion and pill; the exemplar
+Scope: `runtime/ui` cf-code-editor mention completion and pill; the exemplar
 (mentionable rows and the item output both carry the member's name as
 `shortName`, which is the one property the editor reads at both ends of a
 mention).
@@ -459,7 +459,7 @@ mention).
 
 Mike's call, after S4.
 
-1. `topics/main.tsx` adopts `naming.ts` with the wiring the rehearsal board
+1. `apps/topics/main.tsx` adopts `naming.ts` with the wiring the rehearsal board
    already carries; the diff is the rehearsal board's diff against today's
    board and nothing more.
 2. `topic.tsx` gains the item-side display the exemplar item proved: the
@@ -473,7 +473,7 @@ Mike's call, after S4.
    survivor is the one both boards derive their universe through.
 
    Recorded: the survivor is one derivation, `mentionableIndex` and
-   `mentionableRowsOf` in `packages/patterns/collection-naming/mentionable.ts`,
+   `mentionableRowsOf` in `patterns/product/collection-naming/mentionable.ts`,
    which both boards import; `MentionableRow` is the row type both publish, and
    `TopicMentionableRow` and `ItemMentionableRow` are gone. Neither board could
    import the other's copy: a pattern module carries its imports into its own

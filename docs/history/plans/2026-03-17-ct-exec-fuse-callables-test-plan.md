@@ -65,7 +65,7 @@ These adjustments do not change scope or cost from the approved strategy.
 - **Implementation plan**: [docs/plans/2026-03-17-ct-exec-fuse-callables.md](./2026-03-17-ct-exec-fuse-callables.md), especially `User-visible behavior`, `Important contracts`, and Tasks 1 to 5.
 - **FUSE spec**: [2-path-scheme.md](../../specs/fuse-filesystem/2-path-scheme.md), [3-json-mapping.md](../../specs/fuse-filesystem/3-json-mapping.md), and [4-read-write.md](../../specs/fuse-filesystem/4-read-write.md).
 - **Handler CLI workflow doc**: [handlers-cli-testing.md](../../common/workflows/handlers-cli-testing.md).
-- **Runner guardrails**: Existing tests in [cell-callbacks.test.ts](../../../packages/runner/test/cell-callbacks.test.ts), [schema-format.test.ts](../../../packages/runner/test/schema-format.test.ts), and [generate-object-tools.test.ts](../../../packages/runner/test/generate-object-tools.test.ts).
+- **Runner guardrails**: Existing tests in [cell-callbacks.test.ts](../../../runtime/runner/test/cell-callbacks.test.ts), [schema-format.test.ts](../../../runtime/runner/test/schema-format.test.ts), and [generate-object-tools.test.ts](../../../runtime/runner/test/generate-object-tools.test.ts).
 
 ## Test plan
 

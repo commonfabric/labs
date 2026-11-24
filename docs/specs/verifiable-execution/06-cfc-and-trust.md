@@ -41,7 +41,7 @@ type Labels = {
 
 In practice, IFC annotations live on JSON Schemas via the `ifc` extension (see
 `docs/specs/json_schema.md`) and are evaluated/propagated by runtime logic (see
-`packages/runner/src/cfc.ts`).
+`runtime/runner/src/cfc.ts`).
 
 #### 10.3.1 Label Facts (Current)
 
@@ -101,7 +101,8 @@ type CFCLabelMap = {
 #### 10.3.4 Label Map Commitments (Future)
 
 This spec uses content-addressed hashes (see `FabricHash` in
-`packages/data-model/src/fabric-primitives/FabricHash.ts`) for commitments.
+`base/data-model/src/fabric-primitives/FabricHash.ts`) for
+commitments.
 
 A label map commitment MUST be domain-separated and deterministic. One simple
 construction is:

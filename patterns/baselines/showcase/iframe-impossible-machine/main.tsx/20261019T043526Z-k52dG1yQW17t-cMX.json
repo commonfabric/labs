@@ -1,0 +1,270 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "IframeInputData": {
+        "properties": {
+          "subtitle": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "subtitle"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "selectedNodeId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "showSignals": {
+            "type": "boolean"
+          },
+          "simulationTick": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "selectedNodeId",
+          "simulationTick",
+          "showSignals"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "What a Collaborative Impossible Machine piece is instantiated with.",
+    "properties": {
+      "input": {
+        "$ref": "#/$defs/IframeInputData",
+        "default": {
+          "subtitle": "Wire strange ideas together and watch the signal travel.",
+          "title": "Collaborative Impossible Machine"
+        },
+        "description": "What the guest reads and cannot write."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": {
+          "selectedNodeId": null,
+          "showSignals": true,
+          "simulationTick": 3
+        },
+        "description": "This user's own view of the machine."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "iframe-impossible-machine/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "GateOperator": {
+        "enum": [
+          "and",
+          "or",
+          "xor"
+        ]
+      },
+      "IframeOutputData": {
+        "properties": {
+          "selectedNodeId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "showSignals": {
+            "type": "boolean"
+          },
+          "simulationTick": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "selectedNodeId",
+          "simulationTick",
+          "showSignals"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "disabledEdges": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/$defs/MachineEdge"
+            },
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/$defs/MachineNode"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "nodes",
+          "edges",
+          "disabledEdges"
+        ],
+        "type": "object"
+      },
+      "MachineEdge": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target"
+        ],
+        "type": "object"
+      },
+      "MachineNode": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/MachineNodeKind"
+          },
+          "label": {
+            "type": "string"
+          },
+          "parameters": {
+            "$ref": "#/$defs/MachineParameters"
+          },
+          "position": {
+            "$ref": "#/$defs/MachinePosition"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "position",
+          "parameters"
+        ],
+        "type": "object"
+      },
+      "MachineNodeKind": {
+        "enum": [
+          "sensor",
+          "gate",
+          "delay",
+          "transformer",
+          "actuator"
+        ]
+      },
+      "MachineParameters": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "delaySteps": {
+            "type": "number"
+          },
+          "gain": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "operator": {
+            "$ref": "#/$defs/GateOperator"
+          },
+          "strength": {
+            "type": "number"
+          },
+          "threshold": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "active",
+          "strength",
+          "operator",
+          "delaySteps",
+          "gain",
+          "offset",
+          "threshold"
+        ],
+        "type": "object"
+      },
+      "MachinePosition": {
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A Collaborative Impossible Machine piece.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "description": "What the guest publishes, kept for each user."
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "What the guest stores, shared by everyone on the piece."
+      }
+    },
+    "required": [
+      "state",
+      "output",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

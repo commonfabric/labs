@@ -186,14 +186,14 @@ limit how representative this timing is.
 
 ### Lunch poll: finish the narrow consumers before adding more machinery
 
-The merged [main pattern](../../../../packages/patterns/lunch-poll/main.tsx)
+The merged [main pattern](../../../../patterns/apps/lunch-poll/main.tsx)
 already filters votes to the current day, builds a shared `groupBy(optionId)`,
 and computes each option's tally from its lookup. Keep that architecture and the
 reactive row rendering. Preserve the local-calendar day boundary and the empty
 state while the shared clock is unresolved.
 
 The next concrete experiment is the
-[option card](../../../../packages/patterns/lunch-poll/poll-option-card.tsx).
+[option card](../../../../patterns/apps/lunch-poll/poll-option-card.tsx).
 Each card still receives all of today's votes, and `myVoteFor` searches that
 array for its option and viewer. Try passing the already-maintained option group
 to this read-only display consumer. Keep vote mutation handlers bound to their
@@ -219,11 +219,11 @@ authorize changing the real poll.
 
 ### Topics and Topicboard: maintain the mention relation, preserve demand shape
 
-The [board](../../../../packages/patterns/topics/main.tsx) already centralizes
+The [board](../../../../patterns/apps/topics/main.tsx) already centralizes
 backlink derivation. It materializes narrow mention lists once, then scans those
 lists for each destination topic. This avoids repeatedly resolving reactive
 proxies, but still repeats comparisons across the graph. Each
-[topic](../../../../packages/patterns/topics/topic.tsx) also scans the resulting
+[topic](../../../../patterns/apps/topics/topic.tsx) also scans the resulting
 table to find its own row.
 
 The highest-value hypothesis is a shared maintained relation of source and
@@ -319,13 +319,13 @@ and maintenance contracts.**
 For extending these mechanisms, start with the maintained feature documents,
 then these sources and their neighboring tests:
 
-- [Index builtins](../../../../packages/runner/src/builtins/collection-index.ts):
+- [Index builtins](../../../../runtime/runner/src/builtins/collection-index.ts):
   membership, lookup, enumeration, and lifecycle ownership.
-- [Aggregate builtin](../../../../packages/runner/src/builtins/aggregate.ts):
+- [Aggregate builtin](../../../../runtime/runner/src/builtins/aggregate.ts):
   tree maintenance and result ownership.
-- [Lazy schema views](../../../../packages/runner/src/schema-view.ts): per-path
+- [Lazy schema views](../../../../runtime/runner/src/schema-view.ts): per-path
   materialization and read dependencies.
-- [Memory engine](../../../../packages/memory/v2/engine.ts): revision-cache
+- [Memory engine](../../../../runtime/memory/v2/engine.ts): revision-cache
   identity, staged publication, and patch replay.
 - [Completed implementation tracker](../../plans/pattern-computation-cost-implementation.md):
   landing and validation provenance for the arc, including explicit deferrals.

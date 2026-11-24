@@ -91,6 +91,12 @@ type TestStep =
     event?: unknown; // the payload, sent to the stream as authored
     trustedUi?: { surface: string; action: string };
   }
+  | {
+    press: VNode; // click a rendered control
+    control: string;
+    within?: string;
+    modifiers?: ("alt" | "ctrl" | "meta" | "shift")[];
+  }
   | { render: VNode } // one headless VDOM demand window
   | { settle: true } // wait for full async settlement
   | { label: string } // announce a marker to other participants
@@ -102,6 +108,23 @@ an object arrives as an object. `trustedUi` names a trusted UI surface and the
 control inside it, for an action that must originate from rendered UI under
 enforcement.
 
+A press step clicks a control the `press` view renders, as a person clicks it
+in a browser. The runner renders the view through the browser's reconciler and
+DOM applicator into a mock document, finds the one element whose text, trimmed,
+is `control` (holding no element of its own with that text), and dispatches a
+trusted click on it, which bubbles to the nodes above it. The applicator
+reports the click, and the reconciler hands it to the handler bound there, so
+the handler receives it from the test's own runtime with the UI provenance the
+control's rendered markers give, as it would from a page. Where the view shows
+`control` more than once, `within` names text an element around the one meant
+shows: the control pressed is the one whose nearest enclosing element showing
+that text holds no other. `modifiers` names the keys held down during the
+click: the click's `altKey`, `ctrlKey`, `metaKey` and `shiftKey` are true for
+the keys named and false for the rest, so `["meta"]` is a Cmd-click on a Mac. A
+press step that finds no such control, or more than one, fails, and so does one
+whose `modifiers` names any other key. It counts as an action in the results,
+and settles as one.
+
 `{ label }` and `{ await }` synchronize a multi-user test — a participant
 announces reaching `label`, and another blocks on `await` until it is
 announced. A single-user run has no participant to synchronize with, so both
@@ -112,7 +135,7 @@ is the only way to write; a bare `Reactive<boolean>` is a compile error. The
 transformer rewrites the `assert` body to record each operand as it is
 computed, so a failure can report the operands and their values instead of
 only `false`. See
-[Assertion diagnostics](../../packages/ts-transformers/README.md#assertion-diagnostics)
+[Assertion diagnostics](../../base/ts-transformers/README.md#assertion-diagnostics)
 for the rewrite, and
 [Pattern Testing](../common/workflows/pattern-testing.md#write-assertions-with-assert)
 for the authoring side.
@@ -277,7 +300,7 @@ expense-tracker.test.tsx
 
 ### Algorithm
 
-The runner itself is `packages/cli/lib/test-runner.ts`. The sketch below is a
+The runner itself is `runtime/cli/lib/test-runner.ts`. The sketch below is a
 reading aid for the shape of the loop, not a second copy of it: it leaves out
 the convergence loop an action and a render step settle through, the read
 accounting and error handling around each step, and the multi-user paths.
@@ -524,9 +547,9 @@ return {
 - [x] Example test pattern
 
 **Files created:**
-- `packages/cli/commands/test-command.ts`
-- `packages/cli/lib/test-runner.ts`
-- `packages/patterns/gideon-tests/test-reactivity-computed-derive-same/index.test.tsx`
+- `runtime/cli/commands/test-command.ts`
+- `runtime/cli/lib/test-runner.ts`
+- `patterns/dev/gideon-tests/test-reactivity-computed-derive-same/index.test.tsx`
 
 ### Phase 2: Developer Experience
 

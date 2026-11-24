@@ -10,6 +10,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Joining a Loom lists you in it](social-space-join-as-viewer.md) is a
+  stopgap so that a browser host's guests are named on a Loom's roster: the
+  host lists its guest through the existing `addParticipant`, and then the Loom
+  root exports `joinAsViewer`. READ link guests, people with several profiles,
+  rooms and older roots stay as the plan's accepted limits.
 - [CFC spec correspondence process](cfc-spec-correspondence-process.md)
   gives agents the procedure for changing Contextual Flow Control here: read
   the specification first, classify the change as host arrangement, conforming
@@ -22,12 +27,47 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
   callbacks, a cohesive handles module, one session UI for both command aliases,
   and hands-on demo validation across labs, Weaver, and Loom.
+- [The served vote's remaining cost: the main thread's fan-out](served-vote-fan-out.md)
+  carries the served-vote investigation on from where its records leave it:
+  the memory server's per-session walk and encode on the main thread, the
+  four measurements that decide which change to make, the recipes for taking
+  them, and how the overlapped commit is validated.
+- [Serving a piece's stored outputs while they are current](stored-output-currency.md)
+  keeps a durable record, per piece and per viewer of it, of what it read,
+  what it writes and which stored outputs a serving loop vouched for, marks
+  that record stale through the store when an input changes, and has the
+  demand pass leave a piece unstarted
+  only while its record proves every demanded output of it current, with a
+  mode that records and judges without acting so the judgment can be checked
+  first.
+- [Serving a stored output that depends on another space or on a wish](stored-output-currency-across-spaces.md)
+  continues that index across spaces: a reading space registers the
+  instances it read with their source, the source tells its readers when one
+  changed or its producer became stale, by a trigger that carries nothing
+  and a pull from a position, and demand travels upstream only along stale
+  edges; with it, a wish's own computations are recorded under an identity,
+  a slice that read the interval clock expires, and a computation the
+  scheduler runs without demand may be left unrun while nothing can observe
+  what it would write.
+- [What a create leaves on a serving worker's heap](serving-worker-heap.md)
+  carries the work on what a piece a handler starts keeps alive on a serving
+  worker: what has been released, what is left, and the process for finding the
+  next holder from heap snapshots.
+- [The serving loop off the request thread](serving-loop-worker.md) moves the
+  server-execution host into a Web Worker of the toolshed process: the worker
+  reads the store on its own SQLite connections, sends wave commits and
+  everything else it needs from the memory server over a `MessagePort`, and
+  the request thread stops waiting behind waves.
 - [Memory router security requirements](memory-router-security-requirements.md)
   defines the authentication, authorization, isolation, and public-ingress
   gates for multiplexed Memory WebSockets routed to toolsheds.
-- [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
-  subtrees, graph-aware policy queries, and a reader-first stored-format migration
-  to bound the cost of staged reference diamonds.
+- [Independent reference labels](cfc-independent-reference-labels.md) moves a
+  link write to the specified contract (§8.2, §8.12.8): the slot persists the
+  creating attempt's own label and nothing copied from the target, a label
+  envelope beside a mergeable append describes the committed list, and a
+  specs ruling retires the `LinkReference` atom, after which the runtime
+  stopped minting and reading it. Legacy entries stay as conservative
+  restrictions; no migration runs.
 - [Release gates without an integrity union](cfc-release-gate-integrity.md)
   keeps one consumed value's evidence from releasing another value's clause:
   the write, sink and display gates run value-intrinsic rules at each location
@@ -40,6 +80,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
   taken from the code's own module, not the graph's data, so a rule that guards
   on the identity rests on it. It needs a narrow specs ruling first, and it
   parks a per-item threshold drawn from a policy key.
+- [A piece's creator owns the fields an update adds](piece-creator-owns-update-added-fields.md)
+  records, once and by the runtime alone, the principal a piece was created
+  for, and binds a placeholder-owner field that a source update installs to
+  that record instead of to its first writer. It carries the ruling text for
+  the specs pull request, scopes the attribution mark to the new piece's own
+  documents as the rapids fix, and says how pieces created before the record
+  gain one.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
@@ -129,10 +176,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [`../features/vouched-ingest-channel-mint.md`](../features/vouched-ingest-channel-mint.md).
 - [Integration-test video demos](integration-test-video-demos.md) tracks
   optional CI adoption and further fixture hardening.
-- [Lazy cell materialization](lazy-cell-materialization.md) sequences a
-  schema-observing lazy view over a cell, a transaction mode that hands one back
-  from every read, and the runner disposition for a reader that touches data the
-  schema no longer describes.
 - [Stream markers out of stored data](stream-markers-out-of-stored-data.md)
   moves stream-ness out of the stored `{ "$stream": true }` value and into the
   link schema and the module wrapper, and triggers the cold-start repairs on a
@@ -142,7 +185,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the pre-sync repeats or does not need: a child start re-planning the
   subtree its parent named, every plan's inputs cell re-inlining its
   schemas, a cross-space pass that materializes every plan to find a link,
-  and a planning loop that never yields to read the answers it asked for.
+  a planning loop that never yields to read the answers it asked for, and a
+  node bound once for the pre-sync and again for its instantiation.
 - [Pre-syncing from node plans](presync-from-node-plans.md) makes one
   derivation per pattern node serve both instantiation and the pre-sync, so a
   resume and a fresh start name exactly what each lift, handler, builtin, and
@@ -159,6 +203,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the loop on purpose. The
   backoff Topic 911 waits for, and the first of Topic 913's three guardrails.
   Always on, in every runtime.
+- [Durable history of new real test failures and a bounded
+  aggregate](durable-new-real-test-failure-history.md) keeps every new real
+  test failure the test-selection publisher has credited a test with through
+  a bootstrap, a rename, and an outage, and stops the publisher's aggregate
+  growing with the age of the store. It is built, and waits for the checks
+  its first run after landing answers.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future
@@ -245,8 +295,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [shaped reads and verb results](shaped-reads-and-verb-results.md) — the shared
   read layer, how a shape says "an address here, a value there", and what
   calling a verb adds — and at
-  [CLI surface shape](cli-surface-shape.md) for the command surface and an
-  additive path to it. Start here rather than at either part.
+  [CLI surface shape](../history/plans/cli-surface-shape.md) for the command surface, an executed
+  plan now archived. Start here rather than at either part.
 - [References as arguments](references-as-arguments.md) proposes lifting
   address resolution out of the LLM dialog builtin, which already does it, and
   into the boundary every external caller crosses. An LLM and the CLI can
@@ -290,6 +340,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the verb flags and result shapes that offer none, the source `--space` needs
   before any of it is reachable by name, and the gate that keeps completion
   from falling behind the command tree again.
+- [Turning instance names on](instance-names-on.md) sequences what comes
+  before the `instanceNames` flag turns on: a one-way mark on each space,
+  recorded at the first commit from a naming runtime and only where the
+  deployment names instances, after which the memory server admits no
+  positional runtime to it, which is built; then the flag's env mapping, the
+  flip, and the flag's removal.
 - [Handler-callable egress](handler-callable-egress.md) records the capability
   a pattern does not have: a network request a handler can issue and await,
   which the runtime records and gates the way it records and gates a node

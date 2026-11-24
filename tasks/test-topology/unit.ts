@@ -22,7 +22,7 @@
  * is a decision listed with its reason rather than a shape a task can fall
  * into unnoticed.
  *
- * `packages/runner` is a suite of its own rather than one more member.
+ * `runtime/runner` is a suite of its own rather than one more member.
  * Nothing about how it runs differs; what differs is what its
  * measurements mean. In the reference build the workspace members
  * recorded about one and a half seconds of measured tests for every
@@ -56,9 +56,10 @@ import {
 } from "./suite.ts";
 import type { CapabilityId } from "../ci-capabilities.ts";
 import { EXCLUDED_FROM_COVERAGE_GATE } from "../test-selection/policy.ts";
+import { packageDirOf, withoutPackageParent } from "../package-layout.ts";
 
 /** The member the runner suite owns; every other member is the other one. */
-const RUNNER_MEMBER = "./packages/runner";
+const RUNNER_MEMBER = "./runtime/runner";
 
 /** How a browser half is named as a unit, so it cannot be read as a file. */
 const BROWSER_SUFFIX = "#browser-test";
@@ -68,13 +69,7 @@ const BROWSER_SUFFIX = "#browser-test";
  * the reason it is written that way. Loading the suites fails on a member of
  * that shape this does not list, and on an entry for any other member.
  */
-export const RUNS_WHOLE: ReadonlyMap<string, string> = new Map([
-  [
-    "./packages/identity",
-    "its tests run in a browser through deno-web-test, which takes no file " +
-    "list from a lane",
-  ],
-]);
+export const RUNS_WHOLE: ReadonlyMap<string, string> = new Map();
 
 /** What one member contributes to a unit suite. */
 interface Member {
@@ -84,7 +79,11 @@ interface Member {
   /** The record scope its tests carry. */
   scope: string;
 
-  /** Repository-relative test files, when the member is read one at a time. */
+  /**
+   * Repository-relative test files of the Deno-only half. Each is a unit of
+   * its own where the member is read one at a time, and the whole member is
+   * one unit otherwise.
+   */
   files: string[];
 
   /** The task taken apart, when its files are selectable. */
@@ -107,9 +106,9 @@ interface Member {
   browserFiles: string[];
 }
 
-/** The record scope of a member: its path with `packages/` taken off. */
+/** The record scope of a member: its path below its package's parent. */
 export function memberScope(memberPath: string): string {
-  return memberPath.replace(/^\.\//, "").replace(/^packages\//, "");
+  return withoutPackageParent(memberPath.replace(/^\.\//, ""));
 }
 
 /** The members the workspace declares. */
@@ -128,6 +127,7 @@ async function readMember(
   root: string,
   memberPath: string,
   runsWhole: ReadonlyMap<string, string>,
+  memberPaths: readonly string[],
 ): Promise<Member | undefined> {
   const memberDir = path.resolve(root, memberPath);
   const tasks = await memberTasks(memberDir);
@@ -162,7 +162,41 @@ async function readMember(
     browserTest: tasks.browserTest,
     browserFiles: [],
   };
-  if (tasks.denoTest === undefined) return member;
+  // Normalized against the repository root, because a member's task may
+  // name a file outside its own directory and a unit is a path anyone
+  // else can resolve.
+  const relative = (file: string) =>
+    path.relative(root, path.resolve(memberDir, file));
+  if (tasks.browserTest) {
+    // The browser unit is one unit rather than one per file, so without
+    // this a member that splits its halves by a name — `*.browser.test.ts`
+    // — is a member whose browser files no suite claims. They are the
+    // files the browser half's task names, rather than every file the
+    // Deno-only half ignores, because the Deno-only half may also ignore
+    // files that another suite runs.
+    member.browserFiles = (await memberTestFiles(memberDir, {
+      paths: tasks.browserPaths,
+      ignores: [],
+    })).map(relative);
+  }
+  if (tasks.denoTest === undefined) {
+    if (!tasks.denoHalf) return member;
+    // The member runs whole, so its unit holds every test file under it
+    // that neither its browser half nor a member nested inside it runs.
+    const browser = new Set(member.browserFiles);
+    const own = relative(".");
+    const nested = memberPaths
+      .map((other) => other.replace(/^\.\//, ""))
+      .filter((other) => other.startsWith(`${own}/`));
+    member.files =
+      (await memberTestFiles(memberDir, { paths: [], ignores: [] }))
+        .map(relative)
+        .filter((file) =>
+          !browser.has(file) &&
+          !nested.some((other) => file.startsWith(`${other}/`))
+        );
+    return member;
+  }
   // A glob giving files flags of their own that names no file would leave
   // a renamed file running under the flags of the rest.
   const unmatched = await unmatchedGlobs(memberDir, tasks.denoTest.paths, [
@@ -176,26 +210,9 @@ async function readMember(
       }.`,
     );
   }
-  // Normalized against the repository root, because a member's task may
-  // name a file outside its own directory and a unit is a path anyone
-  // else can resolve.
-  const relative = (file: string) =>
-    path.relative(root, path.resolve(memberDir, file));
   member.files = (await memberTestFiles(memberDir, tasks.denoTest))
     .map(relative);
   member.run = tasks.denoTest;
-  if (tasks.browserTest) {
-    // The browser unit is one unit rather than one per file, so without
-    // this a member that splits its halves by a name — `*.browser.test.ts`
-    // — is a member whose browser files no suite claims. They are the
-    // files the browser half's task names, rather than every file the
-    // Deno-only half ignores, because the Deno-only half may also ignore
-    // files that another suite runs.
-    member.browserFiles = (await memberTestFiles(memberDir, {
-      paths: tasks.browserPaths,
-      ignores: [],
-    })).map(relative);
-  }
   return member;
 }
 
@@ -223,9 +240,9 @@ function measuredSetOf(
   members: readonly Member[],
 ): MeasuredSet | undefined {
   const memberPath = wholeUnit(member);
-  // The gate is over `packages/`. `tasks` is one coverage group rather
+  // The gate is over the packages. `tasks` is one coverage group rather
   // than a tree of them, and `scripts` is outside coverage accounting.
-  if (!memberPath.startsWith("packages/")) return undefined;
+  if (packageDirOf(memberPath) === undefined) return undefined;
   if (EXCLUDED_FROM_COVERAGE_GATE.has(memberPath)) return undefined;
   const units = member.run !== undefined
     ? member.files
@@ -300,6 +317,13 @@ function unitSuite(
     whole,
     ...(sources.length === 0 ? {} : { sources }),
     ...(measured.length === 0 ? {} : { measured }),
+
+    sourcesOf(unit) {
+      const member = byUnit.get(unit);
+      if (member === undefined) return [];
+      if (unit.endsWith(BROWSER_SUFFIX)) return member.browserFiles;
+      return member.run === undefined ? member.files : [];
+    },
 
     locate(record: LocatableRecord): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
@@ -444,7 +468,12 @@ export async function loadUnitSuites(
   const members: Member[] = [];
   let runner: Member | undefined;
   for (const memberPath of memberPaths) {
-    const member = await readMember(root, memberPath, runsWhole);
+    const member = await readMember(
+      root,
+      memberPath,
+      runsWhole,
+      memberPaths,
+    );
     if (member === undefined) continue;
     if (memberPath === RUNNER_MEMBER) runner = member;
     else members.push(member);

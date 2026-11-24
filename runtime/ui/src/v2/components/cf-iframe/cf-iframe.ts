@@ -1,0 +1,480 @@
+/** Sandboxed pattern content and its inherited host presentation. */
+
+import {
+  type AssetRecord,
+  CommonIframeSandboxElement as _,
+  type FabricBridge,
+  type IframePresentation,
+  IPC,
+  toAssetRecord,
+} from "@commonfabric/iframe-sandbox";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isCellHandle, type RuntimeClient } from "@commonfabric/runtime-client";
+import { ContextConsumer, createContext } from "@lit/context";
+import { css, html } from "lit";
+import type { PropertyValues } from "lit";
+
+import { BaseElement } from "../../core/base-element.ts";
+import { runtimeContext } from "../../runtime-context.ts";
+import {
+  type CellContextResourceKind,
+  createCellContextBridge,
+  resolveCellContextBridge,
+} from "./cell-bridge.ts";
+
+/** Host presentation inherited by `cf-iframe` descendants. */
+export const iframePresentationContext = createContext<
+  IframePresentation | null
+>(
+  "cf-iframe-presentation",
+);
+
+/** The assets of a guest given none. */
+const NO_ASSETS: AssetRecord = Object.freeze({});
+
+/** The `source` of the error that refuses an `assets` value. */
+const ASSETS_ERROR_SOURCE = "cf-iframe assets";
+
+/**
+ * CFIframe - An iframe to execute arbitrary scripts
+ *
+ * See `@commonfabric/iframe-sandbox` for security details.
+ *
+ * @element cf-iframe
+ *
+ * @attr {string} src - String representation of HTML content to load within an iframe
+ * @prop {string} script - Module source the guest runs once its document is
+ *   parsed, which the sandbox inlines into the document and escapes there,
+ *   so a bundled guest need not be escaped into its document by hand
+ * @prop {object} assets - Static assets, a record from a name matching
+ *   `[A-Za-z0-9_-]+` to a base64 `data:` URL. The guest's document refers to
+ *   one as `cf-asset:<name>`, and its script reads one with
+ *   `fabric.asset(name)`. Any other value is refused: the element shows why,
+ *   and holds the guest closed until `assets` changes.
+ * @prop {object} bridge - Explicit capability bridge
+ * @prop {object} context - Convenience context. A cell, or a record of cells
+ *   bound as `$context={{ state, output }}`, grants each of its fields as a
+ *   live resource, resolved to its concrete cell before the guest loads; a
+ *   plain object is served as the static values it holds.
+ * @prop {object} resourceKinds - Explicit kinds for opaque context resources.
+ *   A name marked `presence` grants the guest the presence room of that
+ *   context cell's field, where it publishes and hears ephemeral status such
+ *   as pointers, and grants none of the cell's data. A name given a kind is a
+ *   resource even where the context lists no such field, which is how a
+ *   record bound inline names its streams.
+ *
+ * @event {CustomEvent} load - The iframe was successfully loaded
+ * @event {CustomEvent} fix - Dispatched when user clicks "Fix" on an error modal
+ *
+ * @example
+ * <cf-iframe src="<html>...</html>" .bridge=${bridge}></cf-iframe>
+ */
+export class CFIframe extends BaseElement {
+  static override properties = {
+    src: { type: String },
+    script: { attribute: false },
+    assets: { attribute: false },
+    context: { type: Object },
+    bridge: { type: Object },
+    resourceKinds: { attribute: false },
+    presentation: { attribute: false },
+    _errorDetails: { state: true },
+  };
+
+  declare src: string;
+  declare script: string;
+  declare assets: AssetRecord | null;
+  declare context: object | null;
+  declare bridge: FabricBridge | null;
+  declare resourceKinds:
+    | Readonly<Record<string, CellContextResourceKind>>
+    | null;
+  declare _errorDetails: IPC.GuestError | null;
+  #presentation: IframePresentation | null | undefined;
+  readonly #presentationConsumer = new ContextConsumer(this, {
+    context: iframePresentationContext,
+    subscribe: true,
+  });
+
+  private _contextBridge: FabricBridge = { resources: {} };
+  private _contextReady = true;
+
+  /**
+   * The guest's assets, as `assets` held them when last checked, or
+   * `undefined` while that check refuses them, which holds the guest closed.
+   */
+  #checkedAssets: AssetRecord | undefined = NO_ASSETS;
+
+  /**
+   * The context setup still under way, if any. A newer setup aborts it, and
+   * so does a disconnection, which leaves it here, aborted, to start over on
+   * connecting again.
+   */
+  #contextSetup: AbortController | undefined;
+
+  /**
+   * Whether the element was disconnected and has not connected since. An
+   * update still runs then, and a setup it prepares waits, aborted, for the
+   * element to connect again.
+   */
+  #detached = false;
+
+  /**
+   * Where the host serves the sandbox's outer frame, as the runtime it
+   * provided says, or `undefined` to have the sandbox inline it.
+   *
+   * It comes from the host's runtime and from nowhere else. It is private to
+   * the class rather than a property of the element, so nothing that renders
+   * one -- a pattern's markup included -- can name the frame that stands
+   * between its guest and the page.
+   */
+  #outerFrameUrl: string | undefined = undefined;
+
+  /** Holds the subscription to the host's runtime. */
+  private _runtimeConsumer = new ContextConsumer(this, {
+    context: runtimeContext,
+    subscribe: true,
+    callback: (runtime) => this.onRuntime(runtime),
+  });
+
+  constructor() {
+    super();
+    this.src = "";
+    this.script = "";
+    this.assets = null;
+    this.context = null;
+    this.bridge = null;
+    this.resourceKinds = null;
+    this._errorDetails = null;
+  }
+
+  /** Explicit presentation; `undefined` inherits and `null` opts out. */
+  get presentation(): IframePresentation | null | undefined {
+    return this.#presentation;
+  }
+
+  set presentation(value: IframePresentation | null | undefined) {
+    const previous = this.#presentation;
+    this.#presentation = value;
+    this.requestUpdate("presentation", previous);
+  }
+
+  /** Starts over a context setup that a disconnection aborted or deferred. */
+  override connectedCallback() {
+    super.connectedCallback();
+    this.#detached = false;
+    if (this.#contextSetup?.signal.aborted) this.prepareContextBridge();
+  }
+
+  /**
+   * Aborts a context setup under way, whose wait for a SQLite database keeps
+   * that database's producer demanded, and defers any setup an update
+   * prepares until the element connects again.
+   */
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.#detached = true;
+    this.#contextSetup?.abort();
+  }
+
+  static override styles = [
+    BaseElement.baseStyles,
+    css`
+      :host {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      .error-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+      }
+
+      .error-content {
+        background-color: var(
+          --cf-theme-color-surface,
+          var(--cf-colors-white, #ffffff)
+        );
+        padding: var(--cf-theme-spacing-loose, 1.25rem);
+        border-radius: var(
+          --cf-theme-border-radius,
+          var(--cf-border-radius-md, 0.375rem)
+        );
+        max-width: 80%;
+        max-height: 80%;
+        overflow: auto;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+
+      .error-content h2 {
+        margin: 0 0 1rem;
+        color: var(--cf-theme-color-text, #111827);
+      }
+
+      .error-content p {
+        margin: 0.5rem 0;
+        color: var(--cf-theme-color-text, #111827);
+      }
+
+      .error-content pre {
+        background-color: var(
+          --cf-theme-color-surface-hover,
+          #f3f4f6
+        );
+        padding: 1rem;
+        border-radius: var(
+          --cf-theme-border-radius,
+          var(--cf-border-radius-sm, 0.25rem)
+        );
+        overflow: auto;
+        font-family: monospace;
+      }
+
+      .error-actions {
+        margin-top: 1.25rem;
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+      }
+
+      .error-actions button {
+        padding: 0.5rem 1rem;
+        border-radius: var(
+          --cf-theme-border-radius,
+          var(--cf-border-radius-md, 0.375rem)
+        );
+        border: 1px solid var(--cf-theme-color-border, #d1d5db);
+        background-color: var(
+          --cf-theme-color-surface,
+          var(--cf-colors-white, #ffffff)
+        );
+        color: var(--cf-theme-color-text, #111827);
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+      }
+
+      .error-actions button:hover {
+        background-color: var(
+          --cf-theme-color-surface-hover,
+          #f3f4f6
+        );
+      }
+
+      .error-actions button:first-child {
+        background-color: var(
+          --cf-theme-color-primary,
+          #3b82f6
+        );
+        color: var(
+          --cf-theme-color-primary-foreground,
+          var(--cf-colors-white, #ffffff)
+        );
+        border-color: var(
+          --cf-theme-color-primary,
+          #3b82f6
+        );
+      }
+
+      .error-actions button:first-child:hover {
+        opacity: 0.9;
+      }
+    `,
+  ];
+
+  /** Takes the outer frame's URL from the runtime the host provided. */
+  private onRuntime(runtime: RuntimeClient | undefined) {
+    const url = runtime?.iframeOuterFrameUrl();
+    if (url === this.#outerFrameUrl) return;
+    this.#outerFrameUrl = url;
+    this.requestUpdate();
+  }
+
+  private onLoad() {
+    this.emit("load");
+  }
+
+  private onError(e: CustomEvent) {
+    this._errorDetails = e.detail;
+  }
+
+  private dismissError() {
+    this.#clearError();
+  }
+
+  private fixError() {
+    this.emit("fix", this._errorDetails);
+    this.#clearError();
+  }
+
+  private prepareContextBridge() {
+    this.#contextSetup?.abort();
+    this.#contextSetup = undefined;
+    if (this._errorDetails?.source === "cf-iframe context") {
+      this._errorDetails = null;
+      this.#reportHeldAssets();
+    }
+    if (this.bridge || !this.context) {
+      this._contextBridge = { resources: {} };
+      this._contextReady = true;
+    } else if (!isCellHandle<Record<string, unknown>>(this.context)) {
+      this._contextBridge = createCellContextBridge(this.context);
+      this._contextReady = true;
+    } else {
+      const context = this.context;
+      const setup = new AbortController();
+      this.#contextSetup = setup;
+      this._contextBridge = { resources: {} };
+      this._contextReady = false;
+      if (this.#detached) {
+        setup.abort();
+        return;
+      }
+      void resolveCellContextBridge(
+        context,
+        this.resourceKinds ?? {},
+        setup.signal,
+      ).then(
+        (bridge) => ({ bridge }),
+        (error: unknown) => ({ error }),
+      ).then((outcome) => {
+        if (setup.signal.aborted) return;
+        this.#contextSetup = undefined;
+        if ("bridge" in outcome) {
+          this._contextBridge = outcome.bridge;
+          this._contextReady = true;
+        } else {
+          const description = describeFailure(outcome.error);
+          this._errorDetails = {
+            description,
+            source: "cf-iframe context",
+            lineno: 0,
+            colno: 0,
+            stacktrace: outcome.error instanceof Error
+              ? outcome.error.stack ?? description
+              : description,
+          };
+        }
+        this.requestUpdate();
+      });
+    }
+  }
+
+  /**
+   * Checks `assets`, refusing it while it is not a record from a name to a
+   * base64 `data:` URL: the guest is held closed, and the error says why
+   * unless an error from another source is showing, which dismissing reports
+   * this one after. A check that passes clears the error an earlier one
+   * raised.
+   */
+  #checkAssets() {
+    if (this._errorDetails?.source === ASSETS_ERROR_SOURCE) {
+      this._errorDetails = null;
+    }
+    try {
+      this.#checkedAssets = toAssetRecord(this.assets ?? NO_ASSETS);
+    } catch (error) {
+      this.#checkedAssets = undefined;
+      // An error from another source stays: dismissing a context failure
+      // retries the context, which writing over it would lose.
+      if (this._errorDetails !== null) return;
+      const description = describeFailure(error);
+      this._errorDetails = {
+        description,
+        source: ASSETS_ERROR_SOURCE,
+        lineno: 0,
+        colno: 0,
+        stacktrace: description,
+      };
+    }
+  }
+
+  /**
+   * Helper for the dismiss and fix handlers, which clears the error showing:
+   * a context failure retries the context, and assets still refused are
+   * reported in its place.
+   */
+  #clearError() {
+    const source = this._errorDetails?.source;
+    this._errorDetails = null;
+    if (source === "cf-iframe context") this.prepareContextBridge();
+    if (source !== ASSETS_ERROR_SOURCE) this.#reportHeldAssets();
+  }
+
+  /**
+   * Helper for the members above that clear an error from another source,
+   * which reports the refusal of assets `#checkAssets()` held back while that
+   * error showed.
+   */
+  #reportHeldAssets() {
+    if (this._errorDetails === null && this.#checkedAssets === undefined) {
+      this.#checkAssets();
+    }
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>) {
+    if (changed.has("assets")) this.#checkAssets();
+    if (
+      changed.has("bridge") || changed.has("context") ||
+      changed.has("resourceKinds") ||
+      (changed.has("src") &&
+        this._errorDetails?.source === "cf-iframe context")
+    ) {
+      this.prepareContextBridge();
+    }
+  }
+
+  override render() {
+    const bridge = this.bridge ?? this._contextBridge;
+    const assets = this.#checkedAssets;
+    const source = assets !== undefined && (this.bridge || this._contextReady)
+      ? this.src
+      : "";
+    return html`
+      <common-iframe-sandbox
+        .bridge="${bridge}"
+        .src="${source}"
+        .outerFrameUrl="${this.#outerFrameUrl}"
+        .presentation="${this.presentation === undefined
+          ? this.#presentationConsumer.value ?? null
+          : this.presentation}"
+        .script="${this.script}"
+        .assets="${assets ?? NO_ASSETS}"
+        height="100%"
+        width="100%"
+        style="border: none;"
+        @load="${this.onLoad}"
+        @common-iframe-error="${this.onError}"
+      ></common-iframe-sandbox>
+      ${this._errorDetails
+        ? html`
+          <div class="error-modal">
+            <div class="error-content">
+              <h2>Error</h2>
+              <p><strong>Description:</strong> ${this._errorDetails
+                .description}</p>
+              <p><strong>Source:</strong> ${this._errorDetails.source}</p>
+              <p><strong>Line:</strong> ${this._errorDetails.lineno}</p>
+              <p><strong>Column:</strong> ${this._errorDetails.colno}</p>
+              <pre><code>${this._errorDetails.stacktrace}</code></pre>
+              <div class="error-actions">
+                <button @click="${this.fixError}">Fix</button>
+                <button @click="${this.dismissError}">Dismiss</button>
+              </div>
+            </div>
+          </div>
+        `
+        : ""}
+    `;
+  }
+}

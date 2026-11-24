@@ -1,0 +1,4 @@
+{"date":"2026-11-20","from":{"k":"unit","s":"cli","n":"cli entry exit status > ends with the code a command left in Deno.exitCode"},"to":{"k":"unit","s":"cli","n":"main() > ends with the code a command left in `Deno.exitCode`"}}
+{"date":"2026-11-20","from":{"k":"unit","s":"cli","n":"cli entry exit status > ends 0 when the command left the default"},"to":{"k":"unit","s":"cli","n":"main() > ends 0 when the command left the default"}}
+{"date":"2026-11-20","from":{"k":"unit","s":"cli","n":"cli entry exit status > reads the real Deno.exitCode by default"},"to":{"k":"unit","s":"cli","n":"main() > reads the real `Deno.exitCode` by default"}}
+{"date":"2026-11-20","from":{"k":"unit","s":"cli","n":"cli entry exit status > ends 1 on a thrown command error"},"to":{"k":"unit","s":"cli","n":"main() > prints a command's failure on stderr, then exits 1"}}

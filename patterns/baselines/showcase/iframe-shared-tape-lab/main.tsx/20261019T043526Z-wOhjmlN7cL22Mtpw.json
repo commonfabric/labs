@@ -1,0 +1,226 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "IframeInputData": {
+        "properties": {
+          "durationSeconds": {
+            "type": "number"
+          },
+          "recordingLabel": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "recordingLabel",
+          "durationSeconds"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "lastAssessmentId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selectedAnnotationId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "selectedAnnotationId",
+          "lastAssessmentId"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "What a Shared Tape Lab piece is instantiated with.",
+    "properties": {
+      "input": {
+        "$ref": "#/$defs/IframeInputData",
+        "default": {
+          "durationSeconds": 18,
+          "recordingLabel": "Synthetic marsh at dusk",
+          "title": "Shared Tape Lab"
+        },
+        "description": "What the guest reads and cannot write."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": {
+          "lastAssessmentId": null,
+          "selectedAnnotationId": null
+        },
+        "description": "This user's own playback settings."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "iframe-shared-tape-lab/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ConfidenceAssessment": {
+        "properties": {
+          "annotationId": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "reviewerId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "annotationId",
+          "reviewerId",
+          "confidence"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "lastAssessmentId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selectedAnnotationId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "selectedAnnotationId",
+          "lastAssessmentId"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "annotations": {
+            "items": {
+              "$ref": "#/$defs/TapeAnnotation"
+            },
+            "type": "array"
+          },
+          "assessments": {
+            "items": {
+              "$ref": "#/$defs/ConfidenceAssessment"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "annotations",
+          "assessments"
+        ],
+        "type": "object"
+      },
+      "TapeAnnotation": {
+        "properties": {
+          "authorId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "initialConfidence": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "range": {
+            "properties": {
+              "endSeconds": {
+                "type": "number"
+              },
+              "startSeconds": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "startSeconds",
+              "endSeconds"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "range",
+          "label",
+          "note",
+          "authorId",
+          "initialConfidence"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A Shared Tape Lab piece.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "description": "What the guest publishes, kept for each user."
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "What the guest stores, shared by everyone on the piece."
+      }
+    },
+    "required": [
+      "state",
+      "output",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

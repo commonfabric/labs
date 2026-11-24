@@ -1,7 +1,7 @@
 /**
  * These cover the entry point alone — what it prints and what code it returns.
  * The checks it applies are pinned in
- * `packages/dashboard/bench-report.test.ts`.
+ * `dashboard/bench-report.test.ts`.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -9,9 +9,9 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { main } from "./check-bench-report.ts";
-import { KEY_BENCHMARKS } from "../packages/dashboard/bench-report.ts";
+import { KEY_BENCHMARKS } from "../dashboard/bench-report.ts";
 
-const CALIBRATION = "packages/dashboard/machine-calibration.bench.ts";
+const CALIBRATION = "dashboard/machine-calibration.bench.ts";
 
 const stats = { min: 1, avg: 2, max: 3, p75: 2, p99: 3, p995: 3, p999: 3 };
 

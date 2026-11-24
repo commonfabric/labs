@@ -13,7 +13,7 @@ and searches. The pass had one goal: make the corpus something composition can
 draw on, and make the loop able to tell a working pattern from a broken one.
 
 For how the loop works now, read the live documents:
-[`docs/pattern-index-measurement.md`](../../../../packages/cf-harness/docs/pattern-index-measurement.md)
+[`docs/pattern-index-measurement.md`](../../../../runtime/cf-harness/docs/pattern-index-measurement.md)
 for how a measurement run is conducted, and the `pattern-index` repository's
 `ONBOARDING.md` and `docs/gardening.md` for the index service itself.
 
@@ -79,7 +79,7 @@ than importing it.
 
 The seed was *not* taken from the `MODULE_METADATA` components in
 `packages/patterns`. Those are tiered **legacy** in
-[`packages/patterns/index.md`](../../../../packages/patterns/index.md) — "a
+[`packages/patterns/index.md`](../../../../patterns/index.md) — "a
 parallel composition system; do not copy it" — and seeding them would have made
 the index's exemplary building blocks a set the repository tells authors not to
 imitate.

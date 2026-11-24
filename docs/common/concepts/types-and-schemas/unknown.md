@@ -106,8 +106,9 @@ reloads a piece's already-deployed stored source — an identity-pinned
 reconstruction that can admit nothing new — the same diagnostic reports as a
 warning instead, so a pattern accepted before the rule existed keeps loading. It
 covers every key the framework puts on a result — `[TYPE]`, `[NAME]`, `[UI]`,
-`[TILE_UI]`, `[CHIP_UI]`, `[FS]`, `[TESTS]`, `[VIEWS]` — for the same reason: a
-key whose spelling the framework fixed holds a value this pattern produced.
+`[TILE_UI]`, `[CHIP_UI]`, `[FS]`, `[TESTS]`, `[VIEWS]`, `[SUGGESTIONS]` — for
+the same reason: a key whose spelling the framework fixed holds a value this
+pattern produced.
 
 The consuming side of the same field goes the other way, and the two
 declarations are independent of each other. A pattern that takes another
@@ -117,8 +118,8 @@ rather than a copy, so the controls in it stay bound to the piece that owns
 them. An argument declaration also has to keep accepting every value it accepted
 before, which a narrower one does not, so a consumer view of a result type holds
 `unknown` even where the producing type names `VNode`;
-`BackwardsCompatibleProfile` in `packages/patterns/system/profile-home.tsx` is
-the worked example.
+`BackwardsCompatibleProfile` in `patterns/system/profile-home/profile-home.tsx`
+is the worked example.
 
 ### `unknown` is not `any`
 

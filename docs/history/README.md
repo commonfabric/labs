@@ -37,8 +37,13 @@ A document archived from `<path>` lives at `docs/history/<path>`, with a
 leading `docs/` dropped. Examples:
 
 - `docs/specs/compilation-cache.md` → `specs/compilation-cache.md`
-- `packages/cli/PLANNED_FIXES.md` → `packages/cli/PLANNED_FIXES.md`
-- `tools/ralph/SOMETHING.md` → `tools/ralph/SOMETHING.md`
+- `runtime/cli/PLANNED_FIXES.md` → `runtime/cli/PLANNED_FIXES.md`
+- `scripts/ralph/SOMETHING.md` → `scripts/ralph/SOMETHING.md`
+
+A document keeps the path it was archived under when the file it came from
+moves later. So `packages/` here holds what was archived from the packages
+before they moved to `base/`, `runtime/`, `connectors/`, `dashboard/`, and
+`patterns/`.
 
 One more segment is dropped: when a document is absorbed from a local
 `archive/` folder (the pre-history convention for keeping records next to

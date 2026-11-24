@@ -332,7 +332,7 @@ Enough to start on, and no more than that.
 **The core is library code; the entry point is thin.** Enumerating, reading
 each piece's identity, emitting a plan, consuming one, applying a row, and
 restoring a retained revision are ordinary functions with no opinion about
-how they are invoked. They live in `packages/piece/src/ops/`, beside the
+how they are invoked. They live in `runtime/piece/src/ops/`, beside the
 piece and pieces controllers they call — the layer that owns piece
 operations, and one from which the runner's local-program resolution is
 importable, so turning a row's source into a program belongs there too.
@@ -606,7 +606,7 @@ Topics restore script hand-rolls today and should import instead.
 - [x] References survive a repair that does not mention them, and a fixer
       that would rewrite one as a value is refused.
 - [x] Re-running a completed repair writes nothing.
-- [x] The repair act in `packages/cli/integration/bulk-ops-demo.sh` stops
+- [x] The repair act in `runtime/cli/integration/bulk-ops-demo.sh` stops
       being pending: the transcript runs a fixer live under the canonical
       spelling, `cf piece repair`.
 
@@ -660,7 +660,7 @@ group.
       piece is unknown cannot be improved, and the number is the input to
       every decision below about whether to go faster.
 - [x] The apply and survey-diff acts in
-      `packages/cli/integration/bulk-ops-demo.sh` stop being pending: the
+      `runtime/cli/integration/bulk-ops-demo.sh` stop being pending: the
       transcript applies a stamped plan and diffs the after-survey against
       it where it now shows the provisional spellings.
 
@@ -693,7 +693,7 @@ rollback-plan derivation; and the rollback drill.
 - [x] The reversal is exercised against a copy, in the drill, before any live
       run is allowed to depend on it. A rollback path first attempted during
       the incident it exists for is not a rollback path.
-- [x] The rollback act in `packages/cli/integration/bulk-ops-demo.sh` stops
+- [x] The rollback act in `runtime/cli/integration/bulk-ops-demo.sh` stops
       being pending: the transcript derives and restores live where it now
       shows the provisional spelling.
 
@@ -727,7 +727,7 @@ archiving the plan does not take the description of a live feature with it.
       the spine, the plan artifact's semantics, the safety model with the
       moment each refusal fires, the drill's standing guarantees, and the
       session and timing contracts, and stands alone once this plan is
-      archived. Command and flag detail stays in `packages/cli/README.md`.
+      archived. Command and flag detail stays in `runtime/cli/README.md`.
 
 ## The drill
 
@@ -765,7 +765,7 @@ settled before work starts.
    `cf piece inspect`: one group, one word for "one piece", and the later
    write stages follow the same shape. A separate bulk group would buy a
    second home at the cost of the consistency that
-   [CLI surface shape](cli-surface-shape.md) exists to protect.
+   [CLI surface shape](../history/plans/cli-surface-shape.md) established.
 2. ~~**Where preconditions are evaluated.**~~ **Resolved: over the API, and
    stage 1 builds the read.** A piece's pattern identity is readable from a
    live deployment without running the piece — the piece inspection path
@@ -870,7 +870,7 @@ than being settled here.
 - [Topics board migration](../history/plans/topics-migration-rehearsal.md) is a worked
   instance of the retarget operation, with a manifest, an ordering, and a
   rollback record.
-- [CLI surface shape](cli-surface-shape.md) governs the command vocabulary
-  that decision 1 above would change.
+- [CLI surface shape](../history/plans/cli-surface-shape.md), an executed plan now archived,
+  set the command vocabulary that decision 1 above would change.
 - [Piece source lifecycle](../specs/piece-source-lifecycle.md) specifies the
   revision log a piece keeps and the restore operation rollback is built on.

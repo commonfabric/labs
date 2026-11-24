@@ -37,34 +37,6 @@ get_pids_on_port() {
     } | grep -E '^[0-9]+$' || true
 }
 
-# Report the pid listening on a port when it belongs to no process in a given
-# pid's tree. A caller that started a server of its own reads this to tell its
-# child's bind from a survivor of an earlier launch holding the same port and
-# answering for it. Prints nothing when the listener is that pid or one of its
-# descendants, and nothing when there is no listener to name: get_pids_on_port
-# is how a holder is found, and a machine where it finds none has nothing to
-# say about whose server is there. The walk up from the listener stops below
-# init, which is every process's ancestor and so tells no two servers apart.
-# Usage: foreign_port_holder <port> <pid>
-foreign_port_holder() {
-    local port=$1
-    local owner=$2
-    local holder
-    local ancestor
-
-    for holder in $(get_pids_on_port "$port"); do
-        ancestor=$holder
-        while [[ -n "$ancestor" ]] && (( ancestor > 1 )); do
-            if (( ancestor == owner )); then
-                continue 2
-            fi
-            ancestor=$(ps -p "$ancestor" -o ppid= 2>/dev/null | tr -d ' ')
-        done
-        echo "$holder"
-        return
-    done
-}
-
 # Locate ports.json at repo root, requiring the jq used to read it
 # Usage: ports_json_path
 ports_json_path() {

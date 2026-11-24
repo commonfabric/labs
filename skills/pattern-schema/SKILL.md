@@ -37,8 +37,7 @@ pattern code.
 
 ## Top-Level vs Sub-Pattern Inputs
 
-Pattern Factory create-mode deliverables are usually top-level patterns. A
-top-level pattern should be usable by itself with sensible defaults and should
+A top-level pattern should be usable by itself with sensible defaults and should
 usually own its local state unless the brief explicitly describes caller-owned
 cells, linking, or embedding.
 

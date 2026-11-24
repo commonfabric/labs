@@ -341,24 +341,13 @@ describe("pattern-user-post-bash", () => {
       }
     });
 
-    it("advises on both spellings of a command that moved", () => {
-      // The bare `set` moved to `cf cell` and still answers at its old
-      // spelling until its removal date, so the guidance follows the command
-      // rather than the spelling a caller reached it by.
-      for (const spelling of ["cf cell set", "cf set"]) {
-        expect(
-          suggestionForPatternUserCommand(`${spelling} --piece ID title`),
-          spelling,
-        ).toContain("State set.");
-      }
-    });
-
     it("still ignores a bare cf whose next word carries no guidance", () => {
       // The widened match must not swallow every `cf` invocation, and must not
       // claim a verb this hook has nothing to say about.
       expect(suggestionForPatternUserCommand("cf test")).toBe("");
       expect(suggestionForPatternUserCommand("cf wish '#topic'")).toBe("");
       expect(suggestionForPatternUserCommand("cf cell get --piece ID title")).toBe("");
+      expect(suggestionForPatternUserCommand("cf set --piece ID title")).toBe("");
     });
 
     it("returns no suggestion for unrelated commands", () => {

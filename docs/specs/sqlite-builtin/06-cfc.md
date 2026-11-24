@@ -12,9 +12,9 @@ that declares no `ifc` and no row rule is unaffected and pays nothing.
 
 CFC labels are open-ended sets of **atoms** (immutable JSON values), not a fixed
 classification lattice
-([`packages/runner/src/cfc.ts`](../../../packages/runner/src/cfc.ts);
-`packages/api/cfc.ts`). A schema attaches labels through its `ifc` field
-([`packages/api/index.ts`](../../../packages/api/index.ts)):
+([`runtime/runner/src/cfc.ts`](../../../runtime/runner/src/cfc.ts);
+`base/api/cfc.ts`). A schema attaches labels through its `ifc` field
+([`base/api/index.ts`](../../../base/api/index.ts)):
 
 - `confidentiality` — who may read (set of atoms; principals are common atoms,
   e.g. `did:mailto:…`, `did:key:…`).
@@ -27,13 +27,13 @@ classification lattice
 
 Labels join by **union with structural dedup** (`deepEqual`), and confidentiality
 is checked by "every atom in the label fits under the destination's
-`maxConfidentiality` ceiling." This flat representation is the all-singleton
-degenerate case of the CFC spec's CNF algebra (every atom an independent
-conjunctive clause; the subset ceiling check is CFC spec §8.10.3's clause
-subsumption restricted to singletons) — the clause-aware migration path is CFC
-spec §18.5. Async effects already declare a **write policy**
+`maxConfidentiality` ceiling." A flat list of atoms is the all-singleton case of
+the CFC spec's CNF algebra (every atom an independent conjunctive clause; the
+subset ceiling check is CFC spec §8.10.3's clause subsumption restricted to
+singletons), and an authored OR-clause (`{anyOf: [...]}`) is a clause with
+several alternatives (CFC spec §3.1.8, §18.5). Async effects already declare a **write policy**
 before committing side effects via the sink-request mechanism
-([`packages/runner/src/cfc/sink-request.ts`](../../../packages/runner/src/cfc/sink-request.ts)),
+([`runtime/runner/src/cfc/sink-request.ts`](../../../runtime/runner/src/cfc/sink-request.ts)),
 which is the seam SQLite writes use — and, under the `sqliteQuery` sink, the
 seam a query's READ request stages through as well ("The query's control
 state" below, for what that gate governs and what it leaves to the builtin).
@@ -68,7 +68,7 @@ spoofs another, and a name present in several joined tables is ambiguous. So
 labels are keyed off each result column's **TRUE origin** `(table, column)`, read
 from SQLite column metadata via FFI (`sqlite3_column_origin_name` /
 `sqlite3_column_table_name`) on the prepared statement
-([`column-origin.ts`](../../../packages/memory/v2/sqlite/column-origin.ts)):
+([`column-origin.ts`](../../../runtime/memory/v2/sqlite/column-origin.ts)):
 
 | query output | origin | meaning |
 |---|---|---|
@@ -107,7 +107,7 @@ handles. The invariant is one image, not two agreeing ones.
 version pinned in `column-origin.ts` has to equal the version resolved for
 `@db/sqlite`. Plug's cache is keyed by URL, so different versions name different
 files. The [SQLite dependency guide](../../development/DEPENDENCIES.md#sqlite)
-owns the complete roll procedure. A test in `packages/memory` checks the code
+owns the complete roll procedure. A test in `runtime/memory` checks the code
 pin against the lockfile, so a stale pin is reported as a test failure rather
 than a crash.
 
@@ -179,7 +179,7 @@ recomputable at any time, by either side, identically.
 ### Authoring surface — `table(columns, rule)`
 
 `table()` takes the rule as an optional second argument
-([`schema.ts`](../../../packages/memory/v2/sqlite/schema.ts)); the helpers live
+([`schema.ts`](../../../runtime/memory/v2/sqlite/schema.ts)); the helpers live
 on the builder's `cfSqlite` namespace (one import for the whole vocabulary).
 The rule receives a shallow field handle `f` (one accessor per declared column)
 and returns `{ confidentiality?, integrity? }` — two **independent**
@@ -187,7 +187,7 @@ expressions:
 
 ```tsx
 // Shown inside a pattern body.
-const { table, all, principal, match, whenMatches, authoredBy, dbOwner } =
+const { table, any, principal, match, whenMatches, authoredBy, dbOwner } =
   cfSqlite;
 // Pull address tokens out of a messy "Name <addr>, addr" recipient line.
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
@@ -201,8 +201,9 @@ const emails = table(
     body: "text",
   },
   (f) => ({
-    // Row confidentiality = sender ∧ every recipient ∧ the mailbox owner.
-    confidentiality: all(
+    // Row confidentiality = sender ∨ any recipient ∨ the mailbox owner: one
+    // OR-clause, so any one of them can read the row.
+    confidentiality: any(
       principal("mailto", match(f.from_addr, ADDR, { min: 1 })),
       principal("mailto", match(f.to_addrs, ADDR)),
       dbOwner(),
@@ -220,25 +221,24 @@ const emails = table(
 
 **"The sender and all recipients" really means *any-of*** — one OR-clause
 `[[sender ∨ recipients ∨ owner]]` (an authored disjunction, CFC spec §3.1.8),
-written `any(...)`. Under the runner's current flat **conjunctive** lowering
-the same atom set means *all-of*: a row fits only a ceiling listing every
-participant, so per-user views return nothing. The surface keeps the two
-combinators explicit — `all(...)` (conjunctive clauses, works today) and
-`any(...)` (one OR-clause, **errors at `table()` time** until the clause-aware
-label profile lands, CFC spec §18.5.3) — so the wrong semantics is never
-shipped silently.
+written `any(...)`, which is what the example above declares. Written with
+`all(...)`, the same atom set means *all-of*: a row fits only a ceiling listing
+every participant, so per-user views return nothing. The surface keeps the two
+combinators explicit — `all(...)` (a conjunction: each term contributes its own
+clauses) and `any(...)` (one OR-clause, CFC spec §18.5.3), both accepted by
+`table()` — so the wrong semantics is never chosen silently.
 
 The closed helper set
-([`row-label.ts`](../../../packages/memory/v2/sqlite/row-label.ts); each helper
+([`row-label.ts`](../../../runtime/memory/v2/sqlite/row-label.ts); each helper
 returns a plain-JSON AST node):
 
 | helper | meaning |
 |---|---|
 | `match(f.col, /re/, {group?, min?})` | run the regex (forced global) over the column's text ⟹ the ordered list of matches (or capture `group`). The universal field extractor — split + clean in one; subsumes JSON arrays and dirty `Name <addr>` lists. **Strict-if-present:** a non-empty value yielding zero matches fails closed at evaluation (never under-label); `min` makes the field a required anchor |
-| `principal(protocol, match(…))` | `did:<protocol>:<v>` for each extracted `v` (distributes over the match list). Normalization is protocol-implied: `mailto`/`web` lowercase + trim; `did:key` untouched (base58 is case-sensitive) |
-| `dbOwner()` | the db's owner — the principal that created the SqliteDb cell, resolved from the db ref (a fixed db property, so the rule stays pure; for a per-user-scoped db this is that user). Creation under SERVED execution mints the CREATING RUN's acting principal — the demanded run's carried identity, never the serving runtime's ambient (service) identity (`docs/specs/server-side-execution/serving-loop.md` §3c); a served creating run with no carried actor mints NO owner, and `dbOwner()` fails closed (RATIFIED — RULED 2026-08-22; `docs/specs/server-side-execution/verification-coverage.md` OW53 records the ruling) |
-| `all(...t)` | separate **conjunctive** clauses, one per atom — the default confidentiality combinator |
-| `any(...t)` | **one OR-clause**: any alternative satisfies it (CFC spec §3.1.8). Serializes into the rule as an authored OR-clause (un-reserved by Epic E1) — never silently lowered to the conjunctive form |
+| `principal(protocol, match(…))` | the reader `User(did:<protocol>:<v>)` for each extracted `v` (distributes over the match list); under `authoredBy`/`endorsedBy` the DID itself is the claim's subject (CFC spec §4.1.2, §15.2). Normalization is protocol-implied: `mailto`/`web` lowercase + trim; `did:key` untouched (base58 is case-sensitive) |
+| `dbOwner()` | the db's owner as the reader `User(<owner DID>)` (CFC spec §13.12.1's `O`) — the principal that created the SqliteDb cell, resolved from the db ref (a fixed db property, so the rule stays pure; for a per-user-scoped db this is that user). Creation under SERVED execution mints the CREATING RUN's acting principal — the demanded run's carried identity, never the serving runtime's ambient (service) identity (`docs/specs/server-side-execution/serving-loop.md` §3c); a served creating run with no carried actor mints NO owner, and `dbOwner()` fails closed (RATIFIED — RULED 2026-08-22; `docs/specs/server-side-execution/verification-coverage.md` OW53 records the ruling) |
+| `all(...t)` | a **conjunction**: each term contributes its own clauses, so each is an independent requirement (`all(any(A, B), C)` is `(A ∨ B) ∧ C`); the counterpart of `any(...)` |
+| `any(...t)` | **one OR-clause**: any alternative satisfies it (CFC spec §3.1.8). Serializes into the rule as an authored OR-clause; each alternative is a single principal-like term, not an `all(...)` or `any(...)` — never silently lowered to the conjunctive form |
 | `intersect(...t)` | set ∩ over integrity atom sets (the trust-floor meet) — integrity only |
 | `whenMatches(f.col, /re/, term)` | include `term` only when the regex TESTS true against the column (gate trust, or a data-dependent conjunct, on extracted metadata). One **fused** helper — a bare `when(matches(…))` pair would collide with the builder's control-flow `when`, whose transformer lowering matches by NAME and mangles any local so named. NB: a gated confidentiality alternative is absent from some rows, so it never has the common-alternative property (CFC spec §8.17.4) |
 | `authoredBy(p)` / `endorsedBy(p)` | integrity (provenance) claims over a `principal(…)` term — minted as self-describing claim atoms, see below |
@@ -352,8 +352,8 @@ would be a DoS vector). The same validation **re-runs on wire-supplied specs**
 before any evaluation: "couldn't validate" is never "no label".
 
 One pure evaluator —
-[`evaluateRowLabel`](../../../packages/memory/v2/sqlite/row-label.ts), in
-`packages/memory` beside `table()` — is shared by the write gate, read
+[`evaluateRowLabel`](../../../runtime/memory/v2/sqlite/row-label.ts), in
+`runtime/memory` beside `table()` — is shared by the write gate, read
 re-derivation, and (future) server-side commit evaluation, so the sides can
 never drift: the audit property holds by construction. It is fail-closed end
 to end: an absent rule-input field, a value class a regex cannot read (a
@@ -368,9 +368,9 @@ refused query / rejected write.
 Because the label is re-derived from stored data, the read side is
 self-sufficient: a row is correctly labeled even if it predates the rule.
 Implemented in the `sqliteQuery` flush
-([`sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts))
+([`sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts))
 with the pure half in
-[`row-label-read.ts`](../../../packages/runner/src/builtins/sqlite/row-label-read.ts):
+[`row-label-read.ts`](../../../runtime/runner/src/builtins/sqlite/row-label-read.ts):
 
 1. **Locate the rule's inputs by TRUE origin, never output name** (Phase 2's
    provenance machinery): for each column the rule reads, find the result
@@ -433,13 +433,14 @@ const skim = db.query<Row>(sql, {
 The ceiling is declared once: either the query's `maxConfidentiality` option
 or `ifc.maxConfidentiality` on the typed Row schema (declaring both errors).
 Placeholder atoms `{__ctCurrentPrincipal: true}` (the acting user) and
-`{__ctDbOwner: true}` (the db's owner) resolve before the check. A flat
+`{__ctDbOwner: true}` (the db's owner) resolve before the check, each to the
+reader atom `User(<DID>)` the row rule's terms evaluate to. A flat
 ceiling list keeps the **conjunctive** reading — every entry required of the
 observer (clause subsumption restricted to singletons, CFC spec §8.10.3); the
 reader-enumeration reading ("observed by any of these") is an explicit
 `any([...])` ceiling, **implemented** with OR-clauses (Epic A2). A row modeled
 with an `any(...)` rule fits such a reader-enumeration ceiling, so per-user
-views are now genuinely useful; a flat conjunctive label of the same
+views are genuinely useful; a flat conjunctive label of the same
 participants would still require a ceiling listing every one.
 
 `onExceed` governs a ceiling miss: **`"fail"`** (default) refuses the whole
@@ -472,6 +473,13 @@ Those probes do not require the action's read ceiling. The action's own reads
 remain gated, including reads of a value already examined during preflight.
 Cell traversal caches are partitioned by ambient read metadata so a cached
 scheduling probe cannot supply an ordinary payload read.
+
+Before the runner runs a piece set up elsewhere, or swaps one to another
+pattern, it probes whether the documents that run reads are on the replica, so
+that it can name the piece's family first when they are not. Those probes are
+verifier-internal reads on a read-only transaction of their own, and do not
+require the read ceiling: a document whose value the ceiling withholds is
+present all the same. The run's own reads of it remain gated.
 
 A **session-scoped** query result (`PerSession<>`, `.asScope("session")`,
 `scope: "session"`, or a session-scoped db) meets the runtime ceiling with the
@@ -542,8 +550,9 @@ the request hash — and, through it, the effect key — alongside the user
 OW53), so two sessions of one user materialize distinct cleared cells;
 which rows a reader may read never varies by session. A reader may read a row
 iff, for **every** conjunctive clause of the row's re-derived confidentiality,
-the reader is one of that clause's alternatives (the label stores concrete
-principals — `dbOwner()` is resolved at eval time — so this is exact-match; a
+the reader's `User(<reader DID>)` atom is one of that clause's alternatives (the
+label stores concrete principals — `dbOwner()` is resolved at eval time — so
+this is exact-match; a bare DID string is no atom (CFC spec §4.1.2) and a
 non-principal atom like a caveat is never reader-satisfiable, so the row is
 withheld — fail closed). Because dropping a row releases its presence bit, this
 is a **declared existence release** (CFC spec §8.17, invariant 14) and requires
@@ -578,8 +587,8 @@ const mine = db.query<Row>("SELECT * FROM messages ORDER BY id", {
 
 The write side is a gate; it does not determine the row's effective label
 (read re-derivation does). Implemented in `Cell.exec`
-([`cell.ts`](../../../packages/runner/src/cell.ts)) with the pure half in
-[`row-label-write.ts`](../../../packages/runner/src/builtins/sqlite/row-label-write.ts);
+([`cell.ts`](../../../runtime/runner/src/cell.ts)) with the pure half in
+[`row-label-write.ts`](../../../runtime/runner/src/builtins/sqlite/row-label-write.ts);
 zero cost until a table declares a rule:
 
 - An **attributable INSERT/REPLACE** (positional `?` params with an explicit
@@ -622,7 +631,7 @@ zero cost until a table declares a rule:
 The write's ground truth is the row the statement actually commits, whatever
 the statement's shape — so the server re-derives it there. Inside
 `applyCommitTransaction`
-([`commit-eval.ts`](../../../packages/memory/v2/sqlite/commit-eval.ts),
+([`commit-eval.ts`](../../../runtime/memory/v2/sqlite/commit-eval.ts),
 called from `applySqliteOperation`), a folded `sqlite` write whose target
 table declares a rule:
 
@@ -644,7 +653,7 @@ flags): it is the server's own soundness enforcement, so a stale or hostile
 client cannot skip it. Fail closed server-side, each rolling back the commit:
 an unattributable or undeclared target on a rule-bearing db (attributed with
 the SAME shared parser the runner gate uses,
-[`write-targets.ts`](../../../packages/memory/v2/sqlite/write-targets.ts)), an
+[`write-targets.ts`](../../../runtime/memory/v2/sqlite/write-targets.ts)), an
 unrecognized leading keyword (CTE-fronted writes), an invalid wire-supplied
 spec, a statement that already carries RETURNING (a second clause cannot be
 appended soundly — and `db.exec` returns void, so it had no consumer), every
@@ -658,7 +667,7 @@ pay nothing.
 A rolled-back commit is a **terminal** rejection: the server preserves the
 `RowLabelCommitError` name over the wire (it is not collapsed into a generic
 `TransactionError`), and the runner classifies it non-retryable
-([`storage/rejection.ts`](../../../packages/runner/src/storage/rejection.ts)
+([`storage/rejection.ts`](../../../runtime/runner/src/storage/rejection.ts)
 `isTerminalRejection`). Re-running the identical handler would recompute the
 identical refused write, so the doomed handler stops immediately rather than
 consuming its retry budget — its per-attempt speculative rev bumps would only
@@ -679,9 +688,9 @@ re-derives.
 1. **Authoring:** unknown column, unknown op, unsafe regex, an integrity/
    confidentiality op in the wrong position, a malformed `any()` alternative
    (a nested `all()`/`any()`), or a rule input declared REAL or BLOB ⟶
-   `table()` throws. A well-formed `any(...)` is
-   accepted as an authored OR-clause (Epic E1). The same validation re-runs on
-   wire-supplied specs before evaluation.
+   `table()` throws. A well-formed `any(...)` is accepted as an authored
+   OR-clause. The same validation re-runs on wire-supplied specs before
+   evaluation.
 2. **Read, unresolvable input:** a rule input missing from the projection by
    origin, or ambiguous (two columns, same origin) ⟶ refuse the query.
 3. **Read, bad data:** evaluator `{error}` (a regex input with no text this
@@ -724,13 +733,13 @@ Phase 2's per-column label is a join — clause concatenation for confidentialit
 is never unioned when labels of different values fold into a derived one.
 
 Demos:
-[`cfc-row-label-mailbox`](../../../packages/patterns/cfc-row-label-mailbox/main.tsx)
+[`cfc-row-label-mailbox`](../../../patterns/examples/cfc-row-label-mailbox/main.tsx)
 (rule + ceiling + skip + aggregate refusal end to end) and
-[`cfc-row-label-records`](../../../packages/patterns/cfc-row-label-records/main.tsx)
+[`cfc-row-label-records`](../../../patterns/examples/cfc-row-label-records/main.tsx)
 (per-row ∧ per-column composition on one row). e2e:
-[`sqlite-cfc-row-label.test.ts`](../../../packages/runner/integration/sqlite-cfc-row-label.test.ts)
+[`sqlite-cfc-row-label.test.ts`](../../../runtime/runner/integration/sqlite-cfc-row-label.test.ts)
 (3.a/3.b) and
-[`sqlite-cfc-commit-eval.test.ts`](../../../packages/runner/integration/sqlite-cfc-commit-eval.test.ts)
+[`sqlite-cfc-commit-eval.test.ts`](../../../runtime/runner/integration/sqlite-cfc-commit-eval.test.ts)
 (3.c: atomic rollback + post-image upsert relabel).
 
 ## The query's control state
@@ -744,62 +753,34 @@ read out of a labeled row puts that row's label on the hash. Which atoms that
 is depends on what the transaction issuing the request read, which no `ifc`
 written into a schema can say.
 
-So the result cell is a store the runtime owns, and its control paths declare
-their policy from the issuing transaction — CFC spec §8.12.5 route 2, the
-same route the runner's own piece documents take. The declaration grows by
-clause and never shrinks, which is the ratchet §8.12.2 asks for: a query cell
-parameterized out of three differently labeled reads ends up admitting all
-three and readable by whoever satisfies all three.
+The result cell is a store the runtime owns and enrolls for the life of its
+node. Eligible misfits on its control paths are recorded in the issuing
+transaction's derived stamps, under the runtime-owned-store admission described
+in [`../cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4. This is
+the persistence change proposed in specs#78, implemented ahead of its ruling.
+The control write adds no declared policy.
 
-The route declares on the paths the issuing transaction writes, and which
-paths those are depends on what the claim finds stored. `/requestHash` moves
-on every issue, so every labeled issue declares there, and that is the path
-on which the declaration is always observable. `/pending` is written only by
-a claim that finds the flag down. A claim made while an earlier request of
-the same node is still in flight sets the flag to the value it already holds,
-which is no write, and declares nothing there. So a query whose labeled issue
-follows a settled one carries the parameter's clause on `/pending`, and a
-query whose only labeled issue overlapped an unlabeled one does not.
+`/requestHash` changes on each issue. `/pending` changes only when a claim
+raises a flag that was down. A claim while an earlier request is still in
+flight may leave `/pending` unchanged, so that flag does not necessarily
+carry the latest issue's label. Each written control value carries the
+issuing transaction's join, which a reader consumes.
 
-The settle takes no declaration back. It rewrites `pending` — and, on a
-failure, `error` — from a transaction that reads only its own write
-destination and therefore carries nothing, and a declared component grows by
-clause and gives none back (CFC spec §8.12.1), whatever the transaction
-rewriting the path carried. A reader of `pending` is tainted by every clause
-a labeled issue declared there, and stays so after the query settles. A
-pattern that copies the flag, or anything computed from it, into a store
-whose policy an author wrote has to admit those clauses there.
+The settle rewrites `/pending` and, on failure, `/error` from a transaction
+that reads its own write destination rather than application input. Its
+value stamps therefore reflect that settle's derivation. For an existing
+path initialized without taint, a clean settle leaves no issuing-request
+clause in its value stamp. A declaration already stored there, or the
+frozen existence stamp of a path created under taint, remains. Clearing
+those requires the appropriate release route, not an ordinary settle. A
+path with no recorded existence entry can receive a legacy backfill at its
+first labeled write even when its value already existed. That frozen entry
+also remains after a clean settle.
 
-What the flag carries is bounded by the result's top. A claim carries `S`
-and nothing of the rows: the builtin reads its own settled result as a read
-of its write destination, which stays out of the join (§18.6.2). Each settle
-that writes rows declares that same `S` on `/result`, joined with the rows'
-labels. So a reader of the flag of a settled query carries no more than a
-reader of the result's length, and none of a projected column's label. An
-issue that another superseded before its rows landed is inside the bound as
-well. Both read the same parameter cell, and what a reader of that cell
-carries grows by clause and gives none back, so the issue that settled
-carried the superseded one's `S` with its own.
-
-The bound stops at two states. While a labeled request is in flight the flag
-carries its `S` and the top does not, until the settle declares it there. And
-the settle of a FAILED issue writes `/error` and no rows, and declares
-nothing on `/result`, so after a failure the flag carries that issue's `S`
-and the top keeps what the issues that settled rows brought. That settle
-carries nothing, so it declares nothing on `/error` either.
-
-The foreign-space refusal below declares the same way. It is written by the
-ISSUING transaction — the one carrying the clause it refuses over, since that
-is the condition it fires on — so the route declares that clause on the
-control paths the refusal writes, `/error` among them. A pattern that renders
-"this query was refused" therefore inherits the atoms the refusal was about,
-and a store it writes them into has to admit them. That is the ratchet
-landing where the refusal did rather than an accident, and it is worth
-knowing before rendering a refusal into a store whose policy an author wrote.
-
-`/result`'s per-column entries are untouched — the route declines at a path a
-schema declares — and so are the row documents, because that settle
-transaction carries no clause of its own.
+`/result`'s per-column and selection entries keep their authored policy.
+The runtime-owned route declines at a path whose schema declares a policy,
+and the transaction settling rows adds no flow clause of its own. A
+request's labeled selection inputs are recorded separately, as below.
 
 ### Where a query's selection inputs are labeled
 
@@ -814,8 +795,9 @@ the request, recorded at issue and supplied by the settle.
 | which reference sits at a `/result` slot | `S`, and the label of the row at that slot | declared `observes: "followRef"` entry at `/result/*` for `S`; the link entry at the slot for the row's label |
 | a row's content | the row's column and row labels | the row document's own entries |
 | a row document's existence | the row's label | the row document's root entry |
-| `/requestHash` | `S`, accumulated over issues | route-2 declaration by the issuing transaction |
-| `/pending` | the `S` of each issue whose claim raised the flag, accumulated | route-2 declaration by the issuing transaction |
+| `/requestHash` | the current issue's `S`, plus applicable declared and frozen existence labels | derived value stamp by the issuing transaction, joined with retained components |
+| `/requestKey` | the issuing request's `S`, plus retained declarations | derived value stamp by the issuing transaction; declared on an abandoned ending |
+| `/pending` | the last writer's join, plus applicable declared and frozen existence labels | derived value stamp by that transaction, joined with retained components |
 
 All of it holds at every scope. A session-scoped result is materialized per
 reader, which limits who can read it and does not label what that reader's
@@ -864,30 +846,29 @@ column labels on its root as an `observes: "shape"` entry, so its existence
 carries them. A row under a row label carries the row label at its root for
 every class; where such a row also carries per-column labels, its existence
 carries the row label and its columns carry theirs. A row of a query that
-projects an `asCell` link column declares no existence label: a label at a
-row's root subjects every link written beneath it to the link write policy,
-which refuses a link to a cell that carries no label metadata.
+projects an `asCell` link column declares no existence label, so its
+existence does not carry the join of its column labels.
 
 A row to which neither its columns nor a row rule assign a label stores none,
-and declares an empty one. The link write policy governs the slots of a
-result store that carries a label, and refuses a link there to a document
-that stores no label and for which the writing transaction declares none. A
-settle that finds a row's document standing writes the slot and not the
-document, so the declaration cannot rely on what the document stores: every
-settle into a store that carries a label, or is written under one, declares
-the empty label at the root of each such row. The declaration stores nothing
-on the row document, and it does not subject a link written beneath the
-row's root to the link write policy, which counts a declaration by the atoms
-it holds. Into a store that carries no label a row declares nothing, so the
-rows of an unlabeled result do not make its settle relevant to commit
-preparation.
+and declares an empty one: every settle into a store that carries a label, or
+is written under one, declares the empty label at the root of each such row.
+The declaration stores nothing on the row document, and no check depends on
+it. Into a store that carries no label a row declares nothing, so the rows of
+an unlabeled result do not make its settle relevant to commit preparation.
+
+A link write takes nothing from the document it points at, so neither
+arrangement is needed to link a row or a cell a row's column names.
+`docs/plans/cfc-independent-reference-labels.md` (stage 6) records giving a
+row that holds a link column its existence label and dropping the empty
+declaration.
 
 A row document's id is hashed with the space's row salt as well as the row
 key and the result cell's coordinates. The salt is a runtime secret
-(`packages/runner/src/runtime-secret.ts`): one document per space at a
+(`runtime/runner/src/runtime-secret.ts`): one document per space at a
 reserved id, minted with a random value by the first settle that needs it.
 The transaction write chokepoint refuses every unprivileged write to that id,
-and the one writer, `ensureRuntimeSecret()`, returns nothing; the read
+and the one writer, `ensureRuntimeSecret()`, refuses a caller without the
+runtime's authorization and returns the salt only to the runtime; the read
 chokepoint refuses every read of its value but the runtime's own, so no
 executed code reads the salt. A stored salt is trusted only when its stored
 schema carries the writer claim `writeAuthorizedBy: ["runtime-secret"]`, which
@@ -920,25 +901,27 @@ Three residuals are recorded against §8.17.6:
   pattern holding a row reference can write to it. A writer claim naming the
   builtin (`ifc.writeAuthorizedBy`) on each row document is the direction.
 
-What the store's undeclared bookkeeping was refusing by accident, before the
-route reached it, includes one case the sink seam cannot express: a query
-whose database lies in another space, issued by a request carrying
-confidentiality. The parameters of such a query go to whoever holds THAT
-space's replicas, who are not the audience the result document's residency
-names. The builtin refuses it directly, before the request is staged, with a
-stable reason and no request hash — a later evaluation whose request carries
-nothing asks again rather than finding a memo hit.
+A query whose database lies in another space is answered like one in the
+same space, labeled request or not. Its statement and parameters reach that
+space's server, an attested runtime running the same code and applying the
+same access rules as the one that serves this space, so they reach nothing
+the result's own residency would not. What each reader is shown is still
+decided by the rows' labels in that reader's runtime. An earlier refusal of a
+labeled request against a database in another space guarded against a server
+outside that model, had no section of the specification behind it, and is
+withdrawn.
 
-The measure there is the transaction's flow join, not the transaction-global
-consumed set the sink ceilings read — which is also what a per-sink ceiling
-for this sink would have to measure, if a deployment ever declares one: the
-consumed set counts this node's reads of its own settled result, so a ceiling
-reading it would refuse every issue after the first. The difference is the reads the write
-machinery makes of its own destination, which the flow join excludes
-(§18.6.2): this node reads its own settled result to decide whether a
-writeback is stale, and that result carries the labels of the columns it
-projected, so the wider set answers "labeled" on every issue after the first
-whatever the parameters are.
+The confidentiality a request carries is measured by the transaction's flow
+join, not the transaction-global consumed set the sink ceilings read — which
+is what a per-sink ceiling for this sink would have to measure, if a
+deployment ever declares one: the consumed set counts this node's reads of
+its own settled result, so a ceiling reading it would refuse every issue
+after the first. The difference is the reads the write machinery makes of
+its own destination, which the flow join excludes (§18.6.2): this node reads
+its own settled result to decide whether a writeback is stale, and that
+result carries the labels of the columns it projected, so the wider set
+answers "labeled" on every issue after the first whatever the parameters
+are.
 
 That exclusion has the cost §18.6.2 records, and it applies here: whether the
 rows landed discloses whether the stored hash still matched, and that hash is
@@ -956,12 +939,6 @@ sink. A deployment that wants a confidentiality gate on sqlite reads declares
 a ceiling for the sink, and the seam is where it applies — with the caveat
 above about which set such a ceiling must measure.
 
-The refusal is gated on the flow dial rather than on the enforcement ladder: a
-runtime deriving no flow labels has an empty join by construction, so nothing
-is labeled and the refusal never fires. The default flow mode is `off`, so a
-deployment that has not opted into flow labels gets no cross-space bound —
-and nothing for one to protect.
-
 One thing outside this builtin decides whether a caller can use any of it. A
 `lift` whose output document has acquired stored CFC label metadata cannot be
 written again unless the lift declares a RESULT SCHEMA: without one the write
@@ -974,12 +951,12 @@ built directly against the builder, as a runner test does, or one whose return
 type the injector cannot read.
 
 > Implementation: `makeResultCell` plus `recordRuntimeOwnedStore` /
-> `enrollRuntimeOwnedStore`, the `crossSpace` refusal over `deriveFlowJoin`,
+> `enrollRuntimeOwnedStore`, the request's flow join over `deriveFlowJoin`,
 > the `shapeConfidentiality` join, and
 > `enqueueSinkRequestPostCommitEffect` in
-> [`sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts);
+> [`sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts);
 > asserted in
-> [`cfc-sqlite-query-control-state.test.ts`](../../../packages/runner/test/cfc-sqlite-query-control-state.test.ts).
+> [`cfc-sqlite-query-control-state.test.ts`](../../../runtime/runner/test/cfc-sqlite-query-control-state.test.ts).
 > The route's conditions are in
 > [`cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4.
 
@@ -1007,10 +984,10 @@ function of its stored columns, recomputable at any time.
    - **OR-clauses: _implemented_.** The CNF clause kernel + digest-stable
      `anyOf` canonicalization, clause-subsumption ceiling fit, clause-
      concatenation join, and author-written disjunctive confidentiality (Epic
-     A1–A5, #4466–#4481); sqlite `any(...)` un-reserved (Epic E1, #4475);
-     common-alternative aggregate reads (CFC spec §8.17.4) via Epic E2 (#4477).
-     An authored `any(sender ∨ recipients ∨ owner)` now serializes into the rule
-     as one OR-clause instead of erroring at `table()` time.
+     A1–A5, #4466–#4481); sqlite `any(...)` (Epic E1, #4475); common-alternative
+     aggregate reads (CFC spec §8.17.4) via Epic E2 (#4477). An authored
+     `any(sender ∨ recipients ∨ owner)` serializes into the rule as one
+     OR-clause.
    - **3.b — read-time clearance: _implemented_** (Epic E3, #4478). Filtering by
      *who is asking* via a separate `db.query({ readClearance: true })` option —
      distinct from the declared-ceiling `onExceed`; it drops rows the reader

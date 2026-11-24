@@ -81,8 +81,8 @@ result schema so each viewer sees their own profile projection.
 - `Runtime.getHomeSpaceCell()` creates the home space cell at
   `(space = userIdentityDID, cause = userIdentityDID)`.
 - `PiecesController.ensureDefaultPattern()` links a default pattern at
-  `spaceCell.defaultPattern`. Today it chooses `system/home.tsx` for the home
-  space and `system/default-app.tsx` for other spaces.
+  `spaceCell.defaultPattern`. Today it chooses `system/home/home.tsx` for the
+  home space and `system/default-app/default-app.tsx` for other spaces.
 - The current home pattern owns durable cells such as `favorites`, `journal`,
   `learned`, `spaces`, and `defaultAppUrl` on the home default pattern.
 - The current docs say favorites are on `spaceCell.favorites`, but current code
@@ -142,6 +142,8 @@ Profile creation uses the **anonymous** `PatternFactory.inSpace()` (CT-1650):
 const profile = ProfileHome.inSpace(undefined, {
   grants: { "*": "WRITE" },
   root: true,
+  spaceKind: "profile",
+  selfOwned: true,
 })({
   initialName: name,
 });
@@ -152,10 +154,18 @@ the calling space calls it: the home space records one allocation per name, so
 every profile created under one name would land in one space. The anonymous case
 instead records one allocation per call, keyed by the creating handler's frame
 cause (per-user home-space input links + the durable per-event id). Each
-allocation creates a space with a random DID owned by the creating user ([random
-space identities](random-space-identities.md)), so the space is unique per user
-AND per creation event, and stable across the cross-space-commit retry. The
-profile space grants the wildcard `"*"` WRITE. Other users read a profile's
+allocation creates a space with a random DID ([random space
+identities](random-space-identities.md)), so the space is unique per user AND
+per creation event, and stable across the cross-space-commit retry. The space
+owns itself and declares the `profile` kind: its access list grants its own
+DID OWNER and the wildcard `"*"` WRITE, and the creating user holds a
+delegation from the space's key, recorded in the home space and presented
+when the user's runtime opens the space, in place of a grant
+([profile delegation](profile-delegation.md)). The creating runtime holds that
+delegation from the moment the key signs it, so creation itself, the commit
+placing the profile and the copy of its pattern into the space, is made under
+the space's own grant and not the wildcard. A profile created before
+profiles owned themselves names its creator as owner instead. Other users read a profile's
 name, and a runtime showing a profile writes into the profile's space — its
 per-session state at the least — so a space granting READ alone refuses the
 visit. The space's access list therefore protects nothing in a profile. The
@@ -172,13 +182,14 @@ until then. The display name is independent of the space identity: it flows to
 `name` cell, and into that cell itself at creation. The cell is initialized
 statically so it keeps its identity — and the name saved in it — across
 releases of the profile pattern; the create handler
-queues a second step (`seedProfileName` in `profile-create.tsx`, addressed by
-the new entry's position in `profiles`) that stores the creation name through
-`setName`, the cell's owner-protected writer, once the profile's docs have
-loaded, so `#profile` readers find the name in storage without running the
-profile. A profile renamed under an earlier release, whose `name` cell was
-derived from `initialName`, loses that saved name once, at its first release
-under the static initializer, and keeps every name saved after. The home default
+queues a second step (`seedProfileName` in `profile-create.tsx`, handed a link
+to the new profile rather than reading `profiles`) that stores the creation
+name through `setName`, the cell's owner-protected writer, once the profile's
+docs have loaded, so `#profile` readers find the name in storage without
+running the profile. The step fails loudly when its profile does not resolve.
+A profile renamed under an earlier release, whose `name` cell was derived from
+`initialName`, loses that saved name once, at its first release under the
+static initializer, and keeps every name saved after. The home default
 pattern's `profile` link is the durable source of truth after creation, and
 runtime-only `.inSpace` annotations are rewritten to the resolved DID during
 post-run.
@@ -189,7 +200,7 @@ The initial profile default pattern should export this contract:
 
 ```ts
 // Shown at module scope.
-import type { Cell, RequiresIntegrity } from "commonfabric";
+import type { Cell, FabricBytes, RequiresIntegrity } from "commonfabric";
 
 type ProfileElement = {
   cell: Cell<unknown>;
@@ -222,6 +233,8 @@ type ProfileDefaultPattern = {
   [UI]: VNode;
   name: string;
   avatar: string;
+  pictureBlob?: { space?: string; id?: string };
+  picture?: FabricBytes;
   bio: string;
   externalLinks: ExternalProfileLink[];
   verifiedIdentities: VerifiedExternalIdentityCell[];
@@ -252,11 +265,48 @@ type ProfileInbox = {
 
 type SetProfileInboxEvent = {
   inbox?: Cell<ShareInboxPiece>;
+  replacing?: Cell<ShareInboxPiece> | undefined;
 };
 ```
 
-`avatar` starts as a string. The first implementation can use a URL, data URL,
-or emoji-like text. Binary/blob avatar upload is out of scope.
+`pictureBlob` is the profile picture as a blob: a raster image, in any format
+an HTML `<img>` decodes, named by the DID of the space whose blob store holds
+it and the blob's id there. Its bytes stay out of the profile, so they are
+carried by no list, feed or snapshot that carries the profile, and a reader
+fetches them from that blob store, `GET /<space>/blobs/<hash>`, which needs no
+credential ([files](../common/capabilities/files.md)). A blob's id is the hash
+of its media type and bytes, and the memory server stores a blob's record only
+under that hash, so a reference names fixed bytes. Nothing deletes a blob, so
+a picture the owner replaces or clears stays fetchable by anyone who holds its
+reference. A profile that holds no picture as a blob holds `{}`, and a stored
+profile from before the field may hold no `pictureBlob` property.
+
+`picture` is the profile picture as bytes held inline, the format being read
+from the bytes: a host that holds only bytes, such as a host's profile
+suggestion, sets it so. A profile that holds no picture as bytes holds empty
+bytes, and a stored profile from before the field had that default may hold
+no `picture` property.
+
+Only the owner sets either, through `setPicture`, which refuses every other
+writer. A picture sent as a blob a host stored it in (`pictureBlob`, or
+`<cf-avatar-input>`'s `detail.blob`) is stored in `pictureBlob`, and one sent
+as bytes (`picture`, or `detail.bytes`) in `picture`; an event carrying both
+is taken as the blob, and each empties the other field. The bytes reach the
+blob store the way a file's do: the host code that holds them uploads them,
+and no pattern does. The profile's edit form drives `setPicture` from
+`<cf-avatar-input>`, which crops the picked image to its centered square,
+scales it to 128 pixels on each side, and stores it as a blob in the space it
+is shown in; `cf profile set-picture` stores the picture as a blob in the
+profile's own space.
+
+`avatar` is free text: a URL, a `data:` URL, or a glyph. Its writer
+`setAvatar` remains, but no form or pattern in this repository sends to it, and
+new profiles hold `""`. It stays in the contract because stored profiles and
+deployed readers hold and read it as a string. Every reader draws a profile's
+picture, from `pictureBlob` or else from `picture`, or else its avatar text, or
+else initials: `<cf-profile-badge>` does so from the live profile, and a
+pattern that snapshots a profile's appearance copies the picture's reference or
+bytes when there is a picture and the avatar text when there is not.
 
 `bio` (CT-1648) is a short, owner-authored free-text description, the canonical
 shared-profile bio — distinct from Home's legacy `learned.summary`. Like `name`
@@ -292,8 +342,16 @@ uses the host it read the profile from. The pointer holds no secret, since it
 only says where to knock and the inbox decides what it keeps, and it is
 owner-protected, written only through `setInbox`, which takes the link alone
 (`{ inbox: <link> }`) and stores it as `piece`, or nothing (`{}`) to clear the
-pointer. A profile with no inbox holds a pointer without `piece`; a stored
-profile predating the pointer has no `inbox` property.
+pointer. An optional `replacing` makes the write conditional, checked in the
+transaction that writes it: present and `undefined`, it sets the pointer only
+while the profile points at no inbox, and a link, only while the profile
+points at the inbox that link names. An event without the property writes
+unconditionally, so `{ inbox, replacing: undefined }` and `{ inbox }` are
+different events. A link to an inbox holding nothing is a link, and names it.
+A sender that points a profile only when it has no pointer sends
+`replacing: undefined`, since its own read of the pointer is a transaction of
+its own and guards nothing. A profile with no inbox holds a pointer without
+`piece`; a stored profile predating the pointer has no `inbox` property.
 
 The link sits under `piece` rather than being the stored value itself because
 a write to a cell whose document root holds a link goes through the link into
@@ -368,10 +426,10 @@ that is useful for rendering, but external code must depend on `elements` and
 
 Default pattern creation needs a third case:
 
-1. Home space: `/api/patterns/system/home.tsx`
-2. Profile space: `/api/patterns/system/profile-home.tsx`
+1. Home space: `/api/patterns/system/home/home.tsx`
+2. Profile space: `/api/patterns/system/profile-home/profile-home.tsx`
 3. Other spaces: home `defaultPattern.defaultAppUrl` or
-   `/api/patterns/system/default-app.tsx`
+   `/api/patterns/system/default-app/default-app.tsx`
 
 A profile space is not identified by `space === userIdentityDID`. It is
 identified by the profile default-pattern link at
@@ -398,15 +456,15 @@ If `profile` is missing:
 - render an input field for the user's profile name
 - submitting it stores the requested name, which drives a profile-creation
   action/lift
-- that action starts `system/profile-home.tsx` with the anonymous `.inSpace()`
-  (see Profile Space Identity above), passes the submitted name as the initial
-  profile name, and writes the resulting profile
+- that action starts `system/profile-home/profile-home.tsx` with the anonymous
+  `.inSpace()` (see Profile Space Identity above), passes the submitted name as
+  the initial profile name, and writes the resulting profile
   default-pattern link to `homeDefaultPattern.profile`
 
 If `profile` is present:
 
 - render the profile default pattern or a compact summary based on
-  `profile.name` and `profile.avatar`
+  `profile.name` and the profile's face (`profileFace()`)
 
 This write targets the home default pattern because that is the current durable
 home-field convention used by favorites. If custom home pattern replacement
@@ -440,6 +498,8 @@ and element mutations:
 
 - `profileDefault.name`
 - `profileDefault.avatar`
+- `profileDefault.pictureBlob`
+- `profileDefault.picture`
 - `profileDefault.elements`
 - `profileDefault.addElement` / `profileDefault.removeElement` writes that
   mutate `elements`
@@ -541,7 +601,6 @@ Add these explicit profile targets:
 wish({ query: "#profile" })            // homeDefault.profile
 wish({ query: "#profileSpace" })       // the profile space cell, derived from the profile link
 wish({ query: "#profileName" })        // default profile's initialNameApplied (no `profileName` mirror field post-#3830)
-wish({ query: "#profileAvatar" })      // homeDefault.profile.avatar
 wish({ query: "#profileBio" })         // homeDefault.profile.bio (CT-1648)
 ```
 
@@ -609,7 +668,7 @@ The integration test should:
     renders the second user's name without changing the first user's profile
 
 The test should use the existing shell integration harness style from
-`packages/patterns/integration/default-app.test.ts`, including fresh noble
+`patterns/integration/default-app.test.ts`, including fresh noble
 identities and `waitForRuntimeIdle` before assertions. The CFC browser helpers
 already provide useful primitives such as `waitForText`, `fillCfInput`, and
 `waitForRuntimeIdle`; the CFC group-chat integration tests show the existing
@@ -635,7 +694,5 @@ how multi-user patterns build live participant lists on this profile model.
   until explicitly shared?
 - Should the profile default pattern expose `elements` only, or also a
   default-app-compatible `addPiece` stream for reuse?
-- Should avatar be a string permanently, or should the first implementation
-  reserve a future blob shape?
 - How should a user intentionally reset or migrate their profile space if the
   home-space link points to a broken or obsolete profile?

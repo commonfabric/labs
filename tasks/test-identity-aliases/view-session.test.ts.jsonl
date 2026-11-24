@@ -1,0 +1,1 @@
+{"date":"2026-10-28","from":{"k":"unit","s":"cli","n":"session: word wrapping repeats punctuation and whitespace prefixes"},"to":{"k":"unit","s":"cli","n":"session: word wrapping indents continuations by the line prefix"}}

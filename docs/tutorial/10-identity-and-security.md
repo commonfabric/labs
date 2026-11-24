@@ -5,14 +5,14 @@ space — across browsers, CLIs, and servers, with no accounts database
 anywhere in the design? And how can the platform run *user-authored
 programs* against real user data? This chapter covers both: cryptographic
 identity, session authorization, and the layered sandboxing of pattern
-code. Code: `packages/identity`, the auth hooks in `packages/toolshed` and
-`packages/memory`, and `packages/iframe-sandbox`.
+code. Code: `base/identity`, the auth hooks in `runtime/toolshed` and
+`runtime/memory`, and `base/iframe-sandbox`.
 
 ## Identity: keypairs all the way down
 
 There are no usernames or server-side accounts. An identity *is* an Ed25519
 keypair, named by its public key as a DID:
-`did:key:z6Mk...` (`packages/identity/src/identity.ts`). Everything that
+`did:key:z6Mk...` (`base/identity/src/identity.ts`). Everything that
 acts or is acted upon — users, services, spaces — is a DID.
 
 Two derivation tricks recur:
@@ -27,7 +27,7 @@ DID from a fresh random key when it is created (see the ACL section below), so
 no string recomputes it, and it is reached by its DID. A **legacy** space, one
 created under the earlier naming scheme, has the DID that hierarchical
 derivation gives its name under a well-known passphrase. `legacySpaceDid(name)`
-(`packages/identity/src/legacy-space.ts`) resolves such a name to that DID,
+(`base/identity/src/legacy-space.ts`) resolves such a name to that DID,
 offline and with no registry, which is why two setups agree on what
 `did:key:...` a legacy space name means. It returns the DID and never the key,
 and the DID names a space only if one was created there. Passphrase derivation
@@ -44,7 +44,7 @@ local dev server's operator. See `docs/features/shared-identity.md`.
 ## Passkeys: the browser login
 
 The shell never asks for a password and never stores a private key on a
-server. Login (`packages/identity/src/pass-key.ts`):
+server. Login (`base/identity/src/pass-key.ts`):
 
 1. `navigator.credentials.create()` makes a WebAuthn **passkey** (resident
    key, e.g. in iCloud Keychain or a security key), requesting the **PRF
@@ -64,8 +64,8 @@ control path. The CLI does the equivalent with a key file (`cf id derive`,
 
 How does the server know a WebSocket client may touch a space? In the
 current (v2) protocol, authorization happens at **session open**
-(`packages/runner/src/storage/v2-remote-session.ts`,
-`packages/toolshed/routes/storage/memory.ts`):
+(`runtime/runner/src/storage/v2-remote-session.ts`,
+`runtime/toolshed/routes/storage/memory.ts`):
 
 1. The client receives `sessionOpen.audience` and a one-time
    `sessionOpen.challenge` from the server's `hello.ok`.
@@ -92,7 +92,7 @@ current (v2) protocol, authorization happens at **session open**
 
 Beyond authentication, per-space **ACLs** are wired into the v2 server itself.
 A space can carry an ACL document (addressed by the wire entity id
-`of:<space DID>`; types in `packages/memory/acl.ts`, managed by the runner's
+`of:<space DID>`; types in `runtime/memory/acl.ts`, managed by the runner's
 `ACLManager` and surfaced as `cf acl`) granting READ/WRITE/OWNER capabilities.
 A pattern's handler changes it with `grantSpaceAccess()` and
 `revokeSpaceAccess()`.
@@ -132,7 +132,7 @@ cf acl ls --identity ./my.key --api-url https://api.example.com --space "$SPACE"
 That prints a bordered `DID` / `CAPABILITY` table (or `No ACL entries found.`
 if the space has no ACL yet). For the space you just created it is one row:
 your own DID with `OWNER`. Grant, revoke and leave are the other three
-subcommands (`packages/cli/commands/acl.ts`):
+subcommands (`runtime/cli/commands/acl.ts`):
 
 ```bash
 # Grant, or change an existing grant. Capability is READ, WRITE, or OWNER.
@@ -154,7 +154,7 @@ cf acl leave --space "$SPACE"
 
 **A wildcard entry changes what the per-identity commands mean.** The server
 resolves a principal's capability as *its own entry if it has one, otherwise
-the wildcard's* (`#resolveCapability` in `packages/memory/v2/server.ts`:
+the wildcard's* (`#resolveCapability` in `runtime/memory/v2/server.ts`:
 `acl[principal] ?? acl["*"]`). While `"*": "WRITE"` is in the ACL, that
 fallback is WRITE, and it produces two counter-intuitive results:
 
@@ -221,7 +221,7 @@ handler (elsewhere it throws), and its completion is coarsened to one-second
 resolution so a network round trip cannot serve as a fine clock.
 
 **Ring 3 — the iframe sandbox.** For fully untrusted rendered content,
-`packages/iframe-sandbox` adds a process-level browser boundary with a
+`base/iframe-sandbox` adds a process-level browser boundary with a
 clever double-iframe construction: an **outer** iframe loaded via `srcdoc`
 carries a strict Content-Security-Policy meta tag
 (`default-src 'none'`, no form posts, no child frames, connections limited
@@ -234,7 +234,7 @@ package README is candid that exfiltration hardening (e.g. covert channels
 via permitted fetches) is ongoing work.
 
 **Beyond the rings — Contextual Flow Control (CFC).** The rings bound what
-untrusted code *can do*; CFC (`packages/runner/src/cfc/`) tracks what data
+untrusted code *can do*; CFC (`runtime/runner/src/cfc/`) tracks what data
 it *touched*. Every value can carry a label: **integrity atoms** recording
 who or what vouches for it (`PolicyCertified`, `InjectionSafe`,
 `LlmDerived`, `ExternalIngest`, ...) and **confidentiality clauses**
@@ -251,7 +251,7 @@ persistence (`off`/`observe`/`persist`), the write floor, and trigger-read
 gating; the shell today runs `enforce-strict` with flow labels at
 `persist`. The verified-source `$implRef` machinery (Chapter 7) is what
 ties labels to the exact code that produced a value. Specs live in
-`docs/specs/cfc-*.md`; demo patterns in `packages/patterns/cfc-*`.
+`docs/specs/cfc-*.md`; demo patterns in `patterns/cfc-*`.
 
 The rings compose with the data layer: even code that breaks ergonomics
 rules still acts *as* its session's principal, inside one space's replica,

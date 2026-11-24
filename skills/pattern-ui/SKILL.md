@@ -7,18 +7,17 @@ user-invocable: false
 # UI Polish Phase
 
 In a build/polish pass, apply this only after logic is verified and tests pass.
-In a design phase (e.g. Pattern Factory ui_design), use this guidance to write
-the UI design document — specify theme, layout composition, and state scoping;
-do not write implementation code.
+In a design phase, use this guidance to write the UI design document — specify
+theme, layout composition, and state scoping; do not write implementation code.
 
 ## Read First, In Order
 
 - `docs/common/components/COMPONENTS.md` - Full component reference; consult on
   demand before assuming a component does or does not exist
 - one vignette story for the closest tone:
-  `packages/patterns/catalog/stories/vignette-recipe-story.tsx` (warm, editorial
-  light) or `packages/patterns/catalog/stories/vignette-finance-story.tsx`
-  (dark, dashboard-style)
+  `patterns/dev/catalog/stories/vignette-recipe-story.tsx` (warm, editorial
+  light) or `patterns/dev/catalog/stories/vignette-finance-story.tsx` (dark,
+  dashboard-style)
 - `docs/common/patterns/style.md` - for deeper rationale behind the theme-first
   guidance this skill already digests
 
@@ -27,8 +26,8 @@ If needed:
 - `docs/common/patterns/ui-cookbook.md` - Themed layout scaffolds and vignette
   references
 - `docs/common/patterns/two-way-binding.md` - $value, $checked bindings
-- `packages/ui/README.md` - Current notes on CSS custom properties and parts
-- `packages/ui/LLM-COMPONENT-INSTRUCTIONS.md` - Agent-oriented component and
+- `runtime/ui/README.md` - Current notes on CSS custom properties and parts
+- `runtime/ui/LLM-COMPONENT-INSTRUCTIONS.md` - Agent-oriented component and
   theme system notes
 
 ## Visual Priorities
@@ -109,7 +108,7 @@ concluding a component doesn't exist.
 If a needed component doesn't exist, name the design-system gap in your output;
 do not create Lit components or use component internals (`applyThemeToElement`,
 `@consume`, shadow selectors) — component authoring is the `lit-component`
-skill's domain, for `packages/ui` work only. In pattern JSX the theme is passed
+skill's domain, for `runtime/ui` work only. In pattern JSX the theme is passed
 as `theme={...}`, not Lit's `.theme=${...}`.
 
 ## Aesthetic Guidance
@@ -203,18 +202,18 @@ const theme = {
 
 Prefer these before browsing arbitrary pattern code:
 
-- `packages/patterns/catalog/stories/vignette-recipe-story.tsx`
-- `packages/patterns/catalog/stories/vignette-finance-story.tsx`
-- component stories in `packages/patterns/catalog/stories/`
+- `patterns/dev/catalog/stories/vignette-recipe-story.tsx`
+- `patterns/dev/catalog/stories/vignette-finance-story.tsx`
+- component stories in `patterns/dev/catalog/stories/`
 
 Use existing production patterns only when you specifically need to understand a
 domain flow, not as the first place to copy styling from.
 
 ## Done When
 
-In a design phase, the artifact is the design doc (`ui-design.md` in the
-factory), not a rendering UI: done when the doc commits to a theme, layout
-composition, and explicit UI-state scoping. In a build/polish pass:
+In a design phase, the artifact is the design doc, not a rendering UI: done when
+the doc commits to a theme, layout composition, and explicit UI-state scoping.
+In a build/polish pass:
 
 - UI renders correctly
 - Bindings work (typing updates state)

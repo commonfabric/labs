@@ -1,12 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import {
-  dropContainerCases,
-  parseJUnit,
-} from "@commonfabric/test-support/records";
+import { parseJUnit, recordedCases } from "@commonfabric/test-support/records";
 import {
   mergeJUnitReports,
+  mergeWrittenReports,
   runMemberBatches,
   runTestBatches,
 } from "./run-test-batches.ts";
@@ -23,7 +21,7 @@ async function fixture(files: Record<string, string>): Promise<string> {
 /** The names and outcomes of the cases the report at `file` holds. */
 async function outcomes(file: string): Promise<Map<string, string>> {
   return new Map(
-    dropContainerCases(parseJUnit(await Deno.readTextFile(file)))
+    recordedCases(parseJUnit(await Deno.readTextFile(file)))
       .map((leaf) => [leaf.name, leaf.outcome]),
   );
 }
@@ -48,7 +46,7 @@ describe("run-test-batches", () => {
           '<testsuite name="./b.test.ts"><testcase name="b"/><testcase name="c"><failure/></testcase></testsuite>\n',
         ),
       ]);
-      expect(dropContainerCases(parseJUnit(merged)).map((leaf) => leaf.name))
+      expect(recordedCases(parseJUnit(merged)).map((leaf) => leaf.name))
         .toEqual(["a", "b", "c"]);
       expect(merged).toContain(
         '<testsuites name="deno test" tests="3" failures="1" errors="0" ' +
@@ -60,6 +58,53 @@ describe("run-test-batches", () => {
       expect(() => mergeJUnitReports(["<testsuite/>"])).toThrow(
         "Not a JUnit report",
       );
+    });
+  });
+
+  describe("mergeWrittenReports()", () => {
+    const report = (name: string) =>
+      `<testsuites tests="1"><testsuite name="./${name}.test.ts">` +
+      `<testcase name="${name}"/></testsuite></testsuites>`;
+
+    it("merges the reports that were written, skipping one that was not, and removes them", async () => {
+      const dir = await fixture({ "r.0": report("a"), "r.2": report("c") });
+      try {
+        await mergeWrittenReports(`${dir}/r`, [
+          `${dir}/r.0`,
+          `${dir}/r.1`,
+          `${dir}/r.2`,
+        ]);
+        expect([...(await outcomes(`${dir}/r`)).keys()]).toEqual(["a", "c"]);
+        expect([...Deno.readDirSync(dir)].map((entry) => entry.name))
+          .toEqual(["r"]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("writes nothing where no report was written", async () => {
+      const dir = await fixture({});
+      try {
+        await mergeWrittenReports(`${dir}/r`, [`${dir}/r.0`]);
+        expect([...Deno.readDirSync(dir)]).toEqual([]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("throws where a report is there and cannot be read", async () => {
+      const dir = await fixture({ "r.1": report("b") });
+      try {
+        await Deno.mkdir(`${dir}/r.0`);
+        await expect(
+          mergeWrittenReports(`${dir}/r`, [`${dir}/r.0`, `${dir}/r.1`]),
+        ).rejects.toThrow();
+        // Nothing was merged, and the readable report is still there.
+        expect([...Deno.readDirSync(dir)].map((entry) => entry.name).sort())
+          .toEqual(["r.0", "r.1"]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
     });
   });
 

@@ -6,17 +6,20 @@ description: >
 outputs:
   fingerprint:
     description: >
-      The compiler-input fingerprint: base64url, and the part that identifies
-      the compiler in the runtime's own `cf/esm-compile/<fingerprint>` version
-      axis.
+      The compiler-input fingerprint: base64url, moving with every input that
+      can change what the compiler emits.
     value: ${{ steps.fingerprint.outputs.value }}
 runs:
   using: "composite"
   steps:
     # `actions/cache` evaluates its key again during the post-job save, so a
     # `hashFiles()` call written into the key walks the fingerprinted trees
-    # twice. Resolving the value here also makes the CI key the runtime's own
-    # version value rather than a second hash over the same files.
+    # twice. Resolving the value here also keys the cache on the one value
+    # `tasks/compile-cache-key.ts` defines rather than on a second hash over
+    # the same files. It is the compiler-input fingerprint on purpose: the
+    # runtime's own cache version is minted from what the compiler emits and
+    # stays put across compiler changes, while a byte cache has to change
+    # with the compiler that filled it.
     - name: 🧮 Resolve the compiler fingerprint
       id: fingerprint
       shell: bash

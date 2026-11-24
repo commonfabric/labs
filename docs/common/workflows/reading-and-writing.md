@@ -104,7 +104,7 @@ settlement is that handler's commit, deliberately and not the recomputation
 the commit sets off. Waiting for the graph to quiesce would hold an
 already-committed write hostage to every recomputation it triggered elsewhere,
 so `executeResolvedCallable` in
-[`packages/cli/lib/callable.ts`](../../../packages/cli/lib/callable.ts) does
+[`runtime/cli/lib/callable.ts`](../../../runtime/cli/lib/callable.ts) does
 not wait. Act 8 calls a verb and then reads a derived field that has not
 moved.
 
@@ -114,6 +114,14 @@ is the act this tour exists for, and it is the answer to every "why is this
 number wrong" the rest of the tour produces. A read can carry the same step
 inline with `cf cell get --step`, which recomputes, commits, and answers in one
 session.
+
+This tour describes a deployment with server execution off. Under server
+execution the server runs the piece, and `cf cell get` asks it for the value and
+waits for the answer, so a derived field read after a write is already current,
+`cf piece step` is only that same pull, and `cf cell get --no-run` is the read
+that shows what the store holds without asking for anything.
+[The CLI's README](../../../runtime/cli/README.md#what-a-read-and-a-call-do-under-server-execution)
+has the detail.
 
 ## The session, act by act
 
@@ -127,7 +135,7 @@ are addresses the session read out of a run rather than a second, hidden one.
 #### Act 1 · A piece to read and write
 
 The fixture is
-[`thermostat.tsx`](../../../packages/cli/integration/pattern/thermostat.tsx),
+[`thermostat.tsx`](../../../runtime/cli/integration/pattern/thermostat.tsx),
 and it belongs to this demonstration and nothing else. A target a caller
 writes, three zones with a reading each, and two figures derived from both:
 `targetFahrenheit` from the target alone, and `belowTarget` from the target
@@ -135,7 +143,7 @@ and the zones together. Two derived fields rather than one, because the tour
 needs to show that neither of them moves.
 
 ```bash
-cf piece new packages/cli/integration/pattern/thermostat.tsx -s demo --slug thermostat
+cf piece new runtime/cli/integration/pattern/thermostat.tsx -s demo --slug thermostat
 ```
 
 #### Act 2 · Two cells behind one piece
@@ -155,9 +163,11 @@ it whole is a short answer — `target` and `zones`, each a link.
 cf cell get -s demo --piece thermostat --input
 ```
 
-And a derived field has no position there at all. The refusal names the keys
-that do exist, which is the fastest way to find out which cell you are
-addressing.
+And a derived field has no position there at all. The pattern's input schema
+decides which positions the arguments cell has, so the refusal says the path is
+not in that schema: the read went to the arguments cell. Its advice to declare
+the field with `cf piece setsrc` is for a field that belongs among the inputs;
+a derived field is read from the result cell, without `--input`.
 
 ```bash
 cf cell get -s demo --piece thermostat targetFahrenheit --input
@@ -329,7 +339,7 @@ draws: it is shaped like a read, and it is not effect-free.
 ## How the story is kept honest
 
 Every command above is one
-`packages/cli/integration/read-write-demo.sh` runs. The demo narrates each act
+`runtime/cli/integration/read-write-demo.sh` runs. The demo narrates each act
 and then executes it, and each act re-parses its own displayed line and
 compares the words against the argv that ran — so a line a reader retypes is
 the line that executed, checked rather than asserted. The `echo … |` half of a
@@ -344,17 +354,17 @@ in this document — every line above ran.
 What the demo cannot check is the prose, and two claims here are properties of
 the implementation rather than of a transcript: that `cf cell set`'s default lands
 on the result cell (`setCellValue` in
-[`packages/cli/lib/piece.ts`](../../../packages/cli/lib/piece.ts) branches on
+[`runtime/cli/lib/piece.ts`](../../../runtime/cli/lib/piece.ts) branches on
 `options.input` and reaches `piece.result` without it), and that resolving a
 wish commits (`resolveWish` in
-[`packages/cli/lib/wish.ts`](../../../packages/cli/lib/wish.ts) opens a
+[`runtime/cli/lib/wish.ts`](../../../runtime/cli/lib/wish.ts) opens a
 transaction, runs its pattern into a cell, and commits before reading). Both
 are stated from those functions.
 
 ## Running it yourself
 
 ```bash
-API_URL=http://localhost:8000 packages/cli/integration/read-write-demo.sh
+API_URL=http://localhost:8000 runtime/cli/integration/read-write-demo.sh
 ```
 
 The transcript is the artifact, and every act in it runs. Each one makes a
@@ -373,7 +383,7 @@ cannot exit zero.
   what a retry does and does not guarantee
 - [An agent's entry](../verbs/agents-over-the-cli.md) — the discovery surfaces
   `cf wish` sits among, and what an empty answer does not prove
-- [`packages/cli/README.md`](../../../packages/cli/README.md) — the reference
+- [`runtime/cli/README.md`](../../../runtime/cli/README.md) — the reference
   for `get`, `set`, `wish`, and the reference forms their targets take
 - [computed()](../concepts/computed/computed.md) — the authoring side of a
   derived field: what makes one, and why it is the pattern's to write

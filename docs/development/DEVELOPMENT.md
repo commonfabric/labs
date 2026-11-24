@@ -49,7 +49,7 @@ about one aspect of the runtime, are indexed in
   `@commonfabric/api/interface` (external API), but not both.
 - Collate a package's imports. Every specifier naming the same top-level
   package, or the same namespace-and-package pair, sits in one contiguous run:
-  `@commonfabric/utils/base64url` next to `@commonfabric/utils/types`,
+  `@commonfabric/bytes/base64url` next to `@commonfabric/bytes/buffers`,
   `@std/testing/bdd` next to `@std/testing/time`. A package that appears in two
   places in the list reads as two dependencies, and the second appearance hides
   from anyone scanning for what the file rests on.
@@ -86,7 +86,12 @@ about one aspect of the runtime, are indexed in
   - One statement of each kind, kept adjacent:
     `import type { Foo } from "x";` above `import { bar } from "x";`.
 
-  A file uses whichever reads better; neither is preferred. What neither shape
+  A file uses whichever reads better; neither is preferred. A statement whose
+  every name is a type is written `import type`, which the
+  `cf-import-list/types-are-import-type` lint rule holds everywhere but
+  `patterns/` and `fixtures/` directories: Deno reads what a value statement names before it starts a
+  program, even where TypeScript erases the statement
+  ([`imports.md`](imports.md#what-starting-a-program-reads)). What neither shape
   allows is a second statement of the same kind — two value imports from one
   module, or two `import type`s from it. Those represent one dependency as
   though it were two, and the second is easy to miss when the first is being
@@ -97,7 +102,7 @@ about one aspect of the runtime, are indexed in
   the pair — a namespace imported only so its `typeof` names the whole module,
   against a list of names the file uses throughout — the two statements stay,
   with a `deno-lint-ignore` saying which case it is.
-  `packages/runner/src/builder/types.ts` is the one file in that position
+  `runtime/runner/src/builder/types.ts` is the one file in that position
   today. A bare `import "x";` counts toward the total.
 
   The `cf-import-list/one-statement-per-kind` lint rule
@@ -363,7 +368,10 @@ different answer:
   touches a `#` member of a receiver that is not a real instance, so the test
   wants rewriting to build one.
 - **A helper that uses no instance state.** Make it `static #` behind the
-  static getter, or a module-level function the test imports.
+  static getter, or a module-level function the test imports. A test in
+  another package imports such a function through the package's
+  `./for-testing-only` entry, which § Offering test-only code to other packages
+  describes.
 
 ### Comments
 
@@ -544,10 +552,34 @@ For import-map placement and dependency boundaries, follow
   only e.g. types are needed.
   - If needed, environment specific exports can be provided e.g.
     `@workspace/module/browser` | `@workspace/module/deno`.
-- Consider leaf nodes in the graph: A `utils` module should not be heavy with
-  dependencies, external or otherwise.
+- Consider leaf nodes in the graph: a package that many others import, such as
+  `js-values`, should not be heavy with dependencies, external or otherwise.
 - Clean separation of public and private facing interfaces: only export what's
   needed.
+
+### Offering test-only code to other packages
+
+What a package offers only to other packages' tests — examples of its values, a
+fake, an internal step or count its public surface cannot reach dependably —
+goes behind an export-map entry named `./for-testing-only`, pointing at
+`src/for-testing-only.ts` or at a `src/for-testing-only/` directory's
+`index.ts`. `base/data-model` is the worked example. This is
+the package-level counterpart of a class's `accessForTestingOnly` getter
+(§ Classes).
+
+- No barrel re-exports it and no other entry reaches it, so the package's
+  ordinary use loads none of it.
+- Each value it exports carries a `ForTestingOnly` suffix, or
+  `_FOR_TESTING_ONLY` for an upper-case constant, so the name says what it is
+  wherever it is used. A type keeps its own name.
+- An internal stays out of every barrel and is re-exported here under a
+  suffixed name, whose doc comment says why a test of the public surface cannot
+  reach it.
+- Only tests and benchmarks import it, as `tasks/test-files.ts` defines them.
+  No gate checks this; review does.
+
+Such code belongs beside what it depends on. In `base/test-support` it
+would make that package import the package it serves.
 
 ### Avoid Ambiguous Types
 
@@ -619,14 +651,14 @@ export function isEvent(value: unknown): boolean {
 > **✅ Prefer**
 
 ```ts
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 export function isEvent(value: unknown): boolean {
   return isObjectNotArray(value) && typeof value.type === "string";
 }
 ```
 
-The predicates live in `@commonfabric/utils/types`, and each name settles the
+The predicates live in `@commonfabric/js-values/types`, and each name settles the
 array question in its own final word. `isObjectOrArray()` admits any non-`null`
 value whose `typeof` is `"object"`, arrays included. `isObjectNotArray()` asks
 the same question with arrays removed. `isPlainObject()` additionally requires
@@ -650,11 +682,11 @@ which predicate it needs is the next section.
 ### Walking or comparing a value
 
 A value the runtime holds may be a `FabricSpecialObject` — a byte sequence, a
-temporal value, a content hash, a regular expression, an error, a link, a map,
-a set. Each of those keeps its state in private fields and has no own
-properties at all, so a walk that decides "may I read this by property name?"
-with `isObjectOrArray()`, `isReadonlyObjectOrArray()`, `isObjectNotArray()`, or
-a bare `typeof value === "object"` gets the wrong result: it sees an empty
+temporal value, a content hash, an error, a link, a map, a set. Each of those
+keeps its state in private fields and has no own properties at all, so a walk
+that decides "may I read this by property name?" with `isObjectOrArray()`,
+`isReadonlyObjectOrArray()`, `isObjectNotArray()`, or a bare
+`typeof value === "object"` gets the wrong result: it sees an empty
 record and then merges the value to `{}`, rebuilds it as `{}`, descends into it
 and finds nothing, or writes a property onto it. Two sites already carry a
 `TODO(danfuzz)` naming that defect against `isReadonlyObjectOrArray()` —
@@ -1019,13 +1051,13 @@ hundred thousand the call throws `RangeError: Maximum call stack size
 exceeded`. A collection whose size the code does not fix can reach that. Append
 it in a loop, `for (const record of more) records.push(record);`, and take its
 largest or smallest value with `maxOf` or `minOf` from
-`@commonfabric/utils/math`, which walk the collection and otherwise return what
+`@commonfabric/collections/math`, which walk the collection and otherwise return what
 `Math.max` and `Math.min` would. An array cell is the exception to the loop:
 each `push()` on a cell rebuilds the cell's local copy of the array and records
 an append of its own, so pass the list to `pushAll()` instead, which does that
 once for the whole list.
 
-Replace a range with `spliceAll` from `@commonfabric/utils/arrays`, which gives
+Replace a range with `spliceAll` from `@commonfabric/collections/splice`, which gives
 what `splice` would.
 
 The `cf-spread/no-spread-arguments` lint rule (`tasks/lint-spread-arguments.ts`,
@@ -1035,6 +1067,60 @@ registered in the root `deno.jsonc`) reports every spread into `push`,
 collection whose size the code fixes from one that grows with data. A spread
 that has to stay, such as one in a test that shows the overflow, sits under a
 `deno-lint-ignore` comment that says why.
+
+### `using` on a path that runs often
+
+V8 runs a function that declares `using` far slower than one with a `try`
+block: entering and leaving one `using` scope costs dozens of times as much as
+the same function written with `try` and `finally`. That is nothing for a
+function that opens a file, and a measurable share of the runner's time for one
+on its per-element read paths. In a function that runs per read, per element,
+or per call of another hot function, restore state in a `finally` block
+instead:
+
+```ts
+// Shown at module scope.
+
+let current: string | undefined;
+
+/** Runs `fn` with `scope` current, and restores the previous scope. */
+function withScope<T>(scope: string, fn: () => T): T {
+  const previous = current;
+  current = scope;
+  try {
+    return fn();
+  } finally {
+    current = previous;
+  }
+}
+```
+
+A scope that has to outlive the call that enters it, such as one a suspended
+traversal holds, is a `Disposable` its caller disposes. Make that an instance of
+a small class, which V8 creates several times faster than an object literal
+whose `[Symbol.dispose]` is an arrow function.
+
+### Turning a file URL into a path
+
+Turn a file URL into a path with `fromFileUrl` from `@std/path`, as in
+`fromFileUrl(new URL("../..", import.meta.url))`. The `pathname` of a URL is
+percent-encoded: in a checkout under `/Users/me/my work/`, the `pathname` of a
+module's URL begins `/Users/me/my%20work/`, which names no directory, so a read
+of that path fails with `NotFound`. The same happens to every non-ASCII
+character, such as an emoji in a directory name. Where an API takes a URL, such
+as `Deno.readTextFile` or the `cwd` of `Deno.Command`, pass the URL itself. Turn
+a path into a URL with `toFileUrl` rather than by writing `file://` in front of
+it, which leaves a `#` or `?` in the path to be read as the start of a fragment
+or a query.
+
+The `cf-path/no-file-url-pathname` lint rule (`tasks/lint-file-url-pathname.ts`,
+registered in the root `deno.jsonc`) reports a read of `pathname`, by a member
+access or by destructuring in a variable declaration, directly off a URL that `new URL()` or `URL.parse()`
+builds in the same expression from `import.meta.url`, from
+`import.meta.resolve()`, or from a `file:` literal, and directly off the result
+of `toFileUrl`. It does not follow a URL through a variable or a parameter. The
+test lanes in continuous integration run from a checkout whose path holds a
+space and an emoji, which catches what the rule misses.
 
 ## Build & Test
 
@@ -1053,7 +1139,15 @@ that has to stay, such as one in a test that shows the overflow, sits under a
 - Run all tests using `deno task test` (NOT `deno test`). It is not a
   substitute for `deno task check`: every package's tests run under
   `--no-check`.
-- To run a single test file use `deno test --no-check path/to/test.ts`.
+- To run one test, `cd` into its package and run
+  `deno task test --filter "test name"`.
+  [Running one test by name](TESTING.md#running-one-test-by-name) describes
+  which name the pattern has to match. A bare
+  `deno test --no-check path/to/test.ts` drops the `--preload` and
+  permissions that the package's `deno-test` task passes. In
+  `runtime/runner`, for example, the preload installs the global fake
+  `clock`, and without it a test that calls `clock.settle()` fails with
+  `ReferenceError: clock is not defined`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 
@@ -1062,18 +1156,19 @@ that has to stay, such as one in a test that shows the overflow, sits under a
 Every workspace package must be registered and configured correctly, or the test
 suite will break.
 
-1. **Register the package.** Add its path (e.g., `./packages/my-package`) to the
+1. **Register the package.** Add its path (e.g., `./runtime/my-package`) to the
    `"workspace"` array in the root `deno.jsonc`.
 
 2. **Include a test task.** The package's `deno.jsonc` **must** have a `"tasks"`
-   object with a `"test"` entry. The root test runner (`tasks/test.ts`) iterates
-   all workspace members and runs `deno task test` in each package directory. If
-   a package lacks a test task, Deno resolves the task name against the root
-   workspace instead, which would re-run the entire test suite recursively,
-   spawning processes exponentially. The runner reads every member's manifest
-   before it runs any of their test tasks, and refuses to start when one has no
-   `"test"` entry, naming the member; that check is what keeps a missing entry
-   to a message rather than a CI timeout.
+   object with a `"test"` entry. The root test runner
+   (`tasks/workspace-tests.ts`) iterates all workspace members and runs
+   `deno task test` in each package directory. If a package lacks a test task,
+   Deno resolves the task name against the root workspace instead, which would
+   re-run the entire test suite recursively, spawning processes exponentially.
+   The runner reads every member's manifest before it runs any of their test
+   tasks, and refuses to start when one has no `"test"` entry, naming the
+   member; that check is what keeps a missing entry to a message rather than a
+   CI timeout.
 
    For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
    the package's `"deno-test"` task, which runs the tests themselves — a
@@ -1095,7 +1190,7 @@ suite will break.
    }
    ```
 
-See `packages/utils` and `packages/leb128` for real examples.
+See `base/text` and `base/async` for real examples.
 If the new package needs registry dependencies, follow
 [Adding dependencies](DEPENDENCIES.md#adding-dependencies).
 
@@ -1130,8 +1225,8 @@ deno task integration patterns counter
 
 **Log files:** After servers start, check these if something goes wrong:
 
-- `packages/shell/local-dev-shell.log`
-- `packages/toolshed/local-dev-toolshed.log`
+- `runtime/shell/local-dev-shell.log`
+- `runtime/toolshed/local-dev-toolshed.log`
 
 **Advanced usage with --port-offset:**
 

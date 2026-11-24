@@ -472,7 +472,7 @@ before a process starts. Page mutation (`create`, `replace`, `section …`,
 `--concise` is passed by the host, not offered to the model: a full `inspect`
 exceeds the harness's tool-result bound and returns fragments that do not parse,
 which loom's own skill notes.
-[`packages/cf-harness/docs/LOOM_RETRIEVAL.md`](../../../packages/cf-harness/docs/LOOM_RETRIEVAL.md)
+[`packages/cf-harness/docs/LOOM_RETRIEVAL.md`](../../../runtime/cf-harness/docs/LOOM_RETRIEVAL.md)
 is the implementation reference.
 
 **Labels on Loom observations.** Loom connector rows carry `ifc` labels in their

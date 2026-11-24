@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { dispatchArms, loadCliSuites, phaseAnnouncements } from "./cli.ts";
 
@@ -7,7 +8,7 @@ const stepsForTest = (body: string): string[] =>
   [...body.matchAll(/^ {4}cf_test_step_begin (\S+)$/gm)].map((f) => f[1]!);
 import type { Suite } from "./suite.ts";
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 const suites = await loadCliSuites(root);
 const byId = (id: string): Suite => suites.find((s) => s.id === id)!;
 const context = { root, outputDir: "/out", spoolDir: "/spool" };
@@ -30,7 +31,7 @@ describe("the command-line suites", () => {
     );
     expect(invocation!.command).toEqual(["./integration/integration.sh"]);
     expect(invocation!.env?.CF_CLI_INTEGRATION_SECTION).toBe("verbs");
-    expect(invocation!.cwd).toBe(`${root}/packages/cli`);
+    expect(invocation!.cwd).toBe(`${root}/runtime/cli`);
   });
 
   it("runs a standalone script as itself", async () => {
@@ -40,6 +41,20 @@ describe("the command-line suites", () => {
     );
     expect(invocation!.command).toEqual(["./integration/acl.sh"]);
     expect(invocation!.env?.CF_CLI_INTEGRATION_SECTION).toBeUndefined();
+  });
+
+  it("returns every file beside the scripts, and the command line, as what a step runs", () => {
+    for (const unit of ["integration.sh verbs-walkthrough", "acl.sh"]) {
+      const sources = byId("cli-core").sourcesOf?.(unit) ?? [];
+      expect(sources).toContain("runtime/cli/integration/integration.sh");
+      expect(sources).toContain("runtime/cli/integration/test-records.sh");
+      expect(sources).toContain("runtime/cli/integration/pattern/main.tsx");
+      expect(sources).toContain("runtime/cli/mod.ts");
+    }
+    expect(byId("cli-fuse").sourcesOf?.("fuse-exec.sh exec")).toContain(
+      "runtime/cli/integration/fuse-memory-proxy.ts",
+    );
+    expect(byId("cli-core").sourcesOf?.("no-such.sh")).toEqual([]);
   });
 
   it("holds the script's whole-invocation record to the suite", () => {
@@ -133,12 +148,13 @@ describe("the command-line suites", () => {
 
   it("accounts for the scripts its steps call", () => {
     const sources = byId("cli-core").sources ?? [];
-    expect(sources).toContain("packages/cli/integration/integration.sh");
-    expect(sources).toContain("packages/cli/integration/verbs-over-the-cli.sh");
+    expect(sources).toContain("runtime/cli/integration/integration.sh");
+    expect(sources).toContain("runtime/cli/integration/verbs-over-the-cli.sh");
     // The FUSE script is its own suite's to account for.
-    expect(sources).not.toContain("packages/cli/integration/fuse-exec.sh");
+    expect(sources).not.toContain("runtime/cli/integration/fuse-exec.sh");
     expect(byId("cli-fuse").sources).toEqual([
-      "packages/cli/integration/fuse-exec.sh",
+      "runtime/cli/integration/fuse-exec.sh",
+      "runtime/cli/integration/fuse-memory-proxy.ts",
     ]);
   });
 
@@ -239,12 +255,12 @@ describe("deciding which scripts a suite is built from", () => {
    */
   async function rooted(script: string): Promise<string> {
     const at = await Deno.makeTempDir({ prefix: "cli-sources-" });
-    await Deno.mkdir(`${at}/packages/cli/integration`, { recursive: true });
+    await Deno.mkdir(`${at}/runtime/cli/integration`, { recursive: true });
     await Deno.writeTextFile(
-      `${at}/packages/cli/integration/integration.sh`,
+      `${at}/runtime/cli/integration/integration.sh`,
       script,
     );
-    await Deno.writeTextFile(`${at}/packages/cli/integration/fuse-exec.sh`, "");
+    await Deno.writeTextFile(`${at}/runtime/cli/integration/fuse-exec.sh`, "");
     return at;
   }
 
@@ -256,8 +272,8 @@ describe("deciding which scripts a suite is built from", () => {
     try {
       const sources = (await loadCliSuites(at))
         .find((suite) => suite.id === "cli-core")!.sources;
-      expect(sources).not.toContain("packages/cli/integration/fuse-exec.sh");
-      expect(sources).toContain("packages/cli/integration/integration.sh");
+      expect(sources).not.toContain("runtime/cli/integration/fuse-exec.sh");
+      expect(sources).toContain("runtime/cli/integration/integration.sh");
     } finally {
       await Deno.remove(at, { recursive: true });
     }
@@ -270,7 +286,7 @@ describe("deciding which scripts a suite is built from", () => {
     try {
       const sources = (await loadCliSuites(at))
         .find((suite) => suite.id === "cli-core")!.sources;
-      expect(sources).not.toContain("packages/cli/integration/report.sh");
+      expect(sources).not.toContain("runtime/cli/integration/report.sh");
     } finally {
       await Deno.remove(at, { recursive: true });
     }

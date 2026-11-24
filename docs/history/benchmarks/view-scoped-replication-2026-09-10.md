@@ -208,8 +208,8 @@ Overlap checks appeared in three repeated ancestor searches: selection's call to
 `collectViewAncestors`, error propagation's call to it, and the publisher's
 producer-certification loop. Each accounted for roughly 6.4 seconds of overlap
 checking. The relevant code is
-[`view-replication.ts`](../../../packages/runner/src/view-replication.ts) and
-[`view-plan-publisher.ts`](../../../packages/runner/src/executor/view-plan-publisher.ts).
+[`view-replication.ts`](../../../runtime/runner/src/view-replication.ts) and
+[`view-plan-publisher.ts`](../../../runtime/runner/src/executor/view-plan-publisher.ts).
 
 The server recorded 40 wave cycles with 28.678 seconds of cumulative cycle time
 during the profile. The CPU samples provide the attribution: repeated ancestor

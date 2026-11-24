@@ -45,8 +45,9 @@ doing, not by reading the list through.
   `docs/development/EXPERIMENTAL_OPTIONS.md`, which is the registry as well as
   the guidance, and is updated in the same change.
 - **Adding a dependency** — `docs/development/DEPENDENCIES.md`.
-- **Adding a workspace package** — `AGENTS.md`, "Adding New Packages". The
-  missing `test` task is the one that hangs CI rather than failing it.
+- **Adding a workspace package** — `.claude/rules/workspace-packages.md`. A
+  missing `test` task is the edit most often forgotten; the root test runner
+  refuses to start and names the package.
 - **Writing a pattern** — the `pattern-dev` skill at
   `skills/pattern-dev/SKILL.md`, in addition to this one.
 - **Changing behavior a live document describes** — `docs/README.md`. That
@@ -72,6 +73,12 @@ example:
   test that needs a `#` member reaches it through an `accessForTestingOnly`
   getter, never through a cast on the instance; § Classes says how that getter
   is shaped and what it cannot cover.
+- **Test-only exports.** Code a package offers only to other packages' tests
+  goes behind its `./for-testing-only` export-map entry, in no barrel, each
+  value export carrying a `ForTestingOnly` suffix (`_FOR_TESTING_ONLY` for an
+  upper-case constant). Nothing checks that only tests and benchmarks import it.
+  `docs/development/DEVELOPMENT.md`, § Offering test-only code to other
+  packages, holds the rest.
 - **Import grouping and collation.** Every specifier naming the same package
   sits in one contiguous run. Nothing sorts imports here.
 - **Word choice.** American spelling, and one word per concept — this reaches
