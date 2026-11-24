@@ -16,8 +16,9 @@
 
 import {
   type CoverageBaseline,
+  type CoverageFigures,
   coverageFiguresOf,
-  isMainPush,
+  isMainRun,
   type StoredReportGroup,
 } from "@commonfabric/test-support/records";
 import { LOCAL_COVERAGE_BASELINE_DAYS } from "./policy.ts";
@@ -41,24 +42,36 @@ export function splitMeasuredSet(
  * The baselines one stored report holds: each measured set its records
  * count, against the commit the report ran at.
  *
- * Only a push to `main` holds any, by the rule the fold places a run on the
- * default branch by. Any other run measured code the default branch does
- * not carry, so it is not something a later change should be held to.
+ * Only a run of the head of `main` holds any, by the rule the fold places a
+ * run on the default branch by. Any other run measured code the default
+ * branch does not carry, so it is not something a later change should be
+ * held to.
  */
 export function baselinesOf(report: StoredReportGroup): CoverageBaseline[] {
   const context = report.context;
-  if (context === undefined || !isMainPush(context)) return [];
-  return [...coverageFiguresOf(report.records).sets].flatMap(
-    ([name, uncoveredLines]) => {
-      const set = splitMeasuredSet(name);
-      return set === undefined ? [] : [{
-        ...set,
-        commit: context.commit,
-        createdAt: context.startedAt,
-        uncoveredLines,
-      }];
-    },
+  if (context === undefined || !isMainRun(context)) return [];
+  return baselinesFrom(
+    coverageFiguresOf(report.records),
+    context.commit,
+    context.startedAt,
   );
+}
+
+/**
+ * The baselines a run's coverage figures hold: each measured set's count,
+ * against the commit the run measured, started at `createdAt`.
+ */
+export function baselinesFrom(
+  figures: CoverageFigures,
+  commit: string,
+  createdAt: string,
+): CoverageBaseline[] {
+  return [...figures.sets].flatMap(([name, uncoveredLines]) => {
+    const set = splitMeasuredSet(name);
+    return set === undefined
+      ? []
+      : [{ ...set, commit, createdAt, uncoveredLines }];
+  });
 }
 
 /**

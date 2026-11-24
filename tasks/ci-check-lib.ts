@@ -10,6 +10,9 @@
  *   - ci-lane.ts                (records the compile cache state)
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { packageDirOf } from "./package-layout.ts";
+
 //
 // Config (from environment)
 //
@@ -75,6 +78,9 @@ export interface WorkflowRun {
    * run re-run the next day.
    */
   run_started_at?: string;
+
+  /** `queued`, `in_progress` or `completed`, among others GitHub names. */
+  status?: string;
 
   conclusion: string;
   event: string;
@@ -173,6 +179,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** How a retrying request waits between attempts. */
+export interface RetryOptions {
+  /** Waits out the delay before the next attempt, in milliseconds. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /**
  * GitHub refusing because the token is over one of its request limits, as
  * against refusing for any other reason. A caller that has to tell the two
@@ -259,7 +271,7 @@ function githubApiError(
  */
 export function isNotFound(error: unknown): boolean {
   return /^GitHub API (?:GET|POST|PATCH) 404\b/.test(
-    error instanceof Error ? error.message : String(error),
+    describeFailure(error),
   );
 }
 
@@ -331,15 +343,18 @@ async function readRefusalBody(resp: Response): Promise<string> {
   }
 }
 
-export async function githubGet<T>(path: string): Promise<T> {
+export async function githubGet<T>(
+  path: string,
+  { sleep: wait = sleep }: RetryOptions = {},
+): Promise<T> {
   const url = path.startsWith("http") ? path : `https://api.github.com${path}`;
-  for (let attempt = 1; attempt <= GITHUB_GET_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1;; attempt++) {
     let resp: Response;
     try {
       resp = await fetch(url, { headers: apiHeaders() });
     } catch (error) {
       if (attempt === GITHUB_GET_MAX_ATTEMPTS) throw error;
-      await sleep(githubRetryDelayMs(attempt));
+      await wait(githubRetryDelayMs(attempt));
       continue;
     }
 
@@ -360,10 +375,8 @@ export async function githubGet<T>(path: string): Promise<T> {
       throw githubApiError(resp, path, "GET", refusal);
     }
 
-    await sleep(githubRetryDelayMs(attempt, resp));
+    await wait(githubRetryDelayMs(attempt, resp));
   }
-
-  throw new Error(`GitHub API GET retry loop exhausted unexpectedly: ${path}`);
 }
 
 export async function githubPost<T>(
@@ -479,6 +492,7 @@ async function extractArtifactZip(
 export async function downloadAndExtractArtifact(
   artifactId: number,
   tmpPrefix: string,
+  { sleep: wait = sleep }: RetryOptions = {},
 ): Promise<string | null> {
   const artifactPath = `/repos/${REPO}/actions/artifacts/${artifactId}/zip`;
   const url = `https://api.github.com${artifactPath}`;
@@ -496,7 +510,7 @@ export async function downloadAndExtractArtifact(
     } catch (error) {
       recordFailure(attempt, `fetch failed: ${error}`);
       if (attempt === GITHUB_GET_MAX_ATTEMPTS) break;
-      await sleep(githubRetryDelayMs(attempt));
+      await wait(githubRetryDelayMs(attempt));
       continue;
     }
 
@@ -525,7 +539,7 @@ export async function downloadAndExtractArtifact(
       ) {
         break;
       }
-      await sleep(githubRetryDelayMs(attempt, resp));
+      await wait(githubRetryDelayMs(attempt, resp));
       continue;
     }
 
@@ -534,7 +548,7 @@ export async function downloadAndExtractArtifact(
     recordFailure(attempt, extraction.error);
 
     if (attempt < GITHUB_GET_MAX_ATTEMPTS) {
-      await sleep(githubRetryDelayMs(attempt));
+      await wait(githubRetryDelayMs(attempt));
     }
   }
 
@@ -606,14 +620,8 @@ function coverageGroupForChangedFile(filename: string): string | null {
   const normalized = filename.replaceAll("\\", "/");
   if (!/\.[jt]sx?$/.test(normalized)) return null;
 
-  const parts = normalized.split("/");
-  if (parts[0] === "packages" && parts[1]) {
-    return `packages/${parts[1]}`;
-  }
-  if (parts[0] === "tasks") {
-    return parts[0];
-  }
-  return null;
+  return packageDirOf(normalized) ??
+    (normalized.startsWith("tasks/") ? "tasks" : null);
 }
 
 export function coverageGroupsForChangedFiles(
@@ -677,13 +685,17 @@ const COVERAGE_ACCEPTANCE_TERMS =
   /^ACCEPT_COVERAGE_DEBT:[ \t]*(\S+)[ \t]*\+[ \t]*(\d+)[ \t]*lines?\b/;
 
 /**
- * What an acceptance may name: a path shaped like a workspace member. The
- * coverage gate scores a measured set over a member, which sits at whatever
- * depth the workspace puts it, so an acceptance has to be able to name
- * `packages/connectors/github/connector`.
+ * What an acceptance may name: a top-level name, or a path in a package shaped
+ * like a workspace member. The coverage gate scores a measured set over a
+ * member, which sits at whatever depth the workspace puts it, so an acceptance
+ * has to be able to name `connectors/github/connector`.
  */
-const COVERAGE_ACCEPTANCE_NAME =
-  /^(?:[A-Za-z0-9._-]+|packages(?:\/[A-Za-z0-9._-]+)+)$/;
+const COVERAGE_ACCEPTANCE_NAME = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+
+function isCoverageAcceptanceName(name: string): boolean {
+  return COVERAGE_ACCEPTANCE_NAME.test(name) &&
+    (!name.includes("/") || packageDirOf(name) !== undefined);
+}
 
 /**
  * Each `ACCEPT_COVERAGE_DEBT:` acceptance in a pull request's description, as
@@ -706,11 +718,11 @@ export function acceptedCoverageDebt(body: string): Map<string, number> {
       );
     }
     const name = terms[1];
-    if (!COVERAGE_ACCEPTANCE_NAME.test(name)) {
+    if (!isCoverageAcceptanceName(name)) {
       throw new Error(
         `Invalid ACCEPT_COVERAGE_DEBT acceptance for "${name}": name a ` +
-          "workspace member, such as `packages/runner` or " +
-          "`packages/connectors/github/connector`.",
+          "workspace member, such as `runtime/runner` or " +
+          "`connectors/github/connector`.",
       );
     }
     const lines = parseInt(terms[2], 10);

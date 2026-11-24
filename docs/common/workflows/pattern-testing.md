@@ -72,13 +72,13 @@ export default pattern(() => {
 
 ```bash
 # Run a specific test
-deno task cf test packages/patterns/my-pattern/main.test.tsx
+deno task cf test patterns/my-pattern/main.test.tsx
 
 # Run with verbose output
-deno task cf test packages/patterns/my-pattern/main.test.tsx --verbose
+deno task cf test patterns/my-pattern/main.test.tsx --verbose
 
 # Run all tests in a directory
-deno task cf test packages/patterns/my-pattern/
+deno task cf test patterns/my-pattern/
 ```
 
 ### Testing labeled data
@@ -91,7 +91,7 @@ accepts `off`, `derive` (the runtime's `observe`), `observe`, and `persist`.
 The run prints the resolved posture. When CFC denies something — a write,
 including one the pattern's own setup makes — `--cfc-denials` prints each
 denial with the reasons behind it. The
-[CLI guide](../../../packages/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
+[CLI guide](../../../runtime/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
 shows how a test declares a local SQLite store with per-column `ifc` labels and
 explains the per-step CFC preparation timings.
 
@@ -99,15 +99,15 @@ explains the per-step CFC preparation timings.
 
 A test pattern's imports resolve within its root directory. Without `--root`,
 `cf test` anchors at the nearest ancestor whose `deno.json(c)` declares a
-package name — `packages/patterns` for this repository's patterns — so imports
-that span the package (shared helpers such as `test/vnode-helpers.ts`, sibling
-patterns, `cfc/` modules) resolve without a flag. A config file with no `name`,
-such as a workspace member stub that only defines tasks, does not anchor the
-root. Pass `--root` to anchor somewhere else; an import that climbs above the
-root fails naming the import and the importing file. CI's `pattern-unit` suite
-(the `pattern-tests` target in `tasks/integration.ts`) passes `--root
-packages/patterns` explicitly, so a bare local run resolves imports the same way
-CI does.
+package name — `patterns` for this repository's patterns — so imports
+that span the package (shared helpers such as
+`tools/test-support/vnode-helpers.ts`, sibling patterns, `cfc/` modules) resolve
+without a flag. A config file with no `name`, such as a workspace member stub
+that only defines tasks, does not anchor the root. Pass `--root` to anchor
+somewhere else; an import that climbs above the root fails naming the import and
+the importing file. CI's `pattern-unit` suite (the `pattern-tests` target in
+`tasks/integration.ts`) passes `--root patterns` explicitly, so a bare local run
+resolves imports the same way CI does.
 
 ### The test's space and its access list
 
@@ -159,17 +159,20 @@ return {
 };
 ```
 
-Each step is either `{ action: Stream<void> }` or `{ assertion }`, where the
+Each step is most often `{ action: Stream<void> }` or `{ assertion }`, where the
 assertion is the record `assert()` produces — see
-[Write assertions with `assert()`](#write-assertions-with-assert) below.
+[Write assertions with `assert()`](#write-assertions-with-assert) below. A
+`{ press, control, within?, modifiers? }` step clicks a control the view renders, as
+[Firing a handler the pattern does not export](#firing-a-handler-the-pattern-does-not-export)
+describes, and `docs/specs/PATTERN_TESTING_SPEC.md` lists every kind of step.
 
 ## Walking the Rendered Tree
 
 Both actions and assertions often need to reach into what a pattern rendered.
-`packages/patterns/test/vnode-helpers.ts` is the one place those helpers live;
-import from it rather than writing a private copy in a test file. Each helper
-resolves cells as it walks, so a test does not have to unwrap reactive values
-by hand.
+`patterns/tools/test-support/vnode-helpers.ts` is the one place those helpers
+live; import from it rather than writing a private copy in a test file. Each
+helper resolves cells as it walks, so a test does not have to unwrap reactive
+values by hand.
 
 Reading a single node:
 
@@ -184,6 +187,14 @@ Reading a single node:
 - `hasText(node, expected)` — whether the subtree's text contains `expected`.
 - `hasExactText(node, expected)` — whether the subtree's text, trimmed, equals
   `expected`.
+- `isElement(node, name)` — whether the node is an element with that tag name.
+- `styleOf(node, key)` — one resolved entry of the node's `style` prop.
+- `viewShows(root, present, absent)` — whether the subtree's text contains
+  every string in `present` and none in `absent`, read in one walk.
+- `pickerLabels(picker)` — the labels of the `items` a picker such as
+  `cf-autocomplete` offers, in order.
+- `inOrder(text, parts)` — whether `parts` appear in `text` in that order, each
+  one starting after the end of the one before it.
 
 Searching for a node:
 
@@ -200,6 +211,58 @@ Searching for a node:
 - `findElementByText(root, name, expected)` and
   `findElementByExactText(root, name, expected)` — the same search narrowed to
   a tag name.
+- `findNodes(root, predicate)` and `findElements(root, name)` — every node the
+  predicate accepts, or every element with that tag name, in document order.
+- `countElements(root, name)` — how many elements with that tag name the
+  subtree holds, nested ones included.
+- `innermostNode(root, accept)` — the first node `accept` admits that has no
+  admitted node inside it, such as the row itself rather than every container
+  that also carries its text.
+- `isButton(label)` — a predicate for a clickable node whose whole text is
+  `label`.
+- `rowWith(root, text, label)` — the row that shows `text` and holds a button
+  labeled `label`: the innermost node holding both.
+  `buttonInRow(root, text, label)` is that button.
+
+Pressing a control:
+
+- `fireEvent(node, prop, event)` and `fireClick(node)` — send an event to the
+  handler a node binds, as described under
+  [Firing a handler the pattern does not export](#firing-a-handler-the-pattern-does-not-export).
+- `clickButton(root, label)` — clicks the first button whose whole text is
+  `label`.
+- `sendMessage(root, message)` — sends `message` from the view's
+  `cf-message-input`, as a person pressing send does.
+- `clickInRow(root, text, label)` — clicks the button `buttonInRow` finds.
+
+Typing into a control:
+
+- `setBound(node, prop, value)` — writes `value` through the cell the node
+  binds under `prop`, such as `$value`, `$checked` or `$result`, as the control
+  does when the user types or picks in it. It works in an `action` and in a
+  handler that receives the view as a `Cell<VNode>`, and fails when the node is
+  missing or binds no cell under `prop`.
+- `typeInto(root, placeholder, value)` — the `$value` case, for the input with
+  that placeholder.
+- `answerOwnerCheck(root, isOwner)` — answers a `cf-owner-view` the way the
+  shell does, through its `$result`.
+
+Writing through a binding:
+
+A value read resolves a `$`-prop such as `$checked` or `$value` to the plain
+value its binding holds, so a test that acts as the bound control walks the
+view as cells instead. A handler declares the view as a `Writable<VNode>` in
+its state and is bound with `subject[UI]`; `viewCell(ui)` makes that cell
+walkable by key.
+
+- `findViewCell(cell, predicate)` — the cell holding the first node the
+  predicate accepts, searched in the order `findNode` searches.
+- `boundViewCell(view, predicate, prop)` — the cell the first accepted node
+  binds as `prop`. Setting it writes whatever the binding links to, as the
+  control does, and it throws when no such node binds `prop`.
+
+`patterns/dev/gideon-tests/test-checkbox-computed.test.tsx` checks boxes this
+way.
 
 ## Writing Actions
 
@@ -227,36 +290,69 @@ const action_setup_game = action(() => {
 ### Firing a handler the pattern does not export
 
 A handler bound only in JSX can still be fired, so a pattern that keeps its
-behavior behind a button does not have to change to be tested. The prop carries
+behavior behind a button does not have to change to be tested.
+
+The way that holds wherever the test's actions run is a press step, which
+clicks the control in the rendered view as a person does:
+
+```tsx
+// Shown for illustration only.
+// `room` is the pattern under test, and `listed` reads its attachment rows.
+return {
+  [TESTS]: [
+    // The "Remove" in the row that shows "slow.txt".
+    { press: room[UI], control: "Remove", within: "slow.txt" },
+    { assertion: assert(() => listed(room[UI]).length === 0) },
+  ],
+};
+```
+
+The runner renders the view as a browser does, finds the one element whose text
+is `control`, and clicks it, so the handler bound there receives the click with
+the provenance the control's rendered markers give it; a reviewed control needs
+no `trustedUi`. `within` picks one row out of several that show the same
+control; `patterns/system/fabrichat/composer-attach.test.tsx` removes an
+attachment this way. `modifiers` holds keys down during the click, so
+`{ press: list[UI], control: "Telegram", modifiers: ["meta"] }` Cmd-clicks the
+control; `runtime/cli/test/fixtures/press/press-modifiers.test.tsx` presses
+with and without them.
+
+Prefer it to walking the tree in an `action`, below, when the control is bound
+per row or per session. With server execution on, an `action` runs on the
+serving loop, whose rendering of the view lacks what only the test's session
+shows, such as the rows of that session's own draft, so the walk there finds no
+control. A press finds the control in the test's own rendering.
+
+The tree walk reads the control's stream in an `action` and sends to it. The prop carries
 a stream whether the handler was written inline or bound from module scope. Walk
 the rendered tree to the node, read the prop, and send it an event:
 
 ```tsx
 // Shown at module scope.
 import { action, pattern, UI } from "commonfabric";
-import { findElementByText, propsOf } from "../test/vnode-helpers.ts";
+import { clickButton } from "../../tools/test-support/vnode-helpers.ts";
 import MapDemo from "./map-demo.tsx";
 
 export default pattern(() => {
   const subject = MapDemo({ areasOfInterest: [] });
 
-  const action_add_area = action(() => {
-    const button = findElementByText(subject[UI], "cf-button", "+ Add Area");
-    const onClick = propsOf(button)?.onClick;
-    if (typeof onClick === "object" && onClick !== null && "send" in onClick) {
-      (onClick as { send: (event: Record<string, never>) => void }).send({});
-    }
-  });
+  const action_add_area = action(() => clickButton(subject[UI], "+ Add Area"));
 
   return { [TESTS]: [{ action: action_add_area }], subject };
 });
 ```
 
-`packages/patterns/map-demo.test.tsx` drives both an inline arrow and a bound
-handler this way. `fireEvent(node, prop, event)` in the vnode helpers does the
-same for any event prop, and fails when the node binds nothing under it;
-`fireClick(node)` is its `onClick` case, with an empty event.
-`packages/patterns/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
+`patterns/examples/map-demo/map-demo.test.tsx` drives both an inline arrow and a
+bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers
+sends an event to any event prop, and fails when the node binds nothing under
+it; `fireClick(node)` is its `onClick` case, with an empty event, and
+`clickButton(root, label)` clicks the first button whose whole text is
+`label`.
+`sendMessage(root, message)` sends from the view's `cf-message-input` as a
+person pressing send does. `setBound(node, prop, value)` writes through the cell
+a control binds under a `$` prop, such as `$value` or `$checked`, as the control
+does when a person edits it.
+`patterns/examples/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
 a `cf-input` by firing its `oncf-submit`.
 
 Prefer an exported `Stream<T>` when you own the pattern: it states the entry
@@ -304,7 +400,7 @@ return {
 };
 ```
 
-`packages/cli/test/fixtures/action-event/policy-link-typed.test.tsx` is this
+`runtime/cli/test/fixtures/action-event/policy-link-typed.test.tsx` is this
 example whole, and `policy-link-inferred.test.tsx` beside it is the refused
 form.
 
@@ -314,6 +410,17 @@ passes to that pattern or returns. A `.key()` link into a cell the test uses
 nowhere else fails the build with `Cell not found in pattern aliases`.
 
 `cf test --cfc-denials` prints a setup refusal like this one with its reason.
+
+Before dispatching an action step, both test runners demand the reads needed
+to construct its event. A trusted UI wrapper copies the payload's top-level
+fields, so links supplied there by another pattern or a computation are ready
+without an earlier assertion or render. Nested objects and arrays keep their
+references for event serialization and the handler's reads.
+
+Copying a field can read the immediate linked record's shape or value. The
+runner does not recursively read the records reachable from that field; those
+reads belong to the handler. An action step can therefore exercise cold linked
+descendants, but does not guarantee that every immediate target is unread.
 
 ## Writing Assertions
 
@@ -409,6 +516,145 @@ Keep assertions deterministic. Do not call `Date.now()` or `Math.random()`
 inside the assertion itself (they are gated and throw in a `computed()`
 anyway). If the pattern stamps a timestamp or random ID, assert that the value
 exists or changed in the expected place.
+
+## Answering Fetches and Model Requests
+
+A test states what a fetch or a language model answers in a module-scope
+export, which the runner reads after it compiles the test and before anything
+runs.
+
+### Fetches
+
+`fetchMocks` answers the HTTP requests `fetchJson` and the other fetch
+builtins make. The first entry whose `urlIncludes` is part of a request's URL
+answers it, with `body` (or `base64Body`, for bytes), `status`, and
+`contentType`; `delayMs` holds the answer back for that long. A request no
+entry matches goes to the network.
+
+```tsx
+// Shown at module scope.
+export const fetchMocks = [
+  { urlIncludes: "/api/weather", body: '{"forecast":"sunny"}' },
+];
+```
+
+`patterns/examples/fetch-json/fetch-mock.test.tsx` is a worked example.
+
+### Model requests
+
+`llmMocks` answers the requests `generateText`, `generateObject`, `llm`, and
+each turn of `llmDialog` make. Every request is answered from it, whether or
+not the test exports it, so a test that makes a request without stating an
+answer fails rather than reaching a model.
+
+```tsx
+// Shown at module scope.
+import { action, assert, pattern, TESTS, UI } from "commonfabric";
+import {
+  hasText,
+  sendMessage,
+} from "../../tools/test-support/vnode-helpers.ts";
+import LLMTest from "./llm.tsx";
+
+export const llmMocks = [
+  {
+    when: {
+      systemContains: "helpful assistant",
+      lastMessageContains: "What is the capital of France?",
+    },
+    text: "Paris.",
+  },
+];
+
+export default pattern(() => {
+  const subject = LLMTest({ title: "LLM Test" });
+  const action_ask = action(() =>
+    sendMessage(subject[UI], "What is the capital of France?")
+  );
+  return {
+    [TESTS]: [
+      { action: action_ask },
+      { assertion: assert(() => subject.response === "Paris.") },
+      { assertion: assert(() => hasText(subject[UI], "LLM Response:")) },
+    ],
+  };
+});
+```
+
+Each entry carries one kind of answer:
+
+- `text`, `toolCalls`, or both answer a text request, which is what
+  `generateText`, `llm`, and `llmDialog` make. Each tool call is
+  `{ name, input }`, with an optional `id`. A streamed request, such as each
+  turn of a dialog, receives the text as its partial result before the reply
+  completes.
+- `object` answers a `generateObject` request. A `generateObject` given tools
+  is sent as a text request offering a `presentResult` tool, and an `object`
+  entry answers it with a call to that tool carrying the object. An entry with
+  only `text` does not answer such a request; one with `toolCalls` does, which
+  is how a test has the model call other tools before it returns the object.
+- `error` fails the request with that message, whichever kind it is. This is
+  how a test reaches a pattern's handling of a failed request. A failed
+  request usually logs a warning, which fails the test unless it also sets
+  `allowConsoleWarnings: true`.
+
+`when` narrows which requests an entry answers, with the conditions
+`systemContains`, `lastMessageContains`, `messagesContain` (a list of strings,
+each in some message), `hasTools` (a list of tool names the request offers),
+and `messageCount`. The text conditions search a message's text parts only, so
+a tool result does not match them. An entry that calls tools answers only a
+request that offers each tool it calls.
+
+A request is answered by the first entry, in the order the test lists them,
+that no earlier request used up, whose kind fits, and whose conditions the
+request meets. That entry is then used up, unless it says `repeat: true`, in
+which case it answers every request it fits. So entries without conditions
+answer requests in turn, and the conditions pick an entry out when the order of
+the requests is not fixed, as when a pattern starts two requests at once. An
+entry that repeats suits a request a pattern makes a varying number of times,
+such as one for each item of a list it keeps. An entry with `toolCalls` cannot
+repeat, since it would answer every turn of a dialog with another tool call;
+the runner refuses such an entry before the test runs.
+
+A dialog's tools run when the model calls them, so a test states every turn of
+the model's side of the conversation. After a tool call, the next request
+carries the call and the tool's result, so `messageCount` tells the turns
+apart:
+
+```tsx
+// Shown at module scope.
+export const llmMocks = [
+  {
+    when: { messageCount: 1 },
+    toolCalls: [{ name: "readRawBriefing", input: {} }],
+  },
+  {
+    when: { messageCount: 3 },
+    toolCalls: [{
+      name: "sendMail",
+      input: { recipient: "bob@example.org", subject: "approved", body: "…" },
+    }],
+  },
+  { when: { messageCount: 5 }, text: "I could not send the email." },
+];
+```
+
+`patterns/examples/cfc-agent-prompt-injection-demo/model-turns.test.tsx` drives
+two dialogs this way and asserts what each tool did, and
+`patterns/examples/llm/llm.test.tsx` states both an answer and a failed
+request.
+
+The runner fails the test with a result named `llmMocks` for a request no entry
+answered, saying what the request held and why each remaining entry of its kind
+did not fit it; when the run fails for another reason, these join its error.
+An entry no request uses is not a failure, because a test can make some
+requests only when server execution is on. An export
+the runner cannot read, such as an entry with an unknown key or two kinds of
+answer, fails the run before anything runs.
+
+A multi-user test has one list of entries for all its participants: each
+request is answered by the first entry that fits and is not used up, whichever
+participant makes it.
 
 ## Test Organization
 
@@ -620,4 +866,4 @@ const assert_total_correct = assert(() => {
 - [Pattern Testing Spec](../../specs/PATTERN_TESTING_SPEC.md) - Technical specification
 - [Coverage in CI](../../development/COVERAGE.md) - How the pattern unit tests
   run here feed the repository-wide coverage figure
-- [Patterns package test lanes](../../../packages/patterns/deno.jsonc) - Where each kind of test (plain Deno unit test, pattern test, integration test) lives in the patterns package and how each is discovered and run
+- [Patterns package test lanes](../../../patterns/deno.jsonc) - Where each kind of test (plain Deno unit test, pattern test, integration test) lives in the patterns package and how each is discovered and run

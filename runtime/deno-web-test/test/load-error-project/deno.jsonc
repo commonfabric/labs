@@ -1,0 +1,6 @@
+{
+  "name": "deno-web-test-load-error-project",
+  "tasks": {
+    "test": "<@see deno-web-test/test/utils.ts#runDenoWebTest>"
+  }
+}

@@ -18,14 +18,17 @@
  * no identity may be mapped twice across the whole directory, and the
  * mapping graph must have no cycle — a cycle would send resolution around
  * forever and means someone renamed something back, which is a new rename
- * with its own line, not an edit to an old one. Readers take only the
+ * with its own line, not an edit to an old one. A moved-path line added
+ * since the merge base must name something in the tree. Readers take only the
  * `.jsonl` files directly inside the directory, so anything else there,
  * and a `.jsonl` file of the directory's name beside it, holds aliases
  * that nothing reads, and fails.
  *
- * Usage: check-test-aliases.ts [base-ref]   (default: origin/main)
+ * Usage: check-test-aliases.ts [base-ref]
+ *        (default: upstream/main where that exists, and origin/main otherwise)
  */
 
+import { existsSync } from "@std/fs/exists";
 import { basename, dirname } from "@std/path";
 import {
   ALIAS_DIRECTORY,
@@ -36,6 +39,7 @@ import {
   parseAliasLine,
   readAliasDirectory,
 } from "@commonfabric/test-support/records";
+import { defaultBase, git } from "./repository-files.ts";
 
 /** What the gate compares: the alias directory now, and at the merge base. */
 export type AliasDirectoryState = {
@@ -53,6 +57,9 @@ export type AliasDirectoryState = {
    * directory.
    */
   strayFile: boolean;
+
+  /** Whether a repository-relative path names a file or directory now. */
+  pathExists: (path: string) => boolean;
 };
 
 /**
@@ -62,7 +69,7 @@ export type AliasDirectoryState = {
 export function aliasDirectoryProblems(
   state: AliasDirectoryState,
 ): { problems: string[]; aliases: AliasLine[] } {
-  const { current, committed, mergeBase, strayFile } = state;
+  const { current, committed, mergeBase, strayFile, pathExists } = state;
   const problems: string[] = [];
 
   for (const name of current.unread) {
@@ -109,25 +116,32 @@ export function aliasDirectoryProblems(
   }
   for (const problem of aliasGraphProblems(aliases)) problems.push(problem);
 
+  // A moved path added since the merge base names where something is now:
+  // a repository path, or a pattern's key, the path below `patterns/` that
+  // some gates name a pattern by. Lines already committed are history, and
+  // what they name may since have gone.
+  for (const { name, text } of current.files) {
+    const before = committed.get(name) ?? "";
+    if (!text.startsWith(before)) continue;
+    for (const line of text.slice(before.length).split("\n")) {
+      if (line.length === 0) continue;
+      const parsed = parseAliasLine(line);
+      if (typeof parsed === "string" || !("p" in parsed.to)) continue;
+      const target = parsed.to.p;
+      if (!pathExists(target) && !pathExists(`patterns/${target}`)) {
+        problems.push(
+          `${name} moves a path to ${target}, which names nothing in the ` +
+            "tree; a moved path names a repository path or a pattern key",
+        );
+      }
+    }
+  }
+
   return { problems, aliases };
 }
 
-async function git(...args: string[]): Promise<string> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    throw new Error(
-      `git ${args.join(" ")} failed: ${new TextDecoder().decode(stderr)}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
-}
-
 async function main(): Promise<void> {
-  const base = Deno.args[0] ?? "origin/main";
+  const base = Deno.args[0] ?? await defaultBase(git);
   let mergeBase: string;
   try {
     mergeBase = (await git("merge-base", base, "HEAD")).trim();
@@ -169,6 +183,7 @@ async function main(): Promise<void> {
     strayFile: beside.some(({ name }) =>
       name === `${basename(ALIAS_DIRECTORY)}${ALIAS_FILE_SUFFIX}`
     ),
+    pathExists: existsSync,
   });
 
   if (problems.length > 0) {

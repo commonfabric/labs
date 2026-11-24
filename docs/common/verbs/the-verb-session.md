@@ -99,7 +99,7 @@ driven, and it is shaped to be awkward in exactly the ways the verb surface
 has to be good at.
 
 The fixture is
-[`packages/cli/integration/pattern/tracker.tsx`](../../../packages/cli/integration/pattern/tracker.tsx).
+[`runtime/cli/integration/pattern/tracker.tsx`](../../../runtime/cli/integration/pattern/tracker.tsx).
 It belongs to this demonstration and nothing else, so no product change can
 quietly break the story — and no story pressure can bend a shipped pattern.
 
@@ -197,7 +197,7 @@ landing in a space another person populated starts from a listing.
 **Deploy, and name it.**
 
 ```console
-$ cf piece new packages/cli/integration/pattern/tracker.tsx -s demo --slug board
+$ cf piece new runtime/cli/integration/pattern/tracker.tsx -s demo --slug board
 fid1:QX-ZJYrB8ynVZvX5Ne_nWlvOaeOcfehraVa2-6et5tk
 
 $ cf piece slugs -s demo
@@ -673,8 +673,8 @@ artifacts check each other, and two of them run in CI:
 
 | Artifact | What it guarantees |
 | --- | --- |
-| [`verb-session-demo.sh`](../../../packages/cli/integration/verb-session-demo.sh) | Prints each command and runs that same command — there is no second, prettier spelling. An act claiming a refusal that no longer happens fails the run, and so does one claiming a success it does not get. |
-| [`verb-session-gaps.sh`](../../../packages/cli/integration/verb-session-gaps.sh) | Asserts the same surface as pass/fail in CI. It also carries a `gap` assertion for a capability that is deliberately absent, which fails loudly the day that capability arrives — so a gap closing gets noticed rather than aging into a stale document. |
+| [`verb-session-demo.sh`](../../../runtime/cli/integration/verb-session-demo.sh) | Prints each command and runs that same command — there is no second, prettier spelling. An act claiming a refusal that no longer happens fails the run, and so does one claiming a success it does not get. |
+| [`verb-session-gaps.sh`](../../../runtime/cli/integration/verb-session-gaps.sh) | Asserts the same surface as pass/fail in CI. It also carries a `gap` assertion for a capability that is deliberately absent, which fails loudly the day that capability arrives — so a gap closing gets noticed rather than aging into a stale document. |
 | [`check-verb-session-sync`](../../../tasks/check-verb-session-sync.ts) | Every command quoted in this page and in the walkthrough must be a command the demo actually runs, and every act number must name a real act. Prose cannot invent a command that was never executed. |
 
 Read the harness's summary line carefully: a count of zero open gaps means
@@ -690,10 +690,10 @@ seconds end to end.
 
 ```bash
 ./scripts/start-local-dev.sh
-packages/cli/integration/verb-session-demo.sh
+runtime/cli/integration/verb-session-demo.sh
 
 # and the pass/fail version:
-packages/cli/integration/verb-session-gaps.sh
+runtime/cli/integration/verb-session-gaps.sh
 ```
 
 ## Where to read further

@@ -13,8 +13,8 @@ This plan authorizes no live writes by itself. Implementation, synthetic demos,
 and isolated copy rehearsals can proceed before a deployment window is chosen.
 
 The implementation surfaces are
-[the board](../../packages/patterns/topics/main.tsx) and
-[the topic](../../packages/patterns/topics/topic.tsx). Contracts are documented
+[the board](../../patterns/apps/topics/main.tsx) and
+[the topic](../../patterns/apps/topics/topic.tsx). Contracts are documented
 in [collection indexes](../features/collection-indexes.md),
 [aggregates](../features/collection-aggregates.md), and
 [read accounting](../features/read-accounting.md). Authoring examples and
@@ -23,11 +23,17 @@ operation-selection guidance live in
 
 ## Expected improvements and limits
 
-The board's `crossrefTable` materializes narrow mention lists once, then scans
-source lists for each destination. Each topic's `backlinksOf` scans the
-resulting table to find its own row. Topic rendering separately derives active
+The board's `crossrefTable` materializes narrow mention lists once, resolves
+each topic and each mention to its `equalsKey()`, and files each source under
+the topics it mentions. One run is written to grow with the topics plus the
+mentions, where comparing every pair with `equals()` grew with their product.
+It still rebuilds the whole table on every change to the board or to any
+topic's mentions. Each topic's `backlinksOf` finds its own row in the resulting
+table through the board's index of it by topic number, and scans the table
+where it cannot. Topic rendering separately derives active
 comments, active links, presence booleans, and link-resolution inputs.
-`lastActivityOf` scans comments and links, including edits and retractions.
+A topic's comment count and last activity are stored values its verbs keep in
+the write that changes them.
 
 Let N be board topic occurrences, E be total mention occurrences, C be comments
 in a topic, and L be links in a topic. These are work hypotheses to test, not
@@ -37,9 +43,9 @@ latency predictions or unconditional complexity guarantees.
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Shared keyed backlink-row lookup                            | Remove each demanding topic's repeated search through N cross-reference rows. With N consumers, eliminate a potential N-by-N lookup stage. | The pivot producer remains. Index maintenance and consumer demand can add graph work; putting an index inside every topic would duplicate maintenance. |
 | Reuse active counts/views                                   | Avoid duplicate C- and L-sized filtering for presence and link resolution.                                                                 | Likely a modest constant-factor benefit; sharing a broader view can increase demand.                                                                   |
-| Maintain source-to-destination edges grouped by destination | On a local mention edit, update affected edges and destination buckets instead of rescanning all source lists for every destination.       | Building all edges afresh retains producer cost. Ordering, duplicate occurrences, membership reconciliation, and large buckets require work.           |
-| Maintained comment count                                    | Reduce repeated predicate work for large threads when one independently linked comment changes.                                            | Shared captures or broad source edits can invalidate many predicates; small threads may not benefit.                                                   |
-| Maintained activity maxima                                  | Reduce full comment/link timestamp scans on localized activity edits.                                                                      | Must include edit and removal timestamps; score production and public Cell typing can dominate the benefit.                                            |
+| Maintain source-to-destination edges grouped by destination | On a local mention edit, update affected edges and destination buckets instead of rebuilding every row from every source list.            | Building all edges afresh retains producer cost. Ordering, duplicate occurrences, membership reconciliation, and large buckets require work.           |
+| Maintained comment count                                    | Adopted as a stored input (`commentCount`) the topic's verbs keep; T4 closed on it.                                                        | Reliable once every writer runs the current topic module and legacy writers are retired.                                                               |
+| Maintained activity maxima                                  | Adopted as a stored input (`lastActivityAt`) the topic's verbs keep, counting stamped removals; T4 closed on it.                           | Reliable once every writer runs the current topic module and legacy writers are retired.                                                               |
 
 A reduction in reads can coexist with increased startup cost, graph size,
 storage, or latency. Do not promise a percentage speedup before matched
@@ -104,13 +110,13 @@ implementation and prototypes can begin earlier.
         derives its limits runs.
   - [x] Browser instrumentation.
   - [x] Browser workloads, extending the
-        [scale](../../packages/patterns/integration/topic-board-scale.bench.ts)
+        [scale](../../patterns/integration/topic-board-scale.bench.ts)
         and
-        [navigation](../../packages/patterns/integration/topic-board-navigation.bench.ts)
+        [navigation](../../patterns/integration/topic-board-navigation.bench.ts)
         benchmarks.
   - [x] A browser demo with board, topic, backlink, and comment actions —
         landed by #7673 as
-        [`topic-board-demo.test.ts`](../../packages/patterns/integration/topic-board-demo.test.ts),
+        [`topic-board-demo.test.ts`](../../patterns/integration/topic-board-demo.test.ts),
         which states which of its properties a candidate may change
         without invalidating T5's comparison.
   - [x] The baseline report in `docs/history/`, separating pivot production,
@@ -126,33 +132,77 @@ implementation and prototypes can begin earlier.
       unintentionally broaden board demand. Can proceed independently of T2;
       acceptance depends on T0.
 - [ ] **T2 — Prototype one shared backlink-row index.** Index the existing
-      cross-reference rows by topic identity once at the board level. Compare
-      direct lookup with each topic scanning the table. Prove two boundaries,
-      each without a cast or a duplicated producer. First, the rows reach one
-      index producer through a subpattern with an explicit Cell input, the shape
-      [reactive collections](../common/concepts/reactive-collections.md#choose-aggregate-semantics-deliberately)
-      gives for a computed list, under a schema that carries `topic` as a Cell
-      so the index keys by canonical Cell identity. The subpattern lives in a
-      module of its own, and the board instantiates it by a direct call rather
-      than inside a reactive `.map`. That is how a new operator leaves the
-      existing hoists' numbers unchanged, which the hoist requirement under
+      cross-reference rows once at the board level, by topic number, and have
+      each lookup verify the row it finds by topic identity. Compare direct
+      lookup with each topic scanning the table. Prove two boundaries, each
+      without a cast or a duplicated producer. First, the rows reach one index
+      producer, a lift that lives in a module of its own and that the board
+      calls directly rather than inside a reactive `.map`. That is how a new
+      operator leaves the existing hoists' numbers unchanged, which the hoist
+      requirement under
       [compatibility requirements](#compatibility-requirements) depends on.
-      `crossrefTable` is a `lift`, whose result type exposes no index operator,
-      and `TopicCrossrefRow.topic` is `unknown` so that reading the table
-      expands no topic. Second, the resulting handle reaches topics without
-      broadening demand. Topics that `addTopic` and the board's composer create
-      hold `boardCrossrefs` as a link to the board's cross-reference table;
-      older topics may not, which step 1's inventory records. Decide between
-      carrying the handle through that link, which changes the board's published
-      `crossrefs` result, and a new topic input, which needs a one-time
-      link-bind onto every existing topic that is to hold it. Classify the
-      choice under step 1 of the
+      `TopicCrossrefRow.topic` is declared a `ComparableCell`, so that reading
+      the table expands no topic, and a lookup compares it as a cell; a query
+      walk follows a reference it reaches under `unknown` into the piece
+      behind it. Second, the
+      resulting handle reaches topics without broadening demand. Topics that
+      `addTopic` and the board's composer create hold `boardCrossrefs` as a
+      link to the board's cross-reference table; older topics may not, which
+      step 1's inventory records. The handle is a new topic input, which needs
+      a one-time link-bind onto every existing topic that is to hold it; it is
+      not carried through that link, which would change the board's published
+      `crossrefs` result. Classify it under step 1 of the
       [stored-state procedure](#stored-state-and-deployment-procedure), and list
-      a link-bind in the step 7 manifest. Retain existing public results through
-      a compatibility bridge where needed; do not assume adding a required field
-      is rollout-safe. Exit: reduced lookup-stage scaling, bounded maintenance
-      cost, and a written old/new board-topic compatibility matrix. Depends on
-      T0.
+      the link-bind in the step 7 manifest. Retain existing public results
+      through a compatibility bridge where needed; do not assume adding a
+      required field is rollout-safe. Exit: reduced lookup-stage scaling,
+      bounded maintenance cost, and a written old/new board-topic compatibility
+      matrix. Depends on T0.
+
+      The board's lookup index is keyed by topic number and verified by
+      identity. `crossrefTable` writes each row's topic number as `name`, and
+      `crossrefIndexOf` in `patterns/apps/topics/crossref-index.ts`, a lift in a
+      module of its own called directly by the board, groups the pivot's
+      positions under it, recording which pivot it indexes. A topic takes it
+      through a new optional input, `boardCrossrefIndex`, which `addTopic` and
+      the composer wire and the board publishes as `crossrefIndex`; a topic
+      filed before it holds none and scans until the step 7 manifest's
+      link-bind of `<board>/crossrefIndex` onto `<topic>/boardCrossrefIndex`.
+      `backlinksOf` reads the positions under its own number only when the
+      index's source `equals` the pivot it is wired to, keeps the row whose
+      topic `equals` itself, and scans otherwise, so the number decides what is
+      read and never what is returned. Under lazy materialization a numbered
+      topic's lookup then registers the same reads at 4 and at 32 topics, and
+      filing a topic re-runs only its own lookup and those of the topics it
+      mentions, both of which `topics-lazy-lookup-reruns.test.ts` holds; the
+      cost probe (`scripts/topics-computation-cost.ts`) measures the same
+      reads at 128 and 512. An unbound topic's lookup scans, and the read
+      budget gates that scan on a case of its own. The runtime `keyBy` index over Cell identity
+      (`docs/features/collection-indexes.md`) is not used: it writes a member
+      document and maintenance records per member, which grows the stored
+      documents per topic. Carrying the index through `boardCrossrefs` is not
+      used either: that link resolves to the pivot array every existing topic
+      reads, and changing what it holds changes that shape for every reader of
+      every generation. Either generation of board pairs with either generation
+      of topic, and every pairing returns the scan's answer:
+
+      | board \ topic | topic without the input | topic with it, unbound | topic with it, bound |
+      | --- | --- | --- | --- |
+      | board without `crossrefIndex` | scans | scans | the bound index is frozen or absent: its positions read the pivot as it is now, else it scans |
+      | board with `crossrefIndex` | scans; ignores each row's `name` | scans | reads its row by number |
+
+      `scripts/topics-restore.ts` relinks `boardCrossrefIndex` where the topic
+      declares it and the board publishes `crossrefIndex`, retires it where the
+      topic does not declare it, and leaves it out, before the apply, where the
+      board does not publish it.
+
+      This stage stays open until its served rehearsals have run: a `SIGKILL`
+      right after an `addTopic` commit, a rollback of the board alone with a
+      pivot shrink while the index is frozen, a half-bound board, and
+      `cf space verify --expect-migration`. Until then the rollback and the
+      shrink are held headless, by the `frozen` and `shrunk` ways of the
+      lookup differential in `topics-headless-fixture.test.ts`. The read, heap
+      and time figures also remain to be measured on the head that merges.
 - [ ] **T3 — Maintain the mention relation.** Prototype stable per-source edge
       production, per-source-occurrence mention deduplication, and shared
       grouping by destination. The derived edges reach `groupBy` through the
@@ -166,16 +216,14 @@ implementation and prototypes can begin earlier.
       retargets update only the required relation work where supported,
       complete-workload costs justify adoption, or a report explains deferral.
       Depends on T0 and T2's boundary decisions; T1 need not block it.
-- [ ] **T4 — Evaluate large-thread aggregates.** Compare a maintained active
-      comment count and activity maxima with the T1 implementation. Use explicit
-      Cell receivers and measure score/predicate production; do not rely on
-      unsupported ordinary-array `.map(...).sum()` chains. Write the aggregates
-      as `.count(predicate)`, `.minBy(score)` and `.maxBy(score)`: the
-      argument-free `count()` takes no callback and so hoists nothing, which
-      leaves nothing to measure. A maintained count or activity maximum
-      carrying a callback is a new operator, so it too lives in a pattern in a
-      module of its own, instantiated the same way. Exit: adopt only the
-      candidates with justified end-to-end tradeoffs. Depends on T0 and T1.
+- [x] **T4 — Evaluate large-thread aggregates.** Closed without a candidate:
+      a topic's comment count and last activity are stored inputs its verbs
+      keep in the write that changes them, so there is no per-thread
+      derivation left to maintain or to measure, and the thread cases that
+      would have measured one are gone from the headless tier. The stored
+      values are reliable once every writer runs the current topic module and
+      legacy writers are retired
+      ([rollout](../../patterns/apps/topics/state-upgrades.md#rollout-and-rollback)).
 - [ ] **T5 — Harden accepted changes and prepare release artifacts.** Add
       regression read budgets, run all relevant authored/package/integration
       tests, preserve compatibility baselines, pass the
@@ -242,11 +290,11 @@ derivation inside a pattern body registers under a name that can differ between
 the baseline and a candidate, so the tier measures it through the pattern that
 holds it rather than by registered name. It runs at 32, 128, and 512 topics,
 with low-degree and high-degree mention graphs, and varies E independently of N.
-Exercise a single large inbound bucket as well as distributed links. Test
-threads at 10, 100, and 1,000 comments, varying L separately. The headless
-read-budget test runs in CI at 4 and 32 topics and at threads of up to 100
-comments or 100 links; 128 and 512 topics and threads of 1,000 comments or
-1,000 links run only from this tier's probe script.
+Exercise a single large inbound bucket as well as distributed links. The
+headless read-budget test runs in CI at 4 and 32 topics; 128 and 512 topics run
+only from this tier's probe script. Thread length is not a dimension of this
+tier: a topic's comment count and last activity are stored inputs its verbs
+keep, so no per-thread derivation remains to scale.
 T0 builds this tier's fixture; if a size cannot be built, T0 records the
 measured limit and the tier runs at the largest size it builds.
 
@@ -259,7 +307,7 @@ whole board bounds the sizes of any tier that seeds one: the
 records its time, memory, and cause. Citations raise the cost further, and
 seeding cost keeps the browser tier to a few citing topics (see
 `DEFAULT_CITING_TOPICS` in
-[the fixture](../../packages/patterns/integration/topic-board-fixture.ts)), so
+[the fixture](../../patterns/integration/topic-board-fixture.ts)), so
 only the headless tier varies E independently of N. Each tier includes a small
 case to expose startup and maintenance overhead that scaling tests can hide.
 
@@ -267,10 +315,9 @@ Three demand workloads are distinct: the board alone, the board with one topic
 open, and all backlink outputs. The browser tier runs the board-alone and
 board-with-one-topic workloads and not the all-backlinks one. In a browser
 measurement with client execution and stored card values, a board loaded before
-any topic was opened ran none of the pivot, backlinks, comment-count, or
-last-activity lifts. Opening a topic ran the pivot, that topic's backlinks, and
-its comment count. Returning to the board afterward ran that topic's
-last-activity lift once. The measurement is one small sample, taken with
+any topic was opened ran neither the pivot nor the backlinks lift. Opening a
+topic ran the pivot and that topic's backlinks. The measurement is one small
+sample, taken with
 [lazy materialization](../development/EXPERIMENTAL_OPTIONS.md#lazymaterialization)
 on and with client execution.
 
@@ -310,11 +357,10 @@ board-with-one-topic workload with the demand the browser measured, and the
 all-backlinks workload as a scaling probe rather than normal UI behavior: it
 demands the pivot and every topic's backlinks at once, which no browser workload
 does. The probe records the board-alone workload as not measured, because a
-board loaded before any topic is opened runs none of the pivot, backlinks,
-comment-count, or last-activity lifts, so there is no work of theirs to measure
-headlessly. The tier's thread cases run under a workload of their own,
-`aggregates`, which demands every topic's present comment count and last
-activity and nothing else. Measure cold initialization, warm updates, and reopen
+board loaded before any topic is opened runs neither the pivot nor the backlinks
+lift, so there is no work of theirs to measure headlessly. A topic's comment
+count and last activity are stored values, so the tier has no thread cases.
+Measure cold initialization, warm updates, and reopen
 or reconnect separately. T0 measured reopen in the browser tier and not
 reconnect: inducing a transport reconnect needs a storage relay the Benchmarks
 workflow does not run, so the browser tier's `reopen` series re-opens a topic
@@ -334,7 +380,7 @@ multi-user tests are part of acceptance, not replaced by benchmarks.
 be held to one.** A topic's rendering derivations — active comments, active
 links, the presence booleans, and the link-resolution inputs — are `computed`
 expressions in the topic's body or lifts neither instrument names. The headless
-tier starts the four Topics lifts directly and instantiates no pattern body, so
+tier starts the two Topics lifts directly and instantiates no pattern body, so
 they never run there; in the browser they run and fall into the sample's
 aggregated `remaining` row, which keeps no run's identity. Closing this needs
 the browser helper to retain something per source-less run and its timing rows
@@ -349,10 +395,9 @@ or memory measurements. The browser tier records body reads, graph size, and
 timings; attempt reads come from the headless tier, because the runtime client's
 read-stats request enables body accounting only. Count producer and consumer
 work separately but decide on the complete settled operation. T0 measured the
-browser tier's reopen workload to run none of the pivot, backlink,
-comment-count, or last-activity lifts, so that one has no producer or consumer
-work to separate. Network claims require bytes/subscription measurements in
-addition to read accounting.
+browser tier's reopen workload to run neither the pivot nor the backlinks lift,
+so that one has no producer or consumer work to separate. Network claims
+require bytes/subscription measurements in addition to read accounting.
 
 T0 must set numeric baseline-derived acceptance limits before tuning candidates.
 Read budgets are total and per-run, with explicit output/UI demand. Read and
@@ -426,8 +471,8 @@ board's package does not upgrade those existing children.
 
 1. Inventory target piece IDs, source revisions, stored input/result contracts,
    linked spaces, active generations, each topic's stored `topicStateVersion`,
-   and which topics hold `boardCrossrefs`, `mentionable`, and the legacy
-   `boardNames`, and what each links to. A topic no longer declares
+   and which topics hold `boardCrossrefs`, `boardCrossrefIndex`,
+   `mentionable`, and the legacy `boardNames`, and what each links to. A topic no longer declares
    `boardNames` — it stores the number its board calls it by, which `addTopic`
    passes at create and `recordName` writes onto a topic that predates it — so
    what an inventory finds there is a stored link the current projection no
@@ -438,7 +483,7 @@ board's package does not upgrade those existing children.
 2. Confirm the target runtime/compiler supports the operators. A change to
    derived computation alone needs no upgrade step. A change the topic pattern
    makes to its own persisted state is a new step under
-   [Topic state upgrades](../../packages/patterns/topics/state-upgrades.md),
+   [Topic state upgrades](../../patterns/apps/topics/state-upgrades.md),
    which defines the step contract, the mutations allowed while a step is
    pending, the required tests, and the rollout and rollback limits. That
    document also describes when a topic's pending steps run and what stops them;
@@ -458,7 +503,7 @@ board's package does not upgrade those existing children.
    attachment included. Along with the check and apply, rehearse on the clone
    every link-bind the change requires (T2 decides them, and the step 7 manifest
    records them), using
-   [`cf piece link`](../../packages/cli/README.md#linking-piece-inputs). Tests
+   [`cf piece link`](../../runtime/cli/README.md#linking-piece-inputs). Tests
    attached to deployment are packaged/type-checked, not executed there.
    Classify refusals, including missing linked data; a clean compatibility check
    is not an apply or semantic acceptance result.

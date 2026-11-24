@@ -12,10 +12,10 @@ everything confidential the releasing code read was written by the seal.
 
 This is the spec's multi-party consent release through an endorsed transformer
 (§5.3.4, §13.3), with consent given once per value at a trusted gesture. The
-host module is `packages/runner/src/cfc/custody-seal.ts`, exported to hosts as
+host module is `runtime/runner/src/cfc/custody-seal.ts`, exported to hosts as
 `@commonfabric/runner/cfc/custody-seal` and absent from pattern imports, the
 same arrangement as [reviewed snapshot copies](cfc-persisted-declassification.md#31-reviewed-snapshot-copies).
-The cases are in `packages/runner/test/cfc-custody-seal.test.ts`.
+The cases are in `runtime/runner/test/cfc-custody-seal.test.ts`.
 
 ## The operation
 
@@ -162,25 +162,27 @@ if any holds something else, so the value checked is the value committed.
 ### Seats
 
 A pattern holds a member's profile, never the member's DID. So a seat may be a
-reference to a cell whose stored label attests one principal: a
-`represents-principal` integrity atom at the cell's root or on one of its
-top-level fields, as a profile's owner-protected fields carry their owner's.
-This is the evidence `cf-cfc-authorship` reads an author claim from. A runtime
-binds the subject of an atom in the form `{kind, subject}` to its acting
-principal and refuses a literal DID there, so in that form a cell attests only
-the principal whose runtime wrote it. The seal counts only that form: an atom
-whose subject is exactly a well-formed DID, with no other key, on any label
-entry at the cell or one of its top-level fields, whatever that entry's origin. Any other
-spelling that names a principal, the `represents-principal:<did>` string form
-or a subject padded with spaces among them, gets past the runtime's refusal,
-and the seal refuses a seat whose cell carries one. The seal resolves the cell
-the reference names, reads its label, and refuses a cell that attests no
-principal or more than one, and a cell whose own label carries a clause
+reference to a cell whose stored label attests one principal through its
+`represents-principal` integrity atoms, as a profile's owner-protected fields
+carry their owner's. Which entries count is the profile rule every reader of a
+profile's principal shares (`representsPrincipalEntries()` in
+`runtime/runner/src/cfc/represents-principal.ts`): for a cell whose `name`
+holds a name its owner wrote, the entries on `name` and the root's own; for any
+other cell, every entry its label holds. This is the evidence
+`cf-cfc-authorship` reads an author claim from. A runtime binds the subject of
+an atom in the form `{kind, subject}` to its acting principal and refuses a
+literal DID there, so in that form a cell attests only the principal whose
+runtime wrote it. The seal counts only that form: an atom whose subject is
+exactly a well-formed DID, with no other key, on an entry that rule counts. Any
+other spelling that names a principal, the `represents-principal:<did>` string
+form or a subject padded with spaces among them, gets past the runtime's
+refusal, and the seal refuses a seat whose cell carries one. The seal resolves
+the cell the reference names, reads its label, and refuses a cell that attests
+no principal or more than one, and a cell whose own label carries a clause
 neither `Space(S)` nor `P` satisfies, since the DID it attests is shown to every
-reader of the room; the read is evidence the entry's transaction
-verifies, so a seat that attests another principal before the entry is written
-refuses the seal. Only `seats` may hold references; the other fields are read
-as values.
+reader of the room; the read is evidence the entry's transaction verifies, so a
+seat that attests another principal before the entry is written refuses the
+seal. Only `seats` may hold references; the other fields are read as values.
 
 Naming a seat grants the named member nothing and takes nothing from them: only
 that member can seal into it, since the seal requires the storage signer to be
@@ -204,10 +206,10 @@ attestations on their seat cells; a pattern, which reads neither DIDs nor
 attestations, gains from `D` only a test of a guess at the whole set of seat
 DIDs, and the box's address already gives it the same test. Neither the component nor the worker hands
 the pattern the entry's key: a pattern that held it could write down which
-member's entry it is. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`
-is such a room, and `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
+member's entry it is. `patterns/examples/cfc-exchange-rules/custody-answer-room.tsx`
+is such a room, and `patterns/examples/cfc-exchange-rules/custody-projector.tsx`
 is the same room demo-grade, its rule naming the projector alone.
-`packages/patterns/integration/cfc-custody-projector.test.ts` seals two
+`patterns/integration/cfc-custody-projector.test.ts` seals two
 members' stances through each room's cells and shows that a room reader sees
 its projector's answer and not a member's rating. For the answer room, whose
 rule requires the seal's witness, the host publishes that answer once and
@@ -413,7 +415,7 @@ to the room's argument document by any other code, through any schema, and
 nothing more. A writer claim on `T | null` sits on the `T` branch alone and
 does not refuse a write of `null`, so the room's terms are absent until
 proposed rather than `null`. The pattern's integration test,
-`packages/patterns/integration/cfc-custody-projector.test.ts`, pins a link
+`patterns/integration/cfc-custody-projector.test.ts`, pins a link
 written into the room's result document, and the room's own pattern bound
 beneath its terms, as known residuals.
 

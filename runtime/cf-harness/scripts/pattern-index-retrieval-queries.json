@@ -1,0 +1,758 @@
+{
+  "label": "pattern index retrieval quality",
+  "version": 1,
+  "notes": "A labelled query set for measuring what searchPatterns returns, separate from the standing task suite in pattern-index-suite.json. That suite measures whether a session discovers anything at all; this one measures whether what it is handed is the right thing. Read `population` and `construction` before trusting a number derived from this file: choosing a fixture is choosing a population, and this one is a deliberate choice that can be wrong.",
+  "population": {
+    "whatThisRepresents": "The first search a harness session issues after being handed an ordinary user task, before it authors anything.",
+    "whyThatPopulation": "The prompt-loop instructs a pattern-authoring session to 'Search the pattern index with search_patterns before you author anything', and gives no guidance on how to word the query. So the query is whatever the model composes from the user's task words. That is the moment the index either prevents a rebuild or does not.",
+    "howTheModelActuallyWords_it": [
+      "SETTLED BY OBSERVATION, not assumed. Every search the loop has issued is in the console run transcripts under runtime/cf-harness/.cf-harness-console/runs/. All 64 were read and all 64 parsed; none was unreadable. They hold 70 search_patterns calls across 38 runs: 44 carried free text and 26 carried tags alone. The 44 distinct texts are ALL keyword bags. Not one is a sentence, has a first-person pronoun, or has a verb in a finite clause. Median five words, range one ('app', 'reactive', 'double', 'doubling') to nine. So the `task` register the retrieval brief asked for describes NO part of the observed population, and the `keywords` register describes all of it. That is why the registers are kept rather than replaced: the observed shape is taught by the system prompt, which tells the model to search 'from the whole to the parts' by naming interaction verbs, and that prose is being varied. A fixture pinned only to observed phrasing is pinned to a moving target."
+    ],
+    "registers": {
+      "task": "The user's request in a sentence, first person, as a person would say it and as a session that echoes its user would search. This is the register the retrieval brief asked for.",
+      "keywords": "A bag of content words with no grammar, matching the single observed real query's shape.",
+      "capability": "Component-shopping phrasing from a session that already knows it wants a part to wire in, naming the shape rather than the story.",
+      "observed": "The 34 real queries that map onto a capability, verbatim, deduplicated, from the transcripts. The empirical register. Three further real queries sought a calculator the corpus does not hold and are scored as negatives; seven were generic scaffolding ('app', 'reactive', 'form input button state') and are listed in `unlabelledObservedQueries` unscored, because no honest relevance label exists for them."
+    },
+    "notRepresented": [
+      "Tag-only searches. 26 of the 70 observed calls passed tags with no text, so this is 37 percent of real search traffic and its absence from this instrument is a real gap, not a tidy exclusion. Tag matching is a different mechanism (Firestore array-contains-any, capped at ten) against author-chosen hashtags, and measuring it needs its own labelled set.",
+      "Second and later searches in a session, after a first search has already shown the model the corpus's vocabulary. Those are cheaper to get right and are not where a rebuild is decided.",
+      "Any query issued by a person rather than by a model."
+    ]
+  },
+  "construction": {
+    "procedure": "Labels were derived from BEHAVIOUR, not from wording. For every discoverable entry, `getPattern` was called with `includeSource: true` and the program and both declared schemas were read. Each entry was placed in a capability by what its source does. Query text was then written from the capability's user need, deliberately without the entry's description in view, and only afterwards checked for accidental overlap.",
+    "whyThatMatters": "A query set written by reading descriptions retrieves those descriptions and measures nothing. `descriptionOverlap` below records, per query, the fraction of its content words that appear anywhere in the target entries' description, keywords or hashtags. It is reported alongside every result. A capability whose queries score well ONLY at high overlap has been retrieved on its wording.",
+    "unavoidableOverlap": "Some overlap is honest rather than leaked: a counter is called a counter, and pretending otherwise would measure a population that does not exist. The number is published so the reader can discount it, not driven to zero.",
+    "sourceWasRead": "Stated plainly because it is a limitation: the author of this fixture read the corpus's source, which a harness session never does. That buys correct labels and costs the ability to claim the queries were written in ignorance. The three registers and the overlap statistic are the compensating controls.",
+    "gradingScale": {
+      "answers": "A session handed this entry could use it for the stated need without rewriting its behaviour. Counted as relevant.",
+      "partial": "Adjacent: the right subject but the wrong shape \u2014 a static mockup where interaction was asked for, a narrower or wider capability, or a part that needs real rework. NOT counted as relevant in the headline numbers, and reported separately, because a session that composes one of these has been misled rather than served.",
+      "irrelevant": "Everything else, by omission."
+    },
+    "staticVersusInteractive": "Several zero-argument entries render a hardcoded picture with no state and no event handler while their description claims a tracker or an add control. Behaviourally those cannot answer a request to enter or track anything, so they are labelled `partial` for their own subject. This distinction exists in the source, is invisible to every signal search ranks on, and is the single largest source of false relevance in the corpus.",
+    "atomVersusApp": "`argumentSchema` is an object for the eight composable atoms and `false` for every self-contained app. That is a hard behavioural fact present in the data and unused by ranking. `capability`-register queries want an atom; `task`-register queries usually want an app. Both are labelled, so the two can be scored apart."
+  },
+  "corpusSnapshot": {
+    "readAt": "2026-08-29T00:00Z (approximate; the exact reading is in the measurement report)",
+    "howToRead": "Never hand-write these numbers. `listPatterns '{\"includeNonDiscoverable\":true}'` is the reading, and the scorer records what it saw at run time.",
+    "movingTarget": "The corpus grew by two discoverable entries DURING the construction of this file, from an authoring batch running concurrently. Any measurement against it names the reading it used."
+  },
+  "capabilities": [
+    {
+      "id": "count-up-down",
+      "need": "Keep a number a person nudges up and down, and put it back to zero.",
+      "answers": [
+        "6gKBAa1h7f4mlD6AFkKws59l-TQECHWyFjw9BI7DqUg",
+        "U5g1VlAb1uFmmec7D-fzPXZy0erldi7inqmXN8j7Vi0",
+        "5Bi-U0__vVtL4zYWPiD0M40ZAQtdWQEFqzs2Urdnn4w"
+      ],
+      "partial": [
+        "ZLCtfSzsBQFshSB2dB5xDHh5Sb7YhX7d_-7T1lsS32A"
+      ],
+      "evidence": "6gKBAa1h7f takes value/step/min/max as host cells and exposes increment, decrement and reset streams. U5g1VlAb1u is a zero-argument app with both buttons. 5Bi-U0__vV runs two of them with a live sum. ZLCtfSzsBQ is four lines with an Add button and no reset, so it is the subject without the need."
+    },
+    {
+      "id": "checklist",
+      "need": "A list a person adds items to, ticks off, and removes, showing how many are left.",
+      "answers": [
+        "dZt8I5yIWD2g6NeftbKv-3ZouzZ2LGCSEhT8ij7wGV0",
+        "RMMb1Frzcx-yxRZc1Hfe-puyw5nlriXvJMmYlcmL_5M"
+      ],
+      "partial": [
+        "9VXM7rCcWBR2JrgF69ptWScQDkeWyBYGtDVGSbMr6Yw"
+      ],
+      "evidence": "dZt8I5yIWD is the composable atom: items as a host cell, addItem/toggle/rename/remove/clearCompleted streams, remaining and completed counts. RMMb1Frzcx is the same behaviour as a self-contained grocery app with quantities. 9VXM7rCcWB is a checklist whose items are specifically books, so it answers the subject only when the subject is books."
+    },
+    {
+      "id": "expense-total",
+      "need": "Enter labelled amounts and see them summed, ideally against a budget.",
+      "answers": [
+        "DRCFljoU1NSWQ8pt8dvVa-mG5cld1tj5J46iq7L7-VE",
+        "RaBFRX7tuzcMcWwQ4UguqwFK5tJwxYWJECEWXU_11l8",
+        "DWl3kXPQc1qRvGZaG_rkLEkpOuea6oh2k_CIm62Rf6c"
+      ],
+      "partial": [
+        "bswjWIcieXrb8JqRuM7fFzU17Zc-je8Urvgq8hT2-uQ",
+        "wwVyvVWDNlBL60akfAOm2x7wzgtfeb-skmbJkq-BV9s"
+      ],
+      "evidence": "DRCFljoU1N is the atom: entries as a host cell, integer cents, addEntry/removeEntry, formattedTotal, remaining and overBudget. RaBFRX7tuz and DWl3kXPQc1 are apps that genuinely add and remove rows. bswjWIcieX and wwVyvVWDNl hold a hardcoded three-row array with no way to enter anything; both are honest enough to say 'fixed' in their description, and both are still the wrong answer to 'let me enter my expenses'."
+    },
+    {
+      "id": "sortable-table",
+      "need": "Show rows in a table and reorder them when a column header is clicked.",
+      "answers": [
+        "M4P9ijx47oHLW60ES54oZrNAgXPgyB86k68EcUYQas8"
+      ],
+      "partial": [
+        "wwVyvVWDNlBL60akfAOm2x7wzgtfeb-skmbJkq-BV9s",
+        "DWl3kXPQc1qRvGZaG_rkLEkpOuea6oh2k_CIm62Rf6c"
+      ],
+      "evidence": "M4P9ijx47o is the only entry that takes arbitrary columns and rows from a host and sorts them, with numeric columns compared as numbers. The other two sort a hardcoded array of their own by their own fixed columns."
+    },
+    {
+      "id": "dice-roll",
+      "need": "Roll a die and show what came up.",
+      "answers": [
+        "bcj98b4SbCLZPtHmCJ2AIP7vQzUFQ_rR0iZxQu2qv9o",
+        "fJFEmPDyg47R8OpD33N-3Wz7YxEZ60fOQPdyUnkZJ60",
+        "AgaGn7BUQskPzoKfbEWqq68GwIiDOBkgwe2u8delX5Y"
+      ],
+      "partial": [
+        "n3qGsy2XgLnP1KSe3PkCxqj9h16kU5nd5OqJal0oJ3E",
+        "a9xap95AHRodDy-ydP4KCQbQwiHzYjPbvfNH56VUdp0"
+      ],
+      "evidence": "bcj98b4SbC is the atom with configurable sides and a roll stream a host can fire. fJFEmPDyg4 is a d6 app; AgaGn7BUQs composes three of it and totals them. n3qGsy2XgL rolls d20s but only as character stats; a9xap95AHR draws 1-100 and is not a die."
+    },
+    {
+      "id": "random-number",
+      "need": "Produce a random number in a range on demand.",
+      "answers": [
+        "a9xap95AHRodDy-ydP4KCQbQwiHzYjPbvfNH56VUdp0",
+        "bcj98b4SbCLZPtHmCJ2AIP7vQzUFQ_rR0iZxQu2qv9o"
+      ],
+      "partial": [
+        "fJFEmPDyg47R8OpD33N-3Wz7YxEZ60fOQPdyUnkZJ60"
+      ],
+      "evidence": "a9xap95AHR draws 1-100 on a button. bcj98b4SbC's `sides` is a host cell, so it is a general 1..n generator wearing a die's name. fJFEmPDyg4 is fixed at six."
+    },
+    {
+      "id": "single-select",
+      "need": "Let a person choose one value out of a supplied set.",
+      "answers": [
+        "wZDg6zeEezVWIrOPhhV6mJ794Uys1USogIG_c_C_SIY"
+      ],
+      "partial": [],
+      "evidence": "wZDg6zeEez is the only entry offering selection as a capability: options and selected as host cells, a select stream, and the empty string standing for nothing picked. Nothing else in the corpus exposes a choice to its caller."
+    },
+    {
+      "id": "reading-tracker",
+      "need": "Keep the books being read, with how far through each one is and what it was worth.",
+      "answers": [
+        "FimzoBmTy8QTJQOjaKpsHPjmyMCUJFAGCXoO2vKJMDc",
+        "9VXM7rCcWBR2JrgF69ptWScQDkeWyBYGtDVGSbMr6Yw"
+      ],
+      "partial": [
+        "0y4gYhIXDb4STj4ei_UwNXOm9j5pA-coMF4J2j5OqZI"
+      ],
+      "evidence": "FimzoBmTy8 adds and removes books and carries author, status, progress and a rating. 9VXM7rCcWB adds titles and toggles finished but has no rating. 0y4gYhIXDb renders two hardcoded books with stars and has no event handler at all: it is a picture of the answer."
+    },
+    {
+      "id": "labelled-notes",
+      "need": "Write notes, tag each with a label, and narrow to one label or a search term.",
+      "answers": [
+        "GWkpTfEhKE5hScyU_ddiKVPmUlZw7xm5pbFyl6-yCDA"
+      ],
+      "partial": [],
+      "evidence": "GWkpTfEhKE adds notes with a label, filters to a label, and filters again by substring over title, body and label. It is the only entry in the corpus that filters or searches anything."
+    },
+    {
+      "id": "multiply-number",
+      "need": "Take a number and give back a multiple of it.",
+      "answers": [
+        "9lNyUbKGSncsQtxH_JsSjaClFBEtE4Oz_oY4tWk5tpI",
+        "G3mNQgvMSMXJK0rMmTk00iI_fw_EREGhXrLWHy7N8xg"
+      ],
+      "partial": [],
+      "evidence": "The two arithmetic fixtures. Included deliberately: 9lNyUbKGSn is the only entry in the corpus with a meaningful event history (8 run_succeeded, 10 instantiated, score 13), so it is the one case where ranking has evidence to act on."
+    },
+    {
+      "id": "character-sheet",
+      "need": "An RPG character sheet whose stats are rolled.",
+      "answers": [
+        "n3qGsy2XgLnP1KSe3PkCxqj9h16kU5nd5OqJal0oJ3E"
+      ],
+      "partial": [
+        "bcj98b4SbCLZPtHmCJ2AIP7vQzUFQ_rR0iZxQu2qv9o"
+      ],
+      "evidence": "n3qGsy2XgL is an editable name and three independently rolled d20 stats with a total. bcj98b4SbC is the part it would have been built from."
+    },
+    {
+      "id": "trip-itinerary",
+      "need": "Lay the days of a trip out in order and add things to them.",
+      "answers": [],
+      "partial": [
+        "2h0TVvTMdhGlcFhGubyLvQ1IZhSF5FS5QkgM10aQQTc"
+      ],
+      "evidence": "NO ENTRY ANSWERS THIS. 2h0TVvTMdh renders a hardcoded five-row array as static JSX with no Writable, no cell and no event handler, while its description promises 'an add-activity control'. It is the corpus's most misleading row, and it is one of the newest. Labelled `partial` rather than `answers` on that basis; a session that composes it gets a picture."
+    },
+    {
+      "id": "birthday-list",
+      "need": "List friends with their birthdays and see whose is next.",
+      "answers": [],
+      "partial": [
+        "2QGxpAuh-TxmV1Em462NcFiWDa9AnBjrJpBZbSnmZS0"
+      ],
+      "evidence": "NO ENTRY ANSWERS THIS. 2QGxpAuh-T declares only `$UI` in its result schema and its source contains no state and no handler: the 'chronological upcoming-birthdays list and days-away reminders' its description promises are literal text in static JSX. Same shape of defect as trip-itinerary, from the same batch."
+    }
+  ],
+  "queries": [
+    {
+      "id": "count-up-down.task",
+      "capability": "count-up-down",
+      "register": "task",
+      "text": "I want a little thing on the page that keeps a tally I can nudge up or down and put back to zero"
+    },
+    {
+      "id": "count-up-down.keywords",
+      "capability": "count-up-down",
+      "register": "keywords",
+      "text": "tally up down reset zero button"
+    },
+    {
+      "id": "count-up-down.capability",
+      "capability": "count-up-down",
+      "register": "capability",
+      "text": "a part that holds a whole number and exposes ways to raise it, lower it and clear it"
+    },
+    {
+      "id": "checklist.task",
+      "capability": "checklist",
+      "register": "task",
+      "text": "I need a list the user can add items to and tick off, and it should say how many are still outstanding"
+    },
+    {
+      "id": "checklist.keywords",
+      "capability": "checklist",
+      "register": "keywords",
+      "text": "list add tick off outstanding remove"
+    },
+    {
+      "id": "checklist.capability",
+      "capability": "checklist",
+      "register": "capability",
+      "text": "a part that owns an array of things each of which is either finished or not, with ways to append and drop them"
+    },
+    {
+      "id": "expense-total.task",
+      "capability": "expense-total",
+      "register": "task",
+      "text": "Give me somewhere to type in what I spent and what it was for, and keep a running sum at the top"
+    },
+    {
+      "id": "expense-total.keywords",
+      "capability": "expense-total",
+      "register": "keywords",
+      "text": "spending entry running sum money label"
+    },
+    {
+      "id": "expense-total.capability",
+      "capability": "expense-total",
+      "register": "capability",
+      "text": "a part that owns labelled monetary figures and reports what they come to, against a ceiling if one is set"
+    },
+    {
+      "id": "sortable-table.task",
+      "capability": "sortable-table",
+      "register": "task",
+      "text": "Put my data in a grid where clicking the top of a column reorders everything by it"
+    },
+    {
+      "id": "sortable-table.keywords",
+      "capability": "sortable-table",
+      "register": "keywords",
+      "text": "grid column header click reorder ascending descending"
+    },
+    {
+      "id": "sortable-table.capability",
+      "capability": "sortable-table",
+      "register": "capability",
+      "text": "a part I hand arbitrary records and field definitions to that reorders them on a header press"
+    },
+    {
+      "id": "dice-roll.task",
+      "capability": "dice-roll",
+      "register": "task",
+      "text": "I want to press something and have it show me what a die came up as"
+    },
+    {
+      "id": "dice-roll.keywords",
+      "capability": "dice-roll",
+      "register": "keywords",
+      "text": "die face press show result"
+    },
+    {
+      "id": "dice-roll.capability",
+      "capability": "dice-roll",
+      "register": "capability",
+      "text": "a part that produces a fresh value between one and a configurable upper face when fired"
+    },
+    {
+      "id": "random-number.task",
+      "capability": "random-number",
+      "register": "task",
+      "text": "Make me a page that picks a number at random when I ask it to"
+    },
+    {
+      "id": "random-number.keywords",
+      "capability": "random-number",
+      "register": "keywords",
+      "text": "pick number chance draw"
+    },
+    {
+      "id": "random-number.capability",
+      "capability": "random-number",
+      "register": "capability",
+      "text": "a part that yields an unpredictable integer inside a bound I supply"
+    },
+    {
+      "id": "single-select.task",
+      "capability": "single-select",
+      "register": "task",
+      "text": "The user should be able to choose exactly one of a handful of choices I give them"
+    },
+    {
+      "id": "single-select.keywords",
+      "capability": "single-select",
+      "register": "keywords",
+      "text": "choose one of several choices"
+    },
+    {
+      "id": "single-select.capability",
+      "capability": "single-select",
+      "register": "capability",
+      "text": "a part bound to a caller's field that narrows a set of candidate values down to the one currently chosen"
+    },
+    {
+      "id": "reading-tracker.task",
+      "capability": "reading-tracker",
+      "register": "task",
+      "text": "Make me a page where I can keep what I am partway through and say how good each one was"
+    },
+    {
+      "id": "reading-tracker.keywords",
+      "capability": "reading-tracker",
+      "register": "keywords",
+      "text": "books partway through stars how good"
+    },
+    {
+      "id": "reading-tracker.capability",
+      "capability": "reading-tracker",
+      "register": "capability",
+      "text": "a part holding titled works with an author, a stage, a percentage done and a score out of five"
+    },
+    {
+      "id": "labelled-notes.task",
+      "capability": "labelled-notes",
+      "register": "task",
+      "text": "Somewhere to jot things down, put a category on each, and then narrow to just one category"
+    },
+    {
+      "id": "labelled-notes.keywords",
+      "capability": "labelled-notes",
+      "register": "keywords",
+      "text": "jot category narrow find text"
+    },
+    {
+      "id": "labelled-notes.capability",
+      "capability": "labelled-notes",
+      "register": "capability",
+      "text": "a part that holds written entries under categories and narrows them by category or by matching their body"
+    },
+    {
+      "id": "multiply-number.task",
+      "capability": "multiply-number",
+      "register": "task",
+      "text": "I have a figure and I want twice as much"
+    },
+    {
+      "id": "multiply-number.keywords",
+      "capability": "multiply-number",
+      "register": "keywords",
+      "text": "twice as much figure"
+    },
+    {
+      "id": "multiply-number.capability",
+      "capability": "multiply-number",
+      "register": "capability",
+      "text": "a part taking one numeric field and returning it multiplied"
+    },
+    {
+      "id": "character-sheet.task",
+      "capability": "character-sheet",
+      "register": "task",
+      "text": "Build a sheet for a tabletop hero where I roll for each ability score"
+    },
+    {
+      "id": "character-sheet.keywords",
+      "capability": "character-sheet",
+      "register": "keywords",
+      "text": "tabletop hero ability score roll sheet"
+    },
+    {
+      "id": "character-sheet.capability",
+      "capability": "character-sheet",
+      "register": "capability",
+      "text": "a part with a nameable figure and three rolled ability values that sum"
+    },
+    {
+      "id": "trip-itinerary.task",
+      "capability": "trip-itinerary",
+      "register": "task",
+      "text": "Make a page that lays the days of a trip out in order so I can see what happens when"
+    },
+    {
+      "id": "trip-itinerary.keywords",
+      "capability": "trip-itinerary",
+      "register": "keywords",
+      "text": "trip days order what happens when"
+    },
+    {
+      "id": "trip-itinerary.capability",
+      "capability": "trip-itinerary",
+      "register": "capability",
+      "text": "a part holding dated activities grouped by day that I can append to"
+    },
+    {
+      "id": "birthday-list.task",
+      "capability": "birthday-list",
+      "register": "task",
+      "text": "I want a page listing my friends with their birthdays, so I can see whose is coming up next"
+    },
+    {
+      "id": "birthday-list.keywords",
+      "capability": "birthday-list",
+      "register": "keywords",
+      "text": "friends birthdays coming up next"
+    },
+    {
+      "id": "birthday-list.capability",
+      "capability": "birthday-list",
+      "register": "capability",
+      "text": "a part that orders people by how soon their yearly date falls and says how far off it is"
+    },
+    {
+      "id": "obs.sortable-table",
+      "capability": "sortable-table",
+      "register": "observed",
+      "text": "sortable table"
+    },
+    {
+      "id": "obs.random-number-button-interactive-ui",
+      "capability": "random-number",
+      "register": "observed",
+      "text": "random number button interactive UI"
+    },
+    {
+      "id": "obs.random-roll-button",
+      "capability": "dice-roll",
+      "register": "observed",
+      "text": "random roll button"
+    },
+    {
+      "id": "obs.book-list-add-delete-rating",
+      "capability": "reading-tracker",
+      "register": "observed",
+      "text": "book list add delete rating"
+    },
+    {
+      "id": "obs.monthly-expenses-sortable-table-sort-columns",
+      "capability": "sortable-table",
+      "register": "observed",
+      "text": "monthly expenses sortable table sort columns"
+    },
+    {
+      "id": "obs.trip-itinerary-travel-timeline-day-schedule-chro",
+      "capability": "trip-itinerary",
+      "register": "observed",
+      "text": "trip itinerary travel timeline day schedule chronological planner"
+    },
+    {
+      "id": "obs.add-activity-form-timeline-schedule",
+      "capability": "trip-itinerary",
+      "register": "observed",
+      "text": "add activity form timeline schedule"
+    },
+    {
+      "id": "obs.interactive-planner-add-item",
+      "capability": "trip-itinerary",
+      "register": "observed",
+      "text": "interactive planner add item"
+    },
+    {
+      "id": "obs.doubling",
+      "capability": "multiply-number",
+      "register": "observed",
+      "text": "doubling"
+    },
+    {
+      "id": "obs.double",
+      "capability": "multiply-number",
+      "register": "observed",
+      "text": "double"
+    },
+    {
+      "id": "obs.expense-tracker-monthly-expenses-sorting-amount",
+      "capability": "expense-total",
+      "register": "observed",
+      "text": "expense tracker monthly expenses sorting amount"
+    },
+    {
+      "id": "obs.add-delete-list-form-interactive",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "add delete list form interactive"
+    },
+    {
+      "id": "obs.two-counters-combined-total-interactive-dashboar",
+      "capability": "count-up-down",
+      "register": "observed",
+      "text": "two counters combined total interactive dashboard"
+    },
+    {
+      "id": "obs.interactive-packing-list-checklist-add-item-coun",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "interactive packing list checklist add item count left"
+    },
+    {
+      "id": "obs.interactive-packing-checklist-add-item-checkbox",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "interactive packing checklist add item checkbox remaining count"
+    },
+    {
+      "id": "obs.interactive-checklist",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "interactive checklist"
+    },
+    {
+      "id": "obs.add-item-checkbox",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "add item checkbox"
+    },
+    {
+      "id": "obs.interactive-checklist-add-items",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "interactive checklist add items"
+    },
+    {
+      "id": "obs.interactive-persistent-shopping-grocery-list",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "interactive persistent shopping grocery list"
+    },
+    {
+      "id": "obs.increment-reset",
+      "capability": "count-up-down",
+      "register": "observed",
+      "text": "increment reset"
+    },
+    {
+      "id": "obs.simple-counter-reactive-increment-reset-buttons",
+      "capability": "count-up-down",
+      "register": "observed",
+      "text": "simple counter reactive increment reset buttons"
+    },
+    {
+      "id": "obs.simple-expense-budget-tracker-add-remove-running",
+      "capability": "expense-total",
+      "register": "observed",
+      "text": "simple expense budget tracker add remove running total UI"
+    },
+    {
+      "id": "obs.counter-increment-reset-interactive-ui",
+      "capability": "count-up-down",
+      "register": "observed",
+      "text": "counter increment reset interactive UI"
+    },
+    {
+      "id": "obs.reading-list-books-finished-unread",
+      "capability": "reading-tracker",
+      "register": "observed",
+      "text": "reading list books finished unread"
+    },
+    {
+      "id": "obs.task-tracker-persistent-state-ui",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "task tracker persistent state UI"
+    },
+    {
+      "id": "obs.reading-list-add-title-toggle-finished-unread-co",
+      "capability": "reading-tracker",
+      "register": "observed",
+      "text": "reading list add title toggle finished unread counts"
+    },
+    {
+      "id": "obs.toggle-checkbox-add-item-list-ui",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "toggle checkbox add item list UI"
+    },
+    {
+      "id": "obs.task-list-add-toggle-completed-counts-ui",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "task list add toggle completed counts ui"
+    },
+    {
+      "id": "obs.table-sort-columns",
+      "capability": "sortable-table",
+      "register": "observed",
+      "text": "table sort columns"
+    },
+    {
+      "id": "obs.rpg-character-sheet-stat-roll-total",
+      "capability": "character-sheet",
+      "register": "observed",
+      "text": "RPG character sheet stat roll total"
+    },
+    {
+      "id": "obs.random-d20-roll-button",
+      "capability": "dice-roll",
+      "register": "observed",
+      "text": "random d20 roll button"
+    },
+    {
+      "id": "obs.project-notes-labels-filtering-notes-dashboard",
+      "capability": "labelled-notes",
+      "register": "observed",
+      "text": "project notes labels filtering notes dashboard"
+    },
+    {
+      "id": "obs.add-toggle-list-form-input",
+      "capability": "checklist",
+      "register": "observed",
+      "text": "add toggle list form input"
+    },
+    {
+      "id": "obs.birthday-tracker-upcoming-birthdays-add-friend",
+      "capability": "birthday-list",
+      "register": "observed",
+      "text": "birthday tracker upcoming birthdays add friend"
+    }
+  ],
+  "negativeQueries": [
+    {
+      "id": "neg.stopwatch.task",
+      "kind": "absent",
+      "text": "I need something that counts the seconds while it is running and that I can stop and start",
+      "why": "Nothing in the corpus has a clock, an interval or elapsed time. Deliberately shares the counting vocabulary of count-up-down without sharing its capability."
+    },
+    {
+      "id": "neg.stopwatch.keywords",
+      "kind": "absent",
+      "text": "elapsed seconds start stop clock",
+      "why": "Same absence, keyword register."
+    },
+    {
+      "id": "neg.chart.task",
+      "kind": "absent",
+      "text": "Draw me a bar chart showing how much each category came to",
+      "why": "Nothing in the corpus draws a chart. Shares the expense-total and sortable-table vocabulary; the missing capability is the drawing."
+    },
+    {
+      "id": "neg.rollhistory.task",
+      "kind": "absent",
+      "text": "Roll dice and keep every past roll so I can see the distribution of what I have thrown",
+      "why": "bcj98b4SbC holds only the most recent value and no entry keeps a history or computes a distribution. The nearest neighbour is a genuine near miss, which is the point."
+    },
+    {
+      "id": "neg.currency.task",
+      "kind": "absent",
+      "text": "Convert an amount from one currency into another at today's rate",
+      "why": "No entry converts anything or reaches a rate. DRCFljoU1N takes a currency symbol, which is a label and not a conversion."
+    },
+    {
+      "id": "neg.kanban.task",
+      "kind": "absent",
+      "text": "A board with columns where I drag cards between the columns as work moves along",
+      "why": "Nothing in the corpus has drag, and no entry moves an item between groupings."
+    },
+    {
+      "id": "neg.markdown.task",
+      "kind": "absent",
+      "text": "An editor where what I type in Markdown shows up formatted beside it",
+      "why": "No entry parses or renders Markdown."
+    },
+    {
+      "id": "neg.weather.keywords",
+      "kind": "absent",
+      "text": "weather forecast temperature outside",
+      "why": "No entry reaches any external data at all; the corpus has no network capability."
+    },
+    {
+      "id": "neg.auth.task",
+      "kind": "absent",
+      "text": "A sign-in form that checks a password before letting someone in",
+      "why": "No entry has any notion of a principal or a credential."
+    },
+    {
+      "id": "neg.calendar.task",
+      "kind": "absent",
+      "text": "Show me a month laid out as a grid of weeks with the days numbered",
+      "why": "No entry computes anything from a date. Shares vocabulary with birthday-list and trip-itinerary, both of which are themselves unanswered."
+    },
+    {
+      "id": "neg.upload.keywords",
+      "kind": "absent",
+      "text": "upload file attach document",
+      "why": "No entry accepts a file."
+    },
+    {
+      "id": "neg.nonsense",
+      "kind": "control",
+      "text": "xylophone quantifier brackish",
+      "why": "A control. Three words that appear nowhere in the corpus. If this returns anything, matching is broken rather than merely loose; if it returns nothing while a plain English absent query returns five hits, the difference is the measurement."
+    },
+    {
+      "id": "obs.interactive-calculator-editable-fields-ui",
+      "kind": "observed-absent",
+      "text": "interactive calculator editable fields UI",
+      "why": "No entry evaluates an expression or is a calculator. Three real runs searched for one."
+    },
+    {
+      "id": "obs.interactive-calculator-inputs-tsx",
+      "kind": "observed-absent",
+      "text": "interactive calculator inputs TSX",
+      "why": "Same absence, and the only real query naming a file extension."
+    },
+    {
+      "id": "obs.simple-tip-calculator-bill-amount-tip-percentage",
+      "kind": "observed-absent",
+      "text": "simple tip calculator bill amount tip percentage",
+      "why": "No entry computes a percentage of anything."
+    }
+  ],
+  "unlabelledObservedQueries": [
+    {
+      "id": "obs.form-input-button-state",
+      "text": "form input button state",
+      "why": "Generic scaffolding, which the system prompt explicitly directs the model to fall back to."
+    },
+    {
+      "id": "obs.app",
+      "text": "app",
+      "why": "One word. The broadest query the loop has ever issued."
+    },
+    {
+      "id": "obs.state-interactive-form-ui",
+      "text": "state interactive form UI",
+      "why": "Generic scaffolding."
+    },
+    {
+      "id": "obs.interactive-button-state-ui",
+      "text": "interactive button state UI",
+      "why": "Generic scaffolding."
+    },
+    {
+      "id": "obs.button-ui-handler-reactive-state",
+      "text": "button UI handler reactive state",
+      "why": "Generic scaffolding."
+    },
+    {
+      "id": "obs.reactive",
+      "text": "reactive",
+      "why": "One word, naming a runtime property rather than a capability."
+    },
+    {
+      "id": "obs.button-interactive-ui",
+      "text": "button interactive UI",
+      "why": "Generic scaffolding."
+    }
+  ]
+}

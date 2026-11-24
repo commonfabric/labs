@@ -1,22 +1,37 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run --allow-ffi --allow-net=127.0.0.1
 import { exists, existsSync, walkSync } from "@std/fs";
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
   COMPILE_FINGERPRINT_INPUTS,
+  compileCacheVersionSourceOf,
   computeCompilerVersion,
   renderVersionModule,
-} from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
-import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
-import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
-import { treeSitterGrammars } from "../packages/cli/lib/view/languages/treesitter/grammars.ts";
+} from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
+import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
+import type { TreeSitterGrammar } from "../runtime/cli/lib/view/languages/treesitter/adapter.ts";
+import { treeSitterGrammars } from "../runtime/cli/lib/view/languages/treesitter/grammars.ts";
 import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
+import { PACKAGE_ROOTS } from "./package-layout.ts";
 
 export interface BuildConfigInitializer {
   root: string;
   toolshedFlags: string[];
   binaries?: readonly BinaryName[];
   cliOnly?: boolean;
+
+  /** Whether builds use only dependencies already in Deno's cache. */
+  cachedOnly?: boolean;
+
+  /**
+   * The compile-cache version to bake, computed for the repository root. The
+   * default is the compiler-input fingerprint, which costs nothing;
+   * `runBuildBinaries` hands a shipped build the output-based version
+   * instead (`compile-cache-output-version.deno.ts`), which compiles the
+   * corpus.
+   */
+  compileCacheVersion?: (root: string) => Promise<string>;
 }
 
 export const BINARY_NAMES = ["toolshed", "cf"] as const;
@@ -25,8 +40,8 @@ export type BinaryName = (typeof BINARY_NAMES)[number];
 /**
  * Everything a built binary is made from, as repository-relative files and
  * directories (a directory ends in `/`): the Deno release `mise.toml` pins,
- * which `deno compile` embeds in every binary; this script and the pattern
- * file classification it imports; the workspace
+ * which `deno compile` embeds in every binary; this script, the package
+ * layout, and the pattern file classification it imports; the workspace
  * manifest and lockfile; the port table the servers import; and the trees
  * that the entry points' module graphs and every `--include` reach. A CI lane
  * keys the binaries it caches on the tracked contents of these, so a change
@@ -36,19 +51,21 @@ export type BinaryName = (typeof BINARY_NAMES)[number];
 export const BINARY_SOURCES = [
   "mise.toml",
   "tasks/build-binaries.ts",
+  "tasks/package-layout.ts",
   "tasks/pattern-files.ts",
   "deno.jsonc",
   "deno.lock",
   "ports.json",
-  "packages/",
+  ...PACKAGE_ROOTS.map((root) => `${root}/`),
   "docs/common/",
-] as const;
+];
 
 /**
  * The environment variables a build needs from the machine it runs on: where
  * to find programs, the home and temporary directories, where Deno keeps its
- * cache, and how it reaches the network to fetch dependencies, whose contents
- * the lockfile pins. None of them reaches a binary, which
+ * cache, how it reaches the network to fetch dependencies, and whether an
+ * earlier dependency installation makes compilation cache-only. None of them
+ * reaches a binary, which
  * `build-binaries.test.ts` holds the shell bundle's configuration to. A CI
  * lane building a binary it caches passes these through from its own
  * environment, and nothing else, so every other variable the build reads is
@@ -67,7 +84,26 @@ export const BUILD_HOST_VARIABLES = [
   "DENO_TLS_CA_STORE",
   "DENO_AUTH_TOKENS",
   "NPM_CONFIG_REGISTRY",
+  "CF_DENO_DEPENDENCIES_INSTALLED",
 ] as const;
+
+/**
+ * The compile-cache version a shipped build bakes: a hash of what the
+ * compiler emits for the corpus (`compile-cache-output-version.deno.ts`).
+ * Loaded when a build asks for it: the corpus compile brings the whole
+ * runtime with it, and this module is imported by the test topology and by a
+ * build that takes the compiler-input fingerprint, neither of which loads a
+ * runtime.
+ */
+export async function computeShippedCompileCacheVersion(
+  root: string,
+): Promise<string> {
+  // deno-lint-ignore cf-imports/no-inline-module-import -- the corpus compile brings the whole runtime with it, which the test topology and an inputs-only build never load
+  const { computeCompilerOutputVersion } = await import(
+    "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts"
+  );
+  return await computeCompilerOutputVersion(root);
+}
 
 export function requestedBinaries(args: readonly string[]): BinaryName[] {
   if (args.length === 0) return [...BINARY_NAMES];
@@ -92,6 +128,13 @@ export class BuildConfig {
   readonly toolshedFlags: string[];
   readonly binaries: readonly BinaryName[];
   readonly cliOnly: boolean;
+
+  /** Whether builds use only dependencies already in Deno's cache. */
+  readonly cachedOnly: boolean;
+
+  /** See {@link BuildConfigInitializer.compileCacheVersion}. */
+  readonly compileCacheVersion: (root: string) => Promise<string>;
+
   #manifestOriginal: string;
   #compileCacheVersionOriginal: string;
 
@@ -108,6 +151,9 @@ export class BuildConfig {
       ? ["cf"]
       : requestedBinaries(options.binaries ?? []);
     this.cliOnly = this.binaries.length === 1 && this.binaries[0] === "cf";
+    this.cachedOnly = options.cachedOnly ?? false;
+    this.compileCacheVersion = options.compileCacheVersion ??
+      computeCompilerVersion;
     this.#manifestOriginal = Deno.readTextFileSync(
       this.workspaceManifestPath(),
     );
@@ -143,7 +189,7 @@ export class BuildConfig {
 
   compileCacheVersionPath() {
     return this.#path(
-      "packages",
+      "runtime",
       "runner",
       "src",
       "compilation-cache",
@@ -156,44 +202,58 @@ export class BuildConfig {
   }
 
   shellProjectPath() {
-    return this.#path("packages", "shell");
+    return this.#path("runtime", "shell");
   }
 
   shellOutPath() {
-    return this.#path("packages", "shell", "dist");
+    return this.#path("runtime", "shell", "dist");
   }
 
   toolshedProjectPath() {
-    return this.#path("packages", "toolshed");
+    return this.#path("runtime", "toolshed");
   }
 
   toolshedShellFrontendPath() {
-    return this.#path("packages", "toolshed", "shell-frontend");
+    return this.#path("runtime", "toolshed", "shell-frontend");
   }
 
   toolshedShellFrontendPathDev() {
-    return this.#path("packages", "toolshed", "shell-frontend-dev");
+    return this.#path("runtime", "toolshed", "shell-frontend-dev");
   }
 
   toolshedEntryPath() {
-    return this.#path("packages", "toolshed", "index.ts");
+    return this.#path("runtime", "toolshed", "index.ts");
+  }
+
+  toolshedServingWorkerPath() {
+    return this.#path("runtime", "toolshed", "lib", "serving-worker.ts");
+  }
+
+  compileWorkerPath() {
+    return this.#path(
+      "runtime",
+      "runner",
+      "src",
+      "harness",
+      "compile-worker.ts",
+    );
   }
 
   toolshedEnvPath() {
-    return this.#path("packages", "toolshed", "COMPILED");
+    return this.#path("runtime", "toolshed", "COMPILED");
   }
 
   cliEnvPath() {
-    return this.#path("packages", "cli", "COMPILED");
+    return this.#path("runtime", "cli", "COMPILED");
   }
 
   staticAssetsPath() {
-    return this.#path("packages", "static", "assets");
+    return this.#path("base", "static", "assets");
   }
 
   patternPaths() {
     return [
-      this.#path("packages", "patterns"),
+      this.#path("patterns"),
       ...CONNECTOR_PATTERN_SOURCES.map((source) =>
         this.#path(...source.directory.split("/"))
       ),
@@ -201,7 +261,7 @@ export class BuildConfig {
   }
 
   staticTypesPath() {
-    return this.#path("packages", "static", "assets", "types");
+    return this.#path("base", "static", "assets", "types");
   }
 
   docsCommonPath() {
@@ -209,21 +269,37 @@ export class BuildConfig {
   }
 
   cliEntryPath() {
-    return this.#path("packages", "cli", "mod.ts");
+    return this.#path("runtime", "cli", "mod.ts");
   }
 
   cliMultiUserTestWorkerPath() {
-    return this.#path("packages", "cli", "lib", "multi-user-test-worker.ts");
+    return this.#path("runtime", "cli", "lib", "multi-user-test-worker.ts");
+  }
+
+  cliParseWorkerPath() {
+    return this.#path("runtime", "cli", "lib", "view", "parseworker.ts");
+  }
+
+  cliProgramWorkerPath() {
+    return this.#path(
+      "runtime",
+      "cli",
+      "lib",
+      "view",
+      "languages",
+      "typescript",
+      "programworker.ts",
+    );
   }
 
   fusePackagePath() {
-    return this.#path("packages", "fuse");
+    return this.#path("runtime", "fuse");
   }
 
   /**
    * Every path the build reads, as opposed to writes: those its path methods
-   * name, and the compiler inputs whose fingerprint `prepareWorkspace()`
-   * writes into the binaries. A binary cached under `BINARY_SOURCES` is only
+   * name, and the compiler inputs whose fingerprint a lane's build writes
+   * into the binaries. A binary cached under `BINARY_SOURCES` is only
    * as fresh as this list is complete, so every path a path method of this
    * class names is either named here or named by a method that
    * `build-binaries.test.ts` records as naming paths the build does not read.
@@ -236,12 +312,16 @@ export class BuildConfig {
       this.shellProjectPath(),
       this.toolshedProjectPath(),
       this.toolshedEntryPath(),
+      this.toolshedServingWorkerPath(),
+      this.compileWorkerPath(),
       this.staticAssetsPath(),
       ...this.patternPaths(),
       this.staticTypesPath(),
       this.docsCommonPath(),
       this.cliEntryPath(),
       this.cliMultiUserTestWorkerPath(),
+      this.cliParseWorkerPath(),
+      this.cliProgramWorkerPath(),
       this.fusePackagePath(),
       ...COMPILE_FINGERPRINT_INPUTS.map((input) =>
         this.#path(...input.split("/"))
@@ -261,6 +341,12 @@ export class BuildConfig {
         return [
           this.toolshedShellFrontendPath(),
           this.toolshedShellFrontendPathDev(),
+          // The serving loop's worker entry. The compile does not follow a
+          // worker's module, so it is named here.
+          this.toolshedServingWorkerPath(),
+          // The compile worker the serving runtimes compile in, which the
+          // compile does not follow either.
+          this.compileWorkerPath(),
           this.toolshedEnvPath(),
           this.staticAssetsPath(),
           ...this.patternPaths(),
@@ -273,7 +359,13 @@ export class BuildConfig {
           // The worker `cf test` spawns in multi-user mode. The compile does
           // not follow a worker's module, so it is named here.
           this.cliMultiUserTestWorkerPath(),
-          // The build metadata `packages/cli/lib/build-info.ts` reads.
+          // The worker `cf view` parses a diff's large files in, which the
+          // compile does not follow either.
+          this.cliParseWorkerPath(),
+          // The worker `cf view` builds its TypeScript program in, which the
+          // compile does not follow either.
+          this.cliProgramWorkerPath(),
+          // The build metadata `runtime/cli/lib/build-info.ts` reads.
           this.cliEnvPath(),
         ];
     }
@@ -285,7 +377,8 @@ export class BuildConfig {
    * embedded when an embedded module imports it. The toolshed leaves out the
    * files in the pattern trees that it never serves to a runtime: the
    * integration tests with their helpers and fixtures, the recorded
-   * compatibility baselines, Deno unit tests, and iframe guest sources.
+   * compatibility baselines, the Topics board's command-line client, the
+   * test support modules, Deno unit tests, and iframe guest sources.
    * Authored `.test.tsx` pattern tests are served because a program can attach
    * them as source roots. Excluding development-only files also keeps their npm
    * dependencies out of the binary.
@@ -293,7 +386,9 @@ export class BuildConfig {
   excludePaths(binary: BinaryName): string[] {
     if (binary !== "toolshed") return [];
     const directories = [
-      this.#path("packages", "patterns", "integration"),
+      this.#path("patterns", "integration"),
+      this.#path("patterns", "apps", "topics", "tools"),
+      this.#path("patterns", "tools", "test-support"),
       this.#path(...BASELINES_DIR.split("/")),
     ];
     const files = this.patternPaths().flatMap((tree) =>
@@ -325,8 +420,11 @@ export class BuildConfig {
 
 export type BuildDependencies = {
   ensureDistDir(config: BuildConfig): Promise<void>;
-  buildShell(config: BuildConfig): Promise<void>;
-  prepareWorkspace(config: BuildConfig): Promise<void>;
+  buildShell(config: BuildConfig, compileCacheVersion: string): Promise<void>;
+  prepareWorkspace(
+    config: BuildConfig,
+    compileCacheVersion: string,
+  ): Promise<void>;
   buildToolshed(config: BuildConfig): Promise<void>;
   buildCli(config: BuildConfig): Promise<void>;
   revertWorkspace(config: BuildConfig): Promise<void>;
@@ -350,8 +448,14 @@ export async function build(
     // Ensure dist directory exists
     await dependencies.ensureDistDir(config);
 
-    if (config.builds("toolshed")) await dependencies.buildShell(config);
-    await dependencies.prepareWorkspace(config);
+    // The compile-cache version the binary and its shell both bake, computed
+    // once: before the shell build, and before `prepareWorkspace()` rewrites
+    // `deno.jsonc`, which is a compiler input.
+    const compileCacheVersion = await config.compileCacheVersion(config.root);
+    if (config.builds("toolshed")) {
+      await dependencies.buildShell(config, compileCacheVersion);
+    }
+    await dependencies.prepareWorkspace(config, compileCacheVersion);
     if (config.builds("toolshed")) await dependencies.buildToolshed(config);
     if (config.builds("cf")) await dependencies.buildCli(config);
   } catch (e: unknown) {
@@ -371,14 +475,28 @@ async function ensureDistDir(config: BuildConfig): Promise<void> {
   }
 }
 
-async function buildShell(config: BuildConfig): Promise<void> {
+/** Runs a command to its end, and returns whether it succeeded. */
+export type RunCommand = (
+  command: string,
+  options: Deno.CommandOptions,
+) => Promise<{ success: boolean }>;
+
+/** The {@link RunCommand} that runs the command in a process of its own. */
+const runCommand: RunCommand = (command, options) =>
+  new Deno.Command(command, options).output();
+
+export async function buildShell(
+  config: BuildConfig,
+  compileCacheVersion: string,
+  run: RunCommand = runCommand,
+): Promise<void> {
   for (const mode of ["development", "production"]) {
     console.log(`Building shell app in ${mode}...`);
     const task = mode === "production" ? "production" : "build";
     const toolshedShellFrontend = mode === "production"
       ? config.toolshedShellFrontendPath()
       : config.toolshedShellFrontendPathDev();
-    const { success } = await new Deno.Command(Deno.execPath(), {
+    const { success } = await run(Deno.execPath(), {
       args: [
         "task",
         task,
@@ -387,10 +505,13 @@ async function buildShell(config: BuildConfig): Promise<void> {
       // The shell's configuration reads what it bakes in from the
       // environment this build inherited: the same `COMMIT_SHA` and
       // `EXPERIMENTAL_SERVER_EXECUTION` that `prepareWorkspace()` writes into
-      // the markers, each unset where the caller left it unset.
+      // the markers, each unset where the caller left it unset. The
+      // compile-cache version is the one exception: the binary and its shell
+      // name one compiler, so the shell takes the version this build bakes.
+      env: { CF_COMPILE_CACHE_RUNTIME_VERSION: compileCacheVersion },
       stdout: "inherit",
       stderr: "inherit",
-    }).output();
+    });
     if (!success) {
       throw new Error("Failed to build shell app");
     }
@@ -407,9 +528,12 @@ async function buildShell(config: BuildConfig): Promise<void> {
   console.log("Shell app built successfully");
 }
 
-async function buildToolshed(config: BuildConfig): Promise<void> {
+export async function buildToolshed(
+  config: BuildConfig,
+  run: RunCommand = runCommand,
+): Promise<void> {
   console.log("Building toolshed binary...");
-  const { success } = await new Deno.Command(Deno.execPath(), {
+  const { success } = await run(Deno.execPath(), {
     env: {
       OTEL_DENO: "true",
     },
@@ -430,43 +554,19 @@ async function buildToolshed(config: BuildConfig): Promise<void> {
     cwd: config.toolshedProjectPath(),
     stdout: "inherit",
     stderr: "inherit",
-  }).output();
+  });
   if (!success) {
     throw new Error("Failed to build toolshed binary");
   }
   console.log("Toolshed binary built successfully");
 }
 
-async function buildCli(config: BuildConfig): Promise<void> {
+export async function buildCli(
+  config: BuildConfig,
+  run: RunCommand = runCommand,
+): Promise<void> {
   console.log("Building CLI binary...");
-  // Figure out the full list requested by typescript and
-  // friends
-  // Globs don't work for compile(?)
-  const _envs = [
-    "API_URL",
-    "TSC_WATCHFILE",
-    "TSC_NONPOLLING_WATCHER",
-    "TSC_WATCHDIRECTORY",
-    "TSC_WATCH_POLLINGINTERVAL_LOW",
-    "TSC_WATCH_POLLINGINTERVAL_MEDIUM",
-    "TSC_WATCH_POLLINGINTERVAL_HIGH",
-    "TSC_WATCH_POLLINGCHUNKSIZE_LOW",
-    "TSC_WATCH_POLLINGCHUNKSIZE_MEDIUM",
-    "TSC_WATCH_POLLINGCHUNKSIZE_HIGH",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_LOW",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_MEDIUM",
-    "TSC_WATCH_UNCHANGEDPOLLTHRESHOLDS_HIGH",
-    "NODE_INSPECTOR_IPC",
-    "VSCODE_INSPECTOR_OPTIONS",
-    "NODE_ENV",
-    // sqlite3 library requires these
-    "DENO_SQLITE_PATH",
-    "DENO_SQLITE_LOCAL",
-    "DENO_DIR",
-    "HOME",
-    "XDG_CACHE_HOME",
-  ];
-  const { success } = await new Deno.Command(Deno.execPath(), {
+  const { success } = await run(Deno.execPath(), {
     args: [
       ...lockedCompileArgs(config),
       "--output",
@@ -483,7 +583,7 @@ async function buildCli(config: BuildConfig): Promise<void> {
     cwd: config.root,
     stdout: "inherit",
     stderr: "inherit",
-  }).output();
+  });
   if (!success) {
     throw new Error("Failed to build CLI binary");
   }
@@ -509,10 +609,13 @@ export function embedArgs(config: BuildConfig, binary: BinaryName): string[] {
  * never reads, which the `cf` binary leaves out: every directory in the
  * package but the one holding its compiled parser, such as generated C source
  * and native builds. The packages are in Deno's npm cache rather than in the
- * repository.
+ * repository. `grammars` are the grammars the pager loads.
  */
-export function unusedGrammarDirectories(): string[] {
-  return treeSitterGrammars.flatMap((grammar) => {
+export function unusedGrammarDirectories(
+  grammars: readonly Pick<TreeSitterGrammar, "id" | "wasmUrl">[] =
+    treeSitterGrammars,
+): string[] {
+  return grammars.flatMap((grammar) => {
     const parser = path.fromFileUrl(grammar.wasmUrl());
     let root = path.dirname(parser);
     while (!existsSync(path.join(root, "package.json"))) {
@@ -529,7 +632,8 @@ export function unusedGrammarDirectories(): string[] {
   });
 }
 
-function lockedCompileArgs(config: BuildConfig): string[] {
+/** Returns the dependency-resolution arguments shared by every binary build. */
+export function lockedCompileArgs(config: BuildConfig): string[] {
   // Keep compiled binaries on the same resolved dependency graph as normal
   // install/test flows, even when compile runs from a package cwd.
   return [
@@ -537,6 +641,7 @@ function lockedCompileArgs(config: BuildConfig): string[] {
     "--lock",
     config.workspaceLockPath(),
     "--frozen=true",
+    ...(config.cachedOnly ? ["--cached-only"] : []),
     // Embed only the npm packages the binary's module graph reaches, rather
     // than every npm package in the lockfile. A package that a binary loads
     // only through a specifier the compile cannot read statically must be
@@ -550,6 +655,7 @@ function lockedCompileArgs(config: BuildConfig): string[] {
 // that do not work with toolshed.
 export async function prepareWorkspace(
   config: BuildConfig,
+  compileCacheVersion: string,
 ): Promise<void> {
   const denoJsonPath = config.workspaceManifestPath();
 
@@ -559,10 +665,8 @@ export async function prepareWorkspace(
     );
   }
 
-  // Write the current compile-cache version before compiling binaries. The value
-  // is computed before `deno.jsonc` changes so it reflects the committed
-  // compiler options.
-  const compileCacheVersion = await computeCompilerVersion(config.root);
+  // Write the compile-cache version before compiling binaries: the one the
+  // build computed before `deno.jsonc` changed, and the shell build baked.
   await Deno.writeTextFile(
     config.compileCacheVersionPath(),
     renderVersionModule(compileCacheVersion),
@@ -578,12 +682,12 @@ export async function prepareWorkspace(
   // Write build metadata into the COMPILED files. Included via `--include`
   // when the toolshed and cf binaries are compiled, so the values travel with
   // each artifact and can be read at runtime (see
-  // packages/toolshed/lib/build-info.ts and packages/cli/lib/build-info.ts).
+  // runtime/toolshed/lib/build-info.ts and runtime/cli/lib/build-info.ts).
   const buildInfo = {
     commitSha: Deno.env.get("COMMIT_SHA") ?? "",
     builtAt: new Date().toISOString(),
     // The server-execution v2 posture the browser shell BAKES (an esbuild
-    // define read from this same environment in packages/shell/felt.config.ts
+    // define read from this same environment in runtime/shell/felt.config.ts
     // when buildShell runs below): the raw `EXPERIMENTAL_SERVER_EXECUTION`
     // value, or null when unset — the shell then follows the first-party
     // default. Surfaced on toolshed's /api/meta as
@@ -696,8 +800,42 @@ export async function runBuildBinaries(
       // --background re-runs this binary as a detached server child, so the
       // compiled binary needs permission to spawn itself.
       "--allow-run",
+      // The main thread's heap limit, 16 GiB, the same as the toolshed's
+      // `dev` and `production` tasks and `start-local-dev.sh` give it: under
+      // V8's default of about 4 GB, a toolshed's memory server outgrew it on
+      // Estuary (2026-11-16, toolshed 8020). V8 takes the flag over the limit
+      // each serving worker is started with, so the pool holds each worker to
+      // `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` from its heartbeats instead.
+      // A compiled binary reads no V8 flags when it starts, so this is the
+      // limit every deployment runs with.
+      //
+      // The other two let `perf` on the host name the JavaScript a thread
+      // runs, serving workers' threads included: V8 writes the name and
+      // address of each compiled function to `/tmp/perf-<pid>.map`, and
+      // gives interpreted frames a native frame of their own. A stalled
+      // worker answers nothing, so sampling it from outside is the only way
+      // to see what it runs (2026-11-14, toolshed 8020 on Estuary). The map
+      // grows with each function compiled and is never trimmed; these come
+      // off once that investigation is done.
+      //
+      // `--perf-basic-prof-only-functions` also switches on V8's event log,
+      // which V8 otherwise writes to an `isolate-<address>-<pid>-v8.log` file
+      // in the working directory for each isolate. `--no-logfile-per-isolate`
+      // and `--logfile=+` give each isolate's log an unnamed temporary file
+      // instead, which the system frees when that isolate ends.
+      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack,--no-logfile-per-isolate,--logfile=+",
     ],
     binaries: requestedBinaries(args),
+    cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",
+    // A build from here ships, so it names its compiler by what it emits.
+    // `CF_COMPILE_CACHE_VERSION=inputs` takes the compiler-input fingerprint
+    // instead, for a binary that is a test fixture rather than a release.
+    compileCacheVersion: compileCacheVersionSourceOf(
+        Deno.env.get("CF_COMPILE_CACHE_VERSION"),
+        "output",
+      ) === "inputs"
+      ? computeCompilerVersion
+      : computeShippedCompileCacheVersion,
   });
 
   await (options.runBuild ?? runBuildWithSignalCleanup)(config);

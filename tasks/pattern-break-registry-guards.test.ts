@@ -6,17 +6,18 @@ import {
   deriveRequiredPatternKeys,
   guardBreakRegistryEntries,
   guardUnevaluableExemptions,
+  judgeBreakRegistries,
   recordExistsUnder,
 } from "./pattern-break-registry-guards.ts";
 import { UNEVALUABLE_PATTERNS } from "./pattern-compat-unevaluable.ts";
 import {
   DEFAULT_APP_PATTERN_SOURCE,
   HOME_PATTERN_SOURCE,
-} from "../packages/piece/src/system-pattern-url.ts";
+} from "../runtime/piece/src/system-pattern-url.ts";
 
 const entry = (overrides: Partial<BreakRegistryEntry>): BreakRegistryEntry => ({
   registry: "pattern-compat-accepted-breaks",
-  pattern: "lunch-poll/main.tsx",
+  pattern: "apps/lunch-poll/main.tsx",
   record: "docs/history/topics-crossref-identity-break.md",
   ...overrides,
 });
@@ -25,15 +26,15 @@ describe("pattern-break-registry-guards", () => {
   it("returns no findings for an ordinary entry with an existing record", () => {
     expect(guardBreakRegistryEntries({
       entries: [entry({})],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => true,
     })).toEqual([]);
   });
 
   it("returns a finding for an entry naming a required pattern", () => {
     const findings = guardBreakRegistryEntries({
-      entries: [entry({ pattern: "system/home.tsx" })],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      entries: [entry({ pattern: "system/home/home.tsx" })],
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => true,
     });
     expect(findings.length).toBe(1);
@@ -43,14 +44,14 @@ describe("pattern-break-registry-guards", () => {
   it("returns no required-pattern finding for an entry carrying a `requiredPatternOverride`", () => {
     expect(guardBreakRegistryEntries({
       entries: [entry({
-        pattern: "system/home.tsx",
+        pattern: "system/home/home.tsx",
         requiredPatternOverride: {
           rulingBy: "Someone",
           on: "2026-09-18",
           reason: "no deployed root holds the old shape",
         },
       })],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => true,
     })).toEqual([]);
   });
@@ -58,14 +59,14 @@ describe("pattern-break-registry-guards", () => {
   it("returns a finding for a `requiredPatternOverride` naming nobody", () => {
     const findings = guardBreakRegistryEntries({
       entries: [entry({
-        pattern: "system/home.tsx",
+        pattern: "system/home/home.tsx",
         requiredPatternOverride: {
           rulingBy: "  ",
           on: "2026-09-18",
           reason: "no deployed root holds the old shape",
         },
       })],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => true,
     });
     expect(findings.map((finding) => finding.detail)).toEqual([
@@ -76,14 +77,14 @@ describe("pattern-break-registry-guards", () => {
   it("returns a finding for a `requiredPatternOverride` whose date is not `YYYY-MM-DD`", () => {
     const findings = guardBreakRegistryEntries({
       entries: [entry({
-        pattern: "system/home.tsx",
+        pattern: "system/home/home.tsx",
         requiredPatternOverride: {
           rulingBy: "Someone",
           on: "18 Sep 2026",
           reason: "no deployed root holds the old shape",
         },
       })],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => true,
     });
     expect(findings.length).toBe(1);
@@ -93,14 +94,14 @@ describe("pattern-break-registry-guards", () => {
   it("returns a finding for a `requiredPatternOverride` with a blank reason", () => {
     const findings = guardBreakRegistryEntries({
       entries: [entry({
-        pattern: "system/home.tsx",
+        pattern: "system/home/home.tsx",
         requiredPatternOverride: {
           rulingBy: "Someone",
           on: "2026-09-18",
           reason: "",
         },
       })],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => true,
     });
     expect(findings.length).toBe(1);
@@ -112,7 +113,7 @@ describe("pattern-break-registry-guards", () => {
       entries: [entry({
         requiredPatternOverride: { rulingBy: "", on: "", reason: "" },
       })],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => true,
     })).toEqual([]);
   });
@@ -120,14 +121,14 @@ describe("pattern-break-registry-guards", () => {
   it("still returns the record finding for an overridden entry whose record does not exist", () => {
     const findings = guardBreakRegistryEntries({
       entries: [entry({
-        pattern: "system/home.tsx",
+        pattern: "system/home/home.tsx",
         requiredPatternOverride: {
           rulingBy: "Someone",
           on: "2026-09-18",
           reason: "no deployed root holds the old shape",
         },
       })],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => false,
     });
     expect(findings.length).toBe(1);
@@ -226,23 +227,23 @@ describe("pattern-break-registry-guards", () => {
   it("reports every offending entry rather than the first", () => {
     const findings = guardBreakRegistryEntries({
       entries: [
-        entry({ pattern: "system/home.tsx" }),
+        entry({ pattern: "system/home/home.tsx" }),
         entry({ record: "docs/history/never-written.md" }),
       ],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => false,
     });
     // Asserted by CONTENT, not by count: the first entry also fails the
     // existence probe, so a bare `length === 3` passes on the wrong three.
     expect(findings.map((finding) => `${finding.pattern} ${finding.detail}`))
       .toEqual([
-        "system/home.tsx names a required pattern — an auto-updating root " +
+        "system/home/home.tsx names a required pattern — an auto-updating root " +
         "takes an accepted break only under a `requiredPatternOverride` " +
         "naming who ruled it",
-        'system/home.tsx record "docs/history/topics-crossref-identity-break' +
+        'system/home/home.tsx record "docs/history/topics-crossref-identity-break' +
         '.md" does not exist — an accepted break carries its deliberation, ' +
         "not just its declaration",
-        'lunch-poll/main.tsx record "docs/history/never-written.md" does not ' +
+        'apps/lunch-poll/main.tsx record "docs/history/never-written.md" does not ' +
         "exist — an accepted break carries its deliberation, not just its " +
         "declaration",
       ]);
@@ -250,11 +251,11 @@ describe("pattern-break-registry-guards", () => {
 
   it("refuses a required pattern written as a bare suffix key", () => {
     // `acceptedDropsFor` claims an entry by path SUFFIX, so `home.tsx` really
-    // does forgive drops on `system/home.tsx`. An exact-match floor would let
+    // does forgive drops on `system/home/home.tsx`. An exact-match floor would let
     // the shorter spelling walk straight around it.
     const findings = guardBreakRegistryEntries({
       entries: [entry({ pattern: "home.tsx" })],
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
       recordExists: () => true,
     });
     expect(findings.length).toBe(1);
@@ -268,14 +269,14 @@ describe("pattern-break-registry-guards", () => {
     // manifest's `main` may name.
     for (
       const pattern of [
-        "patterns/system/home.tsx",
-        "packages/patterns/system/home.tsx",
-        "api/patterns/system/home.tsx",
+        "patterns/system/home/home.tsx",
+        "patterns/system/home/home.tsx",
+        "api/patterns/system/home/home.tsx",
       ]
     ) {
       const findings = guardBreakRegistryEntries({
         entries: [entry({ pattern })],
-        requiredPatternKeys: new Set(["system/home.tsx"]),
+        requiredPatternKeys: new Set(["system/home/home.tsx"]),
         recordExists: () => true,
       });
       expect(findings.length).toBe(1);
@@ -289,14 +290,14 @@ describe("pattern-break-registry-guards", () => {
     // that only share trailing text.
     for (
       const pattern of [
-        "packages/patterns/subsystem/home.tsx",
+        "patterns/subsystem/home.tsx",
         "system/whome.tsx",
         "whome.tsx",
       ]
     ) {
       expect(guardBreakRegistryEntries({
         entries: [entry({ pattern })],
-        requiredPatternKeys: new Set(["system/home.tsx"]),
+        requiredPatternKeys: new Set(["system/home/home.tsx"]),
         recordExists: () => true,
       })).toEqual([]);
     }
@@ -306,18 +307,21 @@ describe("pattern-break-registry-guards", () => {
     // A wider exemption than any accepted break: not "this finding is
     // forgiven" but "this pattern is not gated at all".
     const findings = guardUnevaluableExemptions({
-      unevaluable: new Set(["system/home.tsx", "examples/cf-picker.tsx"]),
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      unevaluable: new Set([
+        "system/home/home.tsx",
+        "examples/cf-picker/cf-picker.tsx",
+      ]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
     });
     expect(findings.length).toBe(1);
-    expect(findings[0].pattern).toBe("system/home.tsx");
+    expect(findings[0].pattern).toBe("system/home/home.tsx");
     expect(findings[0].registry).toBe("pattern-compat-unevaluable");
   });
 
   it("allows unevaluable patterns that no required key addresses", () => {
     expect(guardUnevaluableExemptions({
-      unevaluable: new Set(["examples/cf-picker.tsx", "whome.tsx"]),
-      requiredPatternKeys: new Set(["system/home.tsx"]),
+      unevaluable: new Set(["examples/cf-picker/cf-picker.tsx", "whome.tsx"]),
+      requiredPatternKeys: new Set(["system/home/home.tsx"]),
     })).toEqual([]);
   });
 
@@ -325,7 +329,7 @@ describe("pattern-break-registry-guards", () => {
     expect(
       guardUnevaluableExemptions({
         unevaluable: new Set(["home.tsx"]),
-        requiredPatternKeys: new Set(["system/home.tsx"]),
+        requiredPatternKeys: new Set(["system/home/home.tsx"]),
       }).length,
     ).toBe(1);
   });
@@ -352,5 +356,86 @@ describe("pattern-break-registry-guards", () => {
       requiredPatternKeys: (required as { keys: ReadonlySet<string> }).keys,
       recordExists: recordExistsUnder(),
     })).toEqual([]);
+  });
+
+  describe("judgeBreakRegistries()", () => {
+    const required = "apps/required/main.tsx";
+    const requiredUrl = `https://example.com/api/patterns/${required}`;
+
+    it("returns the required keys when every shipped entry is permitted", () => {
+      expect(judgeBreakRegistries({})).toEqual(
+        deriveRequiredPatternKeys(
+          [HOME_PATTERN_SOURCE, DEFAULT_APP_PATTERN_SOURCE],
+        ),
+      );
+    });
+
+    it("returns the unmapped report for a system URL naming no pattern", () => {
+      const judged = judgeBreakRegistries({
+        systemPatternUrls: ["https://example.com/elsewhere.tsx"],
+      });
+
+      expect("error" in judged && judged.error).toContain(
+        "https://example.com/elsewhere.tsx",
+      );
+    });
+
+    it("returns the required keys when no entry names a required pattern", () => {
+      expect(judgeBreakRegistries({
+        systemPatternUrls: [requiredUrl],
+        entries: [entry({})],
+        recordExists: () => true,
+      })).toEqual({ keys: new Set([required]) });
+    });
+
+    it("returns one finding for an entry naming a required pattern", () => {
+      const named = entry({ pattern: required });
+
+      expect(judgeBreakRegistries({
+        systemPatternUrls: [requiredUrl],
+        entries: [named],
+        recordExists: () => true,
+      })).toEqual({
+        error: "1 pattern-exemption entry is not permitted:\n\n" +
+          `  ${named.registry}: ${required}\n` +
+          "    names a required pattern — an auto-updating root takes an " +
+          "accepted break only under a `requiredPatternOverride` naming who " +
+          "ruled it",
+      });
+    });
+
+    it("returns every finding, the unevaluable list's included, when asked to judge it", () => {
+      const judged = judgeBreakRegistries({
+        systemPatternUrls: [requiredUrl],
+        entries: [entry({})],
+        recordExists: () => false,
+        unevaluable: new Set([required]),
+      });
+
+      expect("error" in judged && judged.error).toMatch(
+        /^2 pattern-exemption entries are not permitted:\n\n/,
+      );
+      expect("error" in judged && judged.error).toContain("does not exist");
+      expect("error" in judged && judged.error).toContain(
+        `  pattern-compat-unevaluable: ${required}\n`,
+      );
+    });
+  });
+
+  describe("recordExistsUnder()", () => {
+    it("returns true for a file under the root and false for anything else", async () => {
+      const root = await Deno.makeTempDir({ prefix: "registry-guards-" });
+      try {
+        await Deno.mkdir(`${root}/docs`);
+        await Deno.writeTextFile(`${root}/docs/record.md`, "");
+        const recordExists = recordExistsUnder(root);
+
+        expect(recordExists("docs/record.md")).toBe(true);
+        expect(recordExists("docs/absent.md")).toBe(false);
+        expect(recordExists("docs")).toBe(false);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
   });
 });

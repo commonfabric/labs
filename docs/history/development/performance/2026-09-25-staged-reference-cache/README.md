@@ -10,7 +10,7 @@ reason: "Measurements of the staged-reference derivation cache against main."
 The cache reduced preparation time for binary reference diamonds while
 preserving all serialized label maps. It bounds repeated derivation, but does
 not bound the number of distinct paths in the flat stored map. The
-[compact-map plan](../../../../plans/compact-cfc-label-maps.md) addresses that
+[compact-map plan](../../../plans/compact-cfc-label-maps.md) addresses that
 separate representation problem.
 
 ## Compared code and boundary

@@ -7,10 +7,10 @@
  * An address that stops parsing stops working, and nothing about changing the
  * grammar tells you that prose somewhere teaches the spelling it retired.
  *
- * `parseCellReference` in `packages/runner/src/cell-reference.ts` is the judge,
+ * `parseCellReference` in `runtime/runner/src/cell-reference.ts` is the judge,
  * so the tree's examples answer to the reader the fabric uses rather than to a
  * second copy of its rules. `cf` reaches that reader through
- * `normalizeLLMFriendlyRef` in `packages/cli/lib/llm-friendly-ref.ts`, which
+ * `normalizeLLMFriendlyRef` in `runtime/cli/lib/llm-friendly-ref.ts`, which
  * parses with it and then adds what a command invocation needs: a piece
  * segment in the CLI's own vocabulary, and a space that agrees with the
  * command's target space. An example in a document is not an invocation — it
@@ -74,6 +74,7 @@
  */
 
 import { dirname, fromFileUrl } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { parseCellReference } from "@commonfabric/runner/shared";
 
 import { repositoryFiles } from "./repository-files.ts";
@@ -128,13 +129,13 @@ export const EXEMPTIONS: readonly Exemption[] = [
       "reference grammar retired",
   },
   {
-    file: "packages/cli/lib/callable.ts",
+    file: "runtime/cli/lib/callable.ts",
     example: "//<space>/<id>@scope",
     reason: "the doc comment writes the shape a caller reads the parts out " +
       "of, with a hole in the scope slot, rather than one address",
   },
   {
-    file: "packages/navigation/test/view.test.ts",
+    file: "runtime/navigation/test/view.test.ts",
     example: "/@<space>/<collection>/<member>",
     reason: "a page URL, which keeps the mark the cell reference grammar " +
       "retired",
@@ -368,18 +369,6 @@ function lineAt(text: string, index: number): number {
 }
 
 /**
- * What a reader is told about a value a parse threw.
- *
- * `parseCellReference` throws an `Error`, whose message is the sentence the
- * grammar wrote for the string it refused. A value of any other kind is
- * rendered whole rather than reached into, so one this module did not expect
- * still reaches the report as itself rather than as `undefined`.
- */
-export function refusalMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
  * Keys an exemption by the file it is about and the string it names.
  *
  * The pair is encoded rather than joined. A join needs a separator neither
@@ -430,7 +419,7 @@ export function collectFindings(
           file: path,
           line: lineAt(prose, span.at),
           example,
-          message: refusalMessage(error),
+          message: describeFailure(error),
         });
       }
     }
@@ -501,9 +490,9 @@ function reportFindings(findings: readonly Finding[]): void {
         `      ${finding.message}`,
       ]),
       "",
-      "`parseCellReference` in packages/runner/src/cell-reference.ts is the",
+      "`parseCellReference` in runtime/runner/src/cell-reference.ts is the",
       "reader every address in the fabric answers to, and `cf` reaches it",
-      "through packages/cli/lib/llm-friendly-ref.ts. A string it refuses is a",
+      "through runtime/cli/lib/llm-friendly-ref.ts. A string it refuses is a",
       "string a reader cannot paste into a command.",
       "",
       "Write the address the way the parser reads it. Where the string is",

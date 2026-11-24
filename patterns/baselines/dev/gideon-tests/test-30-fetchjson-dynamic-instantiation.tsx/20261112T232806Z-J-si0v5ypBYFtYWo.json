@@ -1,0 +1,87 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Repo": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "repos": {
+        "default": [
+          {
+            "id": "1",
+            "name": "react"
+          },
+          {
+            "id": "2",
+            "name": "vue"
+          },
+          {
+            "id": "3",
+            "name": "angular"
+          }
+        ],
+        "items": {
+          "$ref": "#/$defs/Repo"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "repos"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/gideon-tests/test-30-fetchjson-dynamic-instantiation.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Repo": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "repos": {
+        "items": {
+          "$ref": "#/$defs/Repo"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "repos",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

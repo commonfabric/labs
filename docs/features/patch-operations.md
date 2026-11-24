@@ -15,7 +15,7 @@ and [keyed-collection-writes.md](./keyed-collection-writes.md). This note is abo
 ## The family
 
 The op tags are the members of the `PatchOp` union in
-`packages/memory/v2.ts`:
+`runtime/memory/v2.ts`:
 
 | op                | shape                          | how it arises |
 | ----------------- | ------------------------------ | ------------- |
@@ -47,11 +47,11 @@ Two overlapping distinctions matter:
 
 Take `Cell.increment(2)`:
 
-1. **Author call** — `Cell.increment` (`packages/runner/src/cell.ts`) validates,
+1. **Author call** — `Cell.increment` (`runtime/runner/src/cell.ts`) validates,
    computes the optimistic local value, writes it, and records the intent by
    calling `tx.recordMergeableOp(link, { op: "increment", by: 2 })`.
 2. **Intent** — the transaction folds the delta into a per-path intent
-   (`packages/runner/src/storage/mergeable-ops.ts`, `foldMergeableIntent`).
+   (`runtime/runner/src/storage/mergeable-ops.ts`, `foldMergeableIntent`).
    Repeated same-kind calls at one path combine (increments sum, tail counts sum,
    removed values accumulate). A different op kind at the same path cannot share
    one intent, so `recordMergeableOp` poisons the path — it drops the intent and
@@ -77,10 +77,10 @@ Take `Cell.increment(2)`:
    [mergeable-collection-writes.md](./mergeable-collection-writes.md) gives the
    reason for each.
 4. **Apply** — the durable store applies the op against live state
-   (`packages/memory/v2/patch.ts`, `patchOpDescriptors[op].apply`).
+   (`runtime/memory/v2/patch.ts`, `patchOpDescriptors[op].apply`).
 5. **React** — the store computes which paths the op touched so stale reads
    conflict and dependent computations re-run
-   (`packages/memory/v2/engine.ts`).
+   (`runtime/memory/v2/engine.ts`).
 
 ## The registries — one definition per op
 
@@ -88,7 +88,7 @@ The per-op behavior lives in three registration points, joined by the shared op
 tag. Adding an op is an entry in each; the type system and a consistency test make
 a missing or mismatched entry a loud failure rather than a silent degradation.
 
-### 1. Wire-op descriptors — `packages/memory/v2/patch.ts`
+### 1. Wire-op descriptors — `runtime/memory/v2/patch.ts`
 
 `patchOpDescriptors` is a `Record<PatchOp["op"], …>`, so every tag in the union
 must have exactly one descriptor and vice versa (a missing or extra one is a
@@ -121,7 +121,7 @@ The client's optimistic pending replay derives no paths: it applies a pending
 layer's ops to the delivered base through the shared `applyPatchToDocument`
 (`memory/v2/patch.ts`), skipping the whole layer when its ops cannot apply.
 
-### 2. Mergeable-op descriptors — `packages/runner/src/storage/mergeable-ops.ts`
+### 2. Mergeable-op descriptors — `runtime/runner/src/storage/mergeable-ops.ts`
 
 The runtime/commit half of a mergeable op. Each op appears once and owns:
 
@@ -135,35 +135,35 @@ declared on `IStorageTransaction` / `IExtendedStorageTransaction` and implemente
 once on the transaction and once on each wrapper. There is no per-op transport
 method to add.
 
-### 3. Author-method catalog — `packages/api` `MERGEABLE_OP_METHODS`
+### 3. Author-method catalog — `base/api` `MERGEABLE_OP_METHODS`
 
 The canonical list of mergeable Cell methods: each entry pairs the author method
 name with the wire tag it records and how the pattern transformer classifies the
 write (`scalar-writer` vs `array-identity-writer`). The transformer's method
-classification (`packages/ts-transformers/src/policy/capability-analysis.ts` and
+classification (`base/ts-transformers/src/policy/capability-analysis.ts` and
 `.../transformers/pattern-body-reactive-root-lowering.ts`) folds this catalog into
 its broader Cell-API sets, so a new mergeable op is classified with no transformer
 edit.
 
 The author-facing type surface — the method signatures on `IWritable` in
-`packages/api/index.ts` — is separate and stays hand-written TypeScript; a method
+`base/api/index.ts` — is separate and stays hand-written TypeScript; a method
 present in the catalog but not declared there simply cannot be called.
 
 ## Adding a mergeable op — checklist
 
 Say you are adding a `min` op that lowers a number toward a floor.
 
-1. **Wire descriptor** — add a `PatchOp` variant in `packages/memory/v2.ts`, an
+1. **Wire descriptor** — add a `PatchOp` variant in `runtime/memory/v2.ts`, an
    apply helper and a `patchOpDescriptors` entry in
-   `packages/memory/v2/patch.ts` (with `pointerFields` and `structural`). The
+   `runtime/memory/v2/patch.ts` (with `pointerFields` and `structural`). The
    `Record` type forces the entry; apply and all three path computations follow.
 2. **Mergeable descriptor** — add the intent/delta variants and a descriptor in
-   `packages/runner/src/storage/mergeable-ops.ts` (fold + build).
-3. **Catalog** — add an entry to `MERGEABLE_OP_METHODS` in `packages/api`.
-4. **Cell method** — add the method to `IWritable` in `packages/api/index.ts` and
-   implement it in `packages/runner/src/cell.ts`, calling `recordMergeableOp` with
+   `runtime/runner/src/storage/mergeable-ops.ts` (fold + build).
+3. **Catalog** — add an entry to `MERGEABLE_OP_METHODS` in `base/api`.
+4. **Cell method** — add the method to `IWritable` in `base/api/index.ts` and
+   implement it in `runtime/runner/src/cell.ts`, calling `recordMergeableOp` with
    the new delta.
-5. Run `packages/runner/test/mergeable-op-registry.test.ts` — it cross-checks that
+5. Run `runtime/runner/test/mergeable-op-registry.test.ts` — it cross-checks that
    the catalog, the runner registry, and the wire descriptors agree.
 
 What catches a mistake, and how loudly:

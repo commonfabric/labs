@@ -1,0 +1,31 @@
+{
+  "name": "@commonfabric/identity",
+  "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test browser-test",
+    // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
+    // A test file whose name ends in `.browser.test.ts` needs a browser, for
+    // IndexedDB; the `--ignore` pattern leaves it out of the `deno test` run.
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --ignore='**/*.browser.test.ts'",
+    // The browser half runs every test file, so that the native Ed25519 the
+    // browser offers, and its IndexedDB, are exercised as well as Deno's.
+    "browser-test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../../runtime/deno-web-test/cli.ts test/*.test.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    // The DID vocabulary alone, free of key material and of any dependency, so
+    // a package can decide whether a string is a DID without loading crypto.
+    "./did": "./src/did.ts",
+    // The deterministic DAG-CBOR subset, for a caller that signs or verifies
+    // bytes of its own format.
+    "./dag-cbor": "./src/dag-cbor.ts",
+    // Synchronous signature verification, for a caller deciding inside a
+    // synchronous transaction; it loads a pure-JS SHA-512 the rest does not.
+    "./verify-sync": "./src/ed25519/verify-sync.ts"
+  },
+  "imports": {
+    // Dependency guide: ../../docs/development/DEPENDENCIES.md
+    "@noble/ed25519": "npm:@noble/ed25519@^3.1.0",
+    "@noble/hashes": "npm:@noble/hashes@^2.2.0",
+    "@scure/bip39": "npm:@scure/bip39@^2.2.0"
+  }
+}

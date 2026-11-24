@@ -37,10 +37,10 @@ The event key is derived from it:
 - `stream` is the link of the stream the handler is registered on: its id,
   path, scope and space.
 
-`deriveEventKey()` in `packages/runner/src/scheduler/event-identity.ts` computes
+`deriveEventKey()` in `runtime/runner/src/scheduler/event-identity.ts` computes
 it, once per handler run, when the runner pushes the handler's frame
-(`packages/runner/src/runner.ts`), beside the frozen event time the handler's
-clock reads. `eventKey()` (`packages/runner/src/builder/event-key.ts`) returns
+(`runtime/runner/src/runner.ts`), beside the frozen event time the handler's
+clock reads. `eventKey()` (`runtime/runner/src/builder/event-key.ts`) returns
 what that frame holds.
 
 ## What changes it
@@ -101,8 +101,9 @@ type-tagged, so `null` equals no DID. In particular it is not the serving
 runtime's own identity: that identity is not the actor of such a run, just as
 `currentPrincipal()` returns `undefined` there rather than naming it.
 
-The cells a handler creates, and the address of its receipt, derive from the
-raw event id and the handler's bindings, not from the event key, so the actor
+The cells a handler creates derive from the raw event id and the handler's
+bindings, and the address of its receipt derives from the raw event id and the
+stream (`handlingReceiptId()`). Neither derives from the event key, so the actor
 does not reach them.
 
 ## How far it can be trusted
@@ -131,14 +132,14 @@ differed per run would make a reactive computation non-idempotent, which is why
 
 ## Tests
 
-`packages/runner/test/event-key.test.ts` covers the key in handlers the
+`runtime/runner/test/event-key.test.ts` covers the key in handlers the
 scheduler dispatches — derived from the dispatched id whatever the payload
 names, distinct across two events and across two streams, and stable across a
 conflict retry — and across runtimes: the same on two runtimes for the same
 inputs, different for another actor sending the same id, and bound to no
 principal on a served run with no actor. It also covers a handler called
 directly, and each kind of frame the function refuses. The `eventKey()` case in
-`packages/runner/test/executor-events-down.test.ts` sends an event through the
+`runtime/runner/test/executor-events-down.test.ts` sends an event through the
 live serving loop and compares the client echo's key with the served run's. The
 derivation itself is covered in
-`packages/runner/test/scheduler-event-identity.test.ts`.
+`runtime/runner/test/scheduler-event-identity.test.ts`.

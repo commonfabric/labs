@@ -1,0 +1,223 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "EventPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "events": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/EventPiece"
+        },
+        "type": "array"
+      },
+      "isCalendar": {
+        "default": true,
+        "type": "boolean"
+      },
+      "isHidden": {
+        "default": false,
+        "type": "boolean"
+      },
+      "title": {
+        "default": "Weekly Calendar",
+        "type": "string"
+      }
+    },
+    "required": [
+      "events"
+    ],
+    "type": "object"
+  },
+  "pattern": "apps/weekly-calendar/weekly-calendar.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "EventPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_1"
+          }
+        },
+        "required": [
+          "mentioned",
+          "backlinks"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "backlinks": {
+        "$ref": "#/$defs/AnonymousType_1"
+      },
+      "createEvent": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "endTime": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "date",
+          "startTime",
+          "endTime"
+        ],
+        "type": "object"
+      },
+      "eventCount": {
+        "type": "number"
+      },
+      "events": {
+        "items": {
+          "$ref": "#/$defs/EventPiece"
+        },
+        "type": "array"
+      },
+      "isCalendar": {
+        "type": "boolean"
+      },
+      "isHidden": {
+        "type": "boolean"
+      },
+      "mentionable": {
+        "items": {
+          "$ref": "#/$defs/EventPiece"
+        },
+        "type": "array"
+      },
+      "setTitle": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "newTitle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "newTitle"
+        ],
+        "type": "object"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "events",
+      "mentionable",
+      "eventCount",
+      "summary",
+      "isCalendar",
+      "isHidden",
+      "backlinks",
+      "createEvent",
+      "setTitle",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

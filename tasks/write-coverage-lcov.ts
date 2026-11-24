@@ -1,5 +1,6 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-run
 import * as path from "@std/path";
+import { PACKAGE_ROOTS } from "./package-layout.ts";
 
 // Taken from this file's own location rather than the working directory, which
 // the conversion inherits from its caller.
@@ -21,6 +22,23 @@ export function normalizeLcovInstancePaths(lcov: string): string {
   return lcov.split(/\r?\n/).map((line) =>
     line.startsWith("SF:") ? `SF:${line.slice(3).split("?")[0]}` : line
   ).join("\n");
+}
+
+/**
+ * Rewrite the `SF:` path of each file inside `root` to its POSIX path relative
+ * to `root`, leaving a path outside it unchanged. A report written this way
+ * names the same files whichever directory the checkout was in when the tests
+ * ran, so a reader in another checkout of the same tree resolves each path
+ * against its own root.
+ */
+export function relativeLcovSourcePaths(lcov: string, root: string): string {
+  return lcov.split(/\r?\n/).map((line) => {
+    const source = line.slice(3);
+    return line.startsWith("SF:") &&
+        source.startsWith(`${root}${path.SEPARATOR}`)
+      ? `SF:${path.relative(root, source).split(path.SEPARATOR).join("/")}`
+      : line;
+  }).join("\n");
 }
 
 /**
@@ -109,7 +127,7 @@ export function parseFilesWithNoSource(stderr: string): string[] {
 // `--allow-read --allow-write --allow-run`, and a wider graph has to keep
 // within that. `write-coverage-lcov.test.ts` fails if these stop agreeing with
 // `isTrackedSourcePath`, which is the metric's own answer to the same question.
-const TRACKED_SOURCE_ROOTS = ["packages", "tasks"];
+const TRACKED_SOURCE_ROOTS = [...PACKAGE_ROOTS, "tasks"];
 const TRACKED_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const UNTRACKED_PATH_PARTS = new Set([
   ".cache",
@@ -132,10 +150,9 @@ const UNTRACKED_FILE_SUFFIXES = [
   ".test.tsx",
 ];
 const UNTRACKED_RELATIVE_PREFIXES = [
-  "packages/generated-patterns/integration/",
-  "packages/patterns/factory-outputs/",
-  "packages/patterns-saves-backup/",
-  "packages/static/assets/",
+  "runtime/generated-patterns/integration/",
+  "patterns/dev/factory-outputs/",
+  "base/static/assets/",
 ];
 
 /**
@@ -301,7 +318,10 @@ export async function writeLcovReport(
 
   await Deno.writeTextFile(
     outputPath,
-    normalizeLcovInstancePaths(await Deno.readTextFile(outputPath)),
+    relativeLcovSourcePaths(
+      normalizeLcovInstancePaths(await Deno.readTextFile(outputPath)),
+      REPO_ROOT,
+    ),
   );
 
   // The report of everything that did convert is on disk either way, so it can

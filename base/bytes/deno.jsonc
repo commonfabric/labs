@@ -1,0 +1,22 @@
+{
+  // Dependency guide: ../../docs/development/DEPENDENCIES.md
+  "name": "@commonfabric/bytes",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true
+  },
+  "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-read=src,test --no-check",
+    "bench": {
+      "description": "Run benchmarks",
+      "command": "deno bench"
+    }
+  },
+  "exports": {
+    "./base64url": "./src/base64url.ts",
+    "./bigint": "./src/bigint.ts",
+    "./buffers": "./src/buffers.ts",
+    "./leb128": "./src/leb128.ts"
+  }
+}

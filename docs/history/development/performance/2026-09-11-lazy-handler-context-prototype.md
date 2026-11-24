@@ -85,7 +85,7 @@ prototype up.
 
 ## The prototype
 
-Three changes to [`runner.ts`](../../../../packages/runner/src/runner.ts) on the
+Three changes to [`runner.ts`](../../../../runtime/runner/src/runner.ts) on the
 prototype branch; two implement the contract, and the third is the lift-path fix
 under [What ships](#what-ships):
 
@@ -174,7 +174,7 @@ stay open.
 ## Measurements
 
 The [F0
-benchmark](../../../../packages/runner/test/handler-dispatch-cost.bench.ts) was
+benchmark](../../../../runtime/runner/test/handler-dispatch-cost.bench.ts) was
 extended on the prototype branch with a posture dimension, so each variant runs
 with the flag off and on over the same seeded list. The run was taken on the
 same machine and Deno as the F0 record, after the reviewers and test suites that

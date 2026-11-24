@@ -17,7 +17,7 @@
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
+} from "@commonfabric/bytes/base64url";
 
 const RECIPIENT_PREFIX = "cfr1";
 const HKDF_INFO = "common-fabric test-records key delivery v1";

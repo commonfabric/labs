@@ -22,12 +22,12 @@ cd ~/code/labs
 export CF_IDENTITY=./shared.key CF_API_URL=http://localhost:8000
 
 # 1. Run every authored pattern test
-deno task cf test packages/patterns/<path>.test.tsx
+deno task cf test patterns/<path>.test.tsx
 
 # 2. Deploy with every test entry attached and capture the piece ID
-ID=$(cf piece new packages/patterns/<path>.tsx \
-  --test packages/patterns/<path>.test.tsx \
-  --space SPACE --root packages/patterns 2>/dev/null | head -1)
+ID=$(cf piece new patterns/<path>.tsx \
+  --test patterns/<path>.test.tsx \
+  --space SPACE --root patterns 2>/dev/null | head -1)
 
 # 3. Set title
 cf piece call --quiet --cell $ID --space SPACE setTitle --value "My Title"
@@ -44,7 +44,7 @@ deploying. Repeat `--test` for multiple entries and pass the same complete set
 on every later `piece setsrc`. Deployment packages and type-checks attached
 tests but does not run them.
 
-**Pattern index:** `cat ~/code/labs/packages/patterns/index.md`
+**Pattern index:** `cat ~/code/labs/patterns/index.md`
 
 **After deploying a structural piece:**
 
@@ -65,7 +65,7 @@ tests but does not run them.
   "source": {
     "ref": "cf:pattern:<content-hash>",
     "repository": "https://github.com/commonfabric/labs",
-    "entry": "/packages/patterns/annotation.tsx"
+    "entry": "/patterns/apps/annotation/annotation.tsx"
   }
 }
 ```
@@ -206,9 +206,9 @@ lift/computed or at pattern-body level rather than inside a handler.
 
 ## Activity Log Pattern
 
-The Activity Log (`packages/patterns/activity-log/activity-log.tsx`) is a
-structured event stream for recording agent actions. Log events incrementally as
-you work — not in one batch at the end.
+The Activity Log (`patterns/apps/activity-log/activity-log.tsx`) is a structured
+event stream for recording agent actions. Log events incrementally as you work —
+not in one batch at the end.
 
 **Calling `logEvent.handler`:**
 
@@ -262,8 +262,8 @@ create and run an automated pattern test. Then attach every test entry with
 repeatable `--test` flags here and on every later `setsrc` update.
 
 ```bash
-ID=$(cf piece new packages/patterns/annotation.tsx \
-  --space SPACE --root packages/patterns 2>/dev/null | head -1)
+ID=$(cf piece new patterns/apps/annotation/annotation.tsx \
+  --space SPACE --root patterns 2>/dev/null | head -1)
 echo '"Standup notes mention 5 people with no structured contact list"' \
   | cf cell set --cell $ID content --space SPACE
 echo '"wish"' | cf cell set --cell $ID kind --space SPACE
@@ -309,7 +309,7 @@ for x in p:
 
 ---
 
-## Agent Piece (`packages/patterns/agent/agent.tsx`)
+## Agent Piece (`patterns/apps/agent/agent.tsx`)
 
 Each agent is a piece in the space with its own cells for directive, learned
 state, and lifecycle. Deploy one per agent in the space.

@@ -12,6 +12,7 @@ import {
   parseSetting,
   profileCandidates,
   profilesToInspect,
+  reexportFromProfiles,
   reloadHint,
   shellKind,
   stripMarkedBlock,
@@ -581,6 +582,65 @@ describe("test-records-shell-config", () => {
       expect(removals).toEqual([
         { path: join(home, ".zshrc"), outcome: "removed" },
       ]);
+    });
+  });
+
+  describe("reexportFromProfiles()", () => {
+    function zshEnv(): Environment {
+      return environment({ SHELL: "/bin/zsh", HOME: home });
+    }
+
+    it("points what it wrote at the new value, in place", async () => {
+      await Deno.writeTextFile(join(home, ".zshrc"), "alias l=ls\n");
+      await exportFromProfiles(VARIABLE, KEY_PATH, zshEnv(), "darwin");
+      await Deno.writeTextFile(join(home, ".zshenv"), "# end\n", {
+        append: true,
+      });
+      const moved = join(home, "moved.json");
+
+      expect(
+        await reexportFromProfiles(
+          VARIABLE,
+          KEY_PATH,
+          moved,
+          zshEnv(),
+          "darwin",
+        ),
+      ).toEqual([join(home, ".zshenv")]);
+      expect(await Deno.readTextFile(join(home, ".zshenv"))).toBe(
+        `${MARKER}\n${exportLine("zsh", VARIABLE, moved, home)}\n# end\n`,
+      );
+      // Done once, there is nothing left to do.
+      expect(
+        await reexportFromProfiles(
+          VARIABLE,
+          KEY_PATH,
+          moved,
+          zshEnv(),
+          "darwin",
+        ),
+      ).toEqual([]);
+    });
+
+    it("leaves a line it did not write, whatever it names", async () => {
+      const line = exportLine("zsh", VARIABLE, KEY_PATH, home);
+      const other = `${MARKER}\n${
+        exportLine("zsh", VARIABLE, join(home, "other.json"), home)
+      }\n`;
+      await Deno.writeTextFile(join(home, ".zshenv"), `${line}\n${other}`);
+
+      expect(
+        await reexportFromProfiles(
+          VARIABLE,
+          KEY_PATH,
+          join(home, "moved.json"),
+          zshEnv(),
+          "darwin",
+        ),
+      ).toEqual([]);
+      expect(await Deno.readTextFile(join(home, ".zshenv"))).toBe(
+        `${line}\n${other}`,
+      );
     });
   });
 

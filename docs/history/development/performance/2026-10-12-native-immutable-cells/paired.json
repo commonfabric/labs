@@ -1,0 +1,508 @@
+{
+  "runtime": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3"
+  },
+  "host": {
+    "target": "aarch64-apple-darwin",
+    "arch": "aarch64",
+    "os": "darwin",
+    "vendor": "apple",
+    "standalone": false
+  },
+  "results": [
+    {
+      "size": 100,
+      "schemaShape": "inline",
+      "mode": "fresh frozen",
+      "iterations": 1,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 16.650167000000238,
+      "nativeMedianMs": 9.97787500000004,
+      "samples": [
+        {
+          "legacyMs": 26.29779099999996,
+          "nativeMs": 17.046457999999802
+        },
+        {
+          "legacyMs": 19.184042000000318,
+          "nativeMs": 100.32912499999975
+        },
+        {
+          "legacyMs": 16.650167000000238,
+          "nativeMs": 9.97787500000004
+        },
+        {
+          "legacyMs": 22.931749999999738,
+          "nativeMs": 4.17049999999972
+        },
+        {
+          "legacyMs": 2.3024170000003323,
+          "nativeMs": 13.31045800000038
+        },
+        {
+          "legacyMs": 3.558542000000216,
+          "nativeMs": 3.891125000000102
+        },
+        {
+          "legacyMs": 1.6896249999999782,
+          "nativeMs": 3.5357500000000073
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "inline",
+      "mode": "fresh mutable",
+      "iterations": 1,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 43.92554199999995,
+      "nativeMedianMs": 14.987167000000227,
+      "samples": [
+        {
+          "legacyMs": 43.582124999999905,
+          "nativeMs": 10.80520899999965
+        },
+        {
+          "legacyMs": 31.202124999999796,
+          "nativeMs": 23.53874999999971
+        },
+        {
+          "legacyMs": 84.18604099999993,
+          "nativeMs": 52.29054199999973
+        },
+        {
+          "legacyMs": 11.678458999999748,
+          "nativeMs": 8.0407909999999
+        },
+        {
+          "legacyMs": 43.92554199999995,
+          "nativeMs": 14.987167000000227
+        },
+        {
+          "legacyMs": 63.25966699999981,
+          "nativeMs": 12.093166999999994
+        },
+        {
+          "legacyMs": 96.02283299999999,
+          "nativeMs": 18.14633300000014
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "inline",
+      "mode": "reused frozen",
+      "iterations": 10,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 6.854133299999967,
+      "nativeMedianMs": 0.0027290999999877385,
+      "samples": [
+        {
+          "legacyMs": 7.555016700000033,
+          "nativeMs": 0.0027290999999877385
+        },
+        {
+          "legacyMs": 3.4465291999999863,
+          "nativeMs": 0.0010709000000133529
+        },
+        {
+          "legacyMs": 7.678737499999988,
+          "nativeMs": 0.0030040999999982887
+        },
+        {
+          "legacyMs": 7.011295900000005,
+          "nativeMs": 0.0011458999999831576
+        },
+        {
+          "legacyMs": 6.854133299999967,
+          "nativeMs": 0.0032374999999774446
+        },
+        {
+          "legacyMs": 4.192070899999999,
+          "nativeMs": 0.0011459000000286323
+        },
+        {
+          "legacyMs": 3.3900208999999903,
+          "nativeMs": 0.003487499999937427
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "inline",
+      "mode": "fresh frozen",
+      "iterations": 1,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 23.369958000000224,
+      "nativeMedianMs": 78.13349999999991,
+      "samples": [
+        {
+          "legacyMs": 79.9773750000004,
+          "nativeMs": 173.07179199999973
+        },
+        {
+          "legacyMs": 143.49733299999934,
+          "nativeMs": 40.78929199999948
+        },
+        {
+          "legacyMs": 57.241125000000466,
+          "nativeMs": 132.8055829999994
+        },
+        {
+          "legacyMs": 11.400499999999738,
+          "nativeMs": 78.13349999999991
+        },
+        {
+          "legacyMs": 12.634458999999879,
+          "nativeMs": 132.68491600000016
+        },
+        {
+          "legacyMs": 23.369958000000224,
+          "nativeMs": 35.11695899999995
+        },
+        {
+          "legacyMs": 18.142958000000363,
+          "nativeMs": 35.922333999999864
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "inline",
+      "mode": "fresh mutable",
+      "iterations": 1,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 515.3207910000001,
+      "nativeMedianMs": 311.4860410000001,
+      "samples": [
+        {
+          "legacyMs": 515.3207910000001,
+          "nativeMs": 132.9111670000002
+        },
+        {
+          "legacyMs": 288.8639999999996,
+          "nativeMs": 450.87716700000055
+        },
+        {
+          "legacyMs": 950.4388330000002,
+          "nativeMs": 311.4860410000001
+        },
+        {
+          "legacyMs": 580.192708999999,
+          "nativeMs": 684.9789999999994
+        },
+        {
+          "legacyMs": 1129.3820419999993,
+          "nativeMs": 240.12087500000052
+        },
+        {
+          "legacyMs": 383.0244160000002,
+          "nativeMs": 263.5732910000006
+        },
+        {
+          "legacyMs": 398.35649999999987,
+          "nativeMs": 756.2574999999997
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "inline",
+      "mode": "reused frozen",
+      "iterations": 10,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 30.048233299999993,
+      "nativeMedianMs": 0.002983299999687006,
+      "samples": [
+        {
+          "legacyMs": 24.20452919999989,
+          "nativeMs": 0.002983299999687006
+        },
+        {
+          "legacyMs": 28.314533400000073,
+          "nativeMs": 0.0009874999999738066
+        },
+        {
+          "legacyMs": 45.76940419999992,
+          "nativeMs": 0.003108300000167219
+        },
+        {
+          "legacyMs": 16.94159170000021,
+          "nativeMs": 0.0010249999999359717
+        },
+        {
+          "legacyMs": 37.467929100000035,
+          "nativeMs": 0.003483300000152667
+        },
+        {
+          "legacyMs": 30.048233299999993,
+          "nativeMs": 0.0010915999999269843
+        },
+        {
+          "legacyMs": 43.48553749999992,
+          "nativeMs": 0.0032999999999447026
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "reference",
+      "mode": "fresh frozen",
+      "iterations": 1,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 1.261916999999812,
+      "nativeMedianMs": 1.3545840000006137,
+      "samples": [
+        {
+          "legacyMs": 1.296542000000045,
+          "nativeMs": 1.3545840000006137
+        },
+        {
+          "legacyMs": 1.1102090000022145,
+          "nativeMs": 1.2192499999982829
+        },
+        {
+          "legacyMs": 1.0919170000015583,
+          "nativeMs": 1.2066670000021986
+        },
+        {
+          "legacyMs": 1.261916999999812,
+          "nativeMs": 1.3943340000005264
+        },
+        {
+          "legacyMs": 1.1037920000017039,
+          "nativeMs": 1.1942500000004657
+        },
+        {
+          "legacyMs": 1.267334000000119,
+          "nativeMs": 1.402750000001106
+        },
+        {
+          "legacyMs": 1.2697909999988042,
+          "nativeMs": 25.639250000000175
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "reference",
+      "mode": "fresh mutable",
+      "iterations": 1,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 1.2448750000003201,
+      "nativeMedianMs": 1.6732090000004973,
+      "samples": [
+        {
+          "legacyMs": 1.2448750000003201,
+          "nativeMs": 1.6732090000004973
+        },
+        {
+          "legacyMs": 10.165999999997439,
+          "nativeMs": 1.7057499999973516
+        },
+        {
+          "legacyMs": 1.2124999999978172,
+          "nativeMs": 1.6266250000007858
+        },
+        {
+          "legacyMs": 1.2809159999997064,
+          "nativeMs": 4.307749999999942
+        },
+        {
+          "legacyMs": 1.1831249999995634,
+          "nativeMs": 1.6214159999981348
+        },
+        {
+          "legacyMs": 1.0452079999995476,
+          "nativeMs": 1.445625000000291
+        },
+        {
+          "legacyMs": 1.2631669999973383,
+          "nativeMs": 2.1124999999992724
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "reference",
+      "mode": "reused frozen",
+      "iterations": 10,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 4.164295800000036,
+      "nativeMedianMs": 0.002520799999911105,
+      "samples": [
+        {
+          "legacyMs": 21.847083400000336,
+          "nativeMs": 0.002595900000233087
+        },
+        {
+          "legacyMs": 4.164295800000036,
+          "nativeMs": 0.0009875000003376044
+        },
+        {
+          "legacyMs": 2.254004200000054,
+          "nativeMs": 0.002520799999911105
+        },
+        {
+          "legacyMs": 7.068729200000234,
+          "nativeMs": 0.0009500000000116415
+        },
+        {
+          "legacyMs": 3.633912500000224,
+          "nativeMs": 0.00290000000022701
+        },
+        {
+          "legacyMs": 6.781170800000109,
+          "nativeMs": 0.001029200000266428
+        },
+        {
+          "legacyMs": 3.121087499999703,
+          "nativeMs": 0.002545800000007148
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "reference",
+      "mode": "fresh frozen",
+      "iterations": 1,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 38.82879099999991,
+      "nativeMedianMs": 23.583083999998053,
+      "samples": [
+        {
+          "legacyMs": 30.70666699999856,
+          "nativeMs": 23.583083999998053
+        },
+        {
+          "legacyMs": 31.55058299999655,
+          "nativeMs": 11.142499999998108
+        },
+        {
+          "legacyMs": 40.07004200000301,
+          "nativeMs": 16.614541999999346
+        },
+        {
+          "legacyMs": 38.82879099999991,
+          "nativeMs": 81.82908400000088
+        },
+        {
+          "legacyMs": 44.45333400000163,
+          "nativeMs": 34.73858299999847
+        },
+        {
+          "legacyMs": 23.546625000002678,
+          "nativeMs": 19.299584000000323
+        },
+        {
+          "legacyMs": 43.19045900000128,
+          "nativeMs": 108.04249999999956
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "reference",
+      "mode": "fresh mutable",
+      "iterations": 1,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 34.90708400000585,
+      "nativeMedianMs": 101.18620799999917,
+      "samples": [
+        {
+          "legacyMs": 149.0560839999962,
+          "nativeMs": 147.43358399999852
+        },
+        {
+          "legacyMs": 39.83395900000323,
+          "nativeMs": 25.085666000006313
+        },
+        {
+          "legacyMs": 34.90708400000585,
+          "nativeMs": 101.18620799999917
+        },
+        {
+          "legacyMs": 47.01479200000176,
+          "nativeMs": 54.868040999994264
+        },
+        {
+          "legacyMs": 19.569625000003725,
+          "nativeMs": 148.81441600000107
+        },
+        {
+          "legacyMs": 11.395041999996465,
+          "nativeMs": 59.265707999998995
+        },
+        {
+          "legacyMs": 25.184667000001355,
+          "nativeMs": 144.14125000000058
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "reference",
+      "mode": "reused frozen",
+      "iterations": 10,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesFrozenGraph": true,
+      "legacyMedianMs": 39.41629169999942,
+      "nativeMedianMs": 0.002812499999708962,
+      "samples": [
+        {
+          "legacyMs": 45.340812500000176,
+          "nativeMs": 0.003170799999497831
+        },
+        {
+          "legacyMs": 50.09667499999996,
+          "nativeMs": 0.0009833000003709458
+        },
+        {
+          "legacyMs": 39.41629169999942,
+          "nativeMs": 0.0034999999996216504
+        },
+        {
+          "legacyMs": 37.56055830000041,
+          "nativeMs": 0.0031583999996655622
+        },
+        {
+          "legacyMs": 27.1565208,
+          "nativeMs": 0.002812499999708962
+        },
+        {
+          "legacyMs": 34.124900000000345,
+          "nativeMs": 0.0009042000005138106
+        },
+        {
+          "legacyMs": 41.573066599999585,
+          "nativeMs": 0.002687500000320142
+        }
+      ]
+    }
+  ]
+}

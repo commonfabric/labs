@@ -167,7 +167,7 @@ unassigned, and editable account labels for its setup UI.
 The source environment deploys its provider through normal piece registration.
 The signed-in user then adds that provider to home favorites once, using
 `FavoritesManager.addFavorite` in
-`packages/runtime-client/src/favorites-manager.ts`. Reuse its full piece
+`runtime/runtime-client/src/favorites-manager.ts`. Reuse its full piece
 address, `favoriteKey`, and the home pattern's `addFavorite` handler. Do not
 hand-write home internals or mirror the database cells into the home space.
 
@@ -269,7 +269,7 @@ it describes.
 ### SQLite source-space routing
 
 The disk registry is keyed by `(space, id)`. In
-`packages/runner/src/builtins/sqlite-builtins.ts`, `sqliteQuery` resolves the
+`runtime/runner/src/builtins/sqlite-builtins.ts`, `sqliteQuery` resolves the
 `db` input's source space and opens that space's storage provider. A descriptor
 contains database identity and schema, while the cell reference supplies space.
 

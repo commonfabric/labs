@@ -1,0 +1,725 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Assumption": {
+        "properties": {
+          "about": {
+            "description": "A short excerpt of that user message, so the card says what it was about.",
+            "type": "string"
+          },
+          "alternatives": {
+            "description": "The options the assistant weighed, each a few words.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "assumedIndex": {
+            "description": "The alternative the assistant assumed.",
+            "type": "number"
+          },
+          "chosenIndex": {
+            "description": "The alternative the user chose instead, when `status` is \"corrected\".",
+            "type": "number"
+          },
+          "description": {
+            "description": "At most one short sentence, or \"\".",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable within one conversation: `a1`, `a2`, … in recording order.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Two to four words, such as \"Language\" or \"Skill level\".",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/AssumptionStatus"
+          },
+          "turn": {
+            "description": "Which user message (1-based) the reply rested on this assumption.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "turn",
+          "about",
+          "label",
+          "description",
+          "alternatives",
+          "assumedIndex",
+          "status",
+          "chosenIndex"
+        ],
+        "type": "object"
+      },
+      "AssumptionStatus": {
+        "enum": [
+          "open",
+          "confirmed",
+          "corrected",
+          "rejected"
+        ]
+      },
+      "BuiltInLLMContent": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/BuiltInLLMContentPart"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "BuiltInLLMContentPart": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BuiltInLLMTextPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMImagePart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolCallPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolResultPart"
+          }
+        ]
+      },
+      "BuiltInLLMImagePart": {
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "image"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "image"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMMessage": {
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/BuiltInLLMContent"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant",
+              "tool"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMTextPart": {
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolCallPart": {
+        "properties": {
+          "input": {
+            "additionalProperties": true,
+            "properties": {},
+            "type": "object"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-call"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "input"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolResultPart": {
+        "properties": {
+          "output": {
+            "anyOf": [
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "text"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "json"
+                    ],
+                    "type": "string"
+                  },
+                  "value": true
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-result"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "output"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "assumptions": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Assumption"
+        },
+        "type": "array"
+      },
+      "messages": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/BuiltInLLMMessage"
+        },
+        "type": "array"
+      },
+      "systemPrompt": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "The assistant's persona. The assumption instructions are added to it.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/assumption-surfacer/assumption-surfacer.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Assumption": {
+        "properties": {
+          "about": {
+            "description": "A short excerpt of that user message, so the card says what it was about.",
+            "type": "string"
+          },
+          "alternatives": {
+            "description": "The options the assistant weighed, each a few words.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "assumedIndex": {
+            "description": "The alternative the assistant assumed.",
+            "type": "number"
+          },
+          "chosenIndex": {
+            "description": "The alternative the user chose instead, when `status` is \"corrected\".",
+            "type": "number"
+          },
+          "description": {
+            "description": "At most one short sentence, or \"\".",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable within one conversation: `a1`, `a2`, … in recording order.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Two to four words, such as \"Language\" or \"Skill level\".",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/AssumptionStatus"
+          },
+          "turn": {
+            "description": "Which user message (1-based) the reply rested on this assumption.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "turn",
+          "about",
+          "label",
+          "description",
+          "alternatives",
+          "assumedIndex",
+          "status",
+          "chosenIndex"
+        ],
+        "type": "object"
+      },
+      "AssumptionStatus": {
+        "enum": [
+          "open",
+          "confirmed",
+          "corrected",
+          "rejected"
+        ]
+      },
+      "BuiltInLLMContent": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/BuiltInLLMContentPart"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "BuiltInLLMContentPart": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BuiltInLLMTextPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMImagePart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolCallPart"
+          },
+          {
+            "$ref": "#/$defs/BuiltInLLMToolResultPart"
+          }
+        ]
+      },
+      "BuiltInLLMImagePart": {
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "image"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "image"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMMessage": {
+        "properties": {
+          "content": {
+            "$ref": "#/$defs/BuiltInLLMContent"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant",
+              "tool"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMTextPart": {
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "text"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolCallPart": {
+        "properties": {
+          "input": {
+            "additionalProperties": true,
+            "properties": {},
+            "type": "object"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-call"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "input"
+        ],
+        "type": "object"
+      },
+      "BuiltInLLMToolResultPart": {
+        "properties": {
+          "output": {
+            "anyOf": [
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "text"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "json"
+                    ],
+                    "type": "string"
+                  },
+                  "value": true
+                },
+                "required": [
+                  "type",
+                  "value"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "tool-result"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "toolCallId",
+          "toolName",
+          "output"
+        ],
+        "type": "object"
+      },
+      "ReportedAssumption": {
+        "properties": {
+          "alternatives": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "assumedIndex": {
+            "type": "number"
+          },
+          "description": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "alternatives",
+          "assumedIndex"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addMessage": {
+        "$ref": "#/$defs/BuiltInLLMMessage",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "assumptions": {
+        "items": {
+          "$ref": "#/$defs/Assumption"
+        },
+        "type": "array"
+      },
+      "cancelGeneration": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "chooseAlternative": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Pick an alternative; a different one than assumed tells the assistant.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "index"
+        ],
+        "type": "object"
+      },
+      "clearChat": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "confirmAssumption": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Keep the assistant's guess.",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "messages": {
+        "items": {
+          "$ref": "#/$defs/BuiltInLLMMessage"
+        },
+        "type": "array"
+      },
+      "openCount": {
+        "description": "Assumptions still waiting on the user.",
+        "type": "number"
+      },
+      "pending": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "recordAssumptions": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "The dialog's tool: record the assumptions behind the next reply.",
+        "properties": {
+          "assumptions": {
+            "items": {
+              "$ref": "#/$defs/ReportedAssumption"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "assumptions"
+        ],
+        "type": "object"
+      },
+      "rejectAssumption": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "None of the alternatives fit; tells the assistant.",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "settled": {
+        "description": "What the user has settled, as fed to the model.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "system": {
+        "description": "The full system prompt the dialog runs with.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "messages",
+      "assumptions",
+      "openCount",
+      "settled",
+      "system",
+      "pending",
+      "recordAssumptions",
+      "confirmAssumption",
+      "rejectAssumption",
+      "chooseAlternative",
+      "addMessage",
+      "cancelGeneration",
+      "clearChat",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

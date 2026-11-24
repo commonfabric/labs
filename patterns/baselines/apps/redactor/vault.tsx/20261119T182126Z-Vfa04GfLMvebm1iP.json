@@ -1,0 +1,150 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "PIICategory": {
+        "enum": [
+          "name",
+          "email",
+          "phone",
+          "ssn",
+          "address",
+          "custom"
+        ]
+      },
+      "PIIEntry": {
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/PIICategory"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "value"
+        ],
+        "type": "object"
+      },
+      "SecretEntry": {
+        "$ref": "#/$defs/PIIEntry",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "YooQZHI052poLn38gSHN5aOO9fuvcx55AsPibeLZhF4",
+              "policyDigest": "933lJCexcsH8SqAG7BbZrUPSsnw5tZyCwrbzTMMJzMc",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "redactionRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      }
+    },
+    "properties": {
+      "entries": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SecretEntry"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/redactor/vault.tsx",
+  "resultSchema": {
+    "$defs": {
+      "PIICategory": {
+        "enum": [
+          "name",
+          "email",
+          "phone",
+          "ssn",
+          "address",
+          "custom"
+        ]
+      },
+      "PIIEntry": {
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/PIICategory"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "value"
+        ],
+        "type": "object"
+      },
+      "SecretEntry": {
+        "$ref": "#/$defs/PIIEntry",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "YooQZHI052poLn38gSHN5aOO9fuvcx55AsPibeLZhF4",
+              "policyDigest": "933lJCexcsH8SqAG7BbZrUPSsnw5tZyCwrbzTMMJzMc",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "redactionRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addEntry": {
+        "$ref": "#/$defs/PIIEntry",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/SecretEntry"
+        },
+        "type": "array"
+      },
+      "removeEntry": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "entries",
+      "addEntry",
+      "removeEntry",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

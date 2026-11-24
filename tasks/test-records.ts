@@ -39,6 +39,7 @@ import {
 } from "@commonfabric/test-support/shuffle";
 import {
   localSubmissionsPrefix,
+  movedKeyPath,
   parsePersonalKeyFile,
   type PersonalKeyFile,
   REPO,
@@ -139,6 +140,22 @@ export async function buildLocalContext(
   }, env);
 }
 
+/**
+ * The text of the key file at a path, read where the key tool moved it
+ * when the path is the legacy one and nothing is there any more.
+ */
+function readKeyFile(path: string): string {
+  try {
+    return Deno.readTextFileSync(path);
+  } catch (error) {
+    const moved = movedKeyPath(path);
+    if (!(error instanceof Deno.errors.NotFound) || moved === undefined) {
+      throw error;
+    }
+    return Deno.readTextFileSync(moved);
+  }
+}
+
 /** Reads and parses the personal key file the environment names. */
 export function readPersonalKey(
   env: Environment = Deno.env.get,
@@ -147,7 +164,7 @@ export function readPersonalKey(
   if (path === undefined || path.length === 0) return undefined;
   let text: string;
   try {
-    text = Deno.readTextFileSync(path);
+    text = readKeyFile(path);
   } catch (error) {
     warn(`cannot read ${RECORDS_KEY_FILE_VARIABLE} at ${path}: ${error}`);
     return undefined;
@@ -227,9 +244,8 @@ export async function shipSpool(
   try {
     const body = buildObjectBody(contents.context, contents.records);
     const gzipped = await gzipText(body);
-    const token = transport.mintToken !== undefined
-      ? await transport.mintToken(key)
-      : await tokenFromKey(key, STORE_WRITE_SCOPE);
+    const token = await (transport.mintToken?.(key) ??
+      tokenFromKey(key, STORE_WRITE_SCOPE));
     const name = `${localSubmissionsPrefix(key.cf_username, env)}/` +
       localObjectName(contents.context);
     const createOptions: Parameters<typeof createObject>[0] = {
@@ -260,7 +276,7 @@ export async function shipSpool(
  * holds its lock — the kernel released it on the owner's death — and ships
  * each one under its own stamped context. Directories with live owners are
  * skipped, which is what makes sweeping safe with any number of parallel
- * runs.
+ * runs. Never throws.
  */
 export async function sweepSpools(
   root: string,
@@ -310,17 +326,13 @@ export async function finishRunRecording(
   } finally {
     recording.spool.close();
   }
-  try {
-    await sweepSpools(
-      recording.spoolRoot,
-      recording.key,
-      recording.spool.dir,
-      env,
-      transport,
-    );
-  } catch (error) {
-    warn(`sweeping ${recording.spoolRoot} failed: ${error}`);
-  }
+  await sweepSpools(
+    recording.spoolRoot,
+    recording.key,
+    recording.spool.dir,
+    env,
+    transport,
+  );
 }
 
 /**

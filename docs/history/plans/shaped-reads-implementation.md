@@ -14,7 +14,7 @@ Sequences the read layer and the calls layered on it, as designed in
 design first; this document assumes it and does not restate it.
 
 The command surface — the third concern in that umbrella,
-[CLI surface shape](../../plans/cli-surface-shape.md) — is out of scope here and moves on
+[CLI surface shape](cli-surface-shape.md) — is out of scope here and moves on
 its own timeline. One piece of it is unavoidable: the concise selection syntax
 needs its own flag before it can grow address notation, so `--select` lands in
 the first stage rather than waiting.

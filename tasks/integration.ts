@@ -18,24 +18,36 @@
 
 import { walk } from "@std/fs/walk";
 import * as path from "@std/path";
+import { packageDirNamed } from "./package-layout.ts";
 import ports from "@commonfabric/ports" with { type: "json" };
-import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
+import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
 import {
+  type Environment,
   FragmentWriter,
   preloadArgument,
+  readJUnit,
+  readNameMaps,
   RECORDS_DIR_VARIABLE,
   recordsDir,
 } from "@commonfabric/test-support/records";
 import {
   pinShuffleSeed,
   shuffledPaths,
-  shuffleSeed,
+  shuffleFlag,
 } from "@commonfabric/test-support/shuffle";
 import {
   finishRunRecording,
   type RunRecording,
   startRunRecording,
 } from "./test-records.ts";
+import {
+  type FailedCommand,
+  passed,
+  printSummary,
+  shellQuote,
+  type TestResult,
+  testResults,
+} from "./test-summary.ts";
 import {
   matchesPatternFilter,
   normalizePatternPath,
@@ -70,7 +82,13 @@ const ALL_PACKAGES_WITH_SERVER = [
 ];
 
 // All valid integration targets, including opt-in platform-specific suites.
-const ALL_PACKAGES = [...DEFAULT_PACKAGES, ...OPTIONAL_PACKAGES_WITH_SERVER];
+export const ALL_PACKAGES = [
+  ...DEFAULT_PACKAGES,
+  ...OPTIONAL_PACKAGES_WITH_SERVER,
+];
+
+// Targets that run a script of their own, which takes no name filter.
+const UNFILTERED_PACKAGES = ["cli", "cli-fuse", "patterns-reload"];
 
 // Packages that need HEADLESS=1 for browser tests
 const HEADLESS_PACKAGES = [
@@ -79,7 +97,12 @@ const HEADLESS_PACKAGES = [
   "patterns-reload",
 ];
 
-async function runCommand(
+/**
+ * Runs `cmd` to completion with this process's environment and `env` on top
+ * of it, capturing what it prints unless `inheritStdio` hands it this
+ * process's own output.
+ */
+export async function runCommand(
   cmd: string[],
   options: {
     cwd?: string;
@@ -108,9 +131,58 @@ async function runCommand(
   };
 }
 
-async function stopServers(portOffset: number, rootDir: string): Promise<void> {
+/**
+ * What an integration run reads from, and does to, the process it runs in.
+ * {@link DENO_HOST} is the process itself.
+ */
+export interface IntegrationHost {
+  /** The working directory, which is the repository's root. */
+  cwd: () => string;
+
+  /** The process's environment, which every command it runs inherits. */
+  env: Pick<Deno.Env, "get" | "set">;
+
+  run: typeof runCommand;
+
+  /** A number in `[0, 1)`, which a generated port offset is drawn from. */
+  random: () => number;
+
+  /** Settles the seed this process and its children shuffle by. */
+  pinShuffleSeed: () => number;
+
+  startRecording: (env: Environment) => Promise<RunRecording>;
+  finishRecording: (recording: RunRecording) => Promise<void>;
+  addSignalListener: (signal: Deno.Signal, handler: () => void) => void;
+  removeSignalListener: (signal: Deno.Signal, handler: () => void) => void;
+  exit: (code: number) => void;
+}
+
+/** The {@link IntegrationHost} that is this Deno process. */
+const DENO_HOST: IntegrationHost = {
+  cwd: Deno.cwd,
+  env: Deno.env,
+  run: runCommand,
+  random: Math.random,
+  pinShuffleSeed,
+  startRecording: startRunRecording,
+  finishRecording: finishRunRecording,
+  addSignalListener: Deno.addSignalListener,
+  removeSignalListener: Deno.removeSignalListener,
+  exit: Deno.exit,
+};
+
+/** `host`'s environment, as the readers that take one as a function want it. */
+function hostEnvironment(host: IntegrationHost): Environment {
+  return (name) => host.env.get(name);
+}
+
+async function stopServers(
+  portOffset: number,
+  rootDir: string,
+  run: typeof runCommand,
+): Promise<void> {
   console.log(`Stopping servers with PORT_OFFSET=${portOffset}...`);
-  await runCommand(
+  await run(
     ["bash", "scripts/stop-local-dev.sh", `--port-offset=${portOffset}`],
     { cwd: rootDir, inheritStdio: true },
   );
@@ -173,13 +245,12 @@ export function chooseGeneratedPortOffset(
 export async function startServers(
   portOffset: number,
   rootDir: string,
-  env: Record<string, string> = {},
-  run: typeof runCommand = runCommand,
+  run: typeof runCommand,
 ): Promise<number> {
   console.log(`Starting servers with PORT_OFFSET=${portOffset}...`);
   const result = await run(
     ["bash", "scripts/start-local-dev.sh", `--port-offset=${portOffset}`],
-    { cwd: rootDir, env, inheritStdio: true },
+    { cwd: rootDir, inheritStdio: true },
   );
 
   if (!result.success) {
@@ -197,8 +268,8 @@ export async function startServers(
  * Resolve the cf binary: CF_BINARY env var, or fall back to running
  * the CLI entrypoint via deno.
  */
-function getCfCommand(rootDir: string): string[] {
-  const cfBinary = Deno.env.get("CF_BINARY");
+function getCfCommand(rootDir: string, env: Environment): string[] {
+  const cfBinary = env("CF_BINARY");
   if (cfBinary) {
     return [cfBinary];
   }
@@ -206,7 +277,7 @@ function getCfCommand(rootDir: string): string[] {
     "deno",
     "run",
     ...CF_PERMISSION_FLAGS,
-    path.join(rootDir, "packages/cli/mod.ts"),
+    path.join(rootDir, "runtime/cli/mod.ts"),
   ];
 }
 
@@ -216,13 +287,13 @@ function getCfCommand(rootDir: string): string[] {
 async function findPatternTests(
   rootDir: string,
   filter?: string,
-  only?: PatternTestList,
+  only?: readonly string[],
 ): Promise<string[]> {
   // An explicit list names the files outright, which is what the topology
   // hands over when a lane was asked for part of this suite. A name
   // filter cannot express a set of unrelated files, and a list of them is
   // exactly what selection produces.
-  if (only !== undefined) return selectPatternTestFiles(only.files);
+  if (only !== undefined) return selectPatternTestFiles(only);
   const testFiles: string[] = [];
   for (const tree of PATTERN_TREES) {
     for await (
@@ -246,68 +317,17 @@ export function selectPatternTestFiles(files: readonly string[]): string[] {
 }
 
 /**
- * One line of a `--files` list: a pattern test's path and, where it is
- * known, the seconds one run of it is expected to take, after a tab.
+ * The pattern tests a `--files` list names, one path to a line, with
+ * blank lines passed over.
  */
-export function patternTestListLine(file: string, cost?: number): string {
-  return cost === undefined ? file : `${file}\t${cost}`;
-}
-
-/** The pattern tests a `--files` list names, and what each is expected to take. */
-export interface PatternTestList {
-  files: string[];
-
-  /** Seconds by file, for the files whose line carries a cost. */
-  costs: Map<string, number>;
-}
-
-/**
- * The list a `--files` file holds, in the form {@link patternTestListLine}
- * writes. A cost that is not a finite number of seconds throws, as does a
- * line with more than the two fields.
- */
-export function readPatternTestList(text: string): PatternTestList {
-  const files: string[] = [];
-  const costs = new Map<string, number>();
-  for (const line of text.split("\n")) {
-    const [written, cost, ...extra] = line.trim().split("\t");
-    if (!written) continue;
-    const file = written.replaceAll("\\", "/");
-    files.push(file);
-    if (cost === undefined) continue;
-    const seconds = Number(cost);
-    if (
-      extra.length > 0 || !Number.isFinite(seconds) ||
-      seconds < 0
-    ) {
-      throw new Error(
-        `Malformed pattern test list line: ${JSON.stringify(line)}`,
-      );
-    }
-    costs.set(file, seconds);
-  }
-  return { files, costs };
-}
-
-/**
- * The order the pool starts pattern test files in: the costliest first,
- * so the files still running once the rest have finished are short ones.
- * A file with no cost goes ahead of every file with one, because nothing
- * says it is not the longest. Files of equal cost, and files of no cost,
- * take the order the shuffle seed puts them in. Each file runs in a
- * process of its own, so their order decides how long the run takes and
- * nothing else.
- */
-export function patternTestStartOrder(
-  files: readonly string[],
-  costs: ReadonlyMap<string, number>,
-  seed: number,
-): string[] {
-  const cost = (file: string) => costs.get(file) ?? Infinity;
-  return shuffledPaths(files, seed).sort((a, b) =>
-    cost(a) === cost(b) ? 0 : cost(b) - cost(a)
+export function readPatternTestList(text: string): string[] {
+  return text.split("\n").map((line) => line.trim()).filter((line) =>
+    line !== ""
   );
 }
+
+/** How many `cf test --compile-only` processes the precompile runs at once. */
+const PRECOMPILE_PROCESSES = 5;
 
 /**
  * Compiles every file's program into the compile byte cache through
@@ -327,7 +347,7 @@ export async function precompilePatternTests(
   rootDir: string,
   testFiles: readonly string[],
   concurrency: number,
-  run: typeof runCommand = runCommand,
+  run: typeof runCommand,
 ): Promise<void> {
   const filesByRoot = new Map<string, string[]>();
   for (const testFile of testFiles) {
@@ -405,42 +425,43 @@ export async function precompilePatternTests(
 }
 
 /**
- * Find and run all .test.tsx pattern tests via `cf test`.
- * Captures per-test timing and optionally writes JUnit XML.
+ * Find and run all .test.tsx pattern tests via `cf test`, write a JUnit
+ * report of each file's timing into `junitDir`, and return each file's
+ * result. A failing file's output is printed, and is the message its
+ * result carries.
+ *
+ * The files run one at a time, in the order the shuffle seed puts them
+ * in, so the time each records is the time it takes with the runner to
+ * itself, which is what test selection charges a lane that holds it.
  */
 async function runPatternTests(
-  rootDir: string,
-  filter?: string,
-  junitDir?: string,
-  only?: PatternTestList,
-): Promise<boolean> {
-  const cfCmd = getCfCommand(rootDir);
+  { rootDir, junitDir, filter, only, seed, host }: PackageRun,
+): Promise<TestResult[]> {
+  const env = hostEnvironment(host);
+  const cfCmd = getCfCommand(rootDir, env);
   const testFiles = await findPatternTests(rootDir, filter, only);
 
   if (testFiles.length === 0) {
     console.log("No pattern test files found.");
-    return true;
+    return [];
   }
 
-  const concurrency = 5;
-  console.log(
-    `Found ${testFiles.length} pattern test(s), running ${concurrency} at a time`,
-  );
-  const startOrder = patternTestStartOrder(
-    testFiles,
-    only?.costs ?? new Map(),
-    shuffleSeed(),
-  );
+  console.log(`Found ${testFiles.length} pattern test(s)`);
 
-  // With a cache file to fill, every file's program is compiled once, in one
-  // process, before any test runs. Each `cf test` child seeds from that file
-  // only as it starts, so on a cold cache the children started together
-  // would each compile the modules they share, and the heavy files among
-  // them would run their steps beside that work.
-  if (Deno.env.get("CF_COMPILE_CACHE_FILE")) {
-    await precompilePatternTests(cfCmd, rootDir, testFiles, concurrency);
+  // With a cache file to fill, every file's program is compiled before any
+  // test runs, several processes at a time, since compiling is all they do.
+  // Each `cf test` child then seeds from that file as it starts, so the time
+  // recorded for a file is its own steps' and not its compile's.
+  if (env("CF_COMPILE_CACHE_FILE")) {
+    await precompilePatternTests(
+      cfCmd,
+      rootDir,
+      testFiles,
+      PRECOMPILE_PROCESSES,
+      host.run,
+    );
   }
-  const failed: string[] = [];
+  const results: TestResult[] = [];
   const testTimings: { file: string; durationMs: number; passed: boolean }[] =
     [];
 
@@ -448,112 +469,74 @@ async function runPatternTests(
   // run: it appends a record per file from its own wall clock, and it
   // clears the records variable in each cf child so the in-runner hook does
   // not record the same files a second time.
-  const recordsFragment = FragmentWriter.openForRun();
+  const recordsFragment = FragmentWriter.openForRun(env);
 
-  // Run as a pool: always keep `concurrency` tests in flight
-  let nextIndex = 0;
-  const running = new Set<Promise<void>>();
-
-  function enqueue(): void {
-    while (running.size < concurrency && nextIndex < startOrder.length) {
-      const testFile = startOrder[nextIndex++];
-      const p = (async () => {
-        const startMs = performance.now();
-        // A child that cannot even spawn is that file's failure, kept
-        // inside the pool promise: a rejection here would escape the
-        // Promise.race below, skip the fragment close, and leave the
-        // remaining children running unawaited.
-        let result: Awaited<ReturnType<typeof runCommand>>;
-        try {
-          result = await runCommand(
-            [
-              ...cfCmd,
-              "test",
-              "--root",
-              path.join(rootDir, patternRoot(testFile)),
-              testFile,
-            ],
-            {
-              cwd: rootDir,
-              env: {
-                CF_TEST_RECORDS_DIR: "",
-                // This harness owns its emulated store and has no serving host.
-                EXPERIMENTAL_SERVER_EXECUTION: "false",
-              },
-            },
-          );
-        } catch (error) {
-          result = { success: false, code: 127, stderr: String(error) };
-        }
-        const durationMs = performance.now() - startMs;
-
-        testTimings.push({
-          file: testFile,
-          durationMs,
-          passed: result.success,
-        });
-        recordsFragment?.append({
-          line: "record",
-          test: { k: "pattern", s: "patterns", n: testFile },
-          outcome: result.success ? "pass" : "fail",
-          durationMs: Math.round(durationMs),
-        });
-
-        if (result.success) {
-          console.log(
-            `✅ ${testFile} (${(durationMs / 1000).toFixed(1)}s)`,
-          );
-        } else {
-          console.log(
-            `❌ ${testFile} (${(durationMs / 1000).toFixed(1)}s)`,
-          );
-          failed.push(testFile);
-        }
-        if (result.stdout) {
-          for (const line of result.stdout.trimEnd().split("\n")) {
-            console.log(`   ${line}`);
-          }
-        }
-        if (result.stderr) {
-          for (const line of result.stderr.trimEnd().split("\n")) {
-            console.error(`   ${line}`);
-          }
-        }
-      })().finally(() => {
-        running.delete(p);
-        enqueue();
-      });
-      running.add(p);
+  for (const testFile of shuffledPaths(testFiles, seed)) {
+    const startMs = performance.now();
+    // A child that cannot even spawn is that file's failure, so the files
+    // after it still run and the fragment is still closed.
+    let result: Awaited<ReturnType<typeof runCommand>>;
+    try {
+      result = await host.run(
+        [
+          ...cfCmd,
+          "test",
+          "--root",
+          path.join(rootDir, patternRoot(testFile)),
+          testFile,
+        ],
+        {
+          cwd: rootDir,
+          env: {
+            CF_TEST_RECORDS_DIR: "",
+            // Pattern tests run the OFF arm in every lane, whatever the
+            // lane's own posture.
+            EXPERIMENTAL_SERVER_EXECUTION: "false",
+          },
+        },
+      );
+    } catch (error) {
+      result = { success: false, code: 127, stderr: String(error) };
     }
-  }
+    const durationMs = performance.now() - startMs;
 
-  enqueue();
-  while (running.size > 0) {
-    await Promise.race(running);
+    testTimings.push({
+      file: testFile,
+      durationMs,
+      passed: result.success,
+    });
+    const record = {
+      line: "record" as const,
+      test: { k: "pattern", s: "patterns", n: testFile },
+      outcome: result.success ? "pass" as const : "fail" as const,
+      durationMs: Math.round(durationMs),
+    };
+    recordsFragment?.append(record);
+
+    const seconds = (durationMs / 1000).toFixed(1);
+    if (result.success) {
+      console.log(`✅ ${testFile} (${seconds}s)`);
+      results.push({ record });
+      continue;
+    }
+    console.log(`❌ ${testFile} (${seconds}s)`);
+    const output = [result.stdout, result.stderr].filter(Boolean)
+      .join("\n");
+    for (const line of output.trimEnd().split("\n")) {
+      console.log(`   ${line}`);
+    }
+    results.push({
+      record: { ...record, file: testFile },
+      message: output,
+      rerun: integrationRerun("pattern-tests", testFile),
+    });
   }
   recordsFragment?.close();
 
-  if (failed.length === 0) {
-    console.log(`\n✅ All ${testFiles.length} pattern tests passed`);
-  } else {
-    console.error(
-      `\n❌ ${failed.length}/${testFiles.length} pattern tests failed:`,
-    );
-    for (const f of failed) {
-      console.error(`   ${f}`);
-    }
-  }
-
-  // Write JUnit XML with per-test timing
-  if (junitDir) {
-    await Deno.mkdir(junitDir, { recursive: true });
-    const xml = buildPatternTestJUnit(testTimings);
-    const junitPath = path.join(junitDir, "pattern-unit-tests.xml");
-    await Deno.writeTextFile(junitPath, xml);
-    console.log(`Wrote JUnit timing to ${junitPath}`);
-  }
-
-  return failed.length === 0;
+  await Deno.mkdir(junitDir, { recursive: true });
+  const junitPath = path.join(junitDir, "pattern-unit-tests.xml");
+  await Deno.writeTextFile(junitPath, buildPatternTestJUnit(testTimings));
+  return results;
 }
 
 /** Build a JUnit XML document from per-test pattern test timings. */
@@ -654,20 +637,22 @@ export async function findIntegrationTestFiles(
 }
 
 /**
- * Build the `deno test` arguments for a name-filtered integration run. The
+ * Build the `deno test` command for a name-filtered integration run. The
  * matching files are passed as explicit paths under `relDir`. Deno does not
  * filter explicitly-passed paths through a package `test` config's `exclude`,
  * so they run even where that config drops the `integration/` directory.
- * With a JUnit directory the run also carries the registration preload,
- * which is what gives the report's cases their files.
+ * The files run in the order `seed` shuffles them into. The run writes its
+ * JUnit report into `junitDir`, and carries the registration preload beside
+ * it.
  */
-export function buildFilteredTestArgs(
+export function filteredTestCommand(
   pkg: string,
   relDir: string,
   testFiles: string[],
-  junitDir?: string,
+  junitDir: string,
+  seed: number,
 ): string[] {
-  const args = ["test", "--no-check", "-A"];
+  const args = ["deno", "test", "--no-check", "-A", shuffleFlag(seed)];
 
   if (pkg === "patterns") {
     args.push("--v8-flags=--max-old-space-size=4096", "--trace-leaks");
@@ -675,10 +660,8 @@ export function buildFilteredTestArgs(
     args.push("--trace-leaks", "--parallel");
   }
 
-  if (junitDir) {
-    args.push(`--junit-path=${path.join(junitDir, `${pkg}.xml`)}`);
-    args.push(preloadArgument());
-  }
+  args.push(`--junit-path=${path.join(junitDir, `${pkg}.xml`)}`);
+  args.push(preloadArgument());
 
   for (const name of testFiles) {
     args.push(`./${relDir}/${name}`);
@@ -696,14 +679,17 @@ export function buildFilteredTestArgs(
  * `integration/` directory, leaving no modules to run. Explicit file paths skip
  * that filtering, so the files are enumerated here instead of passing a glob.
  * Returns a failing result, without running anything, when no file matches.
+ * The report goes into `junitDir`, an absolute path the caller has made. The
+ * files run in the order `seed` shuffles them into.
  */
 export async function runFilteredIntegration(
   pkg: string,
   packageDir: string,
   env: Record<string, string>,
   filter: string,
-  junitDir?: string,
-  run: typeof runCommand = runCommand,
+  junitDir: string,
+  seed: number,
+  run: typeof runCommand,
 ): Promise<{ success: boolean; code: number }> {
   const relDir = integrationTestDir(pkg);
   const testFiles = await findIntegrationTestFiles(
@@ -718,29 +704,84 @@ export async function runFilteredIntegration(
     return { success: false, code: 1 };
   }
 
-  // Resolved for the same reason as in runPackageIntegration: the child's
-  // working directory is the package, not the orchestrator's.
-  let resolvedJunitDir: string | undefined;
-  if (junitDir) {
-    resolvedJunitDir = path.resolve(junitDir);
-    await Deno.mkdir(resolvedJunitDir, { recursive: true });
-  }
-  const args = buildFilteredTestArgs(pkg, relDir, testFiles, resolvedJunitDir);
-  return await run(["deno", ...args], {
+  const command = filteredTestCommand(pkg, relDir, testFiles, junitDir, seed);
+  return await run(command, {
     cwd: packageDir,
     env,
     inheritStdio: true,
   });
 }
 
+/** How one package's integration tests went. */
+export interface PackageOutcome {
+  success: boolean;
+  code: number;
+
+  /** The tests its JUnit report, or the pattern runner, reported. */
+  tests: TestResult[];
+}
+
+/**
+ * A command that runs an integration test of `pkg` again: the run of the
+ * test file holding it, or of the whole package where the file is not
+ * known or the package takes no name. A pattern test is its file, named by
+ * its whole path.
+ */
+export function integrationRerun(pkg: string, file?: string): string {
+  if (file === undefined || UNFILTERED_PACKAGES.includes(pkg)) {
+    return `deno task integration ${pkg}`;
+  }
+  const name = pkg === "pattern-tests"
+    ? file
+    : path.basename(file).replace(/\.test\.ts$/, "");
+  return `deno task integration ${pkg} ${shellQuote(name)}`;
+}
+
+/** What a package's integration tests run against, and how they are chosen. */
+export interface PackageRun {
+  /** The toolshed a package that needs a server reaches. */
+  apiUrl: string;
+
+  rootDir: string;
+
+  /**
+   * The directory every `deno test` writes its JUnit report into, absolute,
+   * since each runs in its own package's directory.
+   */
+  junitDir: string;
+
+  /** The seed the run shuffles its test files by. */
+  seed: number;
+
+  host: IntegrationHost;
+
+  /** The name filter the run was given, if any. */
+  filter?: string;
+
+  /** The pattern tests a `--files` list names, in place of the name filter. */
+  only?: readonly string[];
+}
+
+/**
+ * Runs one package's integration tests, with every `deno test` it starts
+ * writing its JUnit report into `junitDir`, and returns what they came to.
+ */
 export async function runPackageIntegration(
   pkg: string,
-  apiUrl: string,
-  rootDir: string,
-  filter?: string,
-  junitDir?: string,
-  only?: PatternTestList,
-): Promise<boolean> {
+  run: PackageRun,
+): Promise<PackageOutcome> {
+  const { apiUrl, rootDir, junitDir, filter, host } = run;
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`Running integration tests for: ${pkg}`);
+  console.log(`${"=".repeat(60)}`);
+  if (pkg === "pattern-tests") {
+    // A selection that names no file ran nothing, which is not a pass.
+    const tests = await runPatternTests(run);
+    const success = tests.length > 0 &&
+      tests.every(({ record }) => record.outcome !== "fail");
+    return { success, code: success ? 0 : 1, tests };
+  }
+
   const packageDirName = pkg === "cli-fuse"
     ? "cli"
     : pkg === "patterns-reload"
@@ -748,12 +789,8 @@ export async function runPackageIntegration(
     : pkg;
   const packageDir = path.join(
     rootDir,
-    "packages",
-    packageDirName,
+    packageDirNamed(rootDir, packageDirName),
   );
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`Running integration tests for: ${pkg}`);
-  console.log(`${"=".repeat(60)}`);
 
   const env: Record<string, string> = {
     LOG_LEVEL: "warn",
@@ -762,26 +799,25 @@ export async function runPackageIntegration(
       : {}),
   };
 
-  // Set INTEGRATION_TEST_FLAGS for JUnit output if --junit-dir was specified.
-  // The path is resolved against the orchestrator's working directory: the
-  // package task runs with the package directory as its own, so a relative
-  // path would land the XML under packages/<pkg>/ where the workflow's
-  // artifact step never looks.
-  if (junitDir) {
-    await Deno.mkdir(junitDir, { recursive: true });
-    const junitPath = path.resolve(junitDir, `${pkg}.xml`);
-    // The preload travels with the JUnit path: the report names each case
-    // by its describe chain, and the map the preload leaves in the spool
-    // is what turns that chain back into a file.
-    env.INTEGRATION_TEST_FLAGS =
-      `--junit-path=${junitPath} ${preloadArgument()}`;
-  } else {
-    // Pass through INTEGRATION_TEST_FLAGS if set in environment
-    const testFlags = Deno.env.get("INTEGRATION_TEST_FLAGS");
-    if (testFlags) {
-      env.INTEGRATION_TEST_FLAGS = testFlags;
-    }
-  }
+  // The JUnit path is resolved against the orchestrator's working
+  // directory: the package task runs with the package directory as its
+  // own. A report left by an earlier run is removed, so that a package
+  // writing none is not read as having written it. The preload travels
+  // with the JUnit path: the report names each case by its describe chain,
+  // and where the run records, the map the preload leaves in the spool is
+  // what turns that chain back into a file. Flags already in the
+  // environment are passed on ahead of them, so that the report goes where
+  // the summary reads it.
+  await Deno.mkdir(junitDir, { recursive: true });
+  const junitPath = path.join(junitDir, `${pkg}.xml`);
+  await Deno.remove(junitPath).catch((error) => {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  });
+  env.INTEGRATION_TEST_FLAGS = [
+    ...(host.env.get("INTEGRATION_TEST_FLAGS") ?? "").split(/\s+/),
+    `--junit-path=${junitPath}`,
+    preloadArgument(),
+  ].join(" ").trim();
 
   // Add API_URL for packages that need it
   if (ALL_PACKAGES_WITH_SERVER.includes(pkg)) {
@@ -791,11 +827,11 @@ export async function runPackageIntegration(
   // For browser test packages, pass through HEADLESS and PIPE_CONSOLE
   if (HEADLESS_PACKAGES.includes(pkg)) {
     // Default HEADLESS to "1" unless explicitly set in environment
-    const headlessEnv = Deno.env.get("HEADLESS");
+    const headlessEnv = host.env.get("HEADLESS");
     env.HEADLESS = headlessEnv ?? "1";
 
     // Pass through PIPE_CONSOLE if set
-    const pipeConsoleEnv = Deno.env.get("PIPE_CONSOLE");
+    const pipeConsoleEnv = host.env.get("PIPE_CONSOLE");
     if (pipeConsoleEnv) {
       env.PIPE_CONSOLE = pipeConsoleEnv;
     }
@@ -803,12 +839,10 @@ export async function runPackageIntegration(
 
   let result: { success: boolean; code: number };
 
-  if (pkg === "pattern-tests") {
-    return await runPatternTests(rootDir, filter, junitDir, only);
-  } else if (pkg === "cli") {
+  if (pkg === "cli") {
     // CLI uses a special shell script
     env.CF_CLI_INTEGRATION_USE_LOCAL = "1";
-    result = await runCommand(
+    result = await host.run(
       ["bash", "./integration/integration.sh"],
       { cwd: packageDir, env, inheritStdio: true },
     );
@@ -816,13 +850,13 @@ export async function runPackageIntegration(
     // Mirror the dedicated GitHub Actions FUSE suite, but keep it opt-in
     // locally because it depends on platform-specific FUSE setup.
     env.CF_CLI_INTEGRATION_USE_LOCAL = "1";
-    env.FUSE_DEEP_ENTITY_PROBE = Deno.env.get("FUSE_DEEP_ENTITY_PROBE") ?? "0";
-    result = await runCommand(
+    env.FUSE_DEEP_ENTITY_PROBE = host.env.get("FUSE_DEEP_ENTITY_PROBE") ?? "0";
+    result = await host.run(
       ["bash", "./integration/fuse-exec.sh"],
       { cwd: packageDir, env, inheritStdio: true },
     );
   } else if (pkg === "patterns-reload") {
-    result = await runCommand(["deno", "task", "integration:reload"], {
+    result = await host.run(["deno", "task", "integration:reload"], {
       cwd: packageDir,
       env,
       inheritStdio: true,
@@ -834,10 +868,12 @@ export async function runPackageIntegration(
       env,
       filter,
       junitDir,
+      run.seed,
+      host.run,
     );
   } else {
     // Run the standard integration task
-    result = await runCommand(["deno", "task", "integration"], {
+    result = await host.run(["deno", "task", "integration"], {
       cwd: packageDir,
       env,
       inheritStdio: true,
@@ -852,7 +888,30 @@ export async function runPackageIntegration(
     );
   }
 
-  return result.success;
+  let tests: TestResult[] = [];
+  try {
+    const spool = recordsDir(hostEnvironment(host));
+    const prefix = packageDirNamed(rootDir, packageDirName);
+    const report = readJUnit(await Deno.readTextFile(junitPath), {
+      kind: "integration",
+      scope: pkg,
+      filePrefix: prefix,
+      fileByName: spool === undefined
+        ? new Map()
+        : await readNameMaps(spool, { ranIn: prefix }),
+    });
+    tests = testResults(
+      report.records,
+      report.failures,
+      (record) => integrationRerun(pkg, record.file),
+    );
+  } catch (error) {
+    // A package whose command writes no report has no tests to name.
+    if (!(error instanceof Deno.errors.NotFound)) {
+      console.warn(`test summary: reading ${junitPath} failed: ${error}`);
+    }
+  }
+  return { success: result.success, code: result.code, tests };
 }
 
 function printUsage(): void {
@@ -880,9 +939,7 @@ Arguments:
   --files=<path>    A file naming the pattern tests to run, one path per
                     line, in place of the name filter. This is how a
                     continuous-integration lane asks for the part of the
-                    suite it was given. A path may be followed by a tab
-                    and the seconds it is expected to take; the costliest
-                    files start first.
+                    suite it was given.
 
 Examples:
   deno task integration                       # Run all, auto-cleanup
@@ -900,48 +957,91 @@ Notes:
 
 Environment:
   CF_BINARY      - Path to the cf binary (for pattern-tests target).
-                   Falls back to running packages/cli/mod.ts via deno.
+                   Falls back to running runtime/cli/mod.ts via deno.
 Server ports (with offset):
   Toolshed:  ${ports.toolshed} + offset
   Shell:     ${ports.shell} + offset
 
 Log files (after servers start):
-  packages/shell/local-dev-shell.log
-  packages/toolshed/local-dev-toolshed.log
+  runtime/shell/local-dev-shell.log
+  runtime/toolshed/local-dev-toolshed.log
 `);
 }
 
 /**
- * Parse a port offset, exiting with a clear error if it is not a non-negative
- * integer. Shared by --port-offset and the PORT_OFFSET env var so an invalid
- * value fails fast instead of becoming NaN in URLs and command arguments.
+ * A port offset parsed from `value`, or `undefined`, with the error printed,
+ * where it is not a non-negative integer. Shared by --port-offset and the
+ * PORT_OFFSET env var so an invalid value fails fast instead of becoming NaN
+ * in URLs and command arguments.
  */
-function parsePortOffset(value: string, source: string): number {
+function parsePortOffset(value: string, source: string): number | undefined {
   const offset = parseInt(value, 10);
   if (Number.isNaN(offset) || offset < 0) {
     console.error(`Invalid port offset from ${source}: "${value}"`);
-    Deno.exit(1);
+    return undefined;
   }
   return offset;
 }
 
-async function main(): Promise<void> {
-  const args = Deno.args;
+/**
+ * Runs `deno task integration` with `args`, from the repository at `host`'s
+ * working directory, and returns the status the process exits with.
+ */
+export async function runIntegration(
+  args: readonly string[],
+  host: IntegrationHost,
+): Promise<number> {
+  // Settled before any package's task starts, so every runner this run
+  // reaches shuffles the same way.
+  const seed = host.pinShuffleSeed();
+  try {
+    return await integrate(args, seed, host);
+  } catch (error) {
+    console.error("Integration run failed:", error);
+    return 1;
+  }
+}
 
+/** Helper for `runIntegration()`, which runs everything after the seed. */
+async function integrate(
+  args: readonly string[],
+  seed: number,
+  host: IntegrationHost,
+): Promise<number> {
   // Handle --help
   if (args.includes("--help") || args.includes("-h")) {
     printUsage();
-    Deno.exit(0);
+    return 0;
   }
 
   // This entry point owns the run for test recording when a personal key
   // is present, joins the enclosing spool inside CI, and stays inert with
   // neither. Producers in this process and its children find the spool
   // through the environment.
-  const recording: RunRecording = await startRunRecording();
-  if (recording.mode === "own" && recordsDir() === undefined) {
-    Deno.env.set(RECORDS_DIR_VARIABLE, recording.spool.dir);
+  const env = hostEnvironment(host);
+  const recording = await host.startRecording(env);
+  if (recording.mode === "own" && recordsDir(env) === undefined) {
+    host.env.set(RECORDS_DIR_VARIABLE, recording.spool.dir);
   }
+  // Shipped however the run returns or throws, a failing run's records being
+  // the interesting ones; a run that gets as far as its summary prints that
+  // first. A signal ends the process without shipping them.
+  try {
+    return await runRecorded(args, seed, host, env);
+  } finally {
+    await host.finishRecording(recording);
+  }
+}
+
+/** Helper for `integrate()`, which runs everything after recording starts. */
+async function runRecorded(
+  args: readonly string[],
+  seed: number,
+  host: IntegrationHost,
+  env: Environment,
+): Promise<number> {
+  // Relative paths on the command line name paths in the working directory.
+  const rootDir = host.cwd();
 
   // Parse flags
   let cliPortOffset: number | undefined;
@@ -952,22 +1052,20 @@ async function main(): Promise<void> {
   for (const arg of args) {
     if (arg.startsWith("--port-offset=")) {
       cliPortOffset = parsePortOffset(arg.split("=")[1], "--port-offset");
+      if (cliPortOffset === undefined) return 1;
     } else if (arg.startsWith("--junit-dir=")) {
-      junitDir = arg.split("=")[1];
+      junitDir = path.resolve(rootDir, arg.slice("--junit-dir=".length));
     } else if (arg.startsWith("--files=")) {
       // The file naming the pattern tests to run, one path per line. The
       // list arrives in a file rather than on the command line because a
       // selected set runs to hundreds of paths.
-      onlyFilesPath = arg.split("=")[1];
+      onlyFilesPath = path.resolve(rootDir, arg.slice("--files=".length));
     } else if (!arg.startsWith("-")) {
       positionalArgs.push(arg);
     }
   }
 
-  // If --junit-dir is set, pass per-package INTEGRATION_TEST_FLAGS
-  if (junitDir) {
-    await Deno.mkdir(junitDir, { recursive: true });
-  }
+  const startedAt = Date.now();
 
   const onlyList = onlyFilesPath === undefined
     ? undefined
@@ -980,21 +1078,20 @@ async function main(): Promise<void> {
   if (packageFilter && !ALL_PACKAGES.includes(packageFilter)) {
     console.error(`Unknown package: ${packageFilter}`);
     console.error(`Available packages: ${ALL_PACKAGES.join(", ")}`);
-    Deno.exit(1);
+    return 1;
   }
-
-  const rootDir = Deno.cwd();
 
   // Priority: CLI arg > env var > generated. An explicit offset is reused as-is
   // and its servers are left running; a generated offset is tried at random,
   // retried on a port collision, and stopped after the run.
   // An empty or whitespace PORT_OFFSET is treated as unset (use a generated
   // offset); a non-empty value is validated so a typo fails fast.
-  const envPortOffsetRaw = Deno.env.get("PORT_OFFSET");
-  const envPortOffset =
-    envPortOffsetRaw !== undefined && envPortOffsetRaw.trim() !== ""
-      ? parsePortOffset(envPortOffsetRaw, "PORT_OFFSET")
-      : undefined;
+  const envPortOffsetRaw = env("PORT_OFFSET");
+  let envPortOffset: number | undefined;
+  if (envPortOffsetRaw !== undefined && envPortOffsetRaw.trim() !== "") {
+    envPortOffset = parsePortOffset(envPortOffsetRaw, "PORT_OFFSET");
+    if (envPortOffset === undefined) return 1;
+  }
   const portOffsetWasSet = cliPortOffset !== undefined ||
     envPortOffset !== undefined;
   const offsetSource = cliPortOffset !== undefined
@@ -1031,153 +1128,134 @@ async function main(): Promise<void> {
   let ownsServers = false;
   let serverStarted = false;
   let cleanedUp = false;
-  let exitCode = 0;
+  // Every package writes a JUnit report, which is what the summary is
+  // read from: into the directory named, or into one of this run's own
+  // that it removes when it ends.
+  let ownJunitDir: string | undefined;
 
   const cleanup = async (): Promise<void> => {
     if (cleanedUp) return;
     cleanedUp = true;
+    if (ownJunitDir !== undefined) {
+      await Deno.remove(ownJunitDir, { recursive: true });
+    }
     if (ownsServers) {
       console.log("\nCleaning up servers...");
-      await stopServers(portOffset, rootDir);
+      await stopServers(portOffset, rootDir, host.run);
     } else if (serverStarted) {
       console.log("\nLeaving servers running (PORT_OFFSET was set).");
     }
+  };
+
+  // Starts the servers the run needs, and returns whether they started.
+  const startNeededServers = async (): Promise<boolean> => {
+    if (portOffsetWasSet) {
+      // Reuse the requested offset, stopping anything already on its ports.
+      await stopServers(portOffset, rootDir, host.run);
+      apiUrl = `http://localhost:${ports.toolshed + portOffset}`;
+      console.log(`PORT_OFFSET: ${portOffset}${offsetSource}`);
+      console.log(`API_URL: ${apiUrl}`);
+      serverStarted = await startServers(portOffset, rootDir, host.run) === 0;
+      return serverStarted;
+    }
+    // Try a random offset and let the servers report a real port collision
+    // by failing to bind (PORT_IN_USE_EXIT); retry on a fresh offset only in
+    // that case. Any other failure is not port-related and would recur on
+    // every offset, so it stops the run.
+    const maxStartAttempts = 5;
+    for (let attempt = 1; attempt <= maxStartAttempts; attempt++) {
+      portOffset = chooseGeneratedPortOffset(host.random);
+      apiUrl = `http://localhost:${ports.toolshed + portOffset}`;
+      console.log(`PORT_OFFSET: ${portOffset}${offsetSource}`);
+      console.log(`API_URL: ${apiUrl}`);
+      // Once an offset is chosen, this run is responsible for stopping
+      // anything started on it, including after a failed attempt.
+      ownsServers = true;
+      const startCode = await startServers(portOffset, rootDir, host.run);
+      if (startCode === 0) {
+        serverStarted = true;
+        break;
+      }
+      if (startCode !== PORT_IN_USE_EXIT) {
+        break;
+      }
+      console.warn(
+        `Offset ${portOffset} hit a port collision; retrying...`,
+      );
+    }
+    return serverStarted;
   };
 
   // A signal terminates the process without running `finally`, so stop the
   // servers from the handler before exiting.
   const onSignal = () => {
     console.log("\nInterrupted, cleaning up...");
-    cleanup().finally(() => Deno.exit(130));
+    cleanup().finally(() => host.exit(130));
   };
-  Deno.addSignalListener("SIGINT", onSignal);
-  Deno.addSignalListener("SIGTERM", onSignal);
+  host.addSignalListener("SIGINT", onSignal);
+  host.addSignalListener("SIGTERM", onSignal);
 
+  const tests: TestResult[] = [];
+  const commands: FailedCommand[] = [];
+  const unreported: string[] = [];
+  const notes: string[] = [];
   try {
-    if (needsServer) {
-      const serverEnv: Record<string, string> = {};
-      if (portOffsetWasSet) {
-        // Reuse the requested offset, stopping anything already on its ports.
-        await stopServers(portOffset, rootDir);
-        apiUrl = `http://localhost:${ports.toolshed + portOffset}`;
-        console.log(`PORT_OFFSET: ${portOffset}${offsetSource}`);
-        console.log(`API_URL: ${apiUrl}`);
-        if (await startServers(portOffset, rootDir, serverEnv) !== 0) {
-          console.error("Failed to start servers, aborting.");
-          exitCode = 1;
-          return;
+    const reportDir = junitDir ??
+      (ownJunitDir = await Deno.makeTempDir({
+        prefix: "deno-task-integration-",
+      }));
+    if (needsServer && !await startNeededServers()) {
+      notes.push("The servers did not start, so no test ran.");
+    } else {
+      // Packages that need a server run first, then the ones that do not.
+      const ordered = [
+        ...packagesToRun.filter((p) => ALL_PACKAGES_WITH_SERVER.includes(p)),
+        ...packagesToRun.filter((p) => PACKAGES_WITHOUT_SERVER.includes(p)),
+      ];
+      for (const pkg of ordered) {
+        const outcome = await runPackageIntegration(pkg, {
+          apiUrl,
+          rootDir,
+          junitDir: reportDir,
+          seed,
+          host,
+          filter: nameFilter,
+          only: onlyList,
+        });
+        for (const test of outcome.tests) tests.push(test);
+        if (outcome.tests.length === 0 && outcome.success) {
+          unreported.push(pkg);
         }
-        serverStarted = true;
-      } else {
-        // Try a random offset and let the servers report a real port collision
-        // by failing to bind (PORT_IN_USE_EXIT); retry on a fresh offset only in
-        // that case. Any other failure is not port-related and would recur on
-        // every offset, so it stops the run.
-        const maxStartAttempts = 5;
-        for (let attempt = 1; attempt <= maxStartAttempts; attempt++) {
-          portOffset = chooseGeneratedPortOffset();
-          apiUrl = `http://localhost:${ports.toolshed + portOffset}`;
-          console.log(`PORT_OFFSET: ${portOffset}${offsetSource}`);
-          console.log(`API_URL: ${apiUrl}`);
-          // Once an offset is chosen, this run is responsible for stopping
-          // anything started on it, including after a failed attempt.
-          ownsServers = true;
-          const startCode = await startServers(portOffset, rootDir, serverEnv);
-          if (startCode === 0) {
-            serverStarted = true;
-            break;
-          }
-          if (startCode !== PORT_IN_USE_EXIT) {
-            break;
-          }
-          console.warn(
-            `Offset ${portOffset} hit a port collision; retrying...`,
-          );
-        }
-        if (!serverStarted) {
-          console.error("Failed to start servers, aborting.");
-          exitCode = 1;
-          return;
+        if (
+          !outcome.success &&
+          outcome.tests.every(({ record }) => record.outcome !== "fail")
+        ) {
+          commands.push({ label: `${pkg} (exit code ${outcome.code})` });
         }
       }
     }
-
-    // Run integration tests
-    const results: { pkg: string; success: boolean }[] = [];
-
-    // Run packages that need server first
-    for (
-      const pkg of packagesToRun.filter((p) =>
-        ALL_PACKAGES_WITH_SERVER.includes(p)
-      )
-    ) {
-      const success = await runPackageIntegration(
-        pkg,
-        apiUrl,
-        rootDir,
-        nameFilter,
-        junitDir,
-        onlyList,
-      );
-      results.push({ pkg, success });
-    }
-
-    // Then run packages that don't need server
-    for (
-      const pkg of packagesToRun.filter((p) =>
-        PACKAGES_WITHOUT_SERVER.includes(p)
-      )
-    ) {
-      const success = await runPackageIntegration(
-        pkg,
-        apiUrl,
-        rootDir,
-        nameFilter,
-        junitDir,
-        onlyList,
-      );
-      results.push({ pkg, success });
-    }
-
-    // Summary
-    console.log(`\n${"=".repeat(60)}`);
-    console.log("Summary");
-    console.log(`${"=".repeat(60)}`);
-
-    const passed = results.filter((r) => r.success);
-    const failed = results.filter((r) => !r.success);
-
-    for (const { pkg, success } of results) {
-      console.log(`  ${success ? "✅" : "❌"} ${pkg}`);
-    }
-
-    console.log();
-    console.log(`Passed: ${passed.length}/${results.length}`);
-
-    if (failed.length > 0) {
-      console.log(`Failed: ${failed.map((r) => r.pkg).join(", ")}`);
-      exitCode = 1;
-    }
   } catch (error) {
     console.error("Integration run failed:", error);
-    exitCode = 1;
+    notes.push(`The run stopped: ${error}`);
   } finally {
-    Deno.removeSignalListener("SIGINT", onSignal);
-    Deno.removeSignalListener("SIGTERM", onSignal);
+    host.removeSignalListener("SIGINT", onSignal);
+    host.removeSignalListener("SIGTERM", onSignal);
     await cleanup();
-    // Ship before the exit call: Deno.exit runs no further finally blocks,
-    // and a failing run's records are the interesting ones.
-    await finishRunRecording(recording);
-    Deno.exit(exitCode);
   }
+  const summary = {
+    tests,
+    commands,
+    unreported,
+    notes,
+    logs: "the output above" +
+      (serverStarted
+        ? ", runtime/toolshed/local-dev-toolshed.log, and " +
+          "runtime/shell/local-dev-shell.log"
+        : ""),
+    seconds: (Date.now() - startedAt) / 1000,
+  };
+  printSummary(summary);
+  return passed(summary) ? 0 : 1;
 }
 
-if (import.meta.main) {
-  // Settled before any package's task starts, so every runner this run
-  // reaches shuffles the same way.
-  pinShuffleSeed();
-  main().catch((error) => {
-    console.error("Integration run failed:", error);
-    Deno.exit(1);
-  });
-}
+if (import.meta.main) Deno.exit(await runIntegration(Deno.args, DENO_HOST));

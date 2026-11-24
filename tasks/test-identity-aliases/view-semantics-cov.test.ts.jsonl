@@ -1,0 +1,1 @@
+{"date":"2026-11-23","from":{"k":"unit","s":"cli","n":"diff semantics: prewarm warms the diff program off the query path"},"to":{"k":"unit","s":"cli","n":"diff semantics: a definition on a line the diff shows maps back into the diff"}}

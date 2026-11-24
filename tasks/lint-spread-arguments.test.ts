@@ -55,4 +55,15 @@ describe("lint-spread-arguments", () => {
       const all = [...records, ...more];
     `)).toEqual([]);
   });
+
+  it("returns nothing for a spread into a private method of that name", () => {
+    expect(reported(`
+      class Queue {
+        #push(...items) {}
+        add(more) {
+          this.#push(...more);
+        }
+      }
+    `)).toEqual([]);
+  });
 });

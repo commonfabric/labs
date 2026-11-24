@@ -237,8 +237,8 @@ minted into the same entries, not the mechanism.
   canonicalization property tests with multi-`*` paths.
 
   **Implementation note (Stage A landed).** Shipped in
-  `packages/runner/src/cfc/prepare.ts` + `types.ts` with the full test
-  list in `packages/runner/test/cfc-template-population.test.ts` (both
+  `runtime/runner/src/cfc/prepare.ts` + `types.ts` with the full test
+  list in `runtime/runner/test/cfc-template-population.test.ts` (both
   §1 under-taints red-first on main: the child probe joined nothing, the
   slot probe joined only the transport label). Two measured refinements
   against the §2 caution, both found by the phase-B pointwise suite —
@@ -326,10 +326,10 @@ minted into the same entries, not the mechanism.
   per-field tests from the §4.6.4.2 example, SC-25 tail updated.
 
   **Implementation note (Stage B landed, 2026-07-10, #4660).** Shipped in
-  `packages/runner/src/cfc/label-metadata-population.ts` (mint derivation +
+  `runtime/runner/src/cfc/label-metadata-population.ts` (mint derivation +
   wildcard resolver) wired into the `prepare.ts` persist seam and the
   `label-introspection.ts` consumption, tests in
-  `packages/runner/test/cfc-template-metadata-population.test.ts`. Entry
+  `runtime/runner/test/cfc-template-metadata-population.test.ts`. Entry
   form: `origin:"label-metadata"` with `observes:"labelMetadata"`, plain
   `IFCLabel` under `label` per §3.3. The dedicated ORIGIN because the origin
   axis is the update-discipline axis and these entries' discipline — a pure

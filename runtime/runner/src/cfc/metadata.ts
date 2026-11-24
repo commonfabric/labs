@@ -1,0 +1,635 @@
+/**
+ * Reading the CFC envelope a document stores at its reserved `["cfc"]`
+ * member. `docs/specs/cfc-stored-envelope.md` states the rule every reader
+ * here keeps and what each consumer owes it: a document whose stored
+ * envelope this build cannot interpret is never read as an unlabeled
+ * document.
+ *
+ * {@link interpretStoredEnvelope} is the one place that decides which of the
+ * three outcomes a stored value gets — an envelope, nothing stored, or a
+ * {@link StoredCfcMetadataError} — and every entry point below goes through
+ * it, including the prepare pass's `storedMetadataFor`, so two readers
+ * cannot differ over the same stored value.
+ */
+
+import { isDeepFrozen } from "@commonfabric/data-model";
+import type { CfcAtom } from "@commonfabric/api/cfc";
+import type { URI } from "@commonfabric/memory/interface";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import {
+  broaderCellScopes,
+  broaderEntriesForReader,
+} from "@commonfabric/memory/v2/cfc-scoped-instance-labels";
+import {
+  isKnownCfcEnvelopeVersion,
+  isReadableStoredCfcEnvelope,
+} from "@commonfabric/memory/v2/cfc-stored-envelope";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import type { NormalizedFullLink } from "../link-utils.ts";
+import type {
+  IExtendedStorageTransaction,
+  MediaType,
+  MemorySpace,
+} from "../storage/interface.ts";
+import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import { normalizeCellScope } from "../scope.ts";
+import { canonicalizeLogicalPath } from "./canonical.ts";
+import {
+  cfcLabelDocumentHash,
+  isCfcLabelDocumentContent,
+  isCfcLabelReference,
+  lookupCfcLabelDocument,
+  parseCfcLabelReference,
+  registerCfcLabelDocument,
+} from "./label-documents.ts";
+import { isLabelMetadataTemplateEntry } from "./label-metadata-population.ts";
+import { confidentialityOnly, type IFCLabel } from "./label-view-core.ts";
+import type {
+  CfcMetadata,
+  LabelMapEntry,
+  LabelObservationClass,
+  StoredCfcMetadata,
+  StoredLabelMapEntry,
+} from "./types.ts";
+
+/**
+ * How a reader marks its read of the reserved position and of the label
+ * documents a version-2 envelope names. Both are the runtime resolving a
+ * label rather than the caller consuming content, so both carry
+ * `internalVerifierRead`; a reader that additionally hides its reads from
+ * reactivity passes its own policy (the prepare pass does, see
+ * `prepare.ts`).
+ */
+export type StoredCfcReadPolicy = Parameters<
+  IExtendedStorageTransaction["readOrThrow"]
+>[1];
+
+/**
+ * The policy of a reader whose caller depends on the envelope it reads:
+ * marked as a verifier read, and visible to reactivity, so a writer
+ * re-runs when the envelope it read changes.
+ */
+const DEPENDENT_READ: StoredCfcReadPolicy = { meta: internalVerifierRead };
+
+/** A document whose reserved `["cfc"]` position a reader below reaches. */
+export type StoredCfcTarget = {
+  space: MemorySpace;
+  id: string;
+  scope?: NormalizedFullLink["scope"];
+  type?: MediaType;
+};
+
+const isPrefix = (
+  left: readonly string[],
+  right: readonly string[],
+): boolean =>
+  left.length <= right.length &&
+  left.every((segment, index) => segment === right[index]);
+
+/**
+ * An error a reader of a stored envelope throws to fail CLOSED: the envelope
+ * is present and its labels cannot be produced, so the document is not an
+ * unlabeled one. Every consumer that swallows other read failures rethrows
+ * this class — treating the envelope as absent would read a labeled document
+ * as unlabeled, which is exactly the failure each subclass exists to
+ * prevent.
+ */
+export abstract class StoredCfcMetadataError extends Error {}
+
+/**
+ * A stored envelope whose `version` this build does not understand. The
+ * labels cannot be interpreted, so every consumer fails CLOSED on this
+ * error — treating the envelope as absent would read a labeled document
+ * as unlabeled, which is exactly the failure a format version exists to
+ * prevent.
+ */
+export class UnknownCfcMetadataVersionError extends StoredCfcMetadataError {
+  constructor(version: unknown) {
+    super(
+      `stored CFC metadata version ${
+        JSON.stringify(version)
+      } is not one this build interprets`,
+    );
+    this.name = "UnknownCfcMetadataVersionError";
+  }
+}
+
+/**
+ * Whether `value` is an envelope `version` this build interprets. The
+ * versions are the ones every reader of a stored envelope interprets,
+ * Memory's `v2/cfc-stored-envelope`; typing the check against the
+ * metadata's own version union makes a version Memory reads and
+ * `StoredCfcMetadata` does not declare a compile error, since
+ * {@link isCfcMetadata} narrows on the strength of it. A version
+ * `StoredCfcMetadata` declares and Memory does not read is never read.
+ */
+export const isKnownCfcMetadataVersion: (
+  value: unknown,
+) => value is StoredCfcMetadata["version"] = isKnownCfcEnvelopeVersion;
+
+/**
+ * A stored envelope at the reserved position that carries no label map this
+ * build can walk. The labels cannot be read, so a consumer that resolves
+ * labels fails CLOSED on this error: a document whose envelope is present but
+ * unreadable is not an unlabeled document.
+ */
+export class UnreadableCfcMetadataError extends StoredCfcMetadataError {
+  constructor(id: string) {
+    super(
+      `stored CFC metadata for ${id} carries no label map this build can read`,
+    );
+    this.name = "UnreadableCfcMetadataError";
+  }
+}
+
+/**
+ * A version-2 envelope naming a label document that neither the space nor
+ * the realm's label registry can back with label-shaped content verifying
+ * against its id, or naming one outside the `cid:` namespace. The label
+ * cannot be produced, so every consumer fails CLOSED on this error, as on
+ * an unknown version. Recoverable in principle — the document may arrive
+ * by sync — so the failure is never memoized.
+ */
+export class UnresolvableCfcLabelDocumentError extends StoredCfcMetadataError {
+  constructor(readonly reference: string, readonly reason: string) {
+    super(
+      `stored CFC label reference \`${reference}\` cannot be resolved: ${reason}`,
+    );
+    this.name = "UnresolvableCfcLabelDocumentError";
+  }
+}
+
+/**
+ * Whether a value at a document's reserved metadata position leaves the
+ * document carrying a label map. The reserved position is what qualifies a
+ * value, never its field names: a future format may rename every field
+ * except the version, and requiring today's members would read exactly
+ * those envelopes as unlabeled. So anything a document stores there
+ * presents a label map, and only `null` and the scalars — the values
+ * {@link interpretStoredEnvelope} reports as nothing stored — leave the
+ * document carrying none.
+ */
+export const cfcMetadataPresent = (value: unknown): boolean =>
+  isObjectOrArray(value);
+
+/**
+ * Whether `value` is a stored envelope this build can produce labels from.
+ * The rules are the ones every reader of a stored envelope holds to,
+ * Memory's `v2/cfc-stored-envelope`, so the engine labeling the anchors an
+ * edit moves reads the envelopes this does and no others: a version this
+ * build interprets, a `schemaHash` naming the schema its labels were
+ * derived against (spec §4.6.4), a label map of the one map version there
+ * is, and entries that each have a path of strings and a label, inline or,
+ * in a version-2 envelope alone, by reference, with any label-metadata
+ * template among them keyed and classed as one.
+ *
+ * The narrowing is to `StoredCfcMetadata`, more than the check establishes:
+ * it finds each label's `confidentiality` and `integrity` members to be
+ * arrays and does not look at the clauses and atoms they hold, and it reads
+ * an entry's `origin` and `observes` only to find a template.
+ */
+const isCfcMetadata = (value: unknown): value is StoredCfcMetadata =>
+  isReadableStoredCfcEnvelope(value);
+
+/**
+ * The envelopes `interpretStoredEnvelope()` has found interpretable, by
+ * identity, so that reading the labels at one address does not check every
+ * entry of the document's label map again. Only a deep-frozen envelope is
+ * held, since one that cannot change interprets the same every time.
+ */
+const interpretedEnvelopes = new WeakMap<object, StoredCfcMetadata>();
+
+/**
+ * The stored envelope `value` holds, or `undefined` when the reserved
+ * position of document `id` holds nothing. Throws a
+ * {@link StoredCfcMetadataError} for everything else.
+ *
+ * This is the whole of the rule: a value at the reserved position is an
+ * envelope this build interprets, or it is nothing stored, or it fails
+ * closed. Callers resolve the labels afterwards; nothing else classifies.
+ */
+export const interpretStoredEnvelope = (
+  id: string,
+  value: unknown,
+): StoredCfcMetadata | undefined => {
+  if (!cfcMetadataPresent(value)) return undefined;
+  if (isObjectNotArray(value)) {
+    const interpreted = interpretedEnvelopes.get(value);
+    if (interpreted !== undefined) return interpreted;
+  }
+  if (
+    isObjectNotArray(value) && "version" in value &&
+    !isKnownCfcMetadataVersion(value.version)
+  ) {
+    throw new UnknownCfcMetadataVersionError(value.version);
+  }
+  if (!isCfcMetadata(value)) throw new UnreadableCfcMetadataError(id);
+  if (isDeepFrozen(value)) interpretedEnvelopes.set(value, value);
+  return value;
+};
+
+/**
+ * The envelope stored for `target`, labels unresolved, or `undefined` when
+ * the document stores none. Throws a {@link StoredCfcMetadataError} for a
+ * value {@link interpretStoredEnvelope} cannot interpret.
+ *
+ * The read is AT `["cfc"]`, never the whole document: it is scoped to what
+ * the reader CONSUMES, and it is what reactivity re-runs on. A path-`[]`
+ * recursive read made the whole document a value dependency, so a
+ * concurrent, metadata-irrelevant value write between the reader's
+ * confirmed basis and the server head conflicted the commit — for a blind
+ * UI-input fill during its own echo's arrival window (the client's
+ * confirmed basis lags exactly then), that killed the user's typed input
+ * as a stale-confirmed-read conflict the moment the §6 layer-naming half
+ * was fixed (verification-coverage.md OW47's re-close; the name-draft
+ * triage's arm (c), the path half of the ruled arm (b)).
+ */
+const readStoredEnvelope = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+  policy: StoredCfcReadPolicy,
+): StoredCfcMetadata | undefined =>
+  interpretStoredEnvelope(
+    target.id,
+    tx.readOrThrow({
+      space: target.space,
+      id: target.id as URI,
+      scope: normalizeCellScope(target.scope),
+      type: target.type ?? "application/json",
+      path: ["cfc"],
+    }, policy),
+  );
+
+// Resolved entries by the identity of the stored `labelMap` they came
+// from. Content addressing makes a resolution permanent for the bytes it
+// was computed from — every referenced label verified against its id — so
+// the memo can only ever hold the one answer, and a failure never enters
+// it. Only the label map is memoized: the envelope around it is rebuilt
+// per call from the stored envelope at hand, so a rewrite that shares the
+// `labelMap` subtree by reference cannot serve a stale `schemaHash`. A
+// version-1 map is memoized only once frozen, since nothing else fixes it.
+const decodedLabelMaps = new WeakMap<object, CfcMetadata["labelMap"]>();
+
+/**
+ * Decodes a stored label map's one list into the payload entries and the
+ * document-rooted label-metadata templates (spec §4.6.4), so that no lookup
+ * over `entries` can match a template. A list holding no template is kept
+ * as it stands. The stored list is the only source of either: a decoded map
+ * carries no other member of the stored one.
+ */
+const decodeLabelMap = (
+  entries: LabelMapEntry[],
+): CfcMetadata["labelMap"] =>
+  entries.some(isLabelMetadataTemplateEntry)
+    ? {
+      version: 1,
+      entries: entries.filter((entry) => !isLabelMetadataTemplateEntry(entry)),
+      documentEntries: entries.filter(isLabelMetadataTemplateEntry),
+    }
+    : { version: 1, entries };
+
+/**
+ * Reads the stored record of the content-addressed document `id`, the
+ * record holding its `value`, or `undefined` when there is none; throws
+ * when the read fails outright.
+ */
+export type CfcLabelDocumentReader = (id: URI) => unknown;
+
+/**
+ * Helper for {@link resolveStoredCfcMetadata}, which produces the label a
+ * stored entry holds: the entry's own label when inline, else the content
+ * of the label document it references. The document is read through
+ * `read`, its content verified against its id, and the verified label
+ * registered so the realm resolves it without the read; a document `read`
+ * does not supply resolves through the registry, whose entries were
+ * verified at registration. Anything else throws
+ * {@link UnresolvableCfcLabelDocumentError}.
+ */
+const resolveStoredLabel = (
+  entry: StoredLabelMapEntry,
+  read: CfcLabelDocumentReader,
+): IFCLabel => {
+  if (!isCfcLabelReference(entry.label)) return entry.label;
+  const hash = parseCfcLabelReference(entry.label);
+  if (hash === undefined) {
+    throw new UnresolvableCfcLabelDocumentError(
+      entry.label.$ref,
+      "the reference is outside the cid: namespace",
+    );
+  }
+  let stored: unknown;
+  try {
+    stored = read(`cid:${hash}`);
+  } catch (error) {
+    // A read that fails outright — a closed transaction, a refusal — is
+    // still a label that could not be produced, and a consumer that
+    // swallows other read failures must fail closed on this one, so it
+    // arrives as the fail-closed error rather than as its own class.
+    throw new UnresolvableCfcLabelDocumentError(
+      entry.label.$ref,
+      `the label document could not be read: ${describeFailure(error)}`,
+    );
+  }
+  const content = isObjectOrArray(stored) ? stored.value : undefined;
+  if (content === undefined) {
+    const registered = lookupCfcLabelDocument(hash);
+    if (registered !== undefined) return registered;
+    throw new UnresolvableCfcLabelDocumentError(
+      entry.label.$ref,
+      "the label document is neither stored in the space nor registered",
+    );
+  }
+  // Shape before hash: a record that hashes to the id but is not
+  // label-shaped would register as a label whose members a consumer reads
+  // as empty, which is the one reading a stored envelope must never get.
+  if (!isCfcLabelDocumentContent(content)) {
+    throw new UnresolvableCfcLabelDocumentError(
+      entry.label.$ref,
+      "the stored document does not hold a label",
+    );
+  }
+  const actual = cfcLabelDocumentHash(content);
+  if (actual !== hash) {
+    throw new UnresolvableCfcLabelDocumentError(
+      entry.label.$ref,
+      `the stored content hashes to \`${actual}\``,
+    );
+  }
+  return registerCfcLabelDocument(hash, content);
+};
+
+/**
+ * The resolved form of `stored`: every label inline, whichever version it
+ * was stored as, and the label map decoded. A version-1 envelope holds
+ * every label inline already. A version-2 envelope resolves each referenced
+ * label through `read`, throwing {@link UnresolvableCfcLabelDocumentError}
+ * for a reference nothing can back — fail closed, never a partially
+ * resolved envelope. The decoded
+ * label map is memoized by the stored `labelMap`'s identity, so a document
+ * read many times in a session resolves once.
+ *
+ * The result is built from the members this reader validated and from
+ * nothing else, so a member a stored envelope carries beside them, such as
+ * a `documentEntries` of its own, is never read as part of the resolved one.
+ *
+ * Takes an envelope {@link interpretStoredEnvelope} has classified, so
+ * every entry is one a label can be produced from.
+ */
+export const resolveStoredCfcMetadata = (
+  stored: StoredCfcMetadata,
+  read: CfcLabelDocumentReader,
+): CfcMetadata => {
+  let labelMap = decodedLabelMaps.get(stored.labelMap);
+  if (labelMap === undefined) {
+    if (stored.version === 1) {
+      labelMap = decodeLabelMap(stored.labelMap.entries);
+      if (isDeepFrozen(stored.labelMap)) {
+        decodedLabelMaps.set(stored.labelMap, labelMap);
+      }
+    } else {
+      labelMap = decodeLabelMap(
+        stored.labelMap.entries.map((entry) => ({
+          ...entry,
+          label: resolveStoredLabel(entry, read),
+        })),
+      );
+      decodedLabelMaps.set(stored.labelMap, labelMap);
+    }
+  }
+  return {
+    version: stored.version,
+    schemaHash: stored.schemaHash,
+    labelMap,
+    // Read as the one value this build knows; any other is an envelope that
+    // says nothing of its stamps' placement.
+    ...(stored.stampPlacement === "committed"
+      ? { stampPlacement: stored.stampPlacement }
+      : {}),
+  };
+};
+
+/**
+ * The path and origin of each payload entry a stored envelope holds, read
+ * without resolving any label: both are inline in every version, so a
+ * consumer that asks only where policy applies pays no label-document read.
+ * The document-rooted label-metadata templates are left out, as decoding
+ * leaves them out of a resolved envelope's entries. Fails closed exactly as
+ * the resolving reader does, and returns `undefined` for a document storing
+ * no envelope.
+ */
+const readStoredCfcLabelPaths = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+): readonly Pick<StoredLabelMapEntry, "path" | "origin">[] | undefined =>
+  readStoredEnvelope(tx, target, DEPENDENT_READ)?.labelMap.entries.filter(
+    (entry) => !isLabelMetadataTemplateEntry(entry),
+  );
+
+/**
+ * Whether `target`'s document stores an envelope. One this build cannot
+ * interpret counts as stored, as it counts as applying in
+ * {@link storedCfcMetadataAppliesToPath}.
+ */
+export const storesCfcEnvelope = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+): boolean => {
+  try {
+    return readStoredEnvelope(tx, target, DEPENDENT_READ) !== undefined;
+  } catch (error) {
+    if (error instanceof StoredCfcMetadataError) return true;
+    throw error;
+  }
+};
+
+/**
+ * The resolved envelope stored for `target`, or `undefined` when the
+ * document stores none. Throws a {@link StoredCfcMetadataError} for an
+ * envelope this build cannot produce labels from — an unknown version, a
+ * label map it cannot walk, or a label document nothing backs — so a
+ * consumer never reads a labeled document as unlabeled.
+ *
+ * `policy` marks the reads this makes. It defaults to the policy of a
+ * caller that depends on the envelope; the prepare pass passes its own.
+ */
+export const readStoredCfcMetadata = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+  policy: StoredCfcReadPolicy = DEPENDENT_READ,
+): CfcMetadata | undefined => {
+  const stored = readStoredEnvelope(tx, target, policy);
+  return stored === undefined
+    ? undefined
+    : resolveStoredCfcMetadata(stored, (id) =>
+      // A `cid:` document lives at space scope only.
+      tx.readOrThrow({
+        space: target.space,
+        id,
+        type: "application/json",
+        path: [],
+      }, policy));
+};
+
+/**
+ * The schema hash of the envelope stored for `target`, or `undefined` when
+ * the document stores none. Reads the envelope alone, labels unresolved, so
+ * it costs one metadata read however large the schema it names. Throws a
+ * {@link StoredCfcMetadataError} for a value {@link interpretStoredEnvelope}
+ * cannot interpret.
+ */
+export const readStoredCfcSchemaHash = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+  policy: StoredCfcReadPolicy = DEPENDENT_READ,
+): string | undefined => readStoredEnvelope(tx, target, policy)?.schemaHash;
+
+/**
+ * The label `metadata` declares for exactly the observation class
+ * `observes`: at `path` itself, or at each of its children, as `at` says.
+ * Only `declared` entries count, so a writer that reads back what it declared
+ * last time, to carry it forward, never folds the derived stamps on the same
+ * document into its declaration. A legacy covering entry, one with no class,
+ * is not answered either: the caller re-declares one class, and carrying a
+ * covering entry forward as that class would narrow what it covers; left
+ * alone, the declared-monotonicity gate refuses the narrowing. The two axes
+ * are joined across the matching entries.
+ */
+export const cfcDeclaredLabelAt = (
+  metadata: Pick<CfcMetadata, "labelMap"> | undefined,
+  path: readonly string[],
+  observes: LabelObservationClass,
+  at: "node" | "children",
+): IFCLabel => {
+  const depth = at === "node" ? path.length : path.length + 1;
+  const confidentiality: CfcConfClause[] = [];
+  const integrity: CfcAtom[] = [];
+  for (const entry of metadata?.labelMap.entries ?? []) {
+    if (
+      entry.origin !== "declared" || entry.observes !== observes ||
+      entry.path.length !== depth || !isPrefix(path, entry.path)
+    ) {
+      continue;
+    }
+    for (const clause of entry.label.confidentiality ?? []) {
+      confidentiality.push(clause);
+    }
+    for (const atom of entry.label.integrity ?? []) integrity.push(atom);
+  }
+  return {
+    ...(confidentiality.length > 0 && { confidentiality }),
+    ...(integrity.length > 0 && { integrity }),
+  };
+};
+
+/** The labels {@link readStoredCfcLabelsForReader} answers with. */
+export type StoredCfcLabels = Pick<CfcMetadata, "labelMap">;
+
+/**
+ * Helper for {@link readStoredCfcLabelsForReader}, which returns an array
+ * of one entry, `entry` of a broader instance holding its confidentiality
+ * alone, or an empty array where `entry` holds none.
+ */
+const confidentialityOfEntry = (entry: LabelMapEntry): LabelMapEntry[] => {
+  const label = confidentialityOnly(entry.label);
+  return label === undefined ? [] : [{ ...entry, label }];
+};
+
+/**
+ * The labels a reader of `target`'s instance answers to: the envelope that
+ * instance stores, joined with the confidentiality of the entries of each
+ * broader instance of the same document that a reader of a narrower
+ * instance's content answers to (`broaderEntriesForReader()`, which says
+ * which those are and why). `undefined` where none of them stores a label.
+ *
+ * Integrity is the instance's own, so each joined entry holds its
+ * confidentiality alone. A read that resolves the redirect does measure the
+ * pointer the broader slot holds, which this leaves out, so it can refuse
+ * what a read of this instance admits; that over-taint predates this rule.
+ *
+ * Each envelope is read as {@link readStoredCfcMetadata} reads it, so one
+ * this build cannot interpret, on any of the instances, fails the read. A
+ * space-scoped target answers with its own envelope, unchanged. This is a
+ * reader's answer, not an envelope: what merges into or rewrites an
+ * instance's envelope reads that envelope alone, through
+ * {@link readStoredCfcMetadata}. The readers that answer to it are the cell
+ * label views and the runtime read ceiling; the flow join reads an
+ * instance's own envelope. The store's labeling of the anchors an edit moves
+ * (`cfc-anchors-label.ts` in `@commonfabric/memory`) reads stored envelopes
+ * itself, and holds to the same rule through `broaderEntriesForReader()`.
+ */
+export const readStoredCfcLabelsForReader = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+): StoredCfcLabels | undefined => {
+  const own = readStoredCfcMetadata(tx, target);
+  const broader = broaderEntriesForReader(
+    broaderCellScopes(normalizeCellScope(target.scope)).map((scope) =>
+      readStoredCfcMetadata(tx, { ...target, scope })?.labelMap.entries
+    ),
+  ).flatMap(confidentialityOfEntry);
+  if (broader.length === 0) return own;
+  return {
+    labelMap: {
+      ...own?.labelMap,
+      version: 1,
+      entries: [...(own?.labelMap.entries ?? []), ...broader],
+    },
+  };
+};
+
+/**
+ * Whether the envelope stored for `target`'s document holds an entry at,
+ * above, or below `target.path`, which marks the path as one policy applies
+ * to. An envelope this build cannot read answers that it does.
+ *
+ * A link write passes `replacingLink`: the link-origin entries at and below
+ * the slot it writes then do not count. Each labels the pointer the slot
+ * holds now, which the write replaces, and the commit drops it with that
+ * pointer, so it describes the element leaving the slot rather than a policy
+ * of the position, and a list rewrite may move an unlabeled element into a
+ * position a labeled one left. Every other entry still counts: a declared
+ * label, a flow-derived one, and a link-origin entry above the slot.
+ */
+export const storedCfcMetadataAppliesToPath = (
+  tx: IExtendedStorageTransaction,
+  target: Pick<NormalizedFullLink, "space" | "id" | "scope" | "path">,
+  { replacingLink = false }: { replacingLink?: boolean } = {},
+): boolean => {
+  let entries:
+    | readonly Pick<StoredLabelMapEntry, "path" | "origin">[]
+    | undefined;
+  try {
+    entries = readStoredCfcLabelPaths(tx, target);
+  } catch (error) {
+    // An envelope this build cannot produce labels from still marks the
+    // document as policy-carrying: "applies" is the fail-closed answer, and
+    // the write it gates then reaches the same unreadable envelope at
+    // prepare time.
+    if (error instanceof StoredCfcMetadataError) return true;
+    throw error;
+  }
+  if (entries === undefined) {
+    return false;
+  }
+  const logicalPath = canonicalizeLogicalPath(target.path);
+  const paths = entries
+    .filter((entry) =>
+      !(replacingLink && entry.origin === "link" &&
+        isPrefix(logicalPath, entry.path))
+    )
+    .map((entry) => entry.path);
+  // labelMap entries are persisted both for paths with confidentiality /
+  // integrity values AND for paths whose schema carried a policy claim
+  // (writeAuthorizedBy / writePolicyAnyOf / uiContract / exactCopyOf — see
+  // `derivePersistedLabel` and the persistence guard in `prepare.ts`). The
+  // mere presence of an entry signals "policy applies on this path"; do NOT
+  // filter on `hasLabelValues` here, or claim-only entries get silently
+  // bypassed.
+  return paths.some((path) =>
+    isPrefix(path, logicalPath) || isPrefix(logicalPath, path)
+  );
+};

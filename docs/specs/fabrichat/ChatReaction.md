@@ -1,8 +1,8 @@
 # ChatReaction
 
 One person's reaction to one message, with one emoji. A
-[`ChatMessage`](ChatMessage.md) holds its reactions, in no particular order, as
-`reactions`.
+[`ChatMessage`](ChatMessage.md) holds its reactions, in the order they were
+added, as `reactions`.
 
 ```ts
 // Shown for illustration only.
@@ -13,16 +13,17 @@ interface ChatReaction {
   /** A single emoji. */
   emoji: string;
 
-  /** When the room recorded the reaction. Unique in the room. */
+  /** The room's handler clock when it recorded the reaction. */
   sentAt: FabricEpochNsec;
 }
 ```
 
 A reaction is stored as
-`AuthoredByCurrentUser<TrustedActionWrite<ChatReaction, …>>`, admitted only
-through the room's `sendReaction` stream, as a trusted gesture on
-`ChatReactSurface`, and removed only through its `deleteReaction` stream, on the
-same surface (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
+`AuthoredByCurrentUser<TrustedActionWrite<ChatReaction, …>>`: an object pushed
+onto its message's reaction list, a document of its own, admitted only through
+the room's `sendReaction` stream, as a trusted gesture on `ChatReactSurface`,
+and removed only through its `deleteReaction` stream, on the same surface (see
+[`ChatRoomOutput`](ChatRoomOutput.md#streams)). Its identity is its cell.
 
 ## Fields
 
@@ -36,16 +37,49 @@ same surface (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).
   A room has no fixed list. Which emoji a client puts within easy reach is the
   client's choice.
 - **`sentAt`** is the handler clock when the room recorded the reaction, at
-  whatever resolution the system provides. Like every time a room records, it is
-  unique in the room (see [unique times](ChatMessage.md#unique-times)). A
-  reaction removed and added again is a new reaction, with a new `sentAt`.
+  whatever resolution the system provides (see
+  [times](ChatMessage.md#times)). A reaction removed and added again is a new
+  reaction, with a new `sentAt`.
 
 ## Uniqueness
 
-A message holds at most one reaction per reactor and emoji. Adding or removing
+Reaction deduplication and tallying identify a reactor by profile.
+This limits uniqueness to a profile and emoji: one authenticated actor using
+different profiles can appear more than once.
+
+FabriChat's reaction rows identify the viewer's reactions and offer removal
+controls by comparing each reaction's `authored-by` attestation with the owner
+of the viewer's profile, as `profileOwnerOf()` determines it. As with message
+rights, switching between profiles owned by one principal retains the removal
+control; a profile with no verified owner offers none. This display uses the
+profile's owner, while the stream checks the authenticated actor. Selecting
+another actor's profile can offer a removal that the stream refuses.
+
+The room adds none where the sender's profile already has one with
+that emoji, so adding a reaction that's already there, or removing one that
+isn't, changes nothing, and either can be sent again safely. Adding or removing
 one never changes anyone else's, and two people reacting at once both land.
-Adding a reaction that's already there, or removing one that isn't, changes
-nothing, so either can be sent again safely. A reaction is part of its message,
-but a separately authorized part: only its reactor writes it, and it goes only
-by its reactor or with its message when it is obliterated (see
-[`ChatMessage`](ChatMessage.md#who-wrote-what)).
+Two sessions of one person reacting with one emoji at the same moment can each
+add one; a client tallies by profile and emoji, so the pair shows once, and
+removing takes the one the room finds. A reaction is part of its message, but a
+separately authorized part: only its reactor writes it, and it goes only by its
+reactor, or out of reach with its message when the message is deleted or
+obliterated (see [`ChatMessage`](ChatMessage.md#who-wrote-what)).
+
+The `deleteReaction` stream checks the authenticated actor against the reaction's
+`authored-by` attestation. Selecting the same profile as another actor does not
+grant the right to remove their reaction; its author can use this stream to
+remove it after changing profiles.
+
+## A reaction the room can't read
+
+No `sendReaction` stores a reaction that lacks a field above, holds an
+`emoji` or a `sentAt` of another type than the one above, such as a `sentAt`
+that is a bare `bigint` rather than a `FabricEpochNsec`, or holds a
+`reactorProfile` that isn't a link. A message's reactions
+can still hold one, as data stored under another shape can, just as a room's
+messages can hold [a message it can't
+read](ChatMessage.md#a-message-the-room-cant-read). The room leaves such a
+reaction out of the tallies it shows for the message, as though the message
+didn't hold it, and tallies the message's other reactions as it would without
+it.

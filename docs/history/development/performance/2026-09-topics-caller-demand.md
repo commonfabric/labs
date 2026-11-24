@@ -97,7 +97,7 @@ event/watermark investigation remained necessary.
 
 ## Reproduction and remaining evidence
 
-[The compact manifest](../../../../tools/server-execution-topics/evidence/2026-09-10-narrow-demand/manifest.json)
+[The compact manifest](../../../../scripts/server-execution-topics/evidence/2026-09-10-narrow-demand/manifest.json)
 records extracted reader counts and SHA-256 hashes of the raw observations,
 manifests, source snapshots, and ablation patches. Retrieve the named files from
 `/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/`. Run manifests

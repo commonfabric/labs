@@ -59,7 +59,9 @@ no source and a cause that names the space, `in-space-root:` followed by the
 space's DID. The run that instantiates the result places it at that cause's
 address in the new space, rather than at the address derived from its parent's
 output, and links `defaultPattern` to it in the same commit, when nothing is
-linked there yet. Because the cause names the space, the roots of two such
+linked there yet. The cell the call returns is at that address too, so a link
+to it that the calling run stores, such as the entry a handler appends to a
+list, names the root itself. Because the cause names the space, the roots of two such
 spaces are two entities, so a pattern that keys a record by the entity a root
 names, as one keys a person's record by their profile, keeps them apart. A re-run of the same call finds the
 same address, so it neither places a second root nor moves the link.

@@ -15,7 +15,7 @@ type libraries, so authored code that reaches for one fails to compile. The
 other runtime-managed sinks — `streamData`, and the llm class (`llm`,
 `llmDialog`, `generateText`, `generateObject`) — reach the network the same way
 the fetch builtins do, as nodes the runtime issues, and
-`packages/runner/src/cfc/sink-inventory.ts` is the list of all of them.
+`runtime/runner/src/cfc/sink-inventory.ts` is the list of all of them.
 
 ## The shape that has no home
 
@@ -34,7 +34,7 @@ that produces the same sink record, the same ceiling check, and the same
 first-party signature a node factory's request produces.
 
 **Owner.** The Contextual Flow Control runtime, alongside the sink governance in
-`packages/runner/src/cfc/sink-inventory.ts`.
+`runtime/runner/src/cfc/sink-inventory.ts`.
 
 **Retirement.** This plan is done when a handler can issue a request that the
 runtime records and gates, and an OAuth API client can be written against it.
@@ -53,7 +53,7 @@ the same handler — or giving a request its own transaction, which is a differe
 release than the one the boundary measures.
 
 **Before the send, as a host egress does.** `describeSinkReleaseRefusal` in
-`packages/runner/src/cfc/prepare.ts` answers the same question synchronously for
+`runtime/runner/src/cfc/prepare.ts` answers the same question synchronously for
 an egress the host performs rather than a pattern: it reads what is about to be
 released through a transaction and measures that transaction's consumed join
 against the destination's ceiling, with the membership predicate
@@ -80,7 +80,7 @@ What it does not give, and what a design taking this route owes an answer for:
 ## The rest of the stack is still there
 
 The provider side of the removed patterns was not touched: the OAuth routes
-under `packages/toolshed/routes/integrations/`, the `<cf-google-oauth>` and
-`<cf-oauth>` components in `packages/ui`, and their entries in the environment
+under `runtime/toolshed/routes/integrations/`, the `<cf-google-oauth>` and
+`<cf-oauth>` components in `runtime/ui`, and their entries in the environment
 registry. They can mint a token; until this plan lands, no pattern can spend
 one.

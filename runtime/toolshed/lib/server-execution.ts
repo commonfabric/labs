@@ -1,0 +1,902 @@
+// Server-execution v2 stage F (docs/specs/server-side-execution/
+// serving-loop.md §1): the ExecutorHost bootstrap. Under
+// EXPERIMENTAL_SERVER_EXECUTION this process hosts one committing runtime
+// per ACTIVE space — the serving loop, in a Worker per space over a file
+// store — wired to the co-hosted memory server: the admission-side observer (plane b) activates spaces, lease
+// writes ride the direct engine plane (plane c), and the serving
+// runtimes' storage sessions are in-process loopback connections with the
+// SAME signed session-open production clients present (plane a). OFF,
+// whether selected by the default or an explicit override, nothing here
+// runs and toolshed is byte-identical to the pre-v2 behavior.
+
+import {
+  type EnvReader,
+  experimentalOptionsWithFollowedPosture,
+  type RuntimeFetch,
+} from "@commonfabric/runner";
+import { toolshedClientBuild } from "./build-info.ts";
+import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
+import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
+import { ExecutorHost } from "@commonfabric/runner/executor/host";
+import {
+  RoutedPlane,
+  webSocketRoute,
+} from "@commonfabric/runner/executor/routed-plane";
+import { servingLoopDiagnostics } from "@commonfabric/runner/executor/serving-loop-diagnostics";
+import {
+  DEFAULT_CURRENCY_EPOCH,
+  DEFAULT_FLUSH_DEADLINE_MS,
+} from "@commonfabric/runner/executor/space-server";
+import {
+  CURRENCY_INDEX_MODES,
+  type CurrencyIndexMode,
+  currencyIndexModeOf,
+} from "@commonfabric/runner/executor/store-currency";
+import {
+  SERVING_RUNTIME_EXPERIMENTAL,
+  servingRuntimeFactory,
+} from "@commonfabric/runner/executor/serving-runtime";
+import {
+  type CollectedWorkerMemory,
+  type ServingLoopHandle,
+  ServingWorkerPool,
+  type ServingWorkerPoolOptions,
+  type WorkerHeapProfile,
+} from "@commonfabric/runner/executor/serving-worker-host";
+import { garbageCollectorExposed } from "@commonfabric/runner/collected-memory";
+import { ModuleCompilerPool } from "@commonfabric/runner/module-compiler-pool";
+import { openSharedCompileCache } from "@commonfabric/runner/compilation-cache/shared-compile-cache.deno";
+import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
+import type { Identity } from "@commonfabric/identity";
+import {
+  servedLifecycleRunner,
+  type ServedLifecycleVerbRunner,
+} from "@commonfabric/piece/ops";
+import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
+
+/**
+ * The serving loop as the rest of this process reaches it, whichever thread
+ * runs it: the lifecycle verbs the `pattern.lifecycle` handler sends, and the
+ * loop's counters and close.
+ */
+export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle & {
+  /**
+   * Collects each of the loop's serving workers, and returns the memory
+   * each isolate still holds with the spaces placed on it; `undefined`
+   * where the loop runs on this thread, which the caller collects itself.
+   */
+  collectedWorkerMemory(): Promise<CollectedWorkerMemory[] | undefined>;
+
+  /**
+   * Has each of the loop's serving workers write its sampling heap profile
+   * into `directory`; `undefined` where the loop runs on this thread, whose
+   * profile the caller writes itself.
+   */
+  workerHeapProfiles(
+    directory: string,
+  ): Promise<WorkerHeapProfile[] | undefined>;
+};
+
+let loop: ServingLoop | undefined;
+
+/**
+ * The routed plane this thread's lifecycle delivery sends through while the
+ * loop runs with owner routing on. The loop's host keeps one of its own on
+ * whichever thread it runs, so on the main-thread arm two planes dial the
+ * same route; each numbers the appends on its own sessions, so the two never
+ * meet at the owner.
+ */
+let route: RoutedPlane | undefined;
+
+/** The production default for the per-space outstanding-network-effect
+ * cap (serving-loop.md §5; README §3.8's multi-tenancy contract needs a
+ * bound ON by default — a runaway LLM fan-out must degrade only its own
+ * space). An operator-tunable posture, not a spec constant. */
+export const DEFAULT_MAX_OUTSTANDING_EFFECTS = 16;
+
+/**
+ * The mode a toolshed keeps the currency index in where
+ * `SERVER_EXECUTION_CURRENCY_INDEX` names none (serving-loop.md §1): a piece
+ * its record proves current is left unstarted, and nothing is started
+ * upstream of a stale one.
+ */
+export const DEFAULT_CURRENCY_INDEX: CurrencyIndexMode = "skip";
+
+/** The longest delay `setTimeout()` honors, in milliseconds. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** The Phase-6 policy knobs the toolshed bootstrap threads into the
+ * ExecutorHost (`SpaceServerPolicy`'s env-overridable subset). */
+export type ServerExecutionEnvPolicy = {
+  flushDeadlineMs?: number;
+  flushDeadlineMaxMs?: number;
+  maxOutstandingEffects?: number;
+  egressRatePerSecond?: number;
+  storeReadThrough?: boolean;
+  overlapWaveCommit?: boolean;
+  parkedRuntimeRetentionMs?: number;
+  currencyIndex?: CurrencyIndexMode;
+  currencyEpoch?: string;
+};
+
+/**
+ * Resolve the Phase-6 policy knobs from env (serving-loop.md §3's
+ * T_flush "tuned in Phase 6 with the other budgets"; §5's per-space
+ * budgets). Each is env-overridable; the defaults are the production
+ * posture:
+ * - T_flush stays the SpaceServer's built-in default (100 ms, the ruled
+ *   50–100 ms order) unless overridden, and grows after a cut settle only
+ *   when `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` names a longer cap;
+ * - the outstanding-network-effect cap defaults to
+ *   `DEFAULT_MAX_OUTSTANDING_EFFECTS` per space; the LITERAL `0` is the
+ *   operator's explicit opt-out (unbounded);
+ * - egress pacing defaults OFF (the cap alone bounds concurrency; a rate
+ *   value is a deliberate operator choice);
+ * - the store read-through (`SpaceServerPolicy.storeReadThrough`,
+ *   SERVER_EXECUTION_STORE_READ_THROUGH) defaults ON; only the literal
+ *   `false` turns it off, and anything but `true` or `false` warns and
+ *   leaves it on;
+ * - the overlapped wave commit (`SpaceServerPolicy.overlapWaveCommit`,
+ *   SERVER_EXECUTION_OVERLAP_COMMIT) defaults OFF, on the same reading;
+ * - how long an idle-parked space's runtime is kept for its next tenure
+ *   (`SpaceServerPolicy.parkedRuntimeRetentionMs`,
+ *   SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS) stays the host's
+ *   built-in default unless overridden; the literal `0` keeps none, and
+ *   a value past the longest delay a timer honors reads as unset;
+ * - the currency index (`SpaceServerPolicy.currencyIndex`,
+ *   SERVER_EXECUTION_CURRENCY_INDEX) defaults to `defaultCurrencyIndex`,
+ *   and to none where that is not given; the literal `off` keeps none,
+ *   the name of a mode (`CURRENCY_INDEX_MODES`) selects it, and anything
+ *   else warns and keeps the default. Its epoch (`SpaceServerPolicy.currencyEpoch`) is
+ *   SERVER_EXECUTION_CURRENCY_EPOCH as written, or else
+ *   `DEFAULT_CURRENCY_EPOCH`, which no build or process decides.
+ *
+ * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
+ * ("abc", "-1", "1.5") falls back to the default and warns, instead of
+ * being silently indistinguishable from the explicit `0` opt-out (a
+ * typo must never disable the production bound). The other knobs have
+ * no dangerous "absent" meaning — absent = the built-in default — so
+ * garbage there simply reads as unset (also warned).
+ */
+export function serverExecutionPolicyFromEnv(
+  envGet: EnvReader,
+  warn: (message: string) => void = (message) => console.warn(message),
+  defaultCurrencyIndex?: CurrencyIndexMode,
+): ServerExecutionEnvPolicy {
+  /** A strictly non-negative decimal integer, or undefined for anything
+   * else (garbage, sign, fraction, exponent — `parseInt` would accept
+   * prefixes of those). */
+  const strictNonNegativeInt = (raw: string): number | undefined =>
+    /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : undefined;
+
+  const readRaw = (name: string): string | undefined => {
+    const raw = envGet(name);
+    return raw === undefined || raw === "" ? undefined : raw;
+  };
+
+  /** Positive-int knobs whose absence means the built-in default. */
+  const positiveOrDefault = (name: string): number | undefined => {
+    const raw = readRaw(name);
+    if (raw === undefined) return undefined;
+    const value = strictNonNegativeInt(raw);
+    if (value === undefined || value <= 0) {
+      warn(
+        `Server-execution v2: ignoring ${name}=${JSON.stringify(raw)} ` +
+          "(expected a positive integer); using the built-in default",
+      );
+      return undefined;
+    }
+    return value;
+  };
+
+  const flushDeadlineMs = positiveOrDefault(
+    "SERVER_EXECUTION_FLUSH_DEADLINE_MS",
+  );
+  const flushDeadlineMaxMs = positiveOrDefault(
+    "SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS",
+  );
+  const egressRatePerSecond = positiveOrDefault(
+    "SERVER_EXECUTION_EGRESS_RATE_PER_S",
+  );
+  const capRaw = readRaw("SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS");
+  let maxOutstandingEffects: number | undefined;
+  if (capRaw === undefined) {
+    maxOutstandingEffects = DEFAULT_MAX_OUTSTANDING_EFFECTS;
+  } else {
+    const value = strictNonNegativeInt(capRaw);
+    if (value === undefined) {
+      warn(
+        "Server-execution v2: ignoring SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS=" +
+          `${JSON.stringify(capRaw)} (expected a non-negative integer; ` +
+          "the literal 0 means unbounded); using the default " +
+          `${DEFAULT_MAX_OUTSTANDING_EFFECTS}`,
+      );
+      maxOutstandingEffects = DEFAULT_MAX_OUTSTANDING_EFFECTS;
+    } else if (value === 0) {
+      // The explicit opt-out: unbounded (absent from the policy).
+      maxOutstandingEffects = undefined;
+    } else {
+      maxOutstandingEffects = value;
+    }
+  }
+  const retentionRaw = readRaw(
+    "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
+  );
+  // The retention arms a timer, and a delay past the timer's range fires
+  // at once, so such a value reads as unset rather than as "keep long".
+  const retentionValue = retentionRaw === undefined
+    ? undefined
+    : strictNonNegativeInt(retentionRaw);
+  const parkedRuntimeRetentionMs = retentionValue !== undefined &&
+      retentionValue <= MAX_TIMER_DELAY_MS
+    ? retentionValue
+    : undefined;
+  if (retentionRaw !== undefined && parkedRuntimeRetentionMs === undefined) {
+    warn(
+      "Server-execution v2: ignoring " +
+        "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS=" +
+        `${JSON.stringify(retentionRaw)} (expected a non-negative integer ` +
+        `of at most ${MAX_TIMER_DELAY_MS}; the literal 0 keeps no parked ` +
+        "runtime); using the built-in default",
+    );
+  }
+  const readThroughRaw = readRaw("SERVER_EXECUTION_STORE_READ_THROUGH");
+  let storeReadThrough: boolean | undefined = true;
+  if (readThroughRaw === "false") {
+    storeReadThrough = undefined;
+  } else if (readThroughRaw !== undefined && readThroughRaw !== "true") {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_STORE_READ_THROUGH=" +
+        `${JSON.stringify(readThroughRaw)} (expected "true" or "false"); ` +
+        "the store read-through stays ON",
+    );
+  }
+  const overlapRaw = readRaw("SERVER_EXECUTION_OVERLAP_COMMIT");
+  let overlapWaveCommit: boolean | undefined;
+  if (overlapRaw === "true") {
+    overlapWaveCommit = true;
+  } else if (overlapRaw !== undefined && overlapRaw !== "false") {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_OVERLAP_COMMIT=" +
+        `${JSON.stringify(overlapRaw)} (expected "true" or "false"); ` +
+        "the overlapped wave commit stays OFF",
+    );
+  }
+  const currencyRaw = readRaw("SERVER_EXECUTION_CURRENCY_INDEX");
+  let currencyIndex = defaultCurrencyIndex;
+  const currencyNamed = currencyIndexModeOf(currencyRaw);
+  if (currencyNamed !== undefined) {
+    currencyIndex = currencyNamed;
+  } else if (currencyRaw === "off") {
+    currencyIndex = undefined;
+  } else if (currencyRaw !== undefined) {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_CURRENCY_INDEX=" +
+        `${JSON.stringify(currencyRaw)} (expected ${
+          CURRENCY_INDEX_MODES.map((mode) => `"${mode}"`).join(", ")
+        } or "off"); the currency index stays ${
+          defaultCurrencyIndex === undefined
+            ? "OFF"
+            : `"${defaultCurrencyIndex}"`
+        }`,
+    );
+  }
+  const currencyEpoch = readRaw("SERVER_EXECUTION_CURRENCY_EPOCH") ??
+    DEFAULT_CURRENCY_EPOCH;
+  return {
+    ...(flushDeadlineMs !== undefined ? { flushDeadlineMs } : {}),
+    ...(flushDeadlineMaxMs !== undefined ? { flushDeadlineMaxMs } : {}),
+    ...(maxOutstandingEffects !== undefined ? { maxOutstandingEffects } : {}),
+    ...(egressRatePerSecond !== undefined ? { egressRatePerSecond } : {}),
+    ...(storeReadThrough !== undefined ? { storeReadThrough } : {}),
+    ...(overlapWaveCommit !== undefined ? { overlapWaveCommit } : {}),
+    ...(parkedRuntimeRetentionMs !== undefined
+      ? { parkedRuntimeRetentionMs }
+      : {}),
+    ...(currencyIndex !== undefined ? { currencyIndex } : {}),
+    ...(currencyIndex !== undefined ? { currencyEpoch } : {}),
+  };
+}
+
+/** What each currency index mode has a serving loop do, for the log. */
+const CURRENCY_INDEX_EFFECT: Record<CurrencyIndexMode, string> = {
+  record: "records and judges, and starts every demanded piece",
+  skip: "leaves unstarted a piece its record proves current, and starts " +
+    "nothing upstream of a stale one",
+  "start-upstream": "leaves unstarted a piece its record proves current, " +
+    "and starts the pieces upstream of one that is stale only through them",
+};
+
+/**
+ * The line a starting serving host logs of the currency index mode in
+ * force, `mode`, or of keeping no index where it is `undefined`.
+ */
+function currencyIndexReport(mode: CurrencyIndexMode | undefined): string {
+  const byDefault = `default is "${DEFAULT_CURRENCY_INDEX}"`;
+  if (mode === undefined) {
+    return "Server-execution v2: currency index OFF by " +
+      "SERVER_EXECUTION_CURRENCY_INDEX=off (every demanded piece starts; " +
+      `${byDefault})`;
+  }
+  return `Server-execution v2: currency index "${mode}" ` +
+    (mode === DEFAULT_CURRENCY_INDEX
+      ? "(the default)"
+      : `by SERVER_EXECUTION_CURRENCY_INDEX (${byDefault})`) +
+    `: ${CURRENCY_INDEX_EFFECT[mode]}`;
+}
+
+/**
+ * The RULED test switch for the serving loop's space-root ensure (OW45
+ * arm-B stage 1, RULED 2026-08-24 — the owner: production spaces always
+ * get a default pattern; "for tests this is annoying overhead", so test
+ * harnesses may switch the ensure off). `SERVER_EXECUTION_ENSURE_SPACE_ROOTS`:
+ * unset or "true" = ON (the production posture); the literal "false" =
+ * OFF for every space this toolshed serves (a whole-instance switch —
+ * per-space discrimination is deferred by the same ruling). Parsing is
+ * FAIL-TO-PRODUCTION: garbage reads as ON with a warning, so a typo can
+ * never silently strip production spaces of their roots.
+ */
+export function ensureSpaceRootsFromEnv(
+  envGet: EnvReader,
+  warn: (message: string) => void = (message) => console.warn(message),
+): boolean {
+  const raw = envGet("SERVER_EXECUTION_ENSURE_SPACE_ROOTS");
+  if (raw === undefined || raw === "" || raw === "true") return true;
+  if (raw === "false") return false;
+  warn(
+    "Server-execution v2: ignoring SERVER_EXECUTION_ENSURE_SPACE_ROOTS=" +
+      `${JSON.stringify(raw)} (expected "true" or "false"); the space-root ` +
+      "ensure stays ON (the production posture)",
+  );
+  return true;
+}
+
+/**
+ * Whether the serving loop runs in a Worker of this process
+ * (`SERVER_EXECUTION_WORKER`): the literal `true` selects the worker and
+ * `false` keeps the loop on this thread. Unset or empty, it is `fileStore`:
+ * the worker opens the memory server's spaces through its own connections,
+ * which a store that is not a file does not allow. Anything else warns and
+ * takes that same default.
+ */
+export function serverExecutionWorkerFromEnv(
+  envGet: EnvReader,
+  fileStore: boolean,
+  warn: (message: string) => void = (message) => console.warn(message),
+): boolean {
+  const raw = envGet("SERVER_EXECUTION_WORKER");
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  if (raw !== undefined && raw !== "") {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_WORKER=" +
+        `${JSON.stringify(raw)} (expected "true" or "false"); the serving ` +
+        `loop runs ${fileStore ? "in a Worker" : "on the main thread"}`,
+    );
+  }
+  return fileStore;
+}
+
+/** How many spare serving workers a toolshed keeps started unless told. */
+export const DEFAULT_SPARE_SERVING_WORKERS = 1;
+
+/**
+ * The largest a toolshed's serving worker's heap may grow unless told, in
+ * megabytes: well above what a worker serving one space holds, about 80 MB,
+ * and well below the 16 GiB the toolshed's main thread is limited to, so a
+ * runaway space ends its own worker rather than the process.
+ */
+export const DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB = 2048;
+
+/**
+ * The least heap limit a toolshed takes from its environment, in megabytes:
+ * about twice the 110 MB a toolshed's serving worker holds before it serves
+ * anything. Under a limit its modules do not fit in, every worker would end
+ * as it started.
+ */
+export const MIN_SERVING_WORKER_HEAP_LIMIT_MB = 256;
+
+/**
+ * How many serving workers a toolshed places spaces on unless told, past
+ * which a space shares a worker. A host runs many toolsheds, Estuary 16, and
+ * each worker may grow to {@link DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB}: at 4
+ * the workers of 16 toolsheds hold about 7 GB before any space grows and
+ * 128 GB if every one reaches its limit, where 16 per toolshed came to
+ * 512 GB. The pool goes past the cap only to give each space that shared a
+ * worker ended at its heap limit a worker of its own, until one of those
+ * closes.
+ */
+export const DEFAULT_MAX_TOOLSHED_SERVING_WORKERS = 4;
+
+/** The serving-worker pool's knobs a toolshed reads from its environment. */
+export type ServingWorkerPoolEnv = Pick<
+  ServingWorkerPoolOptions,
+  | "maxWorkers"
+  | "spareWorkers"
+  | "heapBudgetBytes"
+  | "heapLimitMb"
+  | "watchdogLimitMs"
+>;
+
+/**
+ * Resolves the serving-worker pool's knobs from env (serving-loop.md §1,
+ * "Workers"); a knob absent from the result leaves the pool's own default:
+ * - `SERVER_EXECUTION_MAX_WORKERS`, a positive integer: how many workers
+ *   spaces are placed on at most, a space joining a worker that already
+ *   serves another once that many are. Default
+ *   {@link DEFAULT_MAX_TOOLSHED_SERVING_WORKERS}; `1` serves every space from
+ *   one worker;
+ * - `SERVER_EXECUTION_SPARE_WORKERS`, a non-negative integer: how many
+ *   workers are kept started ahead of a placement. Default
+ *   {@link DEFAULT_SPARE_SERVING_WORKERS}; the literal `0` keeps none;
+ * - `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, an integer of
+ *   {@link MIN_SERVING_WORKER_HEAP_LIMIT_MB} or more: the largest each
+ *   worker's heap may grow, in megabytes, at which that worker alone is
+ *   ended (`ServingWorkerPoolOptions.heapLimitMb`). Default
+ *   {@link DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB}; the literal `0` sets no
+ *   limit, and the workers are then Deno `Worker`s, one of which aborts the
+ *   process at the isolate's own limit;
+ * - `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, a positive integer: how
+ *   large the workers' heaps may be together, in megabytes, before workers
+ *   holding only parked runtimes are closed. Default: no budget.
+ * - `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`, an integer of 10 or more: how
+ *   long a worker may send nothing, its heartbeats included, before the pool
+ *   kills it (`ServingWorkerPoolOptions.watchdogLimitMs`). Default: the
+ *   pool's own, a minute.
+ *
+ * Anything else warns and takes the default.
+ */
+export function servingWorkerPoolFromEnv(
+  envGet: EnvReader,
+  warn: (message: string) => void = (message) => console.warn(message),
+): ServingWorkerPoolEnv {
+  const read = (
+    name: string,
+    { least, most = Number.MAX_SAFE_INTEGER }: {
+      least: number;
+      most?: number;
+    },
+  ): number | undefined => {
+    const raw = envGet(name);
+    if (raw === undefined || raw === "") return undefined;
+    const value = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : undefined;
+    // A run of digits long enough parses to `Infinity`, which is no count.
+    if (
+      value !== undefined && Number.isSafeInteger(value) && value >= least &&
+      value <= most
+    ) {
+      return value;
+    }
+    warn(
+      `Server-execution v2: ignoring ${name}=${JSON.stringify(raw)} ` +
+        `(expected an integer from ${least} to ${most}); using the default`,
+    );
+    return undefined;
+  };
+  const maxWorkers = read("SERVER_EXECUTION_MAX_WORKERS", { least: 1 }) ??
+    DEFAULT_MAX_TOOLSHED_SERVING_WORKERS;
+  const spareWorkers = read("SERVER_EXECUTION_SPARE_WORKERS", { least: 0 }) ??
+    DEFAULT_SPARE_SERVING_WORKERS;
+  const heapLimitMb = envGet("SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB") === "0"
+    ? undefined
+    : read("SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", {
+      least: MIN_SERVING_WORKER_HEAP_LIMIT_MB,
+    }) ?? DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB;
+  // Each bounded above so that it is still a safe integer once converted.
+  const heapBudgetMb = read("SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", {
+    least: 1,
+    most: Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024)),
+  });
+  // No shorter than the ten seconds a worker posts its heartbeats at.
+  const watchdogSeconds = read("SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", {
+    least: 10,
+    most: Math.floor(Number.MAX_SAFE_INTEGER / 1000),
+  });
+  return {
+    maxWorkers,
+    spareWorkers,
+    ...(heapLimitMb === undefined ? {} : { heapLimitMb }),
+    ...(heapBudgetMb === undefined
+      ? {}
+      : { heapBudgetBytes: heapBudgetMb * 1024 * 1024 }),
+    ...(watchdogSeconds === undefined
+      ? {}
+      : { watchdogLimitMs: watchdogSeconds * 1000 }),
+  };
+}
+
+/**
+ * Whether the serving loop reaches every space but the ones it serves through
+ * that space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
+ * serving-loop.md §2): on unless the variable is the
+ * literal `false`, which leaves every crossing on this process's own memory
+ * server. `true`, unset and empty select the default; anything else warns
+ * and selects it too.
+ */
+export function ownerRoutingFromEnv(
+  envGet: EnvReader,
+  warn: (message: string) => void = (message) => console.warn(message),
+): boolean {
+  const raw = envGet("SERVER_EXECUTION_OWNER_ROUTING");
+  if (raw === "false") return false;
+  if (raw !== undefined && raw !== "" && raw !== "true") {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_OWNER_ROUTING=" +
+        `${JSON.stringify(raw)} (expected "true" or "false"); crossings ` +
+        "reach each space's owner, the default",
+    );
+  }
+  return true;
+}
+
+/** How many compile workers a toolshed's serving runtimes share unless told. */
+export const DEFAULT_SERVING_COMPILE_WORKERS = 1;
+
+/** Where a toolshed's serving runtimes compile, as its environment says. */
+export type ServingCompileEnv = {
+  /** How many compile workers the process's serving runtimes share. */
+  compileWorkers: number;
+
+  /**
+   * The compiled-module cache directory every process on the host shares, or
+   * `undefined` for a cache of this process's own, in memory.
+   */
+  compileCacheDir: string | undefined;
+};
+
+/**
+ * Resolves where the serving runtimes compile from env (serving-loop.md §1,
+ * "Workers"):
+ * - `SERVER_EXECUTION_COMPILE_WORKERS`, a positive integer: how many compile
+ *   workers the process keeps for every serving runtime it runs, in a worker
+ *   or on this thread, each started at its first compile. Default
+ *   {@link DEFAULT_SERVING_COMPILE_WORKERS}: a compile worker holds the
+ *   TypeScript compiler's heap, and a host runs a toolshed per port, so one
+ *   per process keeps that heap to one per process; a cold compile waits for
+ *   the one before it, and the shared cache makes cold compiles rare;
+ * - `SERVER_EXECUTION_COMPILE_CACHE_DIR`, a directory: the compiled-module
+ *   cache every toolshed on the host reads and puts compiled modules in, and
+ *   takes its turns at a cold compile through, so the same modules compile
+ *   once on the host. Default: `defaultCacheDir`, which a toolshed names
+ *   under its `CACHE_DIR`, so a toolshed always has one; a caller that
+ *   passes no default and sets no directory gets none, and each process then
+ *   keeps its own cache in memory.
+ *
+ * A count that is not a positive integer warns and takes the default.
+ */
+export function servingCompileFromEnv(
+  envGet: EnvReader,
+  defaultCacheDir: string | undefined,
+  warn: (message: string) => void = (message) => console.warn(message),
+): ServingCompileEnv {
+  const rawWorkers = envGet("SERVER_EXECUTION_COMPILE_WORKERS");
+  let compileWorkers = DEFAULT_SERVING_COMPILE_WORKERS;
+  if (rawWorkers !== undefined && rawWorkers !== "") {
+    const value = /^\d+$/.test(rawWorkers)
+      ? Number.parseInt(rawWorkers, 10)
+      : undefined;
+    if (value !== undefined && Number.isSafeInteger(value) && value >= 1) {
+      compileWorkers = value;
+    } else {
+      warn(
+        "Server-execution v2: ignoring SERVER_EXECUTION_COMPILE_WORKERS=" +
+          `${JSON.stringify(rawWorkers)} (expected an integer of 1 or more); ` +
+          `using ${DEFAULT_SERVING_COMPILE_WORKERS}`,
+      );
+    }
+  }
+  const rawDir = envGet("SERVER_EXECUTION_COMPILE_CACHE_DIR");
+  return {
+    compileWorkers,
+    compileCacheDir: rawDir === undefined || rawDir === ""
+      ? defaultCacheDir
+      : rawDir,
+  };
+}
+
+/**
+ * Start the serving loop when the flag is on: in Workers of this process,
+ * one per served space, when {@link serverExecutionWorkerFromEnv} says so,
+ * which by default it does over a file store, and on this thread otherwise. Called once from toolshed
+ * startup, after the memory server exists. Returns the loop (or
+ * undefined off the flag) so shutdown can close it.
+ */
+export function startServerExecutionHost(options: {
+  server: MemoryServer;
+  identity: Identity;
+
+  /** The patterns/compile base — the serving runtimes' `apiUrl`. */
+  apiUrl: URL;
+
+  /**
+   * The serving runtimes' outbound fetch on the main thread; unset, the
+   * platform fetch. The worker's entry (`lib/serving-worker.ts`) builds the
+   * same self-directed fetch in its own realm, and this one does not reach
+   * it.
+   */
+  fetch?: RuntimeFetch;
+
+  /**
+   * Where the memory server keeps its spaces. The serving loop runs in a
+   * Worker by default only over a file store; unset counts as none.
+   */
+  store?: URL;
+
+  /**
+   * The deployment's memory endpoint as this process reaches it
+   * (`MEMORY_URL`), the one its proxy routes by space: the route to each
+   * space's owner while {@link ownerRoutingFromEnv} says so. Unset, the
+   * route stays off whatever the knob says.
+   */
+  memoryUrl?: URL;
+
+  /**
+   * The shared compiled-module cache directory where
+   * `SERVER_EXECUTION_COMPILE_CACHE_DIR` names none
+   * ({@link servingCompileFromEnv}). With neither, each process keeps its
+   * own cache in memory.
+   */
+  compileCacheDir?: string;
+
+  envGet?: EnvReader;
+}): ServingLoop | undefined {
+  const envGet = options.envGet ?? Deno.env.get;
+  // The process's ONE flag resolution (server-execution-flag.ts): the
+  // explicit env value, else the first-party default — the same answer
+  // the memory route used for its service-principal grant.
+  if (!serverExecutionEnabledFromEnv(envGet)) {
+    return undefined;
+  }
+  // The other experimental flags reach the serving runtimes from env, over
+  // the followed deployment's posture, as the toolshed's own runtime's do.
+  const experimental = experimentalOptionsWithFollowedPosture(envGet);
+  console.log(
+    `Server-execution v2: serving loop ON (service ${options.identity.did()})`,
+  );
+  // Phase 6 policy knobs — see `serverExecutionPolicyFromEnv`.
+  const ensureSpaceRoots = ensureSpaceRootsFromEnv(envGet);
+  if (!ensureSpaceRoots) {
+    console.log(
+      "Server-execution v2: space-root ensure OFF by " +
+        "SERVER_EXECUTION_ENSURE_SPACE_ROOTS=false (test posture; " +
+        "production default is ON)",
+    );
+  }
+  const policy = serverExecutionPolicyFromEnv(
+    envGet,
+    undefined,
+    DEFAULT_CURRENCY_INDEX,
+  );
+  console.log(currencyIndexReport(policy.currencyIndex));
+  if (
+    policy.currencyEpoch !== undefined &&
+    policy.currencyEpoch !== DEFAULT_CURRENCY_EPOCH
+  ) {
+    console.log(
+      "Server-execution v2: currency index trusts the records of epoch " +
+        `${JSON.stringify(policy.currencyEpoch)} alone, by ` +
+        "SERVER_EXECUTION_CURRENCY_EPOCH (default is " +
+        `${JSON.stringify(DEFAULT_CURRENCY_EPOCH)})`,
+    );
+  }
+  if (policy.storeReadThrough !== true) {
+    console.log(
+      "Server-execution v2: store read-through OFF by " +
+        "SERVER_EXECUTION_STORE_READ_THROUGH=false (serving runtimes read " +
+        "their home space over their loopback sessions; default is ON)",
+    );
+  }
+  if (policy.flushDeadlineMaxMs !== undefined) {
+    // The space server treats a cap no longer than the deadline as no cap.
+    const base = policy.flushDeadlineMs ?? DEFAULT_FLUSH_DEADLINE_MS;
+    if (policy.flushDeadlineMaxMs > base) {
+      console.log(
+        "Server-execution v2: flush deadline grows after a cut settle, up " +
+          `to ${policy.flushDeadlineMaxMs} ms, by ` +
+          "SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS (default is a fixed deadline)",
+      );
+    } else {
+      console.warn(
+        "Server-execution v2: ignoring SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS=" +
+          `${policy.flushDeadlineMaxMs} (no longer than the ${base} ms ` +
+          "deadline); the deadline stays fixed",
+      );
+    }
+  }
+  if (policy.overlapWaveCommit === true) {
+    console.log(
+      "Server-execution v2: overlapped wave commit ON by " +
+        "SERVER_EXECUTION_OVERLAP_COMMIT=true (a wave's commit is in flight " +
+        "while the next cycle drains and settles; default is OFF)",
+    );
+  }
+  const ownerRouting = ownerRoutingFromEnv(envGet);
+  if (!ownerRouting) {
+    console.log(
+      "Server-execution v2: owner routing OFF by " +
+        "SERVER_EXECUTION_OWNER_ROUTING=false (crossings stay on this " +
+        "process's memory server; default is ON)",
+    );
+  } else if (options.memoryUrl === undefined) {
+    console.warn(
+      "Server-execution v2: owner routing is on with no memory endpoint to " +
+        "route through; crossings stay on this process's memory server",
+    );
+  }
+  const memoryUrl = ownerRouting ? options.memoryUrl : undefined;
+  if (memoryUrl !== undefined) {
+    console.log(
+      "Server-execution v2: owner routing ON " +
+        (envGet("SERVER_EXECUTION_OWNER_ROUTING") === "true"
+          ? "by SERVER_EXECUTION_OWNER_ROUTING=true"
+          : "(the default; SERVER_EXECUTION_OWNER_ROUTING=false keeps " +
+            "every crossing on this process's memory server)") +
+        ` (crossings reach each space's owner through ${memoryUrl.href})`,
+    );
+    route = new RoutedPlane(
+      webSocketRoute(memoryUrl, options.identity, toolshedClientBuild()),
+    );
+  }
+  const fileStore = options.store?.protocol === "file:";
+  // One set of compile workers for every serving runtime of this process,
+  // and one cache for every process on the host.
+  const compile = servingCompileFromEnv(envGet, options.compileCacheDir);
+  const moduleCompiler = new ModuleCompilerPool(compile.compileWorkers);
+  console.log(
+    `Server-execution v2: ${compile.compileWorkers} compile worker(s) for ` +
+      "every serving runtime, compiled modules " +
+      (compile.compileCacheDir === undefined
+        ? "in each process's memory"
+        : `shared in ${compile.compileCacheDir}`),
+  );
+  if (serverExecutionWorkerFromEnv(envGet, fileStore)) {
+    const pool = servingWorkerPoolFromEnv(envGet);
+    console.log(
+      "Server-execution v2: serving loop in a Worker per space " +
+        (envGet("SERVER_EXECUTION_WORKER") === "true"
+          ? "by SERVER_EXECUTION_WORKER=true"
+          : "(the default over a file store; SERVER_EXECUTION_WORKER=false " +
+            "keeps it on the main thread)") +
+        `, on ${pool.maxWorkers} worker(s) at most (more only while spaces ` +
+        "separated at a heap limit each hold one)" +
+        `, with ${pool.spareWorkers} spare, ` +
+        (pool.heapLimitMb === undefined
+          ? "no heap limit per worker by SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0"
+          : `each worker's heap limited to ${pool.heapLimitMb} MB`) +
+        (pool.watchdogLimitMs === undefined
+          ? ""
+          : `, a worker killed after ${
+            pool.watchdogLimitMs / 1000
+          } s without a message by SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`),
+    );
+    // The workers' entry adds the lifecycle verbs and the self-directed fetch
+    // (lib/serving-worker.ts); they compile in this process's compile workers
+    // and share the host's cache.
+    const worker = new ServingWorkerPool({
+      server: options.server,
+      identity: options.identity,
+      apiUrl: options.apiUrl,
+      workerModule: new URL("./serving-worker.ts", import.meta.url),
+      policy,
+      ensureSpaceRoots,
+      experimental,
+      ...pool,
+      // The toolshed exposes the collector at startup (`startServer()`).
+      collectBeforeEnding: garbageCollectorExposed(),
+      ...(memoryUrl === undefined ? {} : { route: memoryUrl }),
+      moduleCompiler,
+      ...(compile.compileCacheDir === undefined
+        ? {}
+        : { compileCacheDir: compile.compileCacheDir }),
+    });
+    loop = {
+      runLifecycleVerb: (space, verb) => worker.runLifecycleVerb(space, verb),
+      stats: () => worker.stats(),
+      diagnostics: () => worker.diagnostics(),
+      collectedWorkerMemory: () => worker.collectedMemory(),
+      workerHeapProfiles: (directory) => worker.heapProfiles(directory),
+      host: undefined,
+      // The compile workers close first, so a compile a worker still awaits
+      // fails at once rather than holding the pool's close.
+      close: () => {
+        moduleCompiler.close();
+        return worker.close();
+      },
+    };
+  } else {
+    console.log(
+      "Server-execution v2: serving loop on the main thread " +
+        (fileStore
+          ? "by SERVER_EXECUTION_WORKER=false (default is a Worker)"
+          : "(the memory store is not a file, which a Worker cannot open)"),
+    );
+    const shared = compile.compileCacheDir === undefined
+      ? undefined
+      : openSharedCompileCache(compile.compileCacheDir);
+    const host = new ExecutorHost({
+      policy,
+      ensureSpaceRoots,
+      server: options.server,
+      serviceIdentity: options.identity.did(),
+      ...(memoryUrl === undefined ? {} : {
+        route: webSocketRoute(
+          memoryUrl,
+          options.identity,
+          toolshedClientBuild(),
+        ),
+      }),
+      // The serving runtimes' own flags: the environment's, with the ones
+      // every serving runtime forces on top. `/api/meta` publishes those same
+      // forced flags below.
+      createRuntime: servingRuntimeFactory({
+        clientBuild: toolshedClientBuild(),
+        server: options.server,
+        identity: options.identity,
+        apiUrl: options.apiUrl,
+        ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+        experimental,
+        // One cache for every process on the host. A space's root pattern
+        // compiles into that space's own storage closure, which a fresh space
+        // never holds; the shared cache is what lets a later space's
+        // activation, here or in another process, skip the transform-and-emit
+        // step for modules already compiled.
+        moduleByteCache: shared?.moduleByteCache ??
+          new ProcessModuleByteCache(),
+        ...(shared === undefined
+          ? {}
+          : { compileClaims: shared.compileClaims }),
+        // Keeps the type-check, transform and emit step of every compile off
+        // the thread that answers requests.
+        moduleCompiler,
+      }),
+    });
+    loop = {
+      ...servedLifecycleRunner(host, options.identity),
+      stats: () => host.stats(),
+      // This thread's loggers, and the compile worker's timings, which hold
+      // the compiler's phases.
+      diagnostics: () =>
+        Promise.resolve(servingLoopDiagnostics(moduleCompiler)),
+      collectedWorkerMemory: () => Promise.resolve(undefined),
+      workerHeapProfiles: () => Promise.resolve(undefined),
+      host,
+      // The compile worker closes first, so a compile an activation still
+      // awaits fails at once rather than holding the host's close.
+      close: () => {
+        moduleCompiler.close();
+        return host.close();
+      },
+    };
+  }
+  // Only now, with the loop actually up: what `/api/meta` adds to the base
+  // posture, so a client adopting this deployment's flags gets the ones the
+  // SERVING runtimes run rather than only the generic webhook runtime's.
+  publishServingExperimentalOverrides(SERVING_RUNTIME_EXPERIMENTAL);
+  return loop;
+}
+
+/**
+ * The serving loop while it runs, for what hands it work — the
+ * `pattern.lifecycle` handler among them; `undefined` off the flag.
+ */
+export function serverExecutionHost(): ServingLoop | undefined {
+  return loop;
+}
+
+/**
+ * The routed plane to other spaces' owners while the loop runs with owner
+ * routing on, for a delivery this thread makes into a space it does not
+ * serve; `undefined` otherwise.
+ */
+export function serverExecutionRoute(): RoutedPlane | undefined {
+  return route;
+}
+
+export async function stopServerExecutionHost(): Promise<void> {
+  await loop?.close();
+  loop = undefined;
+  await route?.close();
+  route = undefined;
+  // Nothing serves any more, so `/api/meta` reports the base posture again.
+  publishServingExperimentalOverrides(null);
+}

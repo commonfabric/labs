@@ -1,0 +1,1 @@
+{"date":"2026-10-23","from":{"k":"unit","s":"runner","n":"nested-piece-setup-repair > repairs nothing when the setup marker already names the pattern"},"to":{"k":"unit","s":"runner","n":"nested-piece-setup-repair > heals a nested piece whose manifest lacks a cell though the setup marker names the pattern"}}

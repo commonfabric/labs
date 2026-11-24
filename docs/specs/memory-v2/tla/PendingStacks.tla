@@ -90,6 +90,26 @@
 (*                   a seq and resolves its localSeq but appends nothing   *)
 (*                   to any path's content.  The proof runs only on a      *)
 (*                   staleness refusal; a dead dependency still refuses.   *)
+(*                                                                         *)
+(*   ViewMode - what a build observes at a path one of its own pending     *)
+(*     layers wrote (03-commit-model.md section 3.3.3):                    *)
+(*       "replay"        the confirmed contributors as integrated, plus    *)
+(*                       the own layers: the layer's ops re-folded over    *)
+(*                       the current base, which is how the server         *)
+(*                       reconstructs the reader's view.                   *)
+(*       "intended"      the confirmed contributors at the layer's own     *)
+(*                       basis, plus the own layers: the result the        *)
+(*                       layer's writer computed, which hides every        *)
+(*                       foreign write to the path integrated since.  This *)
+(*                       is a positional op shown as its intended result   *)
+(*                       for every layer, whatever it read.                *)
+(*       "intendedRead"  as "intended", but only for a layer whose commit  *)
+(*                       read the path.  Such a layer is refused or        *)
+(*                       elided once a foreign write moves the path, and   *)
+(*                       a build that named it goes with it; a layer that  *)
+(*                       did not read the path is accepted as it stands,   *)
+(*                       so a build over it must observe what the server   *)
+(*                       will reconstruct.                                 *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -101,12 +121,14 @@ CONSTANTS
   DepMode,      \* "fullstack" | "filtered"
   BasisMode,    \* "maxdep" | "confirmed"
   DeliveryMode, \* "atomic" | "channel"
-  IdentityMode  \* "none" | "elide"
+  IdentityMode, \* "none" | "elide"
+  ViewMode      \* "replay" | "intended" | "intendedRead"
 
 ASSUME DepMode \in {"fullstack", "filtered"}
 ASSUME BasisMode \in {"maxdep", "confirmed"}
 ASSUME DeliveryMode \in {"atomic", "channel"}
 ASSUME IdentityMode \in {"none", "elide"}
+ASSUME ViewMode \in {"replay", "intended", "intendedRead"}
 ASSUME Values # {}
 ASSUME MaxTotal \in Nat \ {0}
 
@@ -151,7 +173,39 @@ StackIdx(s) == DOMAIN pend[s]
 StackLseqs(s) == {pend[s][j].lseq : j \in StackIdx(s)}
 LayersWriting(s, p) ==
   {pend[s][j].lseq : j \in {i \in StackIdx(s) : p \in pend[s][i].writes}}
-ObsConfirmed(s, p) == {i \in 1..csn[s] : p \in log[i].writes}
+
+(* The own layers whose write to p a build sees as the writer computed it,
+   per ViewMode.  Such a layer contributes the view its writer computed
+   over - the contributors it saw at p when it was built, recorded in its
+   `shown` - so a foreign write to p integrated since is hidden from the
+   build, while the own layers beneath it stay in view whether they have
+   since integrated or not. *)
+IntendedLayers(s, p) ==
+  {i \in StackIdx(s) :
+     /\ p \in pend[s][i].writes
+     /\ \/ ViewMode = "intended"
+        \/ /\ ViewMode = "intendedRead"
+           /\ \E r \in pend[s][i].reads : r.path = p}
+
+TopIntended(s, p) == pend[s][Max(IntendedLayers(s, p))]
+
+(* The confirmed contributors to p a build observes: every accepted write
+   to p integrated so far, or, over an intended layer, the confirmed
+   contributors that layer saw.  The read record still declares csn as its
+   basis - the client names what it has integrated - which is the
+   disagreement with the server's reconstruction that ReadCoherence
+   catches when such a layer is accepted. *)
+ObsConfirmed(s, p) ==
+  IF IntendedLayers(s, p) = {} THEN {i \in 1..csn[s] : p \in log[i].writes}
+  ELSE TopIntended(s, p).shown[p].c
+
+(* The pending contributors a build observes at p: the visible own layers
+   writing p, plus, over an intended layer, the layers that layer saw at
+   p - a layer since integrated maps through res to its seq, as any
+   pending contributor does. *)
+ObsPending(s, p) ==
+  LayersWriting(s, p) \cup
+    (IF IntendedLayers(s, p) = {} THEN {} ELSE TopIntended(s, p).shown[p].p)
 
 (* The read record a client produces for path p: kind, recorded dependency
    set (per DepMode), the confirmed basis at build time, and the observed
@@ -173,14 +227,21 @@ ReadRecord(s, p) ==
       deps |-> IF isPending THEN deps ELSE {},
       cbasis |-> csn[s],
       obsC |-> ObsConfirmed(s, p),
-      obsP |-> wl]
+      obsP |-> ObsPending(s, p)]
 
 Build(s, R, W, v) ==
   /\ built < MaxTotal
   /\ LET c == [lseq |-> nextLocal[s],
                writes |-> W,
                val |-> v,
-               reads |-> {ReadRecord(s, p) : p \in R}]
+               reads |-> {ReadRecord(s, p) : p \in R},
+               \* The contributors the writer saw at each path it writes:
+               \* the view it computed over.  Recorded only where a
+               \* ViewMode consults it, so the "replay" rows keep their
+               \* recorded state counts.
+               shown |-> [q \in (IF ViewMode = "replay" THEN {} ELSE W) |->
+                           [c |-> ObsConfirmed(s, q),
+                            p |-> ObsPending(s, q)]]]
      IN pend' = [pend EXCEPT ![s] = Append(@, c)]
   /\ nextLocal' = [nextLocal EXCEPT ![s] = @ + 1]
   /\ built' = built + 1
@@ -202,13 +263,19 @@ ScanBasis(s, r) ==
 
 (* A write at log index i invalidates read r of session s when it touches
    the read path inside the scan interval -- except that the "confirmed"
-   basis mode excludes the reader's own resolved session stack from the
-   pending-read scan (the CT-1910 repair). *)
+   basis mode excludes from the pending-read scan the reader's own layers
+   the read's dependency array names (the CT-1910 repair, in its shipped
+   declared-set form; 03-commit-model.md section 3.6.3).  Build records the
+   full stack, so on every reachable state the named layers are every own
+   layer in the interval and the exclusion is the reader's whole session;
+   the declared-set form is what a build that omitted a layer would be
+   held to. *)
 InvalidatedBy(s, r, i, k) ==
   /\ i > ScanBasis(s, r)
   /\ i < k
   /\ r.path \in log[i].writes
-  /\ ((BasisMode = "confirmed" /\ r.kind = "pending") => log[i].sess # s)
+  /\ ((BasisMode = "confirmed" /\ r.kind = "pending")
+        => ~(log[i].sess = s /\ log[i].lseq \in r.deps))
 
 HasConflict(s, c, k) ==
   \E r \in c.reads : \E i \in DOMAIN log : InvalidatedBy(s, r, i, k)

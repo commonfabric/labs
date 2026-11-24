@@ -56,7 +56,7 @@ wait; they did not explain the entire noisy ablation difference.
 
 The complete sources, exact patches, run manifests, raw observations, and
 recoverable test outputs are in the
-[portable evidence directory](../../../../tools/server-execution-topics/evidence/2026-09-10-event-visibility/README.md).
+[portable evidence directory](../../../../scripts/server-execution-topics/evidence/2026-09-10-event-visibility/README.md).
 The workload source hash is identical across the adjacent baseline/fixed arms.
 The runs exceeded the benchmark quiet-machine threshold and make no latency
 claim. No quiet three-pair latency series was completed for this recommendation.

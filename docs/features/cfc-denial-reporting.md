@@ -2,10 +2,10 @@
 
 Contextual Flow Control decides, twice, whether something may proceed. The
 write gate decides whether a transaction may commit: the rules live in
-`packages/runner/src/cfc/prepare.ts`, which produces the prepare reasons, and
-`packages/runner/src/storage/extended-storage-transaction.ts` acts on them and
+`runtime/runner/src/cfc/prepare.ts`, which produces the prepare reasons, and
+`runtime/runner/src/storage/extended-storage-transaction.ts` acts on them and
 reports. The render gate in the worker reconciler,
-`packages/html/src/worker/reconciler.ts`, decides whether a piece of content
+`runtime/html/src/worker/reconciler.ts`, decides whether a piece of content
 may reach the document. Both fail closed.
 
 A refusal shows up as a write that does not land or interface that is not
@@ -14,7 +14,7 @@ decision, so each gate says what it turned away at the moment it decides.
 
 ## The reporter
 
-`packages/runner/src/cfc/denial-report.ts` holds the reporter, and both gates
+`runtime/runner/src/cfc/denial-report.ts` holds the reporter, and both gates
 call it where they block:
 
 ```ts
@@ -34,9 +34,9 @@ reportCfcDenial(
 
 `code` names the kind of decision, and is one of `CFC_DENIAL_CODES`:
 `write-policy-gate`, `write-prepare-crashed`, `write-unprepared`,
-`write-prepared-digest-mismatch`, `render-confidentiality-ceiling`,
-`render-remote-load`, `render-text-integrity`, and
-`render-literal-text-integrity`.
+`write-prepare-invalidated`, `write-prepared-digest-mismatch`,
+`render-confidentiality-ceiling`, `render-remote-load`,
+`render-text-integrity`, and `render-literal-text-integrity`.
 
 Only a decision that stopped something reports. Under `observe` the write gate
 records its reasons and lets the commit through, so nothing was turned away and
@@ -46,8 +46,26 @@ all, so there are no reasons and nothing to read.
 
 The write gate reports where prepare records its reasons, which is the point
 the decision is made: an enforcing transaction can no longer commit, whether or
-not it goes on to try. A refusal that only becomes one at commit, because a
-later invalidation added a reason prepare never saw, is reported at commit.
+not it goes on to try. A refusal that only becomes one at commit is reported at
+commit. The write kinds say which decision it was, and a kind follows from
+which pass recorded the reasons rather than from their text, since
+`invalidateCfc()` takes any string:
+
+- `write-policy-gate`: prepare evaluated the transaction and refused it,
+  recording why. Reasons an invalidation adds afterwards leave the kind as it
+  is, since a policy check did refuse.
+- `write-prepare-crashed`: prepare threw before the gate decided.
+- `write-prepare-invalidated`: prepare passed the transaction, and a change to
+  it afterwards — a read, a write, a decision input recorded, a dial set —
+  invalidated the preparation where the change was made. No policy check
+  refused the commit, and the rejection is retryable: `invalidateCfc()`
+  records its reason without a verdict tag, so no invalidation is a verdict.
+- `write-prepared-digest-mismatch`: prepare passed the transaction, and the
+  recheck at commit found that its activity changed with nothing having
+  invalidated the preparation.
+- `write-unprepared`: a CFC-relevant transaction reached commit with no
+  preparation run, and so with no reasons but those a caller recorded through
+  `invalidateCfc()`.
 
 ## What may be said out loud
 
@@ -68,20 +86,28 @@ debug and to a denial listener (below), and they are passed as a function so a
 gate builds them only where something takes them.
 
 Where a label is read, `labelSource` says where from: `stored` for the cell's
-own label, `schema` for the information-flow constraint the gate falls back to,
-and `unreadable` when reading it threw, which is the case the gate blocks on
-without ever seeing a label.
+own label, `consumed` for one a read consumed on its way, `schema` for the
+information-flow constraint the gate falls back to, and `unreadable` when
+reading it threw, whether the stored envelope could not be interpreted or the
+schema could not be walked for its labels, which is the case the gate blocks on
+without ever seeing a label. A read that reported no consumed labels reports
+`unreadable` too, while one that consumed the read-failure marker as a stored
+label, as a runtime secret is stored, reports `consumed`. The kind carries
+nothing of the label, so it is the one part of the inputs the worker's host read
+gate also returns to the host, in the refusal of a host's read
+(`CellReadRefusal`, `runtime/runtime-client/src/protocol/types.ts`).
 
 A refused commit's message still quotes its first prepare reason. That message
 is a value returned to the caller that asked for the commit; the log is read by
 whoever holds the console, which in a worker is the page whose content the gate
 scrubbed and on a server is a file spanning every space it serves.
 
-Nothing else travels. The placeholder carries `data-cfc-blocked` and
-`data-cfc-blocked-reason`. A prop feeding one of the text-integrity sinks is
-turned away a third way — its value is replaced and the node is stamped
-`data-cfc-blocked-props` naming the prop — and the report names that prop in
-its inputs.
+Nothing else travels but one input, the kind of label a host's refused read was
+decided on, which the refusal returns as `labelSource`. The placeholder carries
+`data-cfc-blocked` and `data-cfc-blocked-reason`. A prop feeding one of the
+text-integrity sinks is turned away a third way — its value is replaced and the
+node is stamped `data-cfc-blocked-props` naming the prop — and the report names
+that prop in its inputs.
 
 No identifier ties a report to the surface it explains. Reports are addressed
 by their content, so an identifier stable enough to look one up is a function
@@ -143,7 +169,8 @@ value, or a path.
 
 The inputs may name labels, policies, and values freely, because they reach
 only debug and a denial listener. Nothing derived from them may reach the
-surface the denial produced.
+surface the denial produced, but for `labelSource`, which names a kind and
+carries nothing of a label, and which a host's refused read returns.
 
 Report the decision's inputs rather than a conclusion drawn from them. Which
 input decided is the gate's business, and a gate reads them together: the

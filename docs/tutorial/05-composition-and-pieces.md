@@ -46,7 +46,7 @@ parent passes.
 
 A **pattern** is source code — a template. A **piece** is an instance of a
 pattern living in a space. Top-level deployment through `cf piece new` or the
-shell does roughly this (see `packages/piece/src/ops/pieces-controller.ts`):
+shell does roughly this (see `runtime/piece/src/ops/pieces-controller.ts`):
 
 1. The pattern source is compiled and registered, so the space knows the
    program (not just its output).
@@ -129,7 +129,7 @@ For drill-down flows (list → detail), a handler can return
 
 `navigateTo` with a freshly-instantiated pattern creates the detail piece
 and navigates the shell to it; with an existing piece it just navigates.
-The canonical list/detail example is `packages/patterns/reading-list/` —
+The canonical list/detail example is `patterns/examples/reading-list/` —
 the detail pattern receives each editable field as a `Writable<>` input and
 binds them directly with `$value`.
 
@@ -154,8 +154,8 @@ const response = generateText({
 The request flows through the server's LLM proxy (Toolshed — Chapter 11),
 results are cached per distinct input, and `pending`/`error`/`result` are
 just cells your UI binds to. A real use from
-`packages/patterns/shopping-list.tsx` — note it's *inside a `.map()`*, one
-cached classification per item:
+`patterns/apps/shopping-list/shopping-list.tsx` — note it's *inside a `.map()`*,
+one cached classification per item:
 
 ```tsx
 // Shown inside a pattern body.

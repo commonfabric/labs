@@ -2,9 +2,11 @@
 
 Patterns define reactive computations (`computed`, `lift`) that must
 be **idempotent**: given the same inputs, they must produce the same outputs.
-When they don't, the scheduler re-runs them repeatedly because each run produces
-new writes that trigger further runs. This manifests as the UI churning, high
-CPU usage, and the system never reaching a stable state.
+When they don't, each run that repeats the same inputs changes state again. A
+computation is not re-run for its own writes, but when its writes trigger
+another computation whose writes trigger it in turn, the scheduler never
+settles. This manifests as the UI churning, high CPU usage, and the system never
+reaching a stable state.
 
 Common causes:
 

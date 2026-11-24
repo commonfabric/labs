@@ -75,7 +75,7 @@ was not treated as proof of a runnable consequence. The final controls compiled
 a real pattern, persisted its source closure, used real client demand, and read
 the durable result independently of runtime overlays. Full sources, the exact
 ablation patch, manifests, and recoverable raw outputs are in the
-[portable evidence directory](../../../../tools/server-execution-topics/evidence/2026-09-10-terminal-confirmation/README.md).
+[portable evidence directory](../../../../scripts/server-execution-topics/evidence/2026-09-10-terminal-confirmation/README.md).
 
 ## Local validation
 

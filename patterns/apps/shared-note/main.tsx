@@ -1,0 +1,1707 @@
+/**
+ * A shared Markdown document with Fabric profile names on live cursors and
+ * comments on ranges of its text.
+ */
+
+import {
+  anchorsOf,
+  type AuthoredByCurrentUser,
+  type Cell,
+  computed,
+  currentPrincipal,
+  Default,
+  FabricEpochNsec,
+  type FieldAnchors,
+  FS,
+  handler,
+  NAME,
+  pattern,
+  type PerSession,
+  type PerSpace,
+  type PerUser,
+  principalOf,
+  profileOwnerOf,
+  type Stream,
+  TILE_UI,
+  UI,
+  type VNode,
+  wish,
+  Writable,
+  type WriteAuthorizedBy,
+  type WritePolicyAnyOf,
+} from "commonfabric";
+import { normalizePresenceParticipantName } from "./participant-name.ts";
+
+/**
+ * The part of a viewer's Fabric profile the note reads: their name, where
+ * set. A comment's author is drawn from the profile itself, whose face
+ * `cf-profile-badge` shows only when its owner set it.
+ */
+export interface NoteProfile {
+  name?: string;
+}
+
+/** A live link to a person's profile. */
+export type ProfileCell = Cell<NoteProfile>;
+
+/** Initial document values, shared by every viewer of this piece. */
+export interface SharedNoteInput {
+  /** Editable document title, independent of Markdown frontmatter. */
+  title?: PerSpace<string | Default<"Untitled note">>;
+
+  /** LF-normalized Markdown; live editing uses CodeMirror operations. */
+  content?: PerSpace<string | Default<"">>;
+
+  /**
+   * Comments on the body, one keyed record per comment. A record whose
+   * `status` is `"draft"` is a comment its author is still writing.
+   */
+  comments?: PerSpace<StoredComment[] | Default<[]>>;
+
+  /**
+   * What members did in the note, one row per editing session, edit verb
+   * call, comment or reply, each labeled with who did it. Told as the
+   * result's `"[ACTIVITY]"`.
+   */
+  activity?: PerSpace<ActivityRow[] | Default<[]>>;
+}
+
+/** Readable Markdown and the same compact view for standalone and embedded use. */
+export interface SharedNoteOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  [TILE_UI]: VNode;
+
+  /**
+   * The note as `index.md`: the title in the frontmatter, then the body, both
+   * linked to the fields below. A filesystem save writes both back. Once an
+   * editor has changed the body, a save that changes it too is refused, and
+   * the body is edited through the verbs below instead.
+   */
+  [FS]: {
+    type: "text/markdown";
+    frontmatter: { title: string };
+    content: string;
+  };
+
+  title: PerSpace<string>;
+  content: PerSpace<string>;
+  comments: PerSpace<StoredComment[]>;
+  participantName: PerUser<string>;
+
+  /**
+   * What members did in the note, for the other members of a shared space to
+   * hear: "edited \"Packing list\"", "commented on \"Packing list\"". The words
+   * never say who; each row is labeled `authored-by` the person whose handler
+   * run wrote it.
+   */
+  "[ACTIVITY]": PerSpace<ActivityRow[]>;
+
+  /**
+   * Where each comment's text is now: the body's anchors, two per comment,
+   * drafts included. The text of the comment `id` runs from the anchor
+   * `<id>:from` to the anchor `<id>:to`. `undefined` until the body first
+   * holds an anchor.
+   */
+  commentAnchors: FieldAnchors | undefined;
+
+  /** Adds `text` to the end of the document, on a line of its own. */
+  appendLine: Stream<LineEvent>;
+
+  /** Adds `text` to the start of the document, on a line of its own. */
+  prependLine: Stream<LineEvent>;
+
+  /**
+   * Replaces the one occurrence of `old` in the document with `new`, and
+   * refuses when `old` is empty, occurs nowhere, or occurs more than once.
+   */
+  replaceText: Stream<ReplaceTextEvent>;
+
+  /**
+   * Comments under the caller's profile on the one occurrence of `quote` in
+   * the body, and refuses when `quote` is empty, occurs nowhere, or occurs
+   * more than once, when `body` has no text, or when the caller has no
+   * profile.
+   */
+  addComment: Stream<AddCommentEvent>;
+
+  /** Replies to the comment `id` under the caller's profile. */
+  replyToComment: Stream<CommentReplyEvent>;
+
+  /** Marks the comment `id` resolved: it stays listed and marks no text. */
+  resolveComment: Stream<CommentIdEvent>;
+
+  /** Marks the comment `id` open again. */
+  reopenComment: Stream<CommentIdEvent>;
+
+  /** Deletes the comment `id`, which only its author can do. */
+  deleteComment: Stream<CommentIdEvent>;
+}
+
+/** Text to add as a line of its own. */
+export interface LineEvent {
+  /** The line, without a trailing newline. */
+  text: string;
+}
+
+/** An exact replacement anchored on text the document holds once. */
+export interface ReplaceTextEvent {
+  /** Text the document holds exactly once, compared code unit for code unit. */
+  old: string;
+
+  /** Text that takes its place. */
+  new: string;
+}
+
+/** A comment on text the body holds once. */
+export interface AddCommentEvent {
+  /** Text the body holds exactly once, compared code unit for code unit. */
+  quote: string;
+
+  /** The comment. */
+  body: string;
+}
+
+/** Names a comment. */
+export interface CommentIdEvent {
+  /** The comment's `id`. */
+  id: string;
+}
+
+/** A reply to a comment. */
+export interface CommentReplyEvent extends CommentIdEvent {
+  /** The reply. */
+  body: string;
+}
+
+// The verbs edit the body through `applyChanges()` rather than `set()`: once an
+// editor has opened the body it accepts only edits, which the open editors
+// merge with their own typing. Each edit's positions refer to the text the verb
+// read, and land only while the body still holds it; a body that moved on
+// refuses the commit, and the verb runs again against the new text. Memory
+// moves every comment's anchor through the edit as it stores it.
+
+/** What the verbs that edit the body work on. */
+export interface EditState extends ActivityState {
+  content: Writable<string>;
+}
+
+const appendLine = handler<LineEvent, EditState>(({ text }, state) => {
+  const current = state.content.get();
+  const separator = current === "" || current.endsWith("\n") ? "" : "\n";
+  state.content.applyChanges({
+    from: current.length,
+    insert: separator + text,
+  });
+  report("edited", state);
+});
+
+const prependLine = handler<LineEvent, EditState>(({ text }, state) => {
+  const current = state.content.get();
+  const separator = current === "" || text.endsWith("\n") ? "" : "\n";
+  state.content.applyChanges({ from: 0, insert: text + separator });
+  report("edited", state);
+});
+
+/**
+ * Where `text` occurs in `body`, which must be exactly once.
+ *
+ * @throws If `text` is empty, occurs nowhere, or occurs more than once;
+ *   `verb` and `field` name the call and its argument in the message.
+ */
+const onlyOccurrence = (
+  body: string,
+  text: string,
+  verb: string,
+  field: string,
+): number => {
+  if (text === "") {
+    throw new Error(`${verb} needs a non-empty \`${field}\` to anchor on`);
+  }
+  const from = body.indexOf(text);
+  if (from === -1) {
+    throw new Error(
+      `${verb} found no occurrence of \`${field}\`; read the note again and ` +
+        "anchor on text it holds",
+    );
+  }
+  if (body.indexOf(text, from + 1) !== -1) {
+    throw new Error(
+      `${verb} found \`${field}\` more than once; anchor on a longer ` +
+        "passage that occurs once",
+    );
+  }
+  return from;
+};
+
+const replaceText = handler<ReplaceTextEvent, EditState>(
+  (event, state) => {
+    const { content } = state;
+    if (event.old === "") {
+      throw new Error(
+        "replaceText needs a non-empty `old` to anchor on; to add text, use " +
+          "`appendLine` or `prependLine`",
+      );
+    }
+    const from = onlyOccurrence(content.get(), event.old, "replaceText", "old");
+    content.applyChanges({
+      from,
+      to: from + event.old.length,
+      insert: event.new,
+    });
+    report("edited", state);
+  },
+);
+
+const reportError = handler<
+  { detail: { message?: string } },
+  { error: Writable<string> }
+>((event, { error }) => {
+  error.set(
+    event.detail.message || "Editing paused. Reopen this note to reconnect.",
+  );
+});
+
+const preserveUnsentText = handler<
+  { detail: { localValue: string } },
+  { recovery: Writable<string | null> }
+>((event, { recovery }) => {
+  recovery.set(event.detail.localValue);
+});
+
+// A presence failure removes live cursors and leaves editing alone. The editor
+// tries a `configuration` failure again only when the room or name changes,
+// and any other failure when it next gains focus. A failure while it has focus
+// keeps focus, so the viewer has to leave the note and come back.
+const reportPresenceError = handler<
+  { detail: { category?: string } },
+  { presenceNotice: Writable<string> }
+>((event, { presenceNotice }) => {
+  presenceNotice.set(
+    event.detail.category === "configuration"
+      ? "Live cursors are unavailable on this server. Editing still works."
+      : "Live cursors are unavailable. Editing still works; click outside the note, then back into it to try again.",
+  );
+});
+
+const clearPresenceNotice = handler<
+  unknown,
+  { presenceNotice: Writable<string> }
+>((_, { presenceNotice }) => {
+  presenceNotice.set("");
+});
+
+//
+// Comments
+//
+// A comment says which text it is about through two anchors of the body,
+// one where its text starts and one where it ends. Memory moves both through
+// every edit, whoever makes it, so the comment stores no position. A handler
+// changes the anchors as it changes any cell: it reads the body and the
+// anchors and writes the anchors, and its commit lands only while both are
+// still what it read. Comments and replies are labeled `authored-by` whoever
+// wrote them, by the runtime, and only the handlers their policies name can
+// write them.
+//
+
+/** A reply to a comment. */
+export interface ReplyRecord {
+  /** The profile the reply was written under. */
+  authorProfile: ProfileCell;
+
+  /** The reply. */
+  body: string;
+
+  /** The handler clock when the reply was written, in milliseconds. */
+  postedAt: number;
+}
+
+/** A stored reply: written by `commitReply` alone, labeled with its author. */
+export type StoredReply = AuthoredByCurrentUser<
+  WriteAuthorizedBy<ReplyRecord, typeof commitReply>
+>;
+
+/** The replies to one comment, in the order they were written. */
+export type RepliesValue = StoredReply[] | Default<[]>;
+
+/**
+ * Where a comment is in its life: still being written, posted, or deleted.
+ */
+export type CommentStatus = "draft" | "posted" | "deleted";
+
+/** A comment on a range of the body. */
+export interface CommentRecord {
+  /** The comment's id, which its two anchors on the body are named for. */
+  id: string;
+
+  /** The profile the comment was written under. */
+  authorProfile: ProfileCell;
+
+  /** The comment; empty while it is a draft. */
+  body: string;
+
+  /**
+   * Where the comment is in its life. A draft holds its anchors from the
+   * moment its author opens the composer; it is listed only to its author,
+   * who can continue or discard it, and marks no text for anyone else. A
+   * deleted comment is linked from no list, and has no anchors.
+   */
+  status: CommentStatus;
+
+  /**
+   * The text between the anchors when the comment was written, shown in its
+   * row while the editor marks nothing for it: while it is a listed draft,
+   * once it is resolved, and once an edit has deleted that text.
+   */
+  quote: string;
+
+  /** The handler clock when the comment was written, in milliseconds. */
+  postedAt: number;
+
+  /**
+   * The comment's replies, a list of its own that anyone may add to under
+   * their own name.
+   */
+  replies: Writable<RepliesValue>;
+
+  /**
+   * Whether the comment is settled, a cell of its own that anyone may set. A
+   * resolved comment marks no text.
+   */
+  resolved: Writable<boolean | Default<false>>;
+}
+
+/**
+ * A stored comment, one keyed record under its id. Only the handlers that
+ * start, post and delete a comment can write the record, and each labels it
+ * `authored-by` the person it runs for. A later schema can neither add a
+ * writer to the policy nor drop one.
+ */
+export type StoredComment = AuthoredByCurrentUser<
+  WritePolicyAnyOf<CommentRecord, [
+    WriteAuthorizedBy<unknown, typeof openComposer>,
+    WriteAuthorizedBy<unknown, typeof postComment>,
+    WriteAuthorizedBy<unknown, typeof addComment>,
+    WriteAuthorizedBy<unknown, typeof deleteComment>,
+    WriteAuthorizedBy<unknown, typeof discardDraft>,
+  ]>
+>;
+
+type CommentsCell = Writable<StoredComment[] | Default<[]>>;
+
+/** The body's anchors, as a handler reads and writes them. */
+type AnchorsCell = Writable<FieldAnchors | undefined>;
+
+//
+// Activity: what a member did in the note, for the other members of a shared
+// space to hear without reading the note. A row says what was done, in the
+// note's words, and never who did it; the runtime labels each row
+// `authored-by` the person whose handler run wrote it.
+//
+
+/** One thing a member did in the note. */
+export interface NoteActivity {
+  /** What was done, without who did it: `edited "Packing list"`. */
+  body: string;
+
+  /** When, by the handler's clock, in nanoseconds since the epoch. */
+  doneAt: FabricEpochNsec;
+}
+
+/**
+ * A stored activity row: written only by the handlers that report an edit or
+ * a comment, labeled with its author. The list is fixed once a row is
+ * stored: a later schema can re-bind a listed writer to its successor, but
+ * cannot add a new one, and one it leaves out is kept.
+ */
+export type ActivityRow = AuthoredByCurrentUser<
+  WritePolicyAnyOf<NoteActivity, [
+    WriteAuthorizedBy<unknown, typeof reportEdit>,
+    WriteAuthorizedBy<unknown, typeof appendLine>,
+    WriteAuthorizedBy<unknown, typeof prependLine>,
+    WriteAuthorizedBy<unknown, typeof replaceText>,
+    WriteAuthorizedBy<unknown, typeof postComment>,
+    WriteAuthorizedBy<unknown, typeof addComment>,
+    WriteAuthorizedBy<unknown, typeof commitReply>,
+  ]>
+>;
+
+type ActivityCell = Writable<ActivityRow[] | Default<[]>>;
+
+/** What reporting activity reads: the note's title, and where rows go. */
+export interface ActivityState {
+  title: Writable<string>;
+  activity: ActivityCell;
+}
+
+/** The most of a title a row repeats; a longer one is cut short. */
+const ROW_TITLE_MAX = 80;
+
+/**
+ * Adds a row saying `did` the note now, as `<did> "<title>"`. The caller is
+ * the handler the row is reported by, so the write counts as that handler's.
+ * The title is cut short to keep a row brief: anyone can write a title of
+ * any length, and a host may refuse a long row.
+ */
+const report = (did: string, { title, activity }: ActivityState): void => {
+  const whole = title.get().trim() || "Untitled note";
+  const name = whole.length > ROW_TITLE_MAX
+    ? whole.slice(0, ROW_TITLE_MAX - 1) + "…"
+    : whole;
+  activity.push({
+    body: `${did} "${name}"`,
+    doneAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+  });
+};
+
+/**
+ * Notes that the viewer changed a field in this session. The editor's
+ * `cf-edit` and the title field's `cf-input` tell only the viewer's own
+ * changes, never another member's or one the field's cell pushed.
+ */
+const markEdited = handler<unknown, { edited: Writable<boolean> }>(
+  (_, { edited }) => {
+    if (!edited.get()) edited.set(true);
+  },
+);
+
+/**
+ * Ends an editing session as the field loses focus: reports one edit if the
+ * viewer changed the field since it last did. A session is everything typed
+ * between gaining focus and losing it, so one row stands for many
+ * keystrokes. A session whose tab closes before the field loses focus is
+ * not reported.
+ */
+const reportEdit = handler<
+  unknown,
+  ActivityState & { edited: Writable<boolean> }
+>((_, state) => {
+  if (!state.edited.get()) return;
+  state.edited.set(false);
+  report("edited", state);
+});
+
+/** The id of the anchor where the text of the comment `id` starts. */
+const fromAnchorOf = (id: string): string => `${id}:from`;
+
+/** The id of the anchor where the text of the comment `id` ends. */
+const toAnchorOf = (id: string): string => `${id}:to`;
+
+/**
+ * Anchors the comment `id` on `from` up to `to` of the body, beside the
+ * anchors the body already holds. The caller has read the body in the same
+ * handler, so the offsets refer to the text the commit lands on.
+ */
+const anchorComment = (
+  anchors: AnchorsCell,
+  id: string,
+  from: number,
+  to: number,
+): void => {
+  // Memory bounds what a field's anchors document may hold, and refuses a
+  // commit past its bounds with an error that says so; the note leaves those
+  // bounds to Memory rather than restating them here.
+  anchors.set({
+    ...anchors.get(),
+    [fromAnchorOf(id)]: from,
+    [toAnchorOf(id)]: to,
+  });
+};
+
+/** Removes the two anchors of the comment `id`, leaving the others. */
+const unanchorComment = (anchors: AnchorsCell, id: string): void => {
+  const {
+    [fromAnchorOf(id)]: _from,
+    [toAnchorOf(id)]: _to,
+    ...others
+  } = anchors.get() ?? {};
+  anchors.set(others);
+};
+
+/**
+ * The editor's main selection, as the note keeps it: a range of the body and
+ * the text there. `from === to` is nothing selected.
+ */
+interface NoteSelection {
+  from: number;
+  to: number;
+  text: string;
+}
+
+const NOTHING_SELECTED: NoteSelection = { from: 0, to: 0, text: "" };
+
+/**
+ * What `cf-selection-change` reports: the selection as a range of the
+ * editor's text, and the whole of that text, `value`, which the range is
+ * right for.
+ */
+interface SelectionReport extends NoteSelection {
+  value: string;
+}
+
+/** A mark the editor draws: the text from one anchor of the body to another. */
+interface NoteHighlight {
+  id: string;
+  fromAnchor: string;
+  toAnchor: string;
+  kind?: string;
+}
+
+/** The mark on the text of the comment `id`, of `kind` where one is given. */
+const highlightOf = (id: string, kind?: string): NoteHighlight => ({
+  id,
+  fromAnchor: fromAnchorOf(id),
+  toAnchor: toAnchorOf(id),
+  ...(kind === undefined ? {} : { kind }),
+});
+
+/** The `display` of an element a session shows or hides. */
+type NoteDisplay = "block" | "flex" | "none";
+
+/** What one session sees of a comment's row. */
+interface RowDisplay {
+  row: NoteDisplay;
+  border: string;
+}
+
+/**
+ * What one session sees of the actions on its selected comment: whether
+ * they are shown, where among the rows, and which of them.
+ */
+interface ActionsDisplay {
+  bar: NoteDisplay;
+  order: number;
+  resolve: NoteDisplay;
+  reopen: NoteDisplay;
+  delete: NoteDisplay;
+}
+
+/**
+ * How many places in the panel's order one comment takes: its row, then the
+ * actions on it.
+ */
+const PLACES_PER_COMMENT = 2;
+
+/**
+ * Why an act from a viewer whose profile hasn't resolved, or isn't their own,
+ * is refused.
+ */
+const NO_PROFILE = "Choose a Fabric profile of your own to comment.";
+
+/**
+ * The profile `myProfile` resolves to, once it holds a value and is the
+ * profile of the person the handler runs for; `undefined` otherwise. A
+ * comment or reply is labeled as written by that person and shows the profile
+ * it stores, so a profile of someone else's would show them as its author.
+ */
+const ownProfile = (
+  myProfile: ProfileCell | undefined,
+): ProfileCell | undefined => {
+  const profile = myProfile?.resolveAsCell();
+  if (profile?.get() === undefined) return undefined;
+  const actor = currentPrincipal();
+  return actor !== undefined && profileOwnerOf(profile) === actor
+    ? profile
+    : undefined;
+};
+
+/**
+ * A new comment's id, minted in a handler, where the clock and entropy are
+ * allowed; the clock alone would name two comments made in one millisecond
+ * alike.
+ */
+const mintCommentId = (): string =>
+  `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+/** Stores a comment under `id`, which its anchors are named for. */
+const storeComment = (
+  comments: CommentsCell,
+  id: string,
+  profile: ProfileCell,
+  body: string,
+  quote: string,
+  status: "draft" | "posted",
+): void => {
+  // A comment may link only lists and cells that exist, so they are made
+  // before the comment links them.
+  const replies = new Writable<RepliesValue>([]);
+  const resolved = new Writable<boolean | Default<false>>(false);
+  const record = comments.elementById(id);
+  record.set({
+    id,
+    authorProfile: profile,
+    body,
+    status,
+    quote,
+    postedAt: Date.now(),
+    replies,
+    resolved,
+  });
+  comments.addUnique(record);
+};
+
+/**
+ * The cell of the keyed record of the posted comment `id` names. A draft is
+ * its author's alone, to post or discard, so it names none.
+ *
+ * @throws If no posted comment has that id.
+ */
+const commentNamed = (
+  comments: CommentsCell,
+  id: string,
+): Writable<StoredComment> => {
+  const record = id === "" ? undefined : comments.elementById(id);
+  const current: StoredComment | undefined = record?.get();
+  if (record === undefined || current?.status !== "posted") {
+    throw new Error(`No comment has the id \`${id}\`.`);
+  }
+  return record;
+};
+
+/**
+ * Keeps the editor's selection while the body is the text the editor
+ * reported it against, since only then does its range name the selected text
+ * in the body, and keeps nothing selected otherwise, until the editor reports
+ * against the body as it is. The report reaches this handler from the editor
+ * within the runtime, and the editor's text is compared here rather than
+ * kept.
+ */
+const trackSelection = handler<
+  { detail: SelectionReport },
+  { content: Writable<string>; selection: Writable<NoteSelection> }
+>((event, { content, selection }) => {
+  const { from, to, text, value } = event.detail;
+  selection.set(
+    from === to || content.get() !== value
+      ? NOTHING_SELECTED
+      : { from, to, text },
+  );
+});
+
+/** What starting a comment works on. */
+export interface OpenComposerState {
+  content: Writable<string>;
+  anchors: AnchorsCell;
+  comments: CommentsCell;
+  myProfile: ProfileCell | undefined;
+  selection: Writable<NoteSelection>;
+  composing: Writable<string>;
+  draft: Writable<string>;
+  notice: Writable<string>;
+}
+
+/**
+ * Starts a comment on the current selection: a draft record under a new id,
+ * and the two anchors of the body named for it. The selection was kept
+ * against the body as it was then, and is refused if the body no longer
+ * holds its text at its range. From then on Memory keeps the anchors on that
+ * text through every edit, however long the person writes and whatever they
+ * select meanwhile, and the draft stays theirs to continue or discard if they
+ * leave.
+ */
+const openComposer = handler<unknown, OpenComposerState>((_, state) => {
+  const profile = ownProfile(state.myProfile);
+  if (profile === undefined) {
+    state.notice.set(NO_PROFILE);
+    return;
+  }
+  if (state.composing.get() !== "") {
+    state.notice.set("Post or cancel the comment you are writing first.");
+    return;
+  }
+  const { from, to, text } = state.selection.get();
+  if (from === to) {
+    state.notice.set("Select the text to comment on first.");
+    return;
+  }
+  // A comment is on the selected text at the selected range, whatever the
+  // rest of the body holds. The editor reports the range again after every
+  // edit, and until it has, an edit may have left other text there, which is
+  // refused. Identical text an edit brought to the range is taken as the
+  // selection, since nothing tells two identical texts apart.
+  if (state.content.get().slice(from, to) !== text) {
+    state.notice.set("The note changed under your selection; try again.");
+    return;
+  }
+  const id = mintCommentId();
+  anchorComment(state.anchors, id, from, to);
+  storeComment(state.comments, id, profile, "", text, "draft");
+  state.composing.set(id);
+  state.draft.set("");
+  state.notice.set("");
+});
+
+/** Whether the comment `record` is labeled as written by the caller. */
+const writtenByCaller = (record: Writable<StoredComment>): boolean => {
+  const actor = currentPrincipal();
+  return actor !== undefined && principalOf(record, "authored-by") === actor;
+};
+
+/**
+ * Removes the comment `record`, stored under `id`, with its anchors. Dropping
+ * the record's link from the list is what removes the comment from the note.
+ * The record is also marked deleted, so that a handler finding a comment by
+ * its id, as the verbs and the draft checks do, sees that it is gone without
+ * reading the list.
+ */
+const removeComment = (
+  anchors: AnchorsCell,
+  comments: CommentsCell,
+  record: Writable<StoredComment>,
+  id: string,
+): void => {
+  comments.removeByValue(record);
+  record.key("status").set("deleted");
+  unanchorComment(anchors, id);
+};
+
+/**
+ * Deletes the draft `id` with its anchors, if it is still a draft and the
+ * caller wrote it; a draft posted or discarded meanwhile, from another tab,
+ * is left as it is.
+ */
+const discardDraftRecord = (
+  anchors: AnchorsCell,
+  comments: CommentsCell,
+  id: string,
+): void => {
+  const record = comments.elementById(id);
+  const current: StoredComment | undefined = record.get();
+  if (current?.status !== "draft" || !writtenByCaller(record)) return;
+  removeComment(anchors, comments, record, id);
+};
+
+/** What continuing a draft works on. */
+interface ResumeState {
+  comments: CommentsCell;
+  id: string;
+  composing: Writable<string>;
+  draft: Writable<string>;
+  notice: Writable<string>;
+}
+
+/**
+ * Opens the composer on a draft this session is not writing, unless the
+ * composer is already open on another or the draft is no longer one.
+ */
+const resumeDraft = handler<unknown, ResumeState>(
+  (_, { comments, id, composing, draft, notice }) => {
+    if (composing.get() !== "") {
+      notice.set("Post or cancel the comment you are writing first.");
+      return;
+    }
+    const current: StoredComment | undefined = comments.elementById(id).get();
+    if (current?.status !== "draft") {
+      notice.set("This draft was posted or discarded in another tab.");
+      return;
+    }
+    composing.set(id);
+    draft.set("");
+    notice.set("");
+  },
+);
+
+/** What discarding a draft works on. */
+export interface DiscardState {
+  anchors: AnchorsCell;
+  comments: CommentsCell;
+}
+
+/** Discards the draft `id`, from its row or from the composer's Cancel. */
+const discardDraft = handler<CommentIdEvent, DiscardState>(
+  (event, { anchors, comments }) =>
+    discardDraftRecord(anchors, comments, event.id),
+);
+
+/** What closing the composer works on. */
+interface CloseComposerState {
+  discardVerb: Stream<CommentIdEvent>;
+  composing: Writable<string>;
+  draft: Writable<string>;
+  notice: Writable<string>;
+}
+
+/** Discards the draft being written, with its anchors, and closes the composer. */
+const closeComposer = handler<unknown, CloseComposerState>(
+  (_, { discardVerb, composing, draft, notice }) => {
+    const id = composing.get();
+    if (id !== "") discardVerb.send({ id });
+    composing.set("");
+    draft.set("");
+    notice.set("");
+  },
+);
+
+/** What posting from the composer works on. */
+export interface PostCommentState extends ActivityState {
+  comments: CommentsCell;
+  myProfile: ProfileCell | undefined;
+  composing: Writable<string>;
+  draft: Writable<string>;
+  selectedId: Writable<string>;
+  replyDraft: Writable<string>;
+  notice: Writable<string>;
+}
+
+/**
+ * Posts the draft being written, with the composer's text as its body. A
+ * draft discarded or posted elsewhere meanwhile, from another tab, is no
+ * longer this composer's to post: the composer says so and stays open with
+ * the text, which Cancel then closes.
+ */
+const postComment = handler<unknown, PostCommentState>((_, state) => {
+  if (ownProfile(state.myProfile) === undefined) {
+    state.notice.set(NO_PROFILE);
+    return;
+  }
+  const id = state.composing.get();
+  const body = state.draft.get().trim();
+  if (id === "" || body === "") {
+    state.notice.set("Write a comment to post it.");
+    return;
+  }
+  const record = state.comments.elementById(id);
+  if (record.get()?.status !== "draft" || !writtenByCaller(record)) {
+    // The composer stays open, so the text can still be copied; Cancel
+    // closes it.
+    state.notice.set("This draft was posted or discarded in another tab.");
+    return;
+  }
+  record.key("body").set(body);
+  record.key("status").set("posted");
+  record.key("postedAt").set(Date.now());
+  state.composing.set("");
+  state.draft.set("");
+  state.notice.set("");
+  report("commented on", state);
+  selectId(id, state);
+});
+
+/** What the `addComment` verb works on. */
+export interface AddCommentState extends ActivityState {
+  content: Writable<string>;
+  anchors: AnchorsCell;
+  comments: CommentsCell;
+  myProfile: ProfileCell | undefined;
+}
+
+const addComment = handler<AddCommentEvent, AddCommentState>(
+  (event, state) => {
+    const { content, anchors, comments, myProfile } = state;
+    const profile = ownProfile(myProfile);
+    if (profile === undefined) throw new Error(NO_PROFILE);
+    const body = event.body.trim();
+    if (body === "") throw new Error("addComment needs a `body` with text");
+    const from = onlyOccurrence(
+      content.get(),
+      event.quote,
+      "addComment",
+      "quote",
+    );
+    const id = mintCommentId();
+    anchorComment(anchors, id, from, from + event.quote.length);
+    storeComment(comments, id, profile, body, event.quote, "posted");
+    report("commented on", state);
+  },
+);
+
+/** What replying to a comment works on. */
+export interface ReplyState {
+  comments: CommentsCell;
+  myProfile: ProfileCell | undefined;
+}
+
+/** What committing a reply works on: replying, and reporting the reply. */
+export interface CommitReplyState extends ReplyState, ActivityState {}
+
+const commitReply = handler<CommentReplyEvent, CommitReplyState>(
+  (event, state) => {
+    const { comments, myProfile } = state;
+    const profile = ownProfile(myProfile);
+    if (profile === undefined) throw new Error(NO_PROFILE);
+    const record = commentNamed(comments, event.id);
+    const body = event.body.trim();
+    if (body === "") throw new Error("This reply has no text.");
+    record.get().replies.push({
+      authorProfile: profile,
+      body,
+      postedAt: Date.now(),
+    });
+    report("replied to a comment on", state);
+  },
+);
+
+/** What resolving or reopening a comment works on. */
+interface ResolveState {
+  comments: CommentsCell;
+}
+
+const resolveComment = handler<CommentIdEvent, ResolveState>(
+  (event, { comments }) => {
+    commentNamed(comments, event.id).get().resolved.set(true);
+  },
+);
+
+const reopenComment = handler<CommentIdEvent, ResolveState>(
+  (event, { comments }) => {
+    commentNamed(comments, event.id).get().resolved.set(false);
+  },
+);
+
+/** What deleting a comment works on. */
+export interface DeleteCommentState {
+  anchors: AnchorsCell;
+  comments: CommentsCell;
+}
+
+/**
+ * Deletes a comment and its anchors. Only the person the comment is labeled
+ * as written by can delete it.
+ */
+const deleteComment = handler<CommentIdEvent, DeleteCommentState>(
+  (event, { anchors, comments }) => {
+    const record = commentNamed(comments, event.id);
+    if (!writtenByCaller(record)) {
+      throw new Error("Only its author can delete a comment.");
+    }
+    removeComment(anchors, comments, record, event.id);
+  },
+);
+
+/** Sends the row's comment id to one of the comment verbs. */
+const actOnComment = handler<
+  unknown,
+  { verb: Stream<CommentIdEvent>; id: string }
+>((_, { verb, id }) => {
+  verb.send({ id });
+});
+
+/** Sends the selected comment's id to one of the comment verbs. */
+const actOnSelected = handler<
+  unknown,
+  { verb: Stream<CommentIdEvent>; selectedId: Writable<string> }
+>((_, { verb, selectedId }) => {
+  const id = selectedId.get();
+  if (id === "") return;
+  verb.send({ id });
+});
+
+/**
+ * Sends the reply draft to `replyToComment` for the selected comment, and
+ * clears the draft and the notice. A reply the verb would refuse, from a
+ * viewer with no profile of their own or to a comment no longer posted, is
+ * refused here first, in the notice, so the draft stays.
+ */
+const replyToSelected = handler<
+  unknown,
+  ReplyState & {
+    verb: Stream<CommentReplyEvent>;
+    selectedId: Writable<string>;
+    replyDraft: Writable<string>;
+    notice: Writable<string>;
+  }
+>((_, { comments, myProfile, verb, selectedId, replyDraft, notice }) => {
+  const id = selectedId.get();
+  const body = replyDraft.get().trim();
+  if (id === "" || body === "") return;
+  if (ownProfile(myProfile) === undefined) {
+    notice.set(NO_PROFILE);
+    return;
+  }
+  const current: StoredComment | undefined = comments.elementById(id).get();
+  if (current?.status !== "posted") {
+    notice.set("This comment is no longer posted.");
+    return;
+  }
+  verb.send({ id, body });
+  replyDraft.set("");
+  notice.set("");
+});
+
+/** What selecting a comment changes: the selection, and the reply draft. */
+interface SelectState {
+  selectedId: Writable<string>;
+  replyDraft: Writable<string>;
+}
+
+/**
+ * Selects the comment `id`. The reply field moves to that comment, so a
+ * draft written for another comment is cleared rather than posted there.
+ */
+const selectId = (id: string, { selectedId, replyDraft }: SelectState) => {
+  if (selectedId.get() === id) return;
+  selectedId.set(id);
+  replyDraft.set("");
+};
+
+const selectComment = handler<unknown, SelectState & { id: string }>(
+  (_, state) => selectId(state.id, state),
+);
+
+const selectHighlight = handler<{ detail: { id: string } }, SelectState>(
+  (event, state) => selectId(event.detail.id, state),
+);
+
+/** What the note's body and comments are built from, with the viewer given. */
+export interface SharedNoteCoreInput {
+  /** The body, which the editor and the verbs edit. */
+  content: Writable<string>;
+
+  /** Comments on the body. */
+  comments: CommentsCell;
+
+  /** The viewer's profile, which holds no value until it resolves. */
+  myProfile?: ProfileCell;
+
+  /** The viewer's name on live cursors, or empty for none. */
+  participantName: string;
+
+  /** The note's title, which activity rows name the note by. */
+  title: Writable<string>;
+
+  /** Where the note's activity rows go. */
+  activity: ActivityCell;
+}
+
+/** The body's editor with its comments panel, and the verbs. */
+export interface SharedNoteCoreOutput {
+  [UI]: VNode;
+  commentAnchors: FieldAnchors | undefined;
+  appendLine: Stream<LineEvent>;
+  prependLine: Stream<LineEvent>;
+  replaceText: Stream<ReplaceTextEvent>;
+  addComment: Stream<AddCommentEvent>;
+  replyToComment: Stream<CommentReplyEvent>;
+  resolveComment: Stream<CommentIdEvent>;
+  reopenComment: Stream<CommentIdEvent>;
+  deleteComment: Stream<CommentIdEvent>;
+}
+
+/**
+ * The editor and the comments beside it, for a viewer whose profile is given
+ * rather than resolved. The default export resolves the viewer and wraps this;
+ * a test hands it a profile of its own.
+ */
+export const SharedNoteCore = pattern<
+  SharedNoteCoreInput,
+  SharedNoteCoreOutput
+>(({ content, comments, myProfile, participantName, title, activity }) => {
+  const error = new Writable.perSession("");
+  const recovery = new Writable.perSession<string | null>(null);
+  const hasError = computed(() => error.get() !== "");
+  const presenceNotice = new Writable.perSession("");
+  const hasPresenceNotice = computed(() => presenceNotice.get() !== "");
+  const hasRecovery = computed(() => recovery.get() !== null);
+  const recoveryText = computed(() => recovery.get() ?? "");
+
+  const anchors = anchorsOf(content);
+  const replyVerb = commitReply({ comments, myProfile, title, activity });
+  // Whether the viewer has changed the body since its editor last lost focus.
+  const edited = new Writable.perSession(false);
+  const resolveVerb = resolveComment({ comments });
+  const reopenVerb = reopenComment({ comments });
+  const deleteVerb = deleteComment({ anchors, comments });
+  const discardVerb = discardDraft({ anchors, comments });
+  const selection = new Writable.perSession<NoteSelection>(NOTHING_SELECTED);
+  // The id of the draft this session is writing, or empty while the composer
+  // is closed.
+  const composing = new Writable.perSession("");
+  const draft = new Writable.perSession("");
+  const notice = new Writable.perSession("");
+  const replyDraft = new Writable.perSession("");
+  const selectedId = new Writable.perSession("");
+  const showResolved = new Writable.perSession(false);
+  const composer = {
+    content,
+    anchors,
+    comments,
+    myProfile,
+    selection,
+    composing,
+    draft,
+    notice,
+  };
+
+  // Each comment's range by id, as Memory holds its two anchors now.
+  const rangeOf = computed(() => {
+    const held: FieldAnchors = anchors ?? {};
+    const ranges: Record<string, { from: number; to: number }> = {};
+    for (const comment of comments.get()) {
+      if (comment === undefined) continue;
+      const from = held[fromAnchorOf(comment.id)];
+      const to = held[toAnchorOf(comment.id)];
+      if (from !== undefined && to !== undefined) {
+        ranges[comment.id] = { from, to };
+      }
+    }
+    return ranges;
+  });
+
+  // Where each comment's row sits in the margin's order: the order the
+  // comments' text appears in the body, those whose text is gone after the
+  // rest. The editor's margin places each row beside its text where the two
+  // fit side by side, and stacks the rows in this order where it wraps below
+  // the text. A row's place changes only when that order does, not with
+  // every edit ahead of it.
+  const placeOf = computed(() => {
+    const starts: { id: string; from: number }[] = [];
+    for (const comment of comments.get()) {
+      if (comment === undefined) continue;
+      const range = rangeOf[comment.id];
+      starts.push({
+        id: comment.id,
+        from: range === undefined || range.to <= range.from
+          ? Number.MAX_SAFE_INTEGER
+          : range.from,
+      });
+    }
+    starts.sort((a, b) => a.from - b.from);
+    const places: Record<string, number> = {};
+    starts.forEach(({ id }, rank) => {
+      places[id] = rank * PLACES_PER_COMMENT;
+    });
+    return places;
+  });
+
+  // What the editor marks: the text between the two anchors of every open
+  // comment, the selected one told apart. The editor knows where each anchor
+  // is. The open comments are the same for every viewer, and only the last
+  // step reads the viewer's selection.
+  const openIds = computed(() =>
+    comments.get()
+      .filter((comment) =>
+        comment !== undefined && comment.status === "posted" &&
+        !comment.resolved.get()
+      )
+      .map((comment) => comment.id)
+  );
+  // The comment being written marks its text too, for the person writing it.
+  const highlights = computed((): PerSession<NoteHighlight[]> => {
+    const selected = selectedId.get();
+    const marks = openIds.map((id) =>
+      highlightOf(id, id === selected ? "active" : undefined)
+    );
+    const writing = composing.get();
+    return writing === "" || openIds.includes(writing)
+      ? marks
+      : [...marks, highlightOf(writing, "active")];
+  });
+  const openCount = computed(() => openIds.length);
+  const hasProfile = computed(() => myProfile?.get() !== undefined);
+  const noProfile = computed(() => !hasProfile);
+  const commentDisabled = computed((): PerSession<boolean> => {
+    const selected = selection.get();
+    return selected.from === selected.to || !hasProfile ||
+      composing.get() !== "";
+  });
+  // Per-session differences in the composer, the notice and the rows are
+  // shown or hidden through a per-session `display` prop. Each element shown
+  // this way also carries a static `hidden`, which keeps it out of view until
+  // its display has a value.
+  const composerDisplay = computed((): PerSession<NoteDisplay> =>
+    composing.get() === "" ? "none" : "flex"
+  );
+  const noticeDisplay = computed((): PerSession<NoteDisplay> =>
+    notice.get() === "" ? "none" : "block"
+  );
+  // The composer sits in the margin beside the text it comments on, which
+  // the draft has anchored since the composer opened.
+  const composerAnchor = computed((): PerSession<string> => {
+    const writing = composing.get();
+    return writing === "" ? "" : fromAnchorOf(writing);
+  });
+  // The viewer's principal, or empty for a viewer whose profile names none.
+  const viewer = computed((): string =>
+    myProfile === undefined ? "" : profileOwnerOf(myProfile) ?? ""
+  );
+
+  // The actions on the selected comment are one set of controls for the
+  // panel, placed under that comment's row, rather than a hidden set in
+  // every row: a row's controls are built again for every comment on every
+  // load. They are shown while the selected comment's row is.
+  const actions = computed((): PerSession<ActionsDisplay> => {
+    const id = selectedId.get();
+    const record = comments.get().find((comment) => comment?.id === id);
+    const resolved = record?.resolved.get() ?? false;
+    const listed = record?.status === "posted" &&
+      (!resolved || showResolved.get());
+    const mine = record !== undefined && viewer !== "" &&
+      principalOf(comments.elementById(id), "authored-by") === viewer;
+    return {
+      bar: listed ? "flex" : "none",
+      order: (placeOf[id] ?? 0) + 1,
+      resolve: resolved ? "none" : "flex",
+      reopen: resolved ? "flex" : "none",
+      delete: mine ? "flex" : "none",
+    };
+  });
+
+  // The comments are the editor's children, which it shows in a margin
+  // beside the text: the header at the top, and each row and the composer
+  // beside the text it comments on, which `data-anchor` names. The selected
+  // comment's actions name no anchor, and sit under its row.
+  const view = (
+    <cf-vstack gap="3">
+      {hasError ? <cf-text role="alert">{error}</cf-text> : null}
+      {hasPresenceNotice
+        ? <cf-text role="status">{presenceNotice}</cf-text>
+        : null}
+      {hasRecovery
+        ? (
+          <cf-vstack gap="2">
+            <cf-text role="alert">
+              Editing paused. Copy your unsent text below before reopening this
+              note.
+            </cf-text>
+            <cf-textarea
+              id="shared-note-recovery"
+              aria-label="Unsent text to recover"
+              value={recoveryText}
+              readonly
+              rows={8}
+            />
+          </cf-vstack>
+        )
+        : null}
+      <cf-code-editor
+        $value={content}
+        collaborative
+        participantName={participantName}
+        language="text/markdown"
+        mode="prose"
+        wordWrap
+        tabIndent
+        placeholder="Start writing…"
+        highlights={highlights}
+        oncf-error={reportError({ error })}
+        oncf-collaboration-reconcile={preserveUnsentText({ recovery })}
+        oncf-presence-error={reportPresenceError({ presenceNotice })}
+        oncf-presence-join={clearPresenceNotice({ presenceNotice })}
+        oncf-selection-change={trackSelection({ content, selection })}
+        oncf-highlight-click={selectHighlight({ selectedId, replyDraft })}
+        oncf-edit={markEdited({ edited })}
+        oncf-blur={reportEdit({ edited, title, activity })}
+        style={{ minHeight: "20rem" }}
+      >
+        <cf-vstack gap="2" id="shared-note-comments-header">
+          <cf-hstack gap="2" align="center" justify="between" wrap>
+            <cf-text variant="heading-sm">Comments ({openCount})</cf-text>
+            <cf-button
+              id="shared-note-comment-button"
+              size="sm"
+              disabled={commentDisabled}
+              onClick={openComposer(composer)}
+            >
+              Comment
+            </cf-button>
+          </cf-hstack>
+          <cf-checkbox $checked={showResolved}>Show resolved</cf-checkbox>
+          <cf-text
+            id="shared-note-comment-notice"
+            role="status"
+            hidden
+            style={{ display: noticeDisplay }}
+          >
+            {notice}
+          </cf-text>
+        </cf-vstack>
+        <cf-vstack
+          gap="2"
+          id="shared-note-composer"
+          hidden
+          data-anchor={composerAnchor}
+          style={{ display: composerDisplay }}
+        >
+          <cf-textarea
+            id="shared-note-comment-draft"
+            aria-label="Comment"
+            placeholder="Write a comment…"
+            $value={draft}
+            rows={3}
+          />
+          <cf-hstack gap="2">
+            <cf-button
+              id="shared-note-post-button"
+              size="sm"
+              onClick={postComment({
+                comments,
+                myProfile,
+                title,
+                activity,
+                composing,
+                draft,
+                selectedId,
+                replyDraft,
+                notice,
+              })}
+            >
+              Post
+            </cf-button>
+            <cf-button
+              size="sm"
+              variant="ghost"
+              onClick={closeComposer({
+                discardVerb,
+                composing,
+                draft,
+                notice,
+              })}
+            >
+              Cancel
+            </cf-button>
+          </cf-hstack>
+        </cf-vstack>
+        {comments.map((comment) => {
+          const id = comment.id;
+          // A row's derived values are two reactive nodes, one for what
+          // every viewer sees and one for what this session sees. Each
+          // node a row holds is started again for every comment on every
+          // load, so a value of its own is a cost paid per comment.
+          const placed = computed(() => {
+            const range = rangeOf[comment.id];
+            const gone = range !== undefined && range.to <= range.from;
+            const draft = comment.status === "draft";
+            const draftDisplay: NoteDisplay = draft ? "flex" : "none";
+            return {
+              anchor: fromAnchorOf(comment.id),
+              order: placeOf[comment.id] ?? 0,
+              gone,
+              // The editor marks the text of an open comment, and of the
+              // draft being written, which is not listed. A listed draft,
+              // a resolved comment, and a comment whose text an edit
+              // deleted mark nothing, so their rows name the text.
+              quoted: gone || draft || comment.resolved.get(),
+              draftDisplay,
+            };
+          });
+          const shown = computed((): PerSession<RowDisplay> => {
+            const mine = viewer !== "" &&
+              principalOf(
+                  comments.elementById(comment.id),
+                  "authored-by",
+                ) === viewer;
+            const selected = selectedId.get() === comment.id;
+            const resolved = comment.resolved.get();
+            return {
+              // A draft is listed only to its author, and not while the
+              // composer is writing it.
+              row: comment.status === "draft"
+                ? mine && composing.get() !== comment.id ? "flex" : "none"
+                : !resolved || showResolved.get()
+                ? "flex"
+                : "none",
+              border: selected
+                ? "3px solid var(--cf-theme-color-primary)"
+                : "3px solid var(--cf-theme-color-border)",
+            };
+          });
+          return (
+            <cf-vstack
+              gap="1"
+              hidden
+              data-comment-id={id}
+              data-anchor={placed.anchor}
+              style={{
+                display: shown.row,
+                order: placed.order,
+                padding: "0.5rem",
+                borderLeft: shown.border,
+              }}
+              onClick={selectComment({ id, selectedId, replyDraft })}
+            >
+              <cf-hstack gap="2" align="center" wrap>
+                <cf-profile-badge
+                  variant="chip"
+                  size="sm"
+                  $profile={comment.authorProfile}
+                />
+              </cf-hstack>
+              {
+                // The mark in the editor shows what a comment is about,
+                // so the row names its text, the author's quote, only
+                // while nothing marks it.
+                placed.quoted
+                  ? (
+                    <cf-hstack gap="2" align="center" wrap>
+                      <cf-cfc-authorship
+                        $value={comment.quote}
+                        $author={comment.authorProfile}
+                        verifyTextIntegrity
+                        style={{ minWidth: "0", maxWidth: "100%" }}
+                      >
+                        <cf-text
+                          variant="caption"
+                          tone="muted"
+                          style={{
+                            display: "block",
+                            fontStyle: "italic",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            textDecoration: placed.gone
+                              ? "line-through"
+                              : "none",
+                          }}
+                        >
+                          {comment.quote}
+                        </cf-text>
+                      </cf-cfc-authorship>
+                      {placed.gone
+                        ? (
+                          <cf-text variant="caption" tone="muted">
+                            text no longer in note
+                          </cf-text>
+                        )
+                        : null}
+                    </cf-hstack>
+                  )
+                  : null
+              }
+              <cf-cfc-authorship
+                $value={comment.body}
+                $author={comment.authorProfile}
+                verifyTextIntegrity
+              >
+                <cf-text block style={{ whiteSpace: "pre-wrap" }}>
+                  {comment.body}
+                </cf-text>
+              </cf-cfc-authorship>
+              {comment.replies.map((reply) => (
+                <cf-hstack
+                  gap="2"
+                  align="start"
+                  style={{ paddingLeft: "1rem" }}
+                >
+                  <cf-profile-badge
+                    variant="chip"
+                    size="xs"
+                    $profile={reply.authorProfile}
+                  />
+                  <cf-cfc-authorship
+                    $value={reply.body}
+                    $author={reply.authorProfile}
+                    verifyTextIntegrity
+                  >
+                    <cf-text block style={{ whiteSpace: "pre-wrap" }}>
+                      {reply.body}
+                    </cf-text>
+                  </cf-cfc-authorship>
+                </cf-hstack>
+              ))}
+              <cf-hstack
+                gap="2"
+                align="center"
+                wrap
+                hidden
+                style={{ display: placed.draftDisplay }}
+              >
+                <cf-text variant="caption" tone="muted">
+                  Draft
+                </cf-text>
+                <cf-button
+                  size="sm"
+                  onClick={resumeDraft({
+                    comments,
+                    id,
+                    composing,
+                    draft,
+                    notice,
+                  })}
+                >
+                  Continue
+                </cf-button>
+                <cf-button
+                  size="sm"
+                  variant="ghost"
+                  onClick={actOnComment({ verb: discardVerb, id })}
+                >
+                  Discard
+                </cf-button>
+              </cf-hstack>
+            </cf-vstack>
+          );
+        })}
+        <cf-hstack
+          gap="2"
+          align="center"
+          wrap
+          hidden
+          id="shared-note-comment-actions"
+          style={{
+            display: actions.bar,
+            order: actions.order,
+            // Drawn as the foot of the selected row: up against it,
+            // across the gap the editor's margin leaves between its
+            // children, under the same border.
+            marginTop: "-0.5rem",
+            padding: "0 0.5rem 0.5rem",
+            borderLeft: "3px solid var(--cf-theme-color-primary)",
+          }}
+        >
+          <cf-input
+            aria-label="Reply"
+            placeholder="Reply…"
+            $value={replyDraft}
+            disabled={noProfile}
+            timingStrategy="immediate"
+            oncf-submit={replyToSelected({
+              comments,
+              myProfile,
+              verb: replyVerb,
+              selectedId,
+              replyDraft,
+              notice,
+            })}
+            style={{ flex: "1 1 8rem", minWidth: "0" }}
+          />
+          <cf-button
+            size="sm"
+            disabled={noProfile}
+            onClick={replyToSelected({
+              comments,
+              myProfile,
+              verb: replyVerb,
+              selectedId,
+              replyDraft,
+              notice,
+            })}
+          >
+            Reply
+          </cf-button>
+          <cf-button
+            size="sm"
+            variant="ghost"
+            hidden
+            style={{ display: actions.resolve }}
+            onClick={actOnSelected({ verb: resolveVerb, selectedId })}
+          >
+            Resolve
+          </cf-button>
+          <cf-button
+            size="sm"
+            variant="ghost"
+            hidden
+            style={{ display: actions.reopen }}
+            onClick={actOnSelected({ verb: reopenVerb, selectedId })}
+          >
+            Reopen
+          </cf-button>
+          <cf-button
+            size="sm"
+            variant="ghost"
+            hidden
+            style={{ display: actions.delete }}
+            onClick={actOnSelected({ verb: deleteVerb, selectedId })}
+          >
+            Delete
+          </cf-button>
+        </cf-hstack>
+      </cf-code-editor>
+    </cf-vstack>
+  );
+
+  return {
+    [UI]: view,
+    commentAnchors: anchors,
+    appendLine: appendLine({ content, title, activity }),
+    prependLine: prependLine({ content, title, activity }),
+    replaceText: replaceText({ content, title, activity }),
+    addComment: addComment({
+      content,
+      anchors,
+      comments,
+      myProfile,
+      title,
+      activity,
+    }),
+    replyToComment: replyVerb,
+    resolveComment: resolveVerb,
+    reopenComment: reopenVerb,
+    deleteComment: deleteVerb,
+  };
+});
+
+export default pattern<SharedNoteInput, SharedNoteOutput>(
+  ({ title, content, comments, activity }) => {
+    const profile = wish<NoteProfile>({ query: "#profile" });
+    const profileName = wish<string>({ query: "#profileName" });
+    const participantName = computed(() =>
+      normalizePresenceParticipantName(profileName.result ?? "")
+    );
+    const hasProfile = computed(() =>
+      participantName !== "" &&
+      profile.result !== undefined
+    );
+    const note = SharedNoteCore({
+      content,
+      comments,
+      myProfile: profile.result,
+      participantName,
+      title,
+      activity,
+    });
+    // Whether the viewer has changed the title since its field last lost
+    // focus.
+    const titleEdited = new Writable.perSession(false);
+
+    const view = (
+      <cf-vstack
+        gap="3"
+        style={{ padding: "1rem", width: "100%", boxSizing: "border-box" }}
+      >
+        <cf-hstack
+          gap="3"
+          align="center"
+          justify="between"
+          wrap
+        >
+          <cf-input
+            $value={title}
+            oncf-input={markEdited({ edited: titleEdited })}
+            oncf-blur={reportEdit({ edited: titleEdited, title, activity })}
+            aria-label="Note title"
+            placeholder="Untitled note"
+            style={{ flex: "1 1 16rem", minWidth: "0" }}
+          />
+          {hasProfile
+            ? <cf-profile-badge variant="chip" $profile={profile.result} />
+            : (
+              <div
+                id="shared-note-profile-setup"
+                style={{ minWidth: "0", maxWidth: "100%" }}
+              >
+                <cf-text>Choose a Fabric profile to label your cursor.</cf-text>
+                {profile[UI]}
+              </div>
+            )}
+        </cf-hstack>
+        {note[UI]}
+      </cf-vstack>
+    );
+
+    return {
+      [NAME]: title,
+      [UI]: view,
+      [TILE_UI]: view,
+      [FS]: {
+        type: "text/markdown",
+        frontmatter: { title },
+        content,
+      },
+      title,
+      content,
+      comments,
+      participantName,
+      "[ACTIVITY]": activity,
+      commentAnchors: note.commentAnchors,
+      appendLine: note.appendLine,
+      prependLine: note.prependLine,
+      replaceText: note.replaceText,
+      addComment: note.addComment,
+      replyToComment: note.replyToComment,
+      resolveComment: note.resolveComment,
+      reopenComment: note.reopenComment,
+      deleteComment: note.deleteComment,
+    };
+  },
+);

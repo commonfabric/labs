@@ -3,11 +3,11 @@
 Chapter 7 ended with a frozen graph object. This chapter is about the
 machine that runs it: what a `Cell` really is, how the scheduler decides
 what to re-execute, and how writes become transactions. This is the heart of
-the system — `packages/runner` (with public types in `packages/api`).
+the system — `runtime/runner` (with public types in `base/api`).
 
 ## What a Cell actually is
 
-A `Cell` (`packages/runner/src/cell.ts`) holds no data. It is a **typed
+A `Cell` (`runtime/runner/src/cell.ts`) holds no data. It is a **typed
 pointer plus a transaction context**:
 
 ```
@@ -33,7 +33,7 @@ dependencies are recorded as (space, id, path) addresses, so writing
 `item.done` doesn't disturb readers of `item.title`.
 
 Entity ids are content-derived: `createRef(source, cause)` hashes the
-creation context (`packages/runner/src/create-ref.ts`), so the "same" cell
+creation context (`runtime/runner/src/create-ref.ts`), so the "same" cell
 created by the same graph node gets the same id deterministically — which is
 what lets a server re-instantiate a piece and arrive at the same cells.
 
@@ -54,7 +54,7 @@ confusing in practice, and why the rule there is to box stored references.
 ## The scheduler: reads are subscriptions, literally
 
 The runtime's event loop is the scheduler
-(`packages/runner/src/scheduler.ts`). Every graph node — each `computed`,
+(`runtime/runner/src/scheduler.ts`). Every graph node — each `computed`,
 `lift`, handler, render binding — is an **action**. The cycle:
 
 1. **Run inside a transaction.** Each action executes with a fresh
@@ -93,7 +93,7 @@ cannot tell the difference.
 ## Transactions: atomicity and optimism
 
 Every action runs in an `IExtendedStorageTransaction`
-(`packages/runner/src/storage/`):
+(`runtime/runner/src/storage/`):
 
 - **Reads** go through the transaction so they (a) see a consistent
   snapshot plus the transaction's own pending writes, and (b) get journaled
@@ -117,7 +117,7 @@ operations (Chapter 2 — `push`, `pushAll`, `addUnique`, `increment`,
 `removeByValue`) commit the *intent* of the write and drop their own
 incidental read of the container from the conflict set, so concurrent
 appends or increments merge on the server instead of conflicting
-(`packages/runner/src/storage/mergeable-ops.ts`). And plain scalar sets —
+(`runtime/runner/src/storage/mergeable-ops.ts`). And plain scalar sets —
 notably the writes two-way UI bindings issue — are **blind**: their reads
 are recorded for reactivity but excluded from commit preconditions, making
 them last-write-wins. Revert-and-retry is the story for read-modify-write
@@ -130,7 +130,7 @@ against an in-process store (tests, CLI) or a remote server, unchanged.
 
 ## Executing a pattern graph
 
-Instantiating a piece (`packages/runner/src/runner.ts` and `builder/`) ties
+Instantiating a piece (`runtime/runner/src/runner.ts` and `builder/`) ties
 the previous three sections together:
 
 1. The pattern's `argumentSchema` is applied to the argument cell — this is

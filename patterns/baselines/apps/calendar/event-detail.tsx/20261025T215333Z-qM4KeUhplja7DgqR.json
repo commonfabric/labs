@@ -1,0 +1,133 @@
+{
+  "argumentSchema": {
+    "description": "Input for creating a new event detail piece",
+    "properties": {
+      "date": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "notes": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "time": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "title": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "calendar/event-detail.tsx",
+  "resultSchema": {
+    "description": "Output shape of the event piece - this is what gets stored in calendars\n#event",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "date": {
+        "type": "string"
+      },
+      "notes": {
+        "type": "string"
+      },
+      "setDate": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date"
+        ],
+        "type": "object"
+      },
+      "setNotes": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notes"
+        ],
+        "type": "object"
+      },
+      "setTime": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "time": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "time"
+        ],
+        "type": "object"
+      },
+      "setTitle": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "time": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "date",
+      "time",
+      "notes",
+      "summary",
+      "setTitle",
+      "setDate",
+      "setTime",
+      "setNotes",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

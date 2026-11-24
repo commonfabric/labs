@@ -1,0 +1,1 @@
+{"date": "2026-10-12", "from": {"k": "unit", "s": "runner", "n": "CFC link-write integrity gate > refuses a link schema CurrentPrincipal reader without a stored source reader"}, "to": {"k": "unit", "s": "runner", "n": "CFC link-write integrity gate > binds a link schema's CurrentPrincipal reader to the acting principal"}}

@@ -1,0 +1,113 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AuthData": {
+        "properties": {
+          "expiresAt": {
+            "type": "number"
+          },
+          "refreshCount": {
+            "type": "number"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expiresAt",
+          "refreshCount"
+        ],
+        "type": "object"
+      },
+      "Source": {
+        "properties": {
+          "auth": {
+            "$ref": "#/$defs/AuthData"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "auth",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "source": {
+        "$ref": "#/$defs/Source",
+        "default": {
+          "auth": {
+            "expiresAt": 0,
+            "refreshCount": 0,
+            "token": "initial-token"
+          },
+          "name": "Test Source"
+        }
+      }
+    },
+    "required": [
+      "source"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/gideon-tests/test-33-computed-projection-writability.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AuthData": {
+        "properties": {
+          "expiresAt": {
+            "type": "number"
+          },
+          "refreshCount": {
+            "type": "number"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expiresAt",
+          "refreshCount"
+        ],
+        "type": "object"
+      },
+      "Source": {
+        "properties": {
+          "auth": {
+            "$ref": "#/$defs/AuthData"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "auth",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "source": {
+        "$ref": "#/$defs/Source"
+      }
+    },
+    "required": [
+      "source",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

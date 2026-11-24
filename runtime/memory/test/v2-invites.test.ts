@@ -1,0 +1,1557 @@
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
+import { fromFileUrl, toFileUrl } from "@std/path";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { Identity } from "@commonfabric/identity";
+import { isPlainObject } from "@commonfabric/js-values/types";
+import { type ACL, aclDocId } from "../acl.ts";
+import {
+  createInviteCredentials,
+  type InviteAccess,
+  inviteCodeVerifier,
+  type InviteProfileSuggestion,
+  SPACE_INVITE_CAPABILITY,
+  SPACE_INVITES_REVISION_DOC_ID,
+  SpaceInviteError,
+} from "../space-invites.ts";
+import { resetServerExecutionConfig, setServerExecutionConfig } from "../v2.ts";
+import { snapshotSpaceStore } from "../v2/dump.ts";
+import * as Engine from "../v2/engine.ts";
+import { ExecutionLeaseCycle } from "../v2/execution-lease.ts";
+import {
+  applyInvite,
+  executeInvite,
+  type InviteOperation,
+  parseInviteOperation,
+} from "../v2/invites.ts";
+
+const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
+const host = "https://invites.example";
+const initialTime = 1_800_000_000_000;
+
+async function fixture() {
+  const directory = await Deno.makeTempDir();
+  const url = toFileUrl(`${directory}/space.sqlite`);
+  let engine = await Engine.open({ url });
+  const owner = (await Identity.generate()).did();
+  const guest = (await Identity.generate()).did();
+  const second = (await Identity.generate()).did();
+  let now = initialTime;
+  const acl = (value: ACL) =>
+    Engine.applyCommit(engine, {
+      sessionId: crypto.randomUUID(),
+      space,
+      commitClass: "system",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: aclDocId(space), value: { value } }],
+      },
+    });
+  acl({ [owner]: "OWNER" });
+  const execute = (operation: InviteOperation, principal: string = owner) =>
+    executeInvite(engine, { host, space, principal, now, ...operation });
+  const run = (operation: InviteOperation, principal: string = owner) =>
+    execute(operation, principal).result;
+  const create = (
+    options: {
+      maxUses?: number;
+      access?: InviteAccess;
+      ttlSeconds?: number;
+      suggestedProfile?: InviteProfileSuggestion;
+      spaceName?: string;
+      issuerName?: string;
+    } = {},
+  ) => {
+    const credentials = createInviteCredentials();
+    const body = {
+      ...credentials,
+      codeVerifier: inviteCodeVerifier({ host, space, ...credentials }),
+      access: "READ" as const,
+      ttlSeconds: 60,
+      ...options,
+    };
+    const { code, ...request } = body;
+    const result = run({ operation: "create", body: request });
+    return { code, inviteId: body.inviteId, request, result };
+  };
+  return {
+    get engine() {
+      return engine;
+    },
+    owner,
+    guest,
+    second,
+    url,
+    acl,
+    execute,
+    apply: (operation: InviteOperation, principal: string = owner) =>
+      applyInvite(engine, { host, space, principal, now, ...operation }),
+    run,
+    create,
+    advance(ms: number) {
+      now += ms;
+    },
+    async reopen() {
+      Engine.close(engine);
+      engine = await Engine.open({ url });
+    },
+    async close() {
+      Engine.close(engine);
+      await Deno.remove(directory, { recursive: true });
+    },
+  };
+}
+
+const sam: InviteProfileSuggestion = {
+  name: "Sam Lee",
+  picture: toUnpaddedBase64url(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2])),
+};
+
+function suggestionRows(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.engine.database.prepare(
+    "SELECT inviteId FROM space_invite_suggestions",
+  ).all<{ inviteId: string }>();
+}
+
+function previewRows(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.engine.database.prepare(
+    "SELECT inviteId FROM space_invite_previews",
+  ).all<{ inviteId: string }>();
+}
+
+/** The revision the ledger's revision document holds, `0` before its first. */
+function revisionOf(f: Awaited<ReturnType<typeof fixture>>): number {
+  const held = Engine.read(f.engine, { id: SPACE_INVITES_REVISION_DOC_ID })
+    ?.value;
+  expect(held === undefined || isPlainObject(held)).toBe(true);
+  return isPlainObject(held) && typeof held.revision === "number"
+    ? held.revision
+    : 0;
+}
+
+function unavailable(fn: () => unknown) {
+  let failure: unknown;
+  try {
+    fn();
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(SpaceInviteError);
+  if (!(failure instanceof SpaceInviteError)) throw failure;
+  expect(failure.code).toBe("invite-unavailable");
+}
+
+async function processAttempt(
+  f: Awaited<ReturnType<typeof fixture>>,
+  invite: { inviteId: string; code: string },
+  principal: string,
+  mode: "normal" | "before-commit" | "after-commit" = "normal",
+  operation: "redeem" | "revoke" = "redeem",
+) {
+  // This streaming test needs a readiness barrier, so it uses the same temporary
+  // frozen-lock discipline as isolated-deno's non-streaming command helper.
+  const directory = await Deno.makeTempDir();
+  let child: Deno.ChildProcess | undefined;
+  let output: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let stderr: Promise<string> | undefined;
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    closing ??= (async () => {
+      try {
+        await child?.[Symbol.asyncDispose]();
+        await output?.cancel();
+        await stderr;
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    })();
+  try {
+    const lock = `${directory}/deno.lock`;
+    await Deno.copyFile(new URL("../../../deno.lock", import.meta.url), lock);
+    const process = child = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "-A",
+        `--lock=${lock}`,
+        "--frozen=true",
+        fromFileUrl(new URL("./invite-process.ts", import.meta.url)),
+        JSON.stringify({
+          url: f.url.href,
+          request: {
+            host,
+            space,
+            principal,
+            now: initialTime,
+            operation,
+            body: operation === "redeem"
+              ? { inviteId: invite.inviteId, code: invite.code }
+              : { inviteId: invite.inviteId },
+          },
+          mode,
+        }),
+      ],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const reader = output = process.stdout.getReader();
+    const errors = stderr = new Response(process.stderr).text();
+    const ready = await reader.read();
+    expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+    return {
+      [Symbol.asyncDispose]: close,
+      async start() {
+        const writer = process.stdin.getWriter();
+        try {
+          await writer.write(new Uint8Array([1]));
+          await writer.close();
+        } catch (error) {
+          await close();
+          throw error;
+        } finally {
+          writer.releaseLock();
+        }
+      },
+      async finish() {
+        try {
+          let text = "";
+          for (;;) {
+            const item = await reader.read();
+            if (item.done) break;
+            text += new TextDecoder().decode(item.value);
+          }
+          return { text, status: await process.status, stderr: await errors };
+        } finally {
+          await close();
+        }
+      },
+    };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+describe("invites", () => {
+  it("awaits the same in-flight process cleanup for concurrent disposal", async () => {
+    const f = await fixture();
+    const directory = await Deno.makeTempDir();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    try {
+      const attempt = await (async () => {
+        using _directory = stub(
+          Deno,
+          "makeTempDir",
+          () => Promise.resolve(directory),
+        );
+        return await processAttempt(f, f.create(), f.guest);
+      })();
+      const remove = Deno.remove.bind(Deno);
+      using _remove = stub(Deno, "remove", async (path, options) => {
+        if (path === directory) {
+          entered.resolve();
+          await release.promise;
+        }
+        await remove(path, options);
+      });
+      first = attempt[Symbol.asyncDispose]();
+      await entered.promise;
+      let completed = false;
+      second = attempt[Symbol.asyncDispose]().then(() => {
+        completed = true;
+      });
+      await Promise.resolve();
+      expect(completed).toBe(false);
+      release.resolve();
+      await Promise.all([first, second]);
+      expect(completed).toBe(true);
+      await expect(Deno.stat(directory)).rejects.toBeInstanceOf(
+        Deno.errors.NotFound,
+      );
+    } finally {
+      release.resolve();
+      await Promise.all([first, second]);
+      await f.close();
+    }
+  });
+  it("cleans up a child that exits before readiness and an unstarted attempt", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      const directory = await Deno.makeTempDir();
+      {
+        using _directory = stub(
+          Deno,
+          "makeTempDir",
+          () => Promise.resolve(directory),
+        );
+        await expect(processAttempt(
+          { ...f, url: new URL("./", f.url) },
+          invite,
+          f.guest,
+        )).rejects.toThrow();
+      }
+      await expect(Deno.stat(directory)).rejects.toBeInstanceOf(
+        Deno.errors.NotFound,
+      );
+      {
+        await using _attempt = await processAttempt(f, invite, f.guest);
+      }
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("requires explicit ownership for administration while preserving implicit owner access on redemption", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      const envelope = {
+        host,
+        space,
+        principal: f.guest,
+        now: initialTime,
+        implicitOwner: true,
+      };
+      expect(() =>
+        executeInvite(f.engine, {
+          ...envelope,
+          operation: "create",
+          body: invite.request,
+        })
+      ).toThrow("not-owner");
+      expect(executeInvite(f.engine, {
+        ...envelope,
+        operation: "redeem",
+        body: invite,
+      })).toMatchObject({
+        result: { outcome: "redeemed", currentAccess: "OWNER" },
+      });
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+  it("gives the space's own DID only the access its ACL grants on redemption and administration", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ access: "READ" });
+      const pending = f.create();
+      expect(f.run({ operation: "redeem", body: invite }, space))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "READ" });
+      expect(() => f.run({ operation: "list", body: {} }, space)).toThrow(
+        "not-owner",
+      );
+      f.acl({ [f.owner]: "OWNER", [space]: "OWNER" });
+      expect(f.run({ operation: "list", body: {} }, space)).toMatchObject([
+        { inviteId: pending.inviteId },
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("lets an explicit owner issue an OWNER invitation that grants OWNER", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ access: "OWNER", maxUses: 2 });
+      expect(invite.result).toMatchObject({
+        access: "OWNER",
+        issuedBy: f.owner,
+        maxUses: 2,
+      });
+      expect(f.run({ operation: "list", body: {} })).toMatchObject([
+        { inviteId: invite.inviteId, access: "OWNER" },
+      ]);
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "OWNER",
+      });
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+        [f.guest]: "OWNER",
+      });
+      // The grant is a real OWNER: the new owner may administer invitations.
+      expect(f.run({ operation: "list", body: {} }, f.guest)).toMatchObject([
+        { inviteId: invite.inviteId, usedCount: 1, remainingUses: 1 },
+      ]);
+      // An exact retry of the OWNER issuance is idempotent; a retry that
+      // changes the access is refused.
+      expect(f.run({ operation: "create", body: invite.request }))
+        .toMatchObject({ access: "OWNER", usedCount: 1 });
+      expect(() =>
+        f.run({
+          operation: "create",
+          body: { ...invite.request, access: "WRITE" },
+        })
+      ).toThrow("invite-id-unavailable");
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses OWNER invitations from READ and WRITE holders and unknown access", async () => {
+    const f = await fixture();
+    try {
+      f.acl({ [f.owner]: "OWNER", [f.guest]: "WRITE", [f.second]: "READ" });
+      for (const principal of [f.guest, f.second]) {
+        for (const access of ["OWNER", "WRITE", "READ"] as const) {
+          const credentials = createInviteCredentials();
+          expect(() =>
+            f.run({
+              operation: "create",
+              body: {
+                inviteId: credentials.inviteId,
+                codeVerifier: inviteCodeVerifier({
+                  host,
+                  space,
+                  ...credentials,
+                }),
+                access,
+                ttlSeconds: 60,
+              },
+            }, principal)
+          ).toThrow("not-owner");
+        }
+      }
+      for (const access of ["ADMIN", "owner", ""]) {
+        expect(() => f.create({ access: access as InviteAccess })).toThrow(
+          "invalid-request",
+        );
+      }
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("never lowers access on redemption and raises a lesser grant to OWNER", async () => {
+    const f = await fixture();
+    try {
+      const third = (await Identity.generate()).did();
+      f.acl({ [f.owner]: "OWNER", [f.guest]: "OWNER", [f.second]: "WRITE" });
+      const write = f.create({ access: "WRITE" });
+      expect(f.run({ operation: "redeem", body: write }, f.guest))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "OWNER" });
+      const read = f.create({ access: "READ" });
+      expect(f.run({ operation: "redeem", body: read }, f.second))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "WRITE" });
+      const owner = f.create({ access: "OWNER", maxUses: 2 });
+      expect(f.run({ operation: "redeem", body: owner }, f.second))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "OWNER" });
+      expect(f.run({ operation: "redeem", body: owner }, third))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "OWNER" });
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+        [f.guest]: "OWNER",
+        [f.second]: "OWNER",
+        [third]: "OWNER",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses expired, revoked, exhausted, wrong-code, and orphaned OWNER invitations", async () => {
+    const f = await fixture();
+    try {
+      const third = (await Identity.generate()).did();
+      const expired = f.create({ access: "OWNER", ttlSeconds: 1 });
+      const revoked = f.create({ access: "OWNER" });
+      const exhausted = f.create({ access: "OWNER" });
+      const wrong = f.create({ access: "OWNER" });
+      f.run({ operation: "revoke", body: revoked });
+      f.run({ operation: "redeem", body: exhausted }, f.second);
+      unavailable(() =>
+        f.run({ operation: "redeem", body: exhausted }, f.guest)
+      );
+      unavailable(() => f.run({ operation: "redeem", body: revoked }, f.guest));
+      unavailable(() =>
+        f.run({
+          operation: "redeem",
+          body: { ...wrong, code: createInviteCredentials().code },
+        }, f.guest)
+      );
+      f.advance(1000);
+      unavailable(() => f.run({ operation: "redeem", body: expired }, f.guest));
+      // An issuer who no longer owns the space cannot admit anyone.
+      const orphaned = f.create({ access: "OWNER" });
+      f.acl({ [f.second]: "OWNER" });
+      unavailable(() => f.run({ operation: "redeem", body: orphaned }, third));
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.second]: "OWNER",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+  it("checks an unavailable operation with one invocation", () => {
+    let calls = 0;
+    unavailable(() => {
+      calls++;
+      throw new SpaceInviteError("invite-unavailable");
+    });
+    expect(calls).toBe(1);
+  });
+  it("rejects invalid service envelopes without creating admission or receipt state", async () => {
+    const f = await fixture();
+    try {
+      for (
+        const invalid of [
+          { now: -1 },
+          { now: 1.5 },
+          { now: Number.NaN },
+          { principal: "not-a-did" },
+          { space: "not-a-did" },
+        ]
+      ) {
+        expect(() =>
+          executeInvite(f.engine, {
+            host,
+            space,
+            principal: f.owner,
+            now: initialTime,
+            operation: "list",
+            body: {},
+            ...invalid,
+          })
+        ).toThrow("invalid-request");
+      }
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("rejects malformed redemption and owner query identifiers without consuming a use", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      for (
+        const operation of [
+          {
+            operation: "redeem",
+            body: { inviteId: "invalid", code: invite.code },
+          },
+          {
+            operation: "redeem",
+            body: { inviteId: invite.inviteId, code: "invalid" },
+          },
+          { operation: "receipts", body: { inviteId: "invalid" } },
+          { operation: "revoke", body: { inviteId: "invalid" } },
+        ] satisfies InviteOperation[]
+      ) {
+        expect(() => f.run(operation)).toThrow("invalid-request");
+      }
+      expect(f.run({ operation: "list", body: {} })).toMatchObject([
+        { inviteId: invite.inviteId, usedCount: 0, remainingUses: 1 },
+      ]);
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({
+          outcome: "redeemed",
+          currentAccess: "READ",
+        });
+    } finally {
+      await f.close();
+    }
+  });
+  it("grants access and retains one receipt when the final use is retried after restart", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      expect(invite.result).toMatchObject({ maxUses: 1, remainingUses: 1 });
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "READ",
+      });
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+      await f.reopen();
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({ outcome: "already-redeemed", currentAccess: "READ" });
+      unavailable(() => f.run({ operation: "redeem", body: invite }, f.second));
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([{
+        inviteId: invite.inviteId,
+        did: f.guest,
+      }]);
+      expect(() => f.run({ operation: "create", body: invite.request }))
+        .toThrow("invite-id-unavailable");
+    } finally {
+      await f.close();
+    }
+  });
+  it("counts distinct DIDs per invite and preserves independent ACL changes on retries", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ maxUses: 2, access: "WRITE" });
+      f.run({ operation: "redeem", body: invite }, f.guest);
+      f.run({ operation: "redeem", body: invite }, f.guest);
+      expect(f.run({ operation: "list", body: {} })).toMatchObject([{
+        remainingUses: 1,
+        usedCount: 1,
+      }]);
+      expect(f.run({ operation: "create", body: invite.request }))
+        .toMatchObject({ usedCount: 1, remainingUses: 1 });
+      f.acl({ [f.owner]: "OWNER", [f.second]: "READ" });
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({ outcome: "already-redeemed", currentAccess: null });
+      expect(f.run({ operation: "redeem", body: invite }, f.second))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "WRITE" });
+      const replacement = f.create();
+      expect(f.run({ operation: "redeem", body: replacement }, f.guest))
+        .toMatchObject({ outcome: "redeemed", currentAccess: "READ" });
+      expect(f.run({ operation: "receipts", body: {} })).toHaveLength(3);
+    } finally {
+      await f.close();
+    }
+  });
+  it("lists the receipts of the one invitation it is asked for, and every receipt when asked for none", async () => {
+    const f = await fixture();
+    try {
+      const shared = f.create({ maxUses: 2 });
+      const single = f.create();
+      f.run({ operation: "redeem", body: shared }, f.guest);
+      f.run({ operation: "redeem", body: shared }, f.second);
+      f.run({ operation: "redeem", body: single }, f.guest);
+
+      const one = f.run({
+        operation: "receipts",
+        body: { inviteId: shared.inviteId },
+      });
+      const every = f.run({ operation: "receipts", body: {} });
+
+      expect(one).toHaveLength(2);
+      expect(one).toEqual(expect.arrayContaining([
+        { inviteId: shared.inviteId, did: f.guest },
+        { inviteId: shared.inviteId, did: f.second },
+      ]));
+      expect(every).toHaveLength(3);
+      expect(every).toEqual(expect.arrayContaining([
+        { inviteId: single.inviteId, did: f.guest },
+      ]));
+    } finally {
+      await f.close();
+    }
+  });
+  it("preserves a stronger wildcard without masking its independent removal", async () => {
+    const f = await fixture();
+    try {
+      f.acl({ [f.owner]: "OWNER", "*": "WRITE" });
+      const invite = f.create({ maxUses: 2 });
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({ currentAccess: "WRITE" });
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+        "*": "WRITE",
+      });
+      f.acl({ [f.owner]: "OWNER" });
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({ outcome: "already-redeemed", currentAccess: null });
+    } finally {
+      await f.close();
+    }
+  });
+  it("rejects expiry, revoked codes, wrong codes, and removed issuers while retaining receipts", async () => {
+    const f = await fixture();
+    try {
+      const expired = f.create({ ttlSeconds: 1, maxUses: 2 });
+      f.run({ operation: "redeem", body: expired }, f.guest);
+      f.advance(1000);
+      unavailable(() =>
+        f.run({ operation: "redeem", body: expired }, f.second)
+      );
+      expect(f.run({ operation: "redeem", body: expired }, f.guest))
+        .toMatchObject({ outcome: "already-redeemed" });
+      const revoked = f.create();
+      f.run({ operation: "revoke", body: revoked });
+      unavailable(() =>
+        f.run({ operation: "redeem", body: revoked }, f.second)
+      );
+      expect(() => f.run({ operation: "create", body: revoked.request }))
+        .toThrow("invite-id-unavailable");
+      const wrong = f.create();
+      unavailable(() =>
+        f.run({
+          operation: "redeem",
+          body: { ...wrong, code: createInviteCredentials().code },
+        }, f.second)
+      );
+      const removed = f.create();
+      f.acl({ [f.second]: "OWNER" });
+      unavailable(() => f.run({ operation: "redeem", body: removed }, f.guest));
+    } finally {
+      await f.close();
+    }
+  });
+  it("preserves original expiry on identical issuance retries and rejects changed parameters", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      f.advance(1000);
+      expect(f.run({ operation: "create", body: invite.request })).toEqual(
+        invite.result,
+      );
+      expect(() =>
+        f.run({ operation: "create", body: { ...invite.request, maxUses: 2 } })
+      ).toThrow("invite-id-unavailable");
+      for (const maxUses of [0, -1, 1.5, 1001, Infinity]) {
+        expect(() => f.create({ maxUses })).toThrow("invalid-request");
+      }
+      expect(() =>
+        f.run({ operation: "create", body: invite.request }, f.guest)
+      ).toThrow("not-owner");
+    } finally {
+      await f.close();
+    }
+  });
+  it("hands an invitation's suggested profile to its redeemer on each receipt until the invitation expires", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ ttlSeconds: 60, suggestedProfile: sam });
+      expect(invite.result).toMatchObject({ maxUses: 1, usedCount: 0 });
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "READ",
+        suggestedProfile: sam,
+      });
+      // The invitation is used up, but its redeemer can still read the
+      // suggestion when it retries for a receipt it did not receive.
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+      await f.reopen();
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "already-redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "READ",
+        suggestedProfile: sam,
+      });
+      unavailable(() => f.run({ operation: "redeem", body: invite }, f.second));
+      f.advance(60_000);
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "already-redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "READ",
+      });
+      expect(suggestionRows(f)).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("suggests a name alone, and leaves a receipt without a suggestion when the invitation carries none", async () => {
+    const f = await fixture();
+    try {
+      const named = f.create({ suggestedProfile: { name: "Sam" } });
+      expect(f.run({ operation: "redeem", body: named }, f.guest))
+        .toMatchObject({ suggestedProfile: { name: "Sam" } });
+      const plain = f.create();
+      const receipt = f.run({ operation: "redeem", body: plain }, f.second);
+      expect(receipt).toMatchObject({ outcome: "redeemed" });
+      expect(receipt).not.toHaveProperty("suggestedProfile");
+    } finally {
+      await f.close();
+    }
+  });
+  it("forgets a suggested profile when its invitation is revoked or its issuer no longer owns the space", async () => {
+    const f = await fixture();
+    try {
+      const revoked = f.create({ suggestedProfile: sam });
+      f.run({ operation: "redeem", body: revoked }, f.guest);
+      f.run({ operation: "revoke", body: { inviteId: revoked.inviteId } });
+      expect(f.run({ operation: "redeem", body: revoked }, f.guest)).toEqual({
+        outcome: "already-redeemed",
+        redemption: { inviteId: revoked.inviteId, did: f.guest },
+        currentAccess: "READ",
+      });
+      const orphaned = f.create({ suggestedProfile: sam });
+      const redeemed = f.create({ suggestedProfile: sam });
+      f.run({ operation: "redeem", body: redeemed }, f.guest);
+      f.acl({ [f.second]: "OWNER" });
+      unavailable(() =>
+        f.run({ operation: "redeem", body: orphaned }, f.guest)
+      );
+      // The redeemer's later receipt no longer carries the suggestion of an
+      // issuer who has lost the space.
+      expect(f.run({ operation: "redeem", body: redeemed }, f.guest)).toEqual({
+        outcome: "already-redeemed",
+        redemption: { inviteId: redeemed.inviteId, did: f.guest },
+        currentAccess: null,
+      });
+      expect(suggestionRows(f)).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses a suggested profile that is malformed or oversized, or on an invitation for several people", async () => {
+    const f = await fixture();
+    try {
+      const { maxNameLength, maxPictureBytes } =
+        SPACE_INVITE_CAPABILITY.suggestedProfile;
+      const picture = (length: number) =>
+        toUnpaddedBase64url(new Uint8Array(length).fill(7));
+      for (
+        const suggestedProfile of [
+          { name: "" },
+          { name: " Sam" },
+          { name: "Sam " },
+          { name: "Sam\nLee" },
+          { name: "Sam \uD800" },
+          { name: "S".repeat(maxNameLength + 1) },
+          { name: "Sam", picture: "" },
+          { name: "Sam", picture: "not base64url!" },
+          { name: "Sam", picture: `${picture(4)}==` },
+          { name: "Sam", picture: picture(maxPictureBytes + 1) },
+        ]
+      ) {
+        expect(() => f.create({ suggestedProfile })).toThrow(
+          "invalid-request",
+        );
+      }
+      expect(() => f.create({ suggestedProfile: sam, maxUses: 2 })).toThrow(
+        "invalid-request",
+      );
+      expect(
+        f.create({
+          suggestedProfile: {
+            name: "S".repeat(maxNameLength),
+            picture: picture(maxPictureBytes),
+          },
+        }).result,
+      ).toMatchObject({ maxUses: 1 });
+      expect(f.run({ operation: "list", body: {} })).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  });
+  it("parses a suggested profile on create only in its own shape", () => {
+    const body = {
+      inviteId: "A".repeat(22),
+      codeVerifier: "B".repeat(43),
+      access: "READ",
+      ttlSeconds: 60,
+    };
+    expect(
+      parseInviteOperation("create", { ...body, suggestedProfile: sam }),
+    ).toEqual({
+      operation: "create",
+      body: { ...body, suggestedProfile: sam },
+    });
+    for (
+      const suggestedProfile of [
+        "Sam",
+        { picture: sam.picture },
+        { name: 7 },
+        { name: "Sam", picture: 7 },
+        { name: "Sam", email: "sam@example.com" },
+      ]
+    ) {
+      expect(parseInviteOperation("create", { ...body, suggestedProfile }))
+        .toBeNull();
+    }
+  });
+  it("treats an identical issuance retry with its suggestion as the same invitation and refuses a changed one", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ suggestedProfile: sam });
+      expect(f.run({ operation: "create", body: invite.request })).toEqual(
+        invite.result,
+      );
+      const { suggestedProfile: _, ...withoutSuggestion } = invite.request;
+      for (
+        const request of [
+          withoutSuggestion,
+          { ...invite.request, suggestedProfile: { name: "Sam" } },
+          {
+            ...invite.request,
+            suggestedProfile: { ...sam, name: "Samuel Lee" },
+          },
+        ]
+      ) {
+        expect(() => f.run({ operation: "create", body: request })).toThrow(
+          "invite-id-unavailable",
+        );
+      }
+      const plain = f.create();
+      expect(() =>
+        f.run({
+          operation: "create",
+          body: { ...plain.request, suggestedProfile: sam },
+        })
+      ).toThrow("invite-id-unavailable");
+    } finally {
+      await f.close();
+    }
+  });
+  it("shows the holder of an invitation's code its names and suggestion without consuming a use", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({
+        suggestedProfile: sam,
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+      });
+      const preview = { inviteId: invite.inviteId, code: invite.code };
+      expect(f.run({ operation: "preview", body: preview }, f.guest)).toEqual({
+        access: "READ",
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+        suggestedProfile: sam,
+      });
+      // Anyone holding the code may look, as often as they like; nothing is
+      // used up and nothing is granted.
+      f.run({ operation: "preview", body: preview }, f.second);
+      expect(f.run({ operation: "list", body: {} })).toEqual([
+        expect.objectContaining({ usedCount: 0, remainingUses: 1 }),
+      ]);
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({ outcome: "redeemed", suggestedProfile: sam });
+      // Its redeemer still reads it once the invitation is used up; another
+      // holder of the code does not.
+      expect(f.run({ operation: "preview", body: preview }, f.guest))
+        .toEqual({
+          access: "READ",
+          spaceName: "Garden plans",
+          issuerName: "Pat Example",
+          suggestedProfile: sam,
+        });
+      unavailable(() =>
+        f.run({ operation: "preview", body: preview }, f.second)
+      );
+    } finally {
+      await f.close();
+    }
+  });
+  it("shows its redeemer an exhausted invitation's preview whatever code they send, as a receipt-first redemption does", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ spaceName: "Garden plans" });
+      f.run({ operation: "redeem", body: invite }, f.guest);
+      const wrong = {
+        inviteId: invite.inviteId,
+        code: createInviteCredentials().code,
+      };
+      expect(f.run({ operation: "preview", body: wrong }, f.guest)).toEqual({
+        access: "READ",
+        spaceName: "Garden plans",
+      });
+      // The code check still holds for anyone without a receipt.
+      unavailable(() => f.run({ operation: "preview", body: wrong }, f.second));
+    } finally {
+      await f.close();
+    }
+  });
+  it("names any invitation, and previews one that carries no names with its access alone", async () => {
+    const f = await fixture();
+    try {
+      const shared = f.create({
+        maxUses: 5,
+        access: "WRITE",
+        spaceName: "Garden plans",
+      });
+      expect(
+        f.run({
+          operation: "preview",
+          body: { inviteId: shared.inviteId, code: shared.code },
+        }, f.guest),
+      ).toEqual({ access: "WRITE", spaceName: "Garden plans" });
+      const plain = f.create();
+      expect(
+        f.run({
+          operation: "preview",
+          body: { inviteId: plain.inviteId, code: plain.code },
+        }, f.guest),
+      ).toEqual({ access: "READ" });
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses every unreadable preview alike: unknown, wrong code, exhausted, revoked, expired, or orphaned", async () => {
+    const f = await fixture();
+    try {
+      const named = { spaceName: "Garden plans", issuerName: "Pat Example" };
+      const look = (
+        invite: { inviteId: string; code: string },
+        principal = f.guest,
+      ) =>
+        f.run({
+          operation: "preview",
+          body: { inviteId: invite.inviteId, code: invite.code },
+        }, principal);
+      const unknown = createInviteCredentials();
+      unavailable(() => look(unknown));
+      const wrong = f.create(named);
+      unavailable(() => look({ inviteId: wrong.inviteId, code: unknown.code }));
+      const exhausted = f.create(named);
+      f.run({ operation: "redeem", body: exhausted }, f.second);
+      unavailable(() => look(exhausted));
+      const revoked = f.create(named);
+      f.run({ operation: "redeem", body: revoked }, f.second);
+      f.run({ operation: "revoke", body: { inviteId: revoked.inviteId } });
+      // Revocation forgets the preview even for the one who redeemed it.
+      unavailable(() => look(revoked, f.second));
+      const orphaned = f.create(named);
+      const expiring = f.create({ ...named, ttlSeconds: 1 });
+      f.advance(1_000);
+      unavailable(() => look(expiring));
+      f.acl({ [f.second]: "OWNER" });
+      unavailable(() => look(orphaned));
+      // Malformed credentials are refused as malformed, before any lookup.
+      expect(() => look({ inviteId: "short", code: orphaned.code })).toThrow(
+        "invalid-request",
+      );
+      expect(previewRows(f).map((row) => row.inviteId)).not.toContain(
+        revoked.inviteId,
+      );
+      expect(previewRows(f).map((row) => row.inviteId)).not.toContain(
+        expiring.inviteId,
+      );
+    } finally {
+      await f.close();
+    }
+  });
+  it("retires an invitation whose preview finds its issuer no longer owns the space, so restoring them does not revive it", async () => {
+    const f = await fixture();
+    try {
+      const look = (
+        invite: { inviteId: string; code: string },
+        principal = f.guest,
+      ) =>
+        f.run({
+          operation: "preview",
+          body: { inviteId: invite.inviteId, code: invite.code },
+        }, principal);
+      const named = {
+        suggestedProfile: sam,
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+      };
+      const fresh = f.create(named);
+      const redeemed = f.create(named);
+      f.run({ operation: "redeem", body: redeemed }, f.second);
+      f.acl({ [f.guest]: "OWNER" });
+      unavailable(() => look(fresh));
+      unavailable(() => look(redeemed, f.second));
+      expect(previewRows(f)).toEqual([]);
+      expect(suggestionRows(f)).toEqual([]);
+      f.acl({ [f.owner]: "OWNER" });
+      unavailable(() => look(fresh));
+      unavailable(() => look(redeemed, f.second));
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses a malformed or oversized space or issuer name", async () => {
+    const f = await fixture();
+    try {
+      const { maxNameLength } = SPACE_INVITE_CAPABILITY.preview;
+      for (
+        const name of [
+          "",
+          " Garden",
+          "Garden ",
+          "Garden\nplans",
+          "Garden \uD800",
+          "G".repeat(maxNameLength + 1),
+        ]
+      ) {
+        expect(() => f.create({ spaceName: name })).toThrow("invalid-request");
+        expect(() => f.create({ issuerName: name })).toThrow(
+          "invalid-request",
+        );
+      }
+      f.create({
+        spaceName: "G".repeat(maxNameLength),
+        issuerName: "P".repeat(maxNameLength),
+      });
+      expect(f.run({ operation: "list", body: {} })).toHaveLength(1);
+      const body = {
+        inviteId: "A".repeat(22),
+        codeVerifier: "B".repeat(43),
+        access: "READ",
+        ttlSeconds: 60,
+      };
+      expect(parseInviteOperation("create", { ...body, spaceName: "G" }))
+        .toEqual({ operation: "create", body: { ...body, spaceName: "G" } });
+      expect(parseInviteOperation("create", { ...body, spaceName: 7 }))
+        .toBeNull();
+      expect(parseInviteOperation("create", { ...body, issuerName: {} }))
+        .toBeNull();
+      expect(
+        parseInviteOperation("preview", {
+          inviteId: "A".repeat(22),
+          code: "B".repeat(43),
+          spaceName: "G",
+        }),
+      ).toBeNull();
+    } finally {
+      await f.close();
+    }
+  });
+  it("treats an identical issuance retry with its names as the same invitation and refuses changed names", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ spaceName: "Garden plans" });
+      expect(f.run({ operation: "create", body: invite.request })).toEqual(
+        invite.result,
+      );
+      const { spaceName: _, ...withoutName } = invite.request;
+      for (
+        const request of [
+          withoutName,
+          { ...invite.request, spaceName: "Garden" },
+          { ...invite.request, issuerName: "Pat Example" },
+        ]
+      ) {
+        expect(() => f.run({ operation: "create", body: request })).toThrow(
+          "invite-id-unavailable",
+        );
+      }
+    } finally {
+      await f.close();
+    }
+  });
+  it("rolls back the ACL and receipt together when durable receipt insertion fails", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      f.engine.database.exec(
+        "CREATE TRIGGER abort_receipt BEFORE INSERT ON space_invite_redemptions BEGIN SELECT RAISE(ABORT, 'injected disk failure'); END",
+      );
+      expect(() => f.run({ operation: "redeem", body: invite }, f.guest))
+        .toThrow("injected disk failure");
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+      });
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+      expect(revisionOf(f)).toBe(1);
+      f.engine.database.exec("DROP TRIGGER abort_receipt");
+      // Reuse the rolled-back revision with a different grant. Stale staged
+      // cache entries must not turn this committed WRITE into the failed READ.
+      f.acl({ [f.owner]: "OWNER", [f.second]: "WRITE" });
+      await f.reopen();
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({ outcome: "redeemed" });
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+        [f.second]: "WRITE",
+        [f.guest]: "READ",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+  it("serializes the last use across separate persistent engine connections", async () => {
+    const f = await fixture();
+    const second = await Engine.open({ url: f.url });
+    try {
+      const invite = f.create();
+      // These calls verify sequential visibility across connections.
+      // Competing child processes below exercise simultaneous redemption.
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() =>
+          executeInvite(f.engine, {
+            host,
+            space,
+            principal: f.guest,
+            now: initialTime,
+            operation: "redeem",
+            body: invite,
+          })
+        ),
+        Promise.resolve().then(() =>
+          executeInvite(second, {
+            host,
+            space,
+            principal: f.second,
+            now: initialTime,
+            operation: "redeem",
+            body: invite,
+          })
+        ),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+      expect(f.run({ operation: "receipts", body: {} })).toHaveLength(1);
+    } finally {
+      Engine.close(second);
+      await f.close();
+    }
+  });
+  it("admits only one competing process for the final use", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      await using first = await processAttempt(f, invite, f.guest);
+      await using second = await processAttempt(f, invite, f.second);
+      await Promise.all([first.start(), second.start()]);
+      const outcomes = await Promise.all([first.finish(), second.finish()]);
+      expect(outcomes.map((o) => o.status.code)).toEqual([0, 0]);
+      const values = outcomes.map((o) => JSON.parse(o.text));
+      expect(values.filter((v) => v.outcome === "redeemed")).toHaveLength(1);
+      expect(values.filter((v) => v.error === "invite-unavailable"))
+        .toHaveLength(1);
+      await f.reopen();
+      expect(f.run({ operation: "receipts", body: {} })).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  });
+  it("recovers an uncommitted process death and a committed lost response", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      await using before = await processAttempt(
+        f,
+        invite,
+        f.guest,
+        "before-commit",
+      );
+      await before.start();
+      expect((await before.finish()).status.code).toBe(73);
+      await f.reopen();
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+      });
+      await using after = await processAttempt(
+        f,
+        invite,
+        f.guest,
+        "after-commit",
+      );
+      await after.start();
+      expect((await after.finish()).status.code).toBe(74);
+      await f.reopen();
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({ outcome: "already-redeemed", currentAccess: "READ" });
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([{
+        inviteId: invite.inviteId,
+        did: f.guest,
+      }]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("fsyncs invitation decisions before acknowledging them and restores the engine setting", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      const mode = () =>
+        f.engine.database.prepare("PRAGMA synchronous").get<
+          { synchronous: number }
+        >()!.synchronous;
+      const original = mode();
+      let during = -1;
+      f.engine.database.function("observe_invite_sync", () => {
+        during = mode();
+        return 0;
+      });
+      f.engine.database.exec(
+        "CREATE TRIGGER observe_sync AFTER INSERT ON space_invite_redemptions BEGIN SELECT observe_invite_sync(); END",
+      );
+      f.run({ operation: "redeem", body: invite }, f.guest);
+      expect(during).toBe(2);
+      expect(mode()).toBe(original);
+    } finally {
+      await f.close();
+    }
+  });
+  it("preserves private receipt history in full backups while excluding invite secrets from the graph", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ maxUses: 2 });
+      f.run({ operation: "redeem", body: invite }, f.guest);
+      expect(Engine.listEntityIds(f.engine)).toEqual([
+        aclDocId(space),
+        SPACE_INVITES_REVISION_DOC_ID,
+      ]);
+      expect(Engine.read(f.engine, { id: SPACE_INVITES_REVISION_DOC_ID }))
+        .toEqual({ value: { revision: 2 } });
+      const columns = f.engine.database.prepare(
+        "PRAGMA table_info(space_invite_redemptions)",
+      ).all<{ name: string }>().map((row) => row.name);
+      expect(columns).toEqual(["inviteId", "did"]);
+      const snapshot = fromFileUrl(f.url) + ".snapshot.sqlite";
+      snapshotSpaceStore(fromFileUrl(f.url), snapshot);
+      const restored = await Engine.open({ url: toFileUrl(snapshot) });
+      try {
+        const request = {
+          host,
+          space,
+          principal: f.guest,
+          now: initialTime,
+          operation: "redeem" as const,
+          body: invite,
+        };
+        expect(executeInvite(restored, request).result).toMatchObject({
+          outcome: "already-redeemed",
+        });
+        expect(
+          executeInvite(restored, { ...request, principal: f.second }).result,
+        ).toMatchObject({ outcome: "redeemed" });
+        expect(restored.database.prepare("SELECT * FROM space_invites").all())
+          .toEqual([]);
+        expect(
+          restored.database.prepare("SELECT * FROM space_invite_redemptions")
+            .all(),
+        ).toHaveLength(2);
+      } finally {
+        Engine.close(restored);
+      }
+      f.advance(60_000);
+      unavailable(() => f.run({ operation: "redeem", body: invite }, f.second));
+      expect(f.engine.database.prepare("SELECT * FROM space_invites").all())
+        .toEqual([]);
+      expect(
+        f.engine.database.prepare("SELECT * FROM space_invite_redemptions")
+          .all(),
+      ).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  });
+  it("serializes revocation against a first redemption in separate processes", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      await using redeem = await processAttempt(f, invite, f.guest);
+      await using revoke = await processAttempt(
+        f,
+        invite,
+        f.owner,
+        "normal",
+        "revoke",
+      );
+      await Promise.all([redeem.start(), revoke.start()]);
+      const [redemption, revocation] = await Promise.all([
+        redeem.finish(),
+        revoke.finish(),
+      ]);
+      expect(redemption.status.code).toBe(0);
+      expect(revocation.status.code).toBe(0);
+      expect(JSON.parse(revocation.text)).toEqual({ revoked: true });
+      const result = JSON.parse(redemption.text);
+      const receipts = f.run({ operation: "receipts", body: {} });
+      if (result.outcome === "redeemed") {
+        expect(receipts).toEqual([{ inviteId: invite.inviteId, did: f.guest }]);
+      } else {
+        expect(result.error).toBe("invite-unavailable");
+        expect(receipts).toEqual([]);
+      }
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  describe("the ledger's revision document", () => {
+    it("moves with each invitation made or withdrawn and each new receipt, and with nothing that leaves the ledger as it was", async () => {
+      const f = await fixture();
+      try {
+        expect(revisionOf(f)).toBe(0);
+        const invite = f.create({ maxUses: 3 });
+        expect(revisionOf(f)).toBe(1);
+        f.run({ operation: "create", body: invite.request });
+        f.run({ operation: "list", body: {} });
+        f.run({ operation: "receipts", body: {} });
+        expect(revisionOf(f)).toBe(1);
+        f.run({ operation: "redeem", body: invite }, f.guest);
+        expect(revisionOf(f)).toBe(2);
+        f.run({ operation: "redeem", body: invite }, f.guest);
+        expect(revisionOf(f)).toBe(2);
+        f.acl({ [f.owner]: "OWNER", [f.guest]: "READ", [f.second]: "WRITE" });
+        const capable = f.execute(
+          { operation: "redeem", body: invite },
+          f.second,
+        );
+        expect(capable.commit).toBeUndefined();
+        expect(revisionOf(f)).toBe(3);
+        const stranger = (await Identity.generate()).did();
+        const { code: wrongCode } = createInviteCredentials();
+        unavailable(() =>
+          f.run({
+            operation: "redeem",
+            body: { inviteId: invite.inviteId, code: wrongCode },
+          }, stranger)
+        );
+        expect(revisionOf(f)).toBe(3);
+        f.run({ operation: "revoke", body: { inviteId: invite.inviteId } });
+        expect(revisionOf(f)).toBe(4);
+        f.run({ operation: "revoke", body: { inviteId: invite.inviteId } });
+        expect(revisionOf(f)).toBe(4);
+        f.create({ ttlSeconds: 60 });
+        expect(revisionOf(f)).toBe(5);
+        f.advance(61_000);
+        expect(f.run({ operation: "list", body: {} })).toEqual([]);
+        expect(revisionOf(f)).toBe(5);
+      } finally {
+        await f.close();
+      }
+    });
+    it("writes the revision in a system commit of its own, after a redemption's ACL-only grant", async () => {
+      const f = await fixture();
+      try {
+        const invite = f.create();
+        const { commit, revision } = f.execute(
+          { operation: "redeem", body: invite },
+          f.guest,
+        );
+        expect(commit?.revisions.map(({ id }) => id)).toEqual([
+          aclDocId(space),
+        ]);
+        expect(revision?.revisions.map(({ id }) => id)).toEqual([
+          SPACE_INVITES_REVISION_DOC_ID,
+        ]);
+        expect(revision?.seq).toBe((commit?.seq ?? 0) + 1);
+        expect(Engine.commitClassOfSeq(f.engine, revision?.seq ?? 0)).toBe(
+          "system",
+        );
+        expect(Engine.read(f.engine, { id: SPACE_INVITES_REVISION_DOC_ID }))
+          .toEqual({ value: { revision: 2 } });
+      } finally {
+        await f.close();
+      }
+    });
+    it("moves when a refused preview or redemption retires an invitation whose issuer no longer owns the space", async () => {
+      const f = await fixture();
+      try {
+        const previewed = f.create();
+        const redeemed = f.create();
+        f.acl({ [f.second]: "OWNER", [f.owner]: "WRITE" });
+        const preview = f.apply(
+          { operation: "preview", body: previewed },
+          f.guest,
+        );
+        expect(preview).toMatchObject({ failure: "invite-unavailable" });
+        expect(preview.revision?.revisions.map(({ id }) => id)).toEqual([
+          SPACE_INVITES_REVISION_DOC_ID,
+        ]);
+        expect(revisionOf(f)).toBe(3);
+        unavailable(() =>
+          f.run({ operation: "redeem", body: redeemed }, f.guest)
+        );
+        expect(revisionOf(f)).toBe(4);
+        unavailable(() =>
+          f.run({ operation: "preview", body: previewed }, f.guest)
+        );
+        expect(revisionOf(f)).toBe(4);
+        expect(f.run({ operation: "list", body: {} }, f.second)).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    });
+    it("throws for a write to the document in any commit but a system one", async () => {
+      // A derived commit is admitted only under server execution, from the
+      // holder of the space's lease.
+
+      const f = await fixture();
+      setServerExecutionConfig(true);
+      try {
+        f.create();
+        const holder = "service:invite-revision-holder";
+        const lease = new ExecutionLeaseCycle({
+          leases: f.engine.executionLeases,
+          space,
+          holder,
+        });
+        expect(await lease.acquire()).toBe(true);
+        const derivedThrough = Engine.applyCommit(f.engine, {
+          sessionId: crypto.randomUUID(),
+          space,
+          principal: f.owner,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:authored", value: { value: 1 } }],
+          },
+        }).seq;
+        const writes = [
+          {
+            op: "set" as const,
+            id: SPACE_INVITES_REVISION_DOC_ID,
+            value: { value: { revision: 7 } },
+          },
+          { op: "delete" as const, id: SPACE_INVITES_REVISION_DOC_ID },
+        ];
+        for (const operation of writes) {
+          const commit = {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [operation],
+          };
+          expect(() =>
+            Engine.applyCommit(f.engine, {
+              sessionId: crypto.randomUUID(),
+              space,
+              principal: f.owner,
+              commit,
+            })
+          ).toThrow("only the invitation service writes it");
+          expect(() =>
+            Engine.applyCommit(f.engine, {
+              sessionId: holder,
+              space,
+              commitClass: "derived",
+              holder,
+              consequenceOf: ["event:1"],
+              derivedThrough,
+              commit,
+            })
+          ).toThrow("only the invitation service writes it");
+        }
+        expect(revisionOf(f)).toBe(1);
+      } finally {
+        resetServerExecutionConfig();
+        await f.close();
+      }
+    });
+  });
+  describe("parseInviteOperation()", () => {
+    const inviteId = "A".repeat(22);
+
+    it("returns `null` for a body that is not a record", () => {
+      for (const body of [null, "", [], 7]) {
+        expect(parseInviteOperation("list", body)).toBeNull();
+        expect(parseInviteOperation("revoke", body)).toBeNull();
+      }
+    });
+    it("returns `null` for an operation it does not name", () => {
+      expect(parseInviteOperation("delete", { inviteId })).toBeNull();
+      expect(parseInviteOperation(undefined, {})).toBeNull();
+    });
+    it("returns a revocation naming exactly one invitation", () => {
+      expect(parseInviteOperation("revoke", { inviteId })).toEqual({
+        operation: "revoke",
+        body: { inviteId },
+      });
+      expect(parseInviteOperation("revoke", {})).toBeNull();
+      expect(parseInviteOperation("revoke", { inviteId: 7 })).toBeNull();
+      expect(parseInviteOperation("revoke", { inviteId, code: "B" }))
+        .toBeNull();
+    });
+    it("returns a receipts query for every invitation or for one", () => {
+      expect(parseInviteOperation("receipts", {})).toEqual({
+        operation: "receipts",
+        body: {},
+      });
+      expect(parseInviteOperation("receipts", { inviteId })).toEqual({
+        operation: "receipts",
+        body: { inviteId },
+      });
+      expect(parseInviteOperation("receipts", { inviteId: 7 })).toBeNull();
+      expect(parseInviteOperation("receipts", { inviteId, did: "x" }))
+        .toBeNull();
+    });
+    it("returns a listing only for an empty body", () => {
+      expect(parseInviteOperation("list", {})).toEqual({
+        operation: "list",
+        body: {},
+      });
+      expect(parseInviteOperation("list", { inviteId })).toBeNull();
+    });
+  });
+});

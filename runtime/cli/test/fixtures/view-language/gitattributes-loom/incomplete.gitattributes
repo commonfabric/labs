@@ -1,0 +1,3 @@
+# Always keep main's version of pieces.json on merge — piece IDs are
+coordination/pieces.json merge=ours
+coordination/agents.json -merge !di

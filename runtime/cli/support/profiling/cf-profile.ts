@@ -1,0 +1,172 @@
+import { dirname, fromFileUrl, join, resolve } from "@std/path";
+import { CF_PERMISSION_FLAGS } from "../../lib/cf-permissions.ts";
+import {
+  DEFAULT_SUMMARY_PATTERN,
+  DISABLED_SUMMARY_PATTERN,
+  findInspectorWebSocketUrl,
+  inspectWaitFlag,
+  mirrorCaptureOutput,
+  mirrorOutput,
+  parseProfileArgs,
+  pickInspectPort,
+  profileTimestamp,
+  profilingChildEnv,
+  slugifyProfileName,
+  waitForCliStatusOrStopOnCaptureFailure,
+  watchOutput,
+} from "./cf-profile-lib.ts";
+
+const { options, cliArgs } = parseProfileArgs(Deno.args);
+if (cliArgs.length === 0) {
+  throw new Error("cf-profile requires a Common Fabric CLI command");
+}
+
+const profilingDir = dirname(fromFileUrl(import.meta.url));
+const repoRoot = resolve(profilingDir, "../../../..");
+const inspectPort = pickInspectPort(options.inspectPort);
+const defaultOutputDir = join(
+  repoRoot,
+  "tmp",
+  "cf-profile",
+  `${profileTimestamp()}-${slugifyProfileName(cliArgs)}`,
+);
+const requestedOutputPath = options.outputPath
+  ? resolve(Deno.cwd(), options.outputPath)
+  : join(options.outputDir ?? defaultOutputDir, "profile.cpuprofile");
+const cpuPath = requestedOutputPath.endsWith(".json")
+  ? requestedOutputPath.replace(/\.json$/i, ".cpuprofile")
+  : requestedOutputPath;
+const profileStem = cpuPath.endsWith(".cpuprofile")
+  ? cpuPath.slice(0, -".cpuprofile".length)
+  : cpuPath;
+const outputDir = dirname(cpuPath);
+await Deno.mkdir(outputDir, { recursive: true });
+
+const consolePath = `${profileStem}.console.log`;
+const metaPath = `${profileStem}.meta.json`;
+const summaryPattern = options.summaryPattern ??
+  (cliArgs[0] === "test" ? DEFAULT_SUMMARY_PATTERN : DISABLED_SUMMARY_PATTERN);
+const profileStopPattern = options.profileStopPattern;
+const childEnv = profilingChildEnv();
+const cliPath = join(repoRoot, "runtime", "cli", "mod.ts");
+const capturePath = join(
+  profilingDir,
+  "capture-deno-inspector-profile.ts",
+);
+
+console.log(`cf-profile: writing CPU profile to ${cpuPath}`);
+
+const cliCommand = new Deno.Command(Deno.execPath(), {
+  args: [
+    "run",
+    inspectWaitFlag("127.0.0.1", inspectPort),
+    ...CF_PERMISSION_FLAGS,
+    cliPath,
+    ...cliArgs,
+  ],
+  cwd: Deno.cwd(),
+  clearEnv: true,
+  env: childEnv,
+  stdin: "inherit",
+  stdout: "piped",
+  stderr: "piped",
+}).spawn();
+
+const inspectorUrl = Promise.withResolvers<string>();
+const cliStatusPromise = cliCommand.status;
+const onCliOutput = watchOutput(
+  findInspectorWebSocketUrl,
+  (url) => inspectorUrl.resolve(url),
+);
+const stdoutDone = mirrorOutput(
+  cliCommand.stdout,
+  Deno.stdout,
+  onCliOutput,
+);
+const stderrDone = mirrorOutput(
+  cliCommand.stderr,
+  Deno.stderr,
+  onCliOutput,
+);
+
+const inspectorUrlResult = await Promise.race([
+  inspectorUrl.promise.then((url) => ({ kind: "inspector-url" as const, url })),
+  cliStatusPromise.then((status) => ({ kind: "cli-status" as const, status })),
+]);
+
+if (inspectorUrlResult.kind === "cli-status") {
+  await Promise.all([stdoutDone, stderrDone]);
+  Deno.exit(inspectorUrlResult.status.code);
+}
+
+const captureArgs = [
+  "run",
+  "-A",
+  capturePath,
+  `--output=${cpuPath}`,
+  `--console-output=${consolePath}`,
+  `--summary-pattern=${summaryPattern}`,
+  `--websocket-url=${inspectorUrlResult.url}`,
+];
+if (options.profileStartPattern) {
+  captureArgs.push(`--profile-start-pattern=${options.profileStartPattern}`);
+}
+if (profileStopPattern) {
+  captureArgs.push(`--profile-stop-pattern=${profileStopPattern}`);
+}
+
+const capture = new Deno.Command(Deno.execPath(), {
+  args: captureArgs,
+  cwd: Deno.cwd(),
+  clearEnv: true,
+  env: childEnv,
+  stdin: "null",
+  stdout: "piped",
+  stderr: "inherit",
+}).spawn();
+
+// The capture stops on its own when the CLI's program finishes, which it
+// learns from the inspector, and the CLI exits once the capture disconnects.
+const captureResultPromise = Promise.all([
+  capture.status,
+  mirrorCaptureOutput(capture.stdout, Deno.stdout),
+]).then(([status, { targetFinished }]) => ({ status, targetFinished }));
+const cliStatus = await waitForCliStatusOrStopOnCaptureFailure(
+  cliStatusPromise,
+  captureResultPromise,
+  cliCommand,
+);
+await Promise.all([stdoutDone, stderrDone]);
+const { status: captureStatus } = await captureResultPromise;
+
+await Deno.writeTextFile(
+  metaPath,
+  JSON.stringify(
+    {
+      command: cliArgs,
+      cwd: Deno.cwd(),
+      outputDir,
+      cpuPath,
+      consolePath,
+      summaryPattern,
+      profileStartPattern: options.profileStartPattern,
+      profileStopPattern,
+      inspectPort,
+      cliStatus,
+      captureStatus,
+    },
+    null,
+    2,
+  ),
+);
+
+console.log(`cf-profile: CPU profile ${cpuPath}`);
+console.log(`cf-profile: console log ${consolePath}`);
+console.log(`cf-profile: metadata ${metaPath}`);
+
+if (!captureStatus.success) {
+  Deno.exit(captureStatus.code);
+}
+if (!cliStatus.success) {
+  Deno.exit(cliStatus.code);
+}

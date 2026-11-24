@@ -27,6 +27,25 @@ This shift has several benefits:
 - **Simpler types** - Your data models are cleaner without synthetic keys
 - **Natural composition** - Objects can reference other objects directly
 
+### One object written at two positions
+
+Writing the same plain object or array at two positions in one write links the
+two: after `state.set({ a: EMPTY, b: EMPTY })`, `b` is stored as a link to `a`.
+A change inside the value through either position, such as
+`state.key("a").push(item)` or `state.key("b").key(0).set(item)`, is read at
+both, across sessions. Replacing a position whole is different:
+`state.key("b").set([])` replaces the link and ends the sharing, while
+`state.key("a").set([])` replaces what the link points at, so `b` reads the new
+array too.
+
+Separate writes of an object never link: `state.key("a").set(EMPTY)` and then
+`state.key("b").set(EMPTY)` store two independent values, even in one handler.
+A cell is different, since a cell is a reference: written at two positions, it
+is referenced at both, however many writes put it there. The object itself is
+not changed by any of this: `EMPTY` stays as it was. When two positions should
+start out equal but change independently, write each its own value (`[]` and
+`[]`), or write them separately.
+
 ## The `equals()` Function
 
 Use `equals()` to ask whether two things are the *same* thing. It resolves each side to what it points at in the graph — following links — and compares those referents. It never compares contents: two separately-created values are not `equals()` however identical they look, and a value with no place in the graph (a fresh object literal, say) has nothing to compare, so it is never `equals()` to anything but itself.
@@ -81,6 +100,32 @@ const hasItem = lift<{ item: Item, items: Item[] }>(
 ```
 
 **Tip:** For removing items, use `array.remove(item)`, it uses the same `equals()` under the hood.
+
+### Keying by identity with `equalsKey()`
+
+`equals()` compares two values, so finding the distinct references in a list of `n`, or matching one list against another, compares every pair. `equalsKey()` returns a string that two values share exactly when `equals()` returns `true` for them, so a `Set` or a `Map` keyed by it does the same work in one pass:
+
+```typescript
+// Shown at module scope.
+import { equalsKey, lift } from 'commonfabric';
+
+interface Item {
+  name: string;
+}
+
+// Each item at its first position, however many positions name it.
+const distinctItems = lift<{ items: Item[] }>(({ items }) => {
+  const seen = new Set<unknown>();
+  return items.filter((item) => {
+    const key = equalsKey(item) ?? item;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+});
+```
+
+Inside a handler or a reactive computation it follows links first, as `equals()` does, so an alias and the document it names share a key; elsewhere it compares links as given. A value with no place in the graph has no key, and `equalsKey()` returns `undefined` for it; the `?? item` above keeps such a value apart from every other, as `equals()` does. A key holds for the run that made it: compare keys made in the same handler or computation, and do not store one.
 
 ### In `.map()` Callbacks
 

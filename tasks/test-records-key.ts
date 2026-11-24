@@ -28,7 +28,9 @@
  * and the requester's own command collects the delivery as usual.
  */
 
-import { join } from "@std/path";
+import { exists } from "@std/fs";
+import { dirname, join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   defaultSpoolRoot,
   type Environment,
@@ -45,6 +47,10 @@ import {
   type SealedBox,
 } from "./test-records-crypto.ts";
 import {
+  configDir as sharedConfigDir,
+  IDENTITY_FILE_NAME,
+  KEY_FILE_NAME,
+  legacyConfigDir,
   MINT_WORKFLOW_FILE,
   parsePersonalKeyFile,
   type PersonalKeyFile,
@@ -55,12 +61,14 @@ import {
   type AgentConfigRemoval,
   type AgentConfigUpdate,
   exportFromAgentConfigs,
+  reexportFromAgentConfigs,
   unexportFromAgentConfigs,
 } from "./test-records-agent-config.ts";
 import {
   exportFromProfiles,
   exportLine,
   type ProfileUpdate,
+  reexportFromProfiles,
   reloadHint,
   shellKind,
   unexportFromProfiles,
@@ -103,24 +111,15 @@ export interface KeyToolDeps {
   pause: () => Promise<void>;
 }
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** Runs a command for its output; injectable so tests run no commands. */
 export type CommandRunner = (
   command: string,
   args: string[],
 ) => Promise<{ code: number; stdout: Uint8Array }>;
 
-const runCommand: CommandRunner = async (command, args) => {
-  const { code, stdout } = await new Deno.Command(command, {
-    args,
-    stdout: "piped",
-    stderr: "null",
-  }).output();
-  return { code, stdout };
-};
+const runCommand: CommandRunner = (command, args) =>
+  new Deno.Command(command, { args, stdout: "piped", stderr: "null" })
+    .output();
 
 /**
  * The GitHub token to work with: the environment's, and otherwise
@@ -157,15 +156,11 @@ export function defaultDeps(): KeyToolDeps {
 }
 
 function configDir(env: Environment): string {
-  const xdg = readEnv("XDG_CONFIG_HOME", env);
-  if (xdg !== undefined && xdg.length > 0) {
-    return join(xdg, "common-fabric");
-  }
-  const home = readEnv("HOME", env) ?? readEnv("USERPROFILE", env);
-  if (home === undefined || home.length === 0) {
+  const dir = sharedConfigDir(env);
+  if (dir === undefined) {
     throw new KeyToolError("Neither XDG_CONFIG_HOME nor HOME is set.");
   }
-  return join(home, ".config", "common-fabric");
+  return dir;
 }
 
 function home(env: Environment): string | undefined {
@@ -173,11 +168,11 @@ function home(env: Environment): string | undefined {
 }
 
 function identityPath(env: Environment): string {
-  return join(configDir(env), "test-records-identity.json");
+  return join(configDir(env), IDENTITY_FILE_NAME);
 }
 
 function keyFilePath(env: Environment): string {
-  return join(configDir(env), "test-records-key.json");
+  return join(configDir(env), KEY_FILE_NAME);
 }
 
 async function github(
@@ -199,7 +194,7 @@ async function github(
     });
   } catch (error) {
     throw new KeyToolError(
-      `Cannot reach ${API}: ${reason(error)}`,
+      `Cannot reach ${API}: ${describeFailure(error)}`,
     );
   }
 }
@@ -574,7 +569,7 @@ async function installDelivery(
   } catch (error) {
     throw new KeyToolError(
       `The delivery does not open with the identity at ` +
-        `${identityPath(deps.env)}: ${reason(error)}`,
+        `${identityPath(deps.env)}: ${describeFailure(error)}`,
     );
   }
   const keyText = new TextDecoder().decode(keyFile);
@@ -801,6 +796,7 @@ async function keyStillWorks(
 export async function requestCommand(
   deps: KeyToolDeps = defaultDeps(),
 ): Promise<void> {
+  await migrateLegacyInstall(deps);
   const identity = await ensureIdentity(deps);
   console.log(`Recipient: ${identity.recipient}`);
 
@@ -905,6 +901,7 @@ export async function setupCommand(
   deps: KeyToolDeps = defaultDeps(),
   options: { rotate?: boolean } = {},
 ): Promise<number> {
+  await migrateLegacyInstall(deps);
   const token = await deps.githubToken();
   const login = token === undefined
     ? undefined
@@ -1033,6 +1030,7 @@ finishes. Ctrl-C stops watching; rerunning picks up where it left off.
 export async function collectCommand(
   deps: KeyToolDeps = defaultDeps(),
 ): Promise<number> {
+  await migrateLegacyInstall(deps);
   const identity = await loadIdentity(deps.env);
   if (identity === undefined) {
     throw new KeyToolError(
@@ -1108,7 +1106,7 @@ async function removeFile(path: string): Promise<boolean> {
     return true;
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return false;
-    throw new KeyToolError(`Cannot remove ${path}: ${reason(error)}`);
+    throw new KeyToolError(`Cannot remove ${path}: ${describeFailure(error)}`);
   }
 }
 
@@ -1125,6 +1123,79 @@ async function spoolCount(root: string): Promise<number | undefined> {
   }
 }
 
+/** Whether two paths name the same file, neither through a link. */
+async function sameFile(a: string, b: string): Promise<boolean> {
+  const [first, second] = await Promise.all([Deno.lstat(a), Deno.lstat(b)]);
+  return first.isFile && second.isFile && first.ino !== null &&
+    first.ino === second.ino && first.dev === second.dev;
+}
+
+/**
+ * Moves a file to a path nothing is at yet. A file already at the
+ * destination is left where it is, and so is the one that would have
+ * replaced it.
+ */
+async function moveFile(from: string, to: string): Promise<void> {
+  try {
+    if (!await exists(from)) return;
+    await Deno.mkdir(dirname(to), { recursive: true });
+    try {
+      await Deno.link(from, to);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+      // A move stopped between the link and the removal leaves both
+      // names on one file, which finishing the move resolves.
+      if (!await sameFile(from, to)) {
+        console.log(`Both ${from} and ${to} exist; ${from} was left alone.`);
+        return;
+      }
+    }
+    await Deno.remove(from);
+  } catch (error) {
+    throw new KeyToolError(
+      `Cannot move ${from} to ${to}: ${describeFailure(error)}\n` +
+        "Move it there yourself and run the command again.",
+    );
+  }
+  console.log(`Moved ${from} to ${to}`);
+}
+
+/**
+ * Moves an installation out of the legacy configuration directory and
+ * into the shared one, and points what this tool exported at the legacy
+ * key at the shared one. Every command starts with this, so the move
+ * happens the first time a person runs any of them, and each step does
+ * nothing when it has already been done. A shell started before the
+ * move names the legacy path, which the uploader follows to the key's
+ * new place.
+ */
+async function migrateLegacyInstall(deps: KeyToolDeps): Promise<void> {
+  const legacy = legacyConfigDir(deps.env);
+  if (legacy === undefined) return;
+  const legacyKey = join(legacy, KEY_FILE_NAME);
+  const key = keyFilePath(deps.env);
+  await moveFile(legacyKey, key);
+  await moveFile(join(legacy, IDENTITY_FILE_NAME), identityPath(deps.env));
+  // The directory goes only when the move leaves it empty.
+  await Deno.remove(legacy).catch(() => {});
+  const profiles = await reexportFromProfiles(
+    RECORDS_KEY_FILE_VARIABLE,
+    legacyKey,
+    key,
+    deps.env,
+  );
+  for (const path of profiles) {
+    console.log(`${path} now exports ${RECORDS_KEY_FILE_VARIABLE}=${key}`);
+  }
+  const configs = await reexportFromAgentConfigs(
+    RECORDS_KEY_FILE_VARIABLE,
+    legacyKey,
+    key,
+    deps.env,
+  );
+  for (const config of configs) console.log(agentConfigReport(config, key));
+}
+
 /**
  * Takes this workstation back to where it was before `setup`: the key,
  * the delivery identity, and the export are removed, and the recording
@@ -1133,6 +1204,7 @@ async function spoolCount(root: string): Promise<number | undefined> {
 export async function uninstallCommand(
   deps: KeyToolDeps = defaultDeps(),
 ): Promise<number> {
+  await migrateLegacyInstall(deps);
   const key = keyFilePath(deps.env);
   const identity = identityPath(deps.env);
 
@@ -1167,15 +1239,25 @@ Left alone. Recording continues from whatever key that names.`);
   );
   for (const config of configs) console.log(agentRemovalReport(config));
 
-  const removedKey = await removeFile(key);
-  if (removedKey) console.log(`Removed ${key}`);
-  const removedIdentity = await removeFile(identity);
-  if (removedIdentity) console.log(`Removed ${identity}`);
-  // The directory goes only when this tool leaves it empty; anything
+  // What the legacy directory still holds is what could not move
+  // beside a file already in the shared one.
+  const legacy = legacyConfigDir(deps.env);
+  const files = [key, identity];
+  if (legacy !== undefined) {
+    files.push(join(legacy, KEY_FILE_NAME), join(legacy, IDENTITY_FILE_NAME));
+  }
+  let removedFile = false;
+  for (const file of files) {
+    if (!await removeFile(file)) continue;
+    console.log(`Removed ${file}`);
+    removedFile = true;
+  }
+  // A directory goes only when this tool leaves it empty; anything
   // else in there belongs to something other than test records.
   await Deno.remove(configDir(deps.env)).catch(() => {});
+  if (legacy !== undefined) await Deno.remove(legacy).catch(() => {});
 
-  const removed = removedKey || removedIdentity ||
+  const removed = removedFile ||
     removals.some((removal) => removal.outcome === "removed") ||
     configs.some((config) => config.outcome === "removed");
   if (!removed) {
@@ -1233,24 +1315,33 @@ Stopped watching. The minting run carries on; pick the key up with
     deno task test-records-key setup
 `;
 
+/** Where a watch registers for the signal a person stops it with. */
+export interface InterruptSignals {
+  addSignalListener(signal: "SIGINT", handler: () => void): void;
+  removeSignalListener(signal: "SIGINT", handler: () => void): void;
+}
+
 /**
- * Reports a stop as a stop rather than as a stack, and returns the call
- * that takes the listener back off: a live signal listener holds the
- * event loop open, so the command would not end on its own with one
- * still registered.
+ * Reports a stop as a stop rather than as a stack, exiting with `exit`,
+ * and returns the call that takes the listener back off: a live signal
+ * listener holds the event loop open, so the command would not end on its
+ * own with one still registered.
  */
-function watchForInterrupt(): () => void {
+export function watchForInterrupt(
+  signals: InterruptSignals = Deno,
+  exit: (code: number) => never = Deno.exit,
+): () => void {
   const stop = () => {
     console.log(INTERRUPT_NOTICE);
-    Deno.exit(130);
+    exit(130);
   };
   try {
-    Deno.addSignalListener("SIGINT", stop);
+    signals.addSignalListener("SIGINT", stop);
   } catch {
     // A platform without SIGINT delivery stops the way it always did.
     return () => {};
   }
-  return () => Deno.removeSignalListener("SIGINT", stop);
+  return () => signals.removeSignalListener("SIGINT", stop);
 }
 
 /**

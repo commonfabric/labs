@@ -1,4 +1,9 @@
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { dirname, fromFileUrl, join, toFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
@@ -7,6 +12,7 @@ import {
   normalizeLcovInstancePaths,
   parseFilesMissingTranspiledSource,
   parseFilesWithNoSource,
+  relativeLcovSourcePaths,
 } from "./write-coverage-lcov.ts";
 import { isTrackedSourcePath } from "./coverage-metrics.ts";
 
@@ -25,6 +31,28 @@ Deno.test("normalizeLcovInstancePaths strips a per-instance query from SF lines"
 Deno.test("normalizeLcovInstancePaths leaves a plain path and non-SF lines unchanged", () => {
   const input = "SF:/a/b/foo.ts\nDA:1,1\nFN:2,x\nend_of_record";
   assertEquals(normalizeLcovInstancePaths(input), input);
+});
+
+Deno.test("relativeLcovSourcePaths makes a path inside the root relative to it", () => {
+  assertEquals(
+    relativeLcovSourcePaths(
+      [
+        "SF:/home/me/checkout 🦆/runtime/a/mod.ts",
+        "DA:1,1",
+        "end_of_record",
+        "SF:/home/me/checkout 🦆 other/b.ts",
+        "SF:/elsewhere/c.ts",
+      ].join("\n"),
+      "/home/me/checkout 🦆",
+    ),
+    [
+      "SF:runtime/a/mod.ts",
+      "DA:1,1",
+      "end_of_record",
+      "SF:/home/me/checkout 🦆 other/b.ts",
+      "SF:/elsewhere/c.ts",
+    ].join("\n"),
+  );
 });
 
 //
@@ -208,7 +236,7 @@ Deno.test("write-coverage-lcov converts real profiles to a normalized LCOV repor
 
 // A file the coverage-debt metric tracks, which nothing has compiled, so the
 // cache holds no transpiled form of it while the file is there to be read. The
-// metric tracks `packages/` and `tasks/`, so it goes in `tasks/` under a unique
+// metric tracks the packages and `tasks/`, so it goes in `tasks/` under a unique
 // dot-prefixed name that `.gitignore` covers, and the caller removes it.
 async function writeUncompiledTrackedFile(): Promise<string> {
   const filePath = join(
@@ -399,34 +427,34 @@ Deno.test("write-coverage-lcov succeeds when the file left out is outside the re
 
 Deno.test("isTrackedFile gives the same answer as the coverage metric", () => {
   const paths = [
-    "packages/a/mod.ts",
-    "packages/a/mod.tsx",
-    "packages/a/mod.js",
-    "packages/a/mod.jsx",
+    "runtime/a/mod.ts",
+    "runtime/a/mod.tsx",
+    "runtime/a/mod.js",
+    "runtime/a/mod.jsx",
     "tasks/a.ts",
     "tasks/nested/deep/a.ts",
     "docs/x.ts",
     "scripts/x.ts",
-    "packages/a/mod.test.ts",
-    "packages/a/mod.test.tsx",
-    "packages/a/mod.spec.ts",
-    "packages/a/mod.bench.ts",
-    "packages/a/mod.d.ts",
-    "packages/a/README.md",
-    "packages/a/mod.json",
-    "packages/a/test/helper.ts",
-    "packages/a/tests/helper.ts",
-    "packages/a/fixtures/x.ts",
-    "packages/a/integration/x.ts",
-    "packages/a/dist/x.ts",
-    "packages/a/build/x.ts",
-    "packages/a/coverage/x.ts",
-    "packages/a/.cache/x.ts",
-    "packages/a/node_modules/x/index.js",
-    "packages/generated-patterns/integration/x.ts",
-    "packages/patterns/factory-outputs/x.ts",
-    "packages/patterns-saves-backup/x.ts",
-    "packages/static/assets/x.ts",
+    "runtime/a/mod.test.ts",
+    "runtime/a/mod.test.tsx",
+    "runtime/a/mod.spec.ts",
+    "runtime/a/mod.bench.ts",
+    "runtime/a/mod.d.ts",
+    "runtime/a/README.md",
+    "runtime/a/mod.json",
+    "runtime/a/test/helper.ts",
+    "runtime/a/tests/helper.ts",
+    "runtime/a/fixtures/x.ts",
+    "runtime/a/integration/x.ts",
+    "runtime/a/dist/x.ts",
+    "runtime/a/build/x.ts",
+    "runtime/a/coverage/x.ts",
+    "runtime/a/.cache/x.ts",
+    "runtime/a/node_modules/x/index.js",
+    "runtime/generated-patterns/integration/x.ts",
+    "patterns/dev/factory-outputs/x.ts",
+    "runtime/patterns-saves-backup/x.ts",
+    "base/static/assets/x.ts",
   ];
   for (const relativePath of paths) {
     assertEquals(
@@ -438,23 +466,23 @@ Deno.test("isTrackedFile gives the same answer as the coverage metric", () => {
 });
 
 Deno.test("isTrackedFile agrees with what the coverage metric charges for", () => {
-  assert(isTrackedFile("file:///repo/packages/a/mod.ts", "/repo"));
+  assert(isTrackedFile("file:///repo/runtime/a/mod.ts", "/repo"));
   assert(isTrackedFile("file:///repo/tasks/a.ts", "/repo"));
   assert(!isTrackedFile("file:///elsewhere/mod.ts", "/repo"));
   // A sibling directory whose name merely starts with the root's name.
   assert(!isTrackedFile("file:///repo-other/mod.ts", "/repo"));
   // The cache-busting query some tests import with does not hide the path.
-  assert(isTrackedFile("file:///repo/packages/a/mod.ts?testRun=x", "/repo"));
+  assert(isTrackedFile("file:///repo/runtime/a/mod.ts?testRun=x", "/repo"));
   assert(!isTrackedFile("https://example.com/mod.ts", "/repo"));
   // In the repository, but outside what the metric walks or counts, so losing
   // it from the report costs nothing.
   assert(!isTrackedFile("file:///repo/docs/x.ts", "/repo"));
   assert(!isTrackedFile("file:///repo/scripts/x.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/test/helper.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/fixtures/x.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/mod.test.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/mod.d.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/README.md", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/test/helper.ts", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/fixtures/x.ts", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/mod.test.ts", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/mod.d.ts", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/README.md", "/repo"));
 });
 
 Deno.test("parseFilesMissingTranspiledSource reads every dropped file out of the warnings", () => {
@@ -540,4 +568,20 @@ Deno.test("collectCoverageProfileFiles returns empty for a missing directory", a
   } finally {
     await Deno.remove(root, { recursive: true });
   }
+});
+
+Deno.test("collectCoverageProfileFiles surfaces a directory that cannot be read", async () => {
+  // Only a directory that is not there reads as empty. One that is there and
+  // refuses to be read would otherwise drop its profiles from the report.
+  const readDir = (): AsyncIterable<Deno.DirEntry> => ({
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(new Deno.errors.PermissionDenied("refused")),
+    }),
+  });
+
+  await assertRejects(
+    () => collectCoverageProfileFiles("/coverage-root", readDir),
+    Deno.errors.PermissionDenied,
+    "refused",
+  );
 });

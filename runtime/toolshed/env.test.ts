@@ -1,0 +1,498 @@
+/**
+ * Parsing tests for toolshed's `EnvSchema`: strict-boolean flags and
+ * defaulted variables, pinned against the misparse their types invite.
+ *
+ * The EXPERIMENTAL_* → ExperimentalOptions mapping (including its tri-state
+ * unset/true/false fidelity) now lives in the runner's canonical
+ * `experimentalOptionsFromEnv` / `EXPERIMENTAL_ENV_VARS` (CT-1814), shared by
+ * toolshed and the CLI; its coverage lives in
+ * `runtime/runner/test/runtime-presets.test.ts`.
+ */
+
+import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { MAX_UNTRUSTED_MESSAGE_SLOTS } from "@commonfabric/memory/v2";
+import { EnvSchema, loadEnv } from "@/env.ts";
+import { Exited } from "@/test/support/exited.ts";
+
+Deno.test("MEMORY_ACL_DELEGATIONS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const admits = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_ACL_DELEGATIONS: v })
+      .MEMORY_ACL_DELEGATIONS;
+
+  assertEquals(admits(undefined), true);
+  assertEquals(admits("true"), true);
+  assertEquals(admits("1"), true);
+  assertEquals(admits("false"), false);
+  assertEquals(admits("0"), false);
+  // An operator's misspelled disable must not turn the feature on.
+  expect(() => admits("FALSE")).toThrow();
+  expect(() => admits("off")).toThrow();
+});
+
+Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_SYNC_CID_REFERENCES: v })
+      .MEMORY_SYNC_CID_REFERENCES;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  // A misspelled setting must not silently leave the deployment either way.
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
+Deno.test("a leftover MEMORY_MARKED_SPLICES is ignored, whatever its spelling", () => {
+  // The setting is gone: a deployment that still sets it, as an override
+  // file written while it existed does, starts as one that does not.
+  for (const value of ["true", "false", "on"]) {
+    const parsed = EnvSchema.parse({ MEMORY_MARKED_SPLICES: value });
+    assertEquals("MEMORY_MARKED_SPLICES" in parsed, false);
+  }
+});
+
+Deno.test("MEMORY_RETIRE_BARE_DID_LABELS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(
+      v === undefined ? {} : { MEMORY_RETIRE_BARE_DID_LABELS: v },
+    ).MEMORY_RETIRE_BARE_DID_LABELS;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
+Deno.test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_STORE_READS_DIGEST: v })
+      .MEMORY_STORE_READS_DIGEST;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  // A misspelled setting must not silently leave the deployment either way.
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
+Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
+  // Regression guard for the z.coerce.boolean() footgun: Boolean("false") ===
+  // true, which would silently enable telemetry (and, with the all-span
+  // exporter, ship every HTTP request span) when an operator set
+  // OTEL_ENABLED=false to disable it.
+
+  const otel = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { OTEL_ENABLED: v }).OTEL_ENABLED;
+
+  assertEquals(otel("true"), true);
+  assertEquals(otel("1"), true);
+
+  // The cases the old z.coerce.boolean() got wrong:
+  assertEquals(otel("false"), false);
+  assertEquals(otel("0"), false);
+  assertEquals(otel("no"), false);
+
+  // Unset must default to off.
+  assertEquals(otel(undefined), false);
+});
+
+Deno.test("DISABLE_LOG_REQ_RES / PLAID_SYNC_ALL_TRANSACTIONS parse strictly", () => {
+  // The sibling boolean flags use the strict boolFlag() parse rather than
+  // z.coerce.boolean(), which reads "false" as true. Guard them so they
+  // can't silently regress.
+
+  const flag = (key: string, v: string | undefined) =>
+    (EnvSchema.parse(v === undefined ? {} : { [key]: v }) as Record<
+      string,
+      unknown
+    >)[key];
+
+  for (const key of ["DISABLE_LOG_REQ_RES", "PLAID_SYNC_ALL_TRANSACTIONS"]) {
+    assertEquals(flag(key, "true"), true);
+    assertEquals(flag(key, "1"), true);
+    assertEquals(flag(key, "false"), false); // previously coerced to true
+    assertEquals(flag(key, "0"), false);
+    assertEquals(flag(key, undefined), false);
+  }
+});
+
+Deno.test("MEMORY_MINIMUM_CLIENT_GENERATION only accepts disabled configuration", () => {
+  expect(EnvSchema.parse({}).MEMORY_MINIMUM_CLIENT_GENERATION).toBe(0);
+  expect(
+    EnvSchema.parse({ MEMORY_MINIMUM_CLIENT_GENERATION: "0" })
+      .MEMORY_MINIMUM_CLIENT_GENERATION,
+  ).toBe(0);
+  for (
+    const value of [
+      "1",
+      "2",
+      "-1",
+      "1.5",
+      "",
+      " ",
+      "0x2",
+      "1e1",
+      "00",
+      "0.0",
+      "0x0",
+      "0e0",
+      0,
+      null,
+      "unknown",
+      "Infinity",
+      "9007199254740992",
+    ]
+  ) {
+    const result = EnvSchema.safeParse({
+      MEMORY_MINIMUM_CLIENT_GENERATION: value,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining("Client retirement is disabled"),
+    }));
+  }
+});
+
+Deno.test("MEMORY_ACL_MODE defaults to enforce and accepts rollout overrides", () => {
+  const aclMode = (value: string | undefined) =>
+    EnvSchema.parse(
+      value === undefined ? {} : { MEMORY_ACL_MODE: value },
+    ).MEMORY_ACL_MODE;
+
+  assertEquals(aclMode(undefined), "enforce");
+  assertEquals(aclMode("off"), "off");
+  assertEquals(aclMode("observe"), "observe");
+  assertEquals(aclMode("enforce"), "enforce");
+});
+
+Deno.test("MEMORY_PUBLIC_URL is an HTTP or HTTPS origin, or nothing", () => {
+  const parse = (value: string | undefined) =>
+    EnvSchema.safeParse(
+      value === undefined ? {} : { MEMORY_PUBLIC_URL: value },
+    );
+
+  // Unset or empty: clients open Memory on the API host.
+  assertEquals(parse(undefined).data?.MEMORY_PUBLIC_URL, undefined);
+  assertEquals(parse("").data?.MEMORY_PUBLIC_URL, undefined);
+  // Published as the bare origin, however it is spelled.
+  assertEquals(
+    parse("https://router.example/").data?.MEMORY_PUBLIC_URL,
+    "https://router.example",
+  );
+  // Anything else fails the parse, which refuses startup, and the reason
+  // calls the value a memory URL.
+  for (
+    const [value, reason] of [
+      ["router.example", "Invalid memory URL"],
+      ["wss://router.example", "Unsupported memory URL protocol"],
+      ["https://router.example/api", "Memory URL must not include a path"],
+      [
+        "https://user@router.example",
+        "Memory URL must not include credentials",
+      ],
+    ]
+  ) {
+    const result = parse(value);
+    assert(!result.success, value);
+    const issue = result.error.issues.find((issue) =>
+      issue.path[0] === "MEMORY_PUBLIC_URL"
+    );
+    assertEquals(
+      issue?.message,
+      `MEMORY_PUBLIC_URL must be an HTTP or HTTPS origin: ${reason}`,
+    );
+  }
+});
+
+Deno.test("MEMORY_PUBLIC_URL warns about plain http off loopback", () => {
+  const warned: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => warned.push(args);
+  try {
+    const parse = (value: string) =>
+      EnvSchema.safeParse({ MEMORY_PUBLIC_URL: value }).data
+        ?.MEMORY_PUBLIC_URL;
+    // An https page cannot open a ws:// socket, so this one is published
+    // with a warning.
+    assertEquals(
+      parse("http://router.example:9000"),
+      "http://router.example:9000",
+    );
+    assertEquals(warned.length, 1);
+    assert(String(warned[0][0]).includes("http://router.example:9000"));
+    // Loopback and https are what a local run and a deployment use.
+    parse("http://localhost:9000");
+    parse("http://127.0.0.1:9000");
+    parse("https://router.example");
+    assertEquals(warned.length, 1);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+Deno.test("API_INTERNAL_URL is `self`, an HTTP or HTTPS origin, or nothing, beside API_URL", () => {
+  const parse = (
+    value: string | undefined,
+    rest: Record<string, string> = {},
+  ) =>
+    EnvSchema.safeParse({
+      API_URL: "https://toolshed.example",
+      ...rest,
+      ...(value === undefined ? {} : { API_INTERNAL_URL: value }),
+    });
+
+  // Unset or empty: the runtimes' requests go to API_URL, as before.
+  assertEquals(parse(undefined).data?.API_INTERNAL_URL, undefined);
+  assertEquals(parse("  ").data?.API_INTERNAL_URL, undefined);
+  // An origin is kept as the bare origin, however it is spelled, and API_URL
+  // stays what it was: the public origin is not moved by naming an internal
+  // one.
+  const set = parse("HTTP://localhost:8080/").data;
+  assertEquals(set?.API_INTERNAL_URL, "http://localhost:8080");
+  assertEquals(set?.API_URL, "https://toolshed.example");
+  assertEquals(
+    parse("http://[::1]:8080").data?.API_INTERNAL_URL,
+    "http://[::1]:8080",
+  );
+  // `self` is this process's own listener, HOST and PORT, so one shared
+  // .env names each instance of a multi-instance host to itself. A wildcard
+  // or loopback bind is reached on its family's loopback literal, since
+  // `localhost` may resolve to the other family; a bound address is itself.
+  assertEquals(
+    parse("self", { PORT: "8007" }).data?.API_INTERNAL_URL,
+    "http://127.0.0.1:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "localhost" }).data?.API_INTERNAL_URL,
+    "http://127.0.0.1:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "::" }).data?.API_INTERNAL_URL,
+    "http://[::1]:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "10.0.0.5" }).data?.API_INTERNAL_URL,
+    "http://10.0.0.5:8007",
+  );
+  assertEquals(
+    parse("self", { PORT: "8007", HOST: "fd00::5" }).data?.API_INTERNAL_URL,
+    "http://[fd00::5]:8007",
+  );
+  // Anything else fails the parse, which refuses startup.
+  for (
+    const [value, reason] of [
+      ["not a url", "Invalid API_INTERNAL_URL"],
+      // Scheme-less, which URL parsing reads as the scheme `localhost:`.
+      ["localhost:8080", "Unsupported API_INTERNAL_URL protocol"],
+      ["ws://localhost:8080", "Unsupported API_INTERNAL_URL protocol"],
+      [
+        "http://localhost:8080/api",
+        "API_INTERNAL_URL must not include a path",
+      ],
+      [
+        "http://localhost:8080/?x=1",
+        "API_INTERNAL_URL must not include a query",
+      ],
+      [
+        "http://user@localhost:8080",
+        "API_INTERNAL_URL must not include credentials",
+      ],
+      ["Self", "Invalid API_INTERNAL_URL"],
+    ]
+  ) {
+    const result = parse(value);
+    assert(!result.success, value);
+    const issue = result.error.issues.find((issue) =>
+      issue.path[0] === "API_INTERNAL_URL"
+    );
+    assertEquals(
+      issue?.message,
+      `API_INTERNAL_URL must be "self" or an HTTP or HTTPS origin: ${reason}`,
+    );
+  }
+});
+
+Deno.test("TOOLSHED_RELEASED_AT is an RFC 3339 date-time, or nothing", () => {
+  const parse = (value: string | undefined) =>
+    EnvSchema.safeParse(
+      value === undefined ? {} : { TOOLSHED_RELEASED_AT: value },
+    );
+
+  // Unset or empty: the patterns route advertises identities alone.
+  assertEquals(parse(undefined).data?.TOOLSHED_RELEASED_AT, undefined);
+  assertEquals(parse("").data?.TOOLSHED_RELEASED_AT, undefined);
+  // Read as milliseconds since the epoch, whatever offset it is written in.
+  assertEquals(
+    parse("2024-03-05T14:03:00Z").data?.TOOLSHED_RELEASED_AT,
+    Date.UTC(2024, 2, 5, 14, 3, 0),
+  );
+  assertEquals(
+    parse("2024-03-05T07:03:00-07:00").data?.TOOLSHED_RELEASED_AT,
+    Date.UTC(2024, 2, 5, 14, 3, 0),
+  );
+  // Anything else fails the parse, which refuses startup, naming the value.
+  for (const value of ["2026-10-16", "2026-10-16T14:03:00", "now"]) {
+    const result = parse(value);
+    assert(!result.success, value);
+    const issue = result.error.issues.find((issue) =>
+      issue.path[0] === "TOOLSHED_RELEASED_AT"
+    );
+    assertEquals(
+      issue?.message,
+      "TOOLSHED_RELEASED_AT must be an RFC 3339 date-time with an offset, " +
+        `such as 2026-10-16T14:03:00Z: \`${value}\``,
+    );
+  }
+});
+
+Deno.test("TOOLSHED_RELEASED_AT refuses a time ahead of the host's clock", () => {
+  const parse = (offset: number) => {
+    const value = new Date(Date.now() + offset).toISOString();
+    return {
+      value,
+      result: EnvSchema.safeParse({ TOOLSHED_RELEASED_AT: value }),
+    };
+  };
+
+  // Within the allowance for clock skew between hosts, a time just ahead is
+  // the deploy's own.
+  const skewed = parse(60_000);
+  assertEquals(
+    skewed.result.data?.TOOLSHED_RELEASED_AT,
+    Date.parse(skewed.value),
+  );
+  // Further ahead, the parse fails, which refuses startup, naming the value.
+  const ahead = parse(60 * 60_000);
+  assert(!ahead.result.success);
+  const issue = ahead.result.error.issues.find((issue) =>
+    issue.path[0] === "TOOLSHED_RELEASED_AT"
+  );
+  assertEquals(
+    issue?.message,
+    "TOOLSHED_RELEASED_AT is more than five minutes ahead of this host's " +
+      `clock, which no deploy that has happened is: \`${ahead.value}\``,
+  );
+});
+
+Deno.test("EXPOSE_GC parses strictly, and only on a development or test server", () => {
+  const expose = (env: Record<string, string>) =>
+    EnvSchema.parse(env).EXPOSE_GC;
+
+  assertEquals(expose({}), false);
+  assertEquals(expose({ EXPOSE_GC: "false" }), false);
+  assertEquals(expose({ EXPOSE_GC: "true" }), true);
+  assertEquals(expose({ EXPOSE_GC: "true", ENV: "test" }), true);
+  for (const ENV of ["production", "staging", "Production", "prod"]) {
+    expect(() => expose({ EXPOSE_GC: "true", ENV })).toThrow(
+      "EXPOSE_GC=true needs ENV=development or ENV=test",
+    );
+    assertEquals(expose({ EXPOSE_GC: "false", ENV }), false);
+  }
+});
+
+Deno.test("HEAP_PROFILE_MAIN_THREAD is off unless set", () => {
+  const sample = (env: Record<string, string>) =>
+    EnvSchema.parse(env).HEAP_PROFILE_MAIN_THREAD;
+
+  assertEquals(sample({}), false);
+  assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "false" }), false);
+  assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "true" }), true);
+});
+
+Deno.test("MEMORY_DUMP_ENABLED is on, off, or left to the default", () => {
+  const dump = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_DUMP_ENABLED: v })
+      .MEMORY_DUMP_ENABLED;
+
+  assertEquals(dump(undefined), undefined);
+  assertEquals(dump("default"), undefined);
+  assertEquals(dump("false"), false);
+  assertEquals(dump("true"), true);
+  assertEquals(dump("yes"), true);
+});
+
+describe("loadEnv()", () => {
+  const exit = (code: number): never => {
+    throw new Exited(code);
+  };
+
+  it("returns the parsed environment, with a `--port=` argument overriding PORT", () => {
+    const env = loadEnv(
+      { PORT: "9000", HOST: "127.0.0.1" },
+      ["--watch", "--port=8123"],
+      exit,
+    );
+
+    expect(env.PORT).toBe(8123);
+    expect(env.HOST).toBe("127.0.0.1");
+  });
+
+  it("keeps PORT from the environment when no argument names a port", () => {
+    expect(loadEnv({ PORT: "9000" }, ["--watch"], exit).PORT).toBe(9000);
+  });
+
+  it("reports each invalid field and exits with status 1", () => {
+    const reported: unknown[][] = [];
+
+    expect(() =>
+      loadEnv(
+        { MEMORY_ACL_MODE: "sometimes" },
+        [],
+        exit,
+        (...data) => reported.push(data),
+      )
+    ).toThrow(new Exited(1));
+
+    expect(reported[0]).toEqual(["❌ Invalid env:"]);
+    expect(Object.keys(JSON.parse(String(reported[1][0])))).toEqual([
+      "MEMORY_ACL_MODE",
+    ]);
+  });
+});
+
+describe("PLAID_ENV", () => {
+  it("returns the Plaid environments the SDK has an address for, `sandbox` by default", () => {
+    expect(EnvSchema.parse({}).PLAID_ENV).toBe("sandbox");
+    expect(EnvSchema.parse({ PLAID_ENV: "sandbox" }).PLAID_ENV).toBe("sandbox");
+    expect(EnvSchema.parse({ PLAID_ENV: "production" }).PLAID_ENV).toBe(
+      "production",
+    );
+  });
+
+  it("refuses `development`, which the Plaid SDK has no address for", () => {
+    expect(() => EnvSchema.parse({ PLAID_ENV: "development" })).toThrow();
+  });
+});
+
+Deno.test("MEMORY_UNTRUSTED_MESSAGE_SLOTS is unset by default and only raises the default", () => {
+  expect(EnvSchema.parse({}).MEMORY_UNTRUSTED_MESSAGE_SLOTS).toBe(undefined);
+  for (const accepted of [MAX_UNTRUSTED_MESSAGE_SLOTS, 10_000_000]) {
+    expect(
+      EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: String(accepted) })
+        .MEMORY_UNTRUSTED_MESSAGE_SLOTS,
+    ).toBe(accepted);
+  }
+  for (
+    const refused of [
+      String(MAX_UNTRUSTED_MESSAGE_SLOTS - 1),
+      "1000",
+      "0",
+      "-1",
+      "1500000.5",
+      "lots",
+    ]
+  ) {
+    expect(() => EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: refused }))
+      .toThrow();
+  }
+});

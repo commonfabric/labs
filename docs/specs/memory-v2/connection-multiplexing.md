@@ -18,7 +18,7 @@ both. A connection may hold sessions for several spaces, and several sessions
 for one space, each with the principal its own open was authorized as.
 
 What ties a connection to a space is the runner. `RemoteSessionFactory`
-(`packages/runner/src/storage/v2-remote-session.ts`) works one of two ways,
+(`runtime/runner/src/storage/v2-remote-session.ts`) works one of two ways,
 chosen by the `sharedMemoryConnection` flag (the toolshed's own runtime is the
 exception: it always dials one connection per space, see [routed Mode
 A](routed-mode-a.md) step 4):
@@ -41,10 +41,28 @@ A](routed-mode-a.md) step 4):
   the genesis ACL, and the durable session as the user — runs over that one
   connection, as three sessions of two principals.
 
+Either way, the factory has no more than six of its sockets to a host opening
+at a time (`MEMORY_DIALS_PER_HOST`): a dial, the first or a reconnect, waits
+until one of those has opened, closed or failed. With a connection per space
+the factory would otherwise hand the platform's WebSocket a dial for every
+space at once. A handshake that never answers keeps its place until its
+transport closes, since nothing times one out, so six such handshakes in
+flight hold up every later dial to their host.
+
 Per space, a connection of its own costs a TCP and TLS handshake, a `hello`
 exchange, a compression channel, and a toolshed socket, and a client with
 many spaces holds that many sockets against one host. The per-host connection
 costs those once per host.
+
+In both modes, a connection lost before its first handshake completes is
+dialed again after the memory client's reconnect backoff, up to five handshakes
+in all (`MEMORY_FIRST_HANDSHAKE_ATTEMPTS`), so a refused dial or a brief loss
+of the network still gets its session mounted. Each of those dials takes its
+turn among the host's dials like any other, and a failed one gives up its place
+as its socket closes or fails. When all five fail, the factory's
+create fails with an error naming the address, the attempts and the last
+failure, and the space's session error reports it from then on: loads of the
+space fail with it rather than wait for a session nothing is opening.
 
 ## 2. Goals and non-goals
 
@@ -356,15 +374,18 @@ sessions only after its transport closes.
 The router opens an upstream connection to a toolshed the first time the
 client names a space that toolshed owns.
 
-- `hello`: the router answers the client itself, advertising the flags that
-  every toolshed it routes to supports, and sends the client's own negotiated
-  flags upstream, unchanged, in the `hello` of each upstream connection. The
-  toolshed admits sessions by what that `hello` declares, so what it admits
-  is the client, not the router: a client without `stableExpressionResultIds`
-  is refused upstream exactly as it would be directly. A router that cannot
-  forward a client's flags exactly refuses the client. The router stage
-  requires the client's `connectionAuth` and routed-auth support; older clients
-  using signed `session.open` are not routed under this contract.
+- `hello`: the router advertises its frozen startup intersection of compatible
+  toolshed capabilities. Private `router.hello` carries the original client
+  flags unchanged in `memoryFlags` and their intersection with that public
+  snapshot in `negotiatedMemoryFlags`. The link agent signs both canonical
+  hashes in `rdb1`; the toolshed validates the exact selected descriptor and
+  uses it for the backend Memory `hello`. `router.ready` must acknowledge
+  `routerEncodingNegotiation: true` and echo that descriptor exactly. See
+  [the binding contract](routed-mode-a.md#canonical-binary-records) for field
+  order and rejection before ticket consumption or backend replacement. The
+  toolshed still refuses a client without `stableExpressionResultIds`. The
+  router stage requires the client's `connectionAuth` and routed-auth support;
+  older clients using signed `session.open` are not routed under this contract.
 - Authentication metadata: the client pins the router audience and deployment
   identifier from the router's `hello.ok`. With `connectionAuth`, it ignores
   the toolshed's `sessionOpen` metadata in a forwarded `session.open` response
@@ -383,7 +404,9 @@ client names a space that toolshed owns.
   client authenticated, forwarded as section 5.1 describes.
 - Request ids are unique within one client connection, so they pass through
   unchanged, and every server push names its session.
-- Compression is negotiated separately on each hop.
+- Encoding capabilities, including compression and sync tables, cannot exceed
+  the signed selection from the public handshake. Endpoint upgrades cannot
+  enable an unadvertised capability until the router restarts.
 - Ordering and back pressure are what they are today: each upstream connection
   serves one client.
 - Before `session/detached` exists, the router closes the client connection
@@ -411,7 +434,8 @@ The minimum constraints for that review are:
   collide across clients. The toolshed scopes each request ID by client ID;
   the multiplexer does not rewrite payloads.
 - **Per-connection flags move to the session.** `stableExpressionResultIds`
-  admission and the `syncSchemaTableV2` encoding are negotiated per connection.
+  admission and the `syncSchemaTableV2` and `syncLabelTableV1` encodings are
+  negotiated per connection.
   Clients of different builds share one upstream connection, so their
   negotiated flags move into each client's `session.open` admission state.
 - **Detach on client loss.** A client that disconnects from the router no

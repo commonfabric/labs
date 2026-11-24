@@ -21,7 +21,7 @@ cd "${baseDir}"
 # accepts an off-pin version inside the range below; the mismatch is then
 # reported again after the diagnostics, where it is the last thing on screen.
 # tasks/check-deno-pins.ts verifies that the range contains the pin.
-DENO_VERSION_MIN="2.8.0"
+DENO_VERSION_MIN="2.9.8"
 DENO_VERSION_MAX="2.10.0"
 if [[ ! -f mise.toml ]]; then
   # Checked before the read: `set -e` would otherwise abort on sed's exit

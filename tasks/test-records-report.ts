@@ -27,6 +27,7 @@ import { pooledMap } from "@std/async/pool";
 import {
   type AliasResolver,
   datePartition,
+  type Environment,
   listObjects,
   loadAliasResolver,
   readObject,
@@ -366,18 +367,24 @@ export function parseReportArgs(
   return { days, gate };
 }
 
-async function main(): Promise<void> {
-  const parsed = parseReportArgs(Deno.args);
-  if (parsed === undefined) Deno.exit(2);
-  const status = await runReport({
-    days: parsed.days,
-    gate: parsed.gate,
-    bucket: storeBucket(),
-    prefix: ciSubmissionsPrefix(),
+/**
+ * Runs the report a command line asks for over the store `env` names, and
+ * returns the status the command exits with: 2 for a malformed command
+ * line, and otherwise what `runReport` returns.
+ */
+export async function runReportCommand(
+  args: readonly string[],
+  env: Environment = Deno.env.get,
+  overrides: Pick<ReportOptions, "fetchImpl" | "now"> = {},
+): Promise<number> {
+  const parsed = parseReportArgs(args);
+  if (parsed === undefined) return 2;
+  return await runReport({
+    ...parsed,
+    bucket: storeBucket(env),
+    prefix: ciSubmissionsPrefix(env),
+    ...overrides,
   });
-  if (status !== 0) Deno.exit(status);
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) Deno.exit(await runReportCommand(Deno.args));

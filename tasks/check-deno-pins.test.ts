@@ -23,9 +23,9 @@ function alignedFiles() {
   return {
     miseToml: '[tools]\ndeno = "2.9.4"\n',
     dockerfiles: {
-      "Dockerfile.dashboard":
+      "dashboard/Dockerfile":
         "FROM --platform=linux/amd64 denoland/deno:2.9.4\n",
-      "Dockerfile.toolshed": "FROM denoland/deno:2.9.4 AS builder\n" +
+      "runtime/toolshed/Dockerfile": "FROM denoland/deno:2.9.4 AS builder\n" +
         "RUN deno install --frozen\n" +
         "FROM denoland/deno:2.9.4\n",
     },
@@ -83,13 +83,13 @@ Deno.test("findProblems flags a Deno pin defined twice", () => {
 Deno.test("parseDockerfileDenoVersions finds every FROM line", () => {
   assertEquals(
     parseDockerfileDenoVersions(
-      alignedFiles().dockerfiles["Dockerfile.dashboard"],
+      alignedFiles().dockerfiles["dashboard/Dockerfile"],
     ),
     ["2.9.4"],
   );
   assertEquals(
     parseDockerfileDenoVersions(
-      alignedFiles().dockerfiles["Dockerfile.toolshed"],
+      alignedFiles().dockerfiles["runtime/toolshed/Dockerfile"],
     ),
     ["2.9.4", "2.9.4"],
   );
@@ -198,7 +198,7 @@ Deno.test("findProblems flags a Dockerfile without deno images", () => {
     ...alignedFiles(),
     dockerfiles: {
       ...alignedFiles().dockerfiles,
-      "Dockerfile.dashboard": "FROM debian:12\n",
+      "dashboard/Dockerfile": "FROM debian:12\n",
     },
   };
   assertEquals(findProblems(files).length, 1);
@@ -289,7 +289,7 @@ Deno.test("findProblems flags a Dockerfile stage stale behind a flag", () => {
     ...alignedFiles(),
     dockerfiles: {
       ...alignedFiles().dockerfiles,
-      "Dockerfile.dashboard":
+      "dashboard/Dockerfile":
         "FROM --platform=linux/amd64 denoland/deno:2.5.0\n",
     },
   };
@@ -303,7 +303,7 @@ Deno.test("findProblems accepts a digest-pinned image on the pin", () => {
     ...alignedFiles(),
     dockerfiles: {
       ...alignedFiles().dockerfiles,
-      "Dockerfile.toolshed":
+      "runtime/toolshed/Dockerfile":
         "FROM denoland/deno:2.9.4@sha256:abc123 AS builder\n" +
         "FROM denoland/deno:2.9.4\n",
     },
@@ -353,6 +353,7 @@ async function fixtureTree(
   });
   await Deno.writeTextFile(join(root, "mise.toml"), files.miseToml);
   for (const [path, contents] of Object.entries(files.dockerfiles)) {
+    await Deno.mkdir(dirname(join(root, path)), { recursive: true });
     await Deno.writeTextFile(join(root, path), contents);
   }
   await Deno.writeTextFile(join(root, "tasks", "check.sh"), files.checkSh);
@@ -402,7 +403,7 @@ Deno.test("main reports each problem and returns 1 when misaligned", async () =>
     ...alignedFiles(),
     dockerfiles: {
       ...alignedFiles().dockerfiles,
-      "Dockerfile.toolshed": "FROM denoland/deno:2.5.0 AS builder\n",
+      "runtime/toolshed/Dockerfile": "FROM denoland/deno:2.5.0 AS builder\n",
     },
     checkSh: alignedFiles().checkSh.replace(
       'DENO_VERSION_MAX="2.10.0"',

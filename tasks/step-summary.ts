@@ -10,7 +10,7 @@
 
 import { unicodeWidth } from "@std/cli/unicode-width";
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 /** The largest summary GitHub accepts. */
 export const SUMMARY_LIMIT = 1024 * 1024;
@@ -68,6 +68,17 @@ export function appendSummary(text: string): void {
   const body = fit(text, SUMMARY_LIMIT - spent);
   if (body.length === 0) return;
   Deno.writeTextFileSync(at, body, { append: true });
+}
+
+/**
+ * Sets the step output `name` to `value`, for a later step's condition to
+ * read. A run with no output file named is every run outside a GitHub job,
+ * and sets nothing.
+ */
+export function setStepOutput(name: string, value: string): void {
+  const at = Deno.env.get("GITHUB_OUTPUT");
+  if (at === undefined || at.length === 0) return;
+  Deno.writeTextFileSync(at, `${name}=${value}\n`, { append: true });
 }
 
 /**

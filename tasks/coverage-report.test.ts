@@ -9,7 +9,6 @@ import {
 import {
   collectReports,
   main,
-  markedSets,
   measuredSetFigures,
   parseReportArgs,
   report,
@@ -17,6 +16,7 @@ import {
   repositoryFigures,
   summarize,
 } from "./coverage-report.ts";
+import { markedSets } from "./coverage-gate.ts";
 import {
   coverageMetricForGroup,
   measuredSetCoverageMetric,
@@ -36,13 +36,15 @@ import { loadTopology } from "./test-topology.ts";
 import {
   measuredSetDirectory,
   measuredSets,
-} from "./test-selection/coverage.ts";
+} from "./test-topology/coverage-gates.ts";
 
 /** The repository the measured-set tests read the workspace from. */
-const REPOSITORY = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const REPOSITORY = path.dirname(
+  path.dirname(path.fromFileUrl(import.meta.url)),
+);
 
 /** The workspace member those tests write a set report for. */
-const MEMBER = "packages/leb128";
+const MEMBER = "base/json";
 
 /** The suite whose units measure that member. */
 const SUITE = "workspace-unit";
@@ -96,10 +98,10 @@ async function workspaceOfTwo(): Promise<{ root: string; alpha: string }> {
   const source = ["export const covered = 1;", "export const uncovered = 2;"]
     .join("\n");
   const root = await directoryOf({
-    "packages/alpha/src/mod.ts": source,
-    "packages/beta/src/mod.ts": source,
+    "runtime/alpha/src/mod.ts": source,
+    "runtime/beta/src/mod.ts": source,
   });
-  return { root, alpha: path.join(root, "packages/alpha/src/mod.ts") };
+  return { root, alpha: path.join(root, "runtime/alpha/src/mod.ts") };
 }
 
 /**
@@ -185,8 +187,23 @@ describe("coverage-report", () => {
         "lane-2/notes.txt": "not a report",
       });
       try {
-        const reports = await collectReports(root);
+        const reports = await collectReports(root, "/repo");
         expect([...reports.coverage.keys()].sort()).toEqual(["/a.ts", "/b.ts"]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("returns a relative source path resolved against the root", async () => {
+      const root = await directoryOf({
+        "lane-1/lcov/sets/workspace-unit/packages_memory/coverage.lcov":
+          "SF:runtime/memory/a.ts\nend_of_record\n",
+      });
+      try {
+        const reports = await collectReports(root, "/repo");
+        expect([...reports.coverage.keys()]).toEqual([
+          "/repo/runtime/memory/a.ts",
+        ]);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -204,7 +221,7 @@ describe("coverage-report", () => {
           "SF:/a.ts\nDA:1,0\nDA:2,3\nend_of_record\n",
       });
       try {
-        const reports = await collectReports(root);
+        const reports = await collectReports(root, "/repo");
         expect([...reports.coverage.get("/a.ts")!.lineHits]).toEqual([
           [1, 1],
           [2, 3],
@@ -228,8 +245,8 @@ describe("coverage-report", () => {
         [`lane-2/lcov/${COMPILE_CACHE_STATE_FILE}`]: "warm\n",
       });
       try {
-        expect((await collectReports(cold)).cold).toBe(true);
-        expect((await collectReports(warm)).cold).toBe(false);
+        expect((await collectReports(cold, "/repo")).cold).toBe(true);
+        expect((await collectReports(warm, "/repo")).cold).toBe(false);
       } finally {
         await Deno.remove(cold, { recursive: true });
         await Deno.remove(warm, { recursive: true });
@@ -245,7 +262,7 @@ describe("coverage-report", () => {
         [`lane-2/lcov/${COMPILE_CACHE_STATE_FILE}`]: "tepid\n",
       });
       try {
-        expect((await collectReports(root)).cold).toBe(true);
+        expect((await collectReports(root, "/repo")).cold).toBe(true);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -257,17 +274,18 @@ describe("coverage-report", () => {
           "SF:/a.ts\nend_of_record\n",
       });
       try {
-        expect((await collectReports(root)).cold).toBe(false);
+        expect((await collectReports(root, "/repo")).cold).toBe(false);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
     });
 
     it("returns nothing for a directory nothing was downloaded into", async () => {
-      expect(await collectReports("/nonexistent-coverage-artifacts")).toEqual({
-        coverage: new Map(),
-        cold: false,
-      });
+      expect(await collectReports("/nonexistent-coverage-artifacts", "/repo"))
+        .toEqual({
+          coverage: new Map(),
+          cold: false,
+        });
     });
 
     it("throws where the path names a file rather than a directory", async () => {
@@ -278,7 +296,7 @@ describe("coverage-report", () => {
 
       const file = await Deno.makeTempFile({ prefix: "coverage-report-" });
       try {
-        await expect(collectReports(file)).rejects.toThrow();
+        await expect(collectReports(file, "/repo")).rejects.toThrow();
       } finally {
         await Deno.remove(file);
       }
@@ -294,13 +312,16 @@ describe("coverage-report", () => {
 
         expect(
           await repositoryFigures(optionsFor(root, "artifacts"), {
-            coverage: parseLcov(`SF:${alpha}\nDA:1,1\nDA:2,0\nend_of_record\n`),
+            coverage: parseLcov(
+              `SF:${alpha}\nDA:1,1\nDA:2,0\nend_of_record\n`,
+              root,
+            ),
             cold: false,
           }),
         ).toEqual([
           { name: coverageMetricForGroup("workspace"), uncoveredLines: 3 },
-          { name: coverageMetricForGroup("packages/alpha"), uncoveredLines: 1 },
-          { name: coverageMetricForGroup("packages/beta"), uncoveredLines: 2 },
+          { name: coverageMetricForGroup("runtime/alpha"), uncoveredLines: 1 },
+          { name: coverageMetricForGroup("runtime/beta"), uncoveredLines: 2 },
         ]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -316,7 +337,7 @@ describe("coverage-report", () => {
       try {
         expect(
           await repositoryFigures(optionsFor(root, "artifacts"), {
-            coverage: parseLcov("TN:\nend_of_record\n"),
+            coverage: parseLcov("TN:\nend_of_record\n", root),
             cold: false,
           }),
         ).toEqual([]);
@@ -483,7 +504,7 @@ describe("coverage-report", () => {
     it("returns a summary naming the workspace figure", () => {
       const figures: CoverageDebtMetric[] = [
         { name: coverageMetricForGroup("workspace"), uncoveredLines: 12 },
-        { name: coverageMetricForGroup("packages/memory"), uncoveredLines: 3 },
+        { name: coverageMetricForGroup("runtime/memory"), uncoveredLines: 3 },
       ];
       const summary = summarize(figures);
       expect(summary).toContain("12 uncovered lines");

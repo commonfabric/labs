@@ -203,19 +203,19 @@ revision path and are not selected, decoded, or returned by ID enumeration.
 The scheduled benchmark workflow runs these diagnostic benchmarks. Their
 results show trends but do not cause changes to fail CI:
 
-- `packages/fuse/entity-projection.bench.ts` measures bounded exact-projection
+- `runtime/fuse/entity-projection.bench.ts` measures bounded exact-projection
   churn, the first paginated directory view, repeated refresh, batched CFC
   directory annotations, and a recursive metadata walk with a fake manager;
   and
-- `packages/memory/test/v2-entity-id-list.bench.ts` measures the SQLite list
+- `runtime/memory/test/v2-entity-id-list.bench.ts` measures the SQLite list
   query across live-count, payload-size, and tombstone-count fixtures, and
   compares it with the live-head index.
 
 Representative commands are:
 
 ```bash
-deno task --cwd packages/fuse bench:entity-projection
-deno task --cwd packages/memory bench:entity-id-list
+deno task --cwd runtime/fuse bench:entity-projection
+deno task --cwd runtime/memory bench:entity-id-list
 ```
 
 The workflow's JSON artifact records only the operations named by each

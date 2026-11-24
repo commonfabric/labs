@@ -53,9 +53,10 @@ Explicitly deferred:
 - full UCAN transport framing for all wire messages
 - server-issued or principal-bound session ids; resume remains keyed by the
   caller-provided `sessionId`
-- public branch lifecycle commands on the v2 wire protocol
 - merge proposal generation, merge conflict workflows, and advanced branch
   live-sync optimizations
+- branches a serving loop runs: a session of a branch other than the default
+  computes what the branch stores itself (`06-branching.md` section 6.16)
 - the structured-codec readiness proof required before a WordGard integration
 - broad protocol-spec reconciliation outside these implementation notes
 
@@ -66,7 +67,7 @@ This is a clean break:
 - no compatibility shim for the current `graph.query subscribe` live protocol
 
 The runner/storage public surface remains stable. The change happens under
-`packages/memory/v2`, `packages/runner/src/storage/v2.ts`, and the toolshed
+`runtime/memory/v2`, `runtime/runner/src/storage/v2.ts`, and the toolshed
 memory route.
 
 ## Constraints
@@ -86,9 +87,9 @@ memory route.
   Session-id hardening is deferred.
 - Keep blob payload storage content-addressed. The seq rewrite applies to JSON
   entity storage, not blob data.
-- Keep branch-aware reads, writes, and watch scopes where already supported.
-  Defer public branch lifecycle commands, merge proposals, and advanced branch
-  sync.
+- Keep branch-aware reads, writes, and watch scopes, and the public branch
+  lifecycle, history and restore commands (`04-protocol.md` section 4.3.8).
+  Defer merge proposals and advanced branch sync.
 
 ## Phase 0: Spec Maintenance
 
@@ -133,8 +134,9 @@ memory route.
 - Emit `session/effect` sync messages instead of `graph.update`.
 - Keep one-shot `graph.query` for non-live reads.
 - For schema-aware watches, persist the tracked doc-plus-selector frontier
-  across watch growth, reuse a persistent traversal memo only for `watchAdd`
-  style growth, and keep write-triggered refreshes on a fresh memo.
+  across watch growth. Share a traversal memo within each evaluation and
+  release it afterward, for `watchAdd` growth and write-triggered refreshes
+  alike.
 - Recompute watch-union results per session and emit:
   - `upserts` for relevant current entity state
   - `removes` when an entity leaves the watch union
@@ -148,7 +150,7 @@ memory route.
 
 ## Phase 3: Client Rewrite
 
-- Rewrite `packages/memory/v2/client.ts` around:
+- Rewrite `runtime/memory/v2/client.ts` around:
   - session-scoped watch sets
   - a session cache of watched entity state
   - reconnect by `seenSeq`
@@ -166,7 +168,7 @@ memory route.
 
 ## Phase 4: Runner / Toolshed Integration
 
-- Update `packages/runner/src/storage/v2.ts` to use session watch installation
+- Update `runtime/runner/src/storage/v2.ts` to use session watch installation
   instead of `queryGraph({ subscribe: true })`.
 - Use `watchAdd(...)` as the normal watch growth path, including the first watch
   install on a fresh session.
@@ -187,10 +189,16 @@ Implemented in this pass:
 - branch-aware current reads
 - branch-aware point-in-time reads
 - branch-aware watch scopes
+- branch create, delete and list commands on the v2 wire protocol
+  (`04-protocol.md` section 4.3.8)
+- sessions opened on a branch (`06-branching.md` section 6.16)
+- history listing, and restoring the default branch to a point of its own or
+  another branch's history (`06-branching.md` sections 6.15 and 6.17)
+- collaborative fields on branches (`06-branching.md` section 6.18)
 
 Deferred:
 
-- public branch create/delete/list commands on the v2 wire protocol
+- sequencing branch creation and deletion as commit-logged writes
 - merge proposal generation
 - merge conflict workflow
 - advanced branch-specific live sync optimizations

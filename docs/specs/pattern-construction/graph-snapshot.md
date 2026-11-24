@@ -116,7 +116,7 @@ type NodeFactoryDescriptor =
     constrain or specialize module signatures without mutating the module
     definition.
   - `program` points to the main compiled artifact so tooling can correlate
-    modules with source files (see `packages/runner/src/harness/types.ts` for
+    modules with source files (see `runtime/runner/src/harness/types.ts` for
     `RuntimeProgram`).
   - Descriptor-level `argumentSchema` values MUST describe array/prefix-array
     schemas so reactive nodes can express tuple-style inputs used by lifts and
