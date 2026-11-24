@@ -6645,8 +6645,11 @@ is relitigated.
   ("we should cover that as well"): a bare `{name}`, the read inside the
   body of a per-element construct, where the row stays a row of the space
   and only the expression that reads the scoped value is of the scope, and
-  the read inside an authored `computed` or `lift` body. Those three are
-  being built.
+  the read inside an authored `computed` or `lift` body. A bare `{name}`
+  and an authored `computed` or `lift` body turned out to be covered by the
+  change as built, and have tests; the read inside the body of a
+  per-element construct is not built, and its plan is note 1007 on that
+  branch.
 
 - A compiled piece commits through the content-addressed label-envelope
   path (2026-11-24, Z95). Asked whether to turn the experimental option

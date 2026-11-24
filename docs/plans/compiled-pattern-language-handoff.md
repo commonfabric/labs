@@ -119,8 +119,9 @@ on `merge-attempt/serving-m6`, head `31d73441f8`).
   request against `main`.
 - *Fixed: a scoped array output was rewritten whole at an append.*
   `Instance.#putScoped` now splices the run of positions that differs. A
-  FabriChat send at 100 messages gives 188 records (688 to 698 before, 189
-  on the serving branch). Open: a scoped output still holds all rows in one
+  FabriChat send at 100 messages gave 188 records after this fix and
+  before P451 (688 to 698 before the fix, 189 on the serving branch), and
+  gives 148 after P451. Open: a scoped output still holds all rows in one
   document, so bytes and time of a send follow the room. FabriChat's
   `messageRights` (a `map` over the array of message references with a
   `PerSession` output) at 10, 100 and 1,000 messages: scope instances of
@@ -165,8 +166,10 @@ on `merge-attempt/serving-m6`, head `31d73441f8`).
     and the acting principal's `User` clauses, which the targets' writer
     policy admits in neither. The scoped places store the same clauses the
     value had before P451, and the same refusal occurred before P451 in
-    one run of two, so this is the label the copy owes and not a defect of
-    P451 (note 1006; a CFC question). Today's path was not run on it.
+    one run of two, so P451 does not record a larger label (note 1006).
+    Whether the copy owes that label, so that the runs that handled every
+    event under-labeled it, is open: a CFC question deferred by Z88, not
+    settled. Today's path was not run on it.
   - No test checks the stored labels of the positions around a scoped
     value under clauses that differ between principals.
   - Note 892's rule stands: a piece with scoped documents resumes whole.
@@ -180,8 +183,8 @@ on `merge-attempt/serving-m6`, head `31d73441f8`).
   topics). `CompiledPiece.#madePending` holds the piece's other runs from
   deriving until the transaction of the run that made the first derivation
   ends. Today's runtime has no counterpart of this mechanism; it is a
-  consequence of deriving once per session (note 892's open item), and one
-  refusal per create remains, and the work of a create follows the
+  consequence of deriving once per session (note 892's open item). The
+  refusals that remain, and the work of a create, follow the number of
   sessions (note 1005; counts at 100 and 1,000 topics alike): with 3, 5
   and 9 sessions of one principal a create takes 13 to 16, 25 to 30 and 50
   to 88 derivations, 197 to 229, 393 to 457 and 665 to 1,122 records, and
