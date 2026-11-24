@@ -41,6 +41,11 @@ import {
   gitignoreLanguage,
 } from "../lib/view/languages/ignore/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
+import {
+  goLanguage,
+  goModLanguage,
+  goSumLanguage,
+} from "../lib/view/languages/go/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
 import { rustLanguage } from "../lib/view/languages/rust/language.ts";
@@ -163,6 +168,11 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   expect(languageForName("bazelignore")).toBe(bazelignoreLanguage);
   assertEquals(languageForName("python"), pythonLanguage);
   assertEquals(languageForName("py"), pythonLanguage);
+  assertEquals(languageForName("go"), goLanguage);
+  assertEquals(languageForName("golang"), goLanguage);
+  assertEquals(languageForName("go-mod"), goModLanguage);
+  assertEquals(languageForName("gowork"), goModLanguage);
+  assertEquals(languageForName("go-sum"), goSumLanguage);
   assertEquals(languageForName("swift"), swiftLanguage);
   assertEquals(languageForName("kotlin"), kotlinLanguage);
   assertEquals(languageForName("kt"), kotlinLanguage);
@@ -216,6 +226,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "dockerignore",
     "bazelignore",
     "python",
+    "go",
+    "go-mod",
+    "go-sum",
     "swift",
     "kotlin",
     "rust",
@@ -258,6 +271,13 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "bazelignore",
     "python",
     "py",
+    "go",
+    "golang",
+    "go-mod",
+    "gomod",
+    "gowork",
+    "go-sum",
+    "gosum",
     "swift",
     "kotlin",
     "kt",

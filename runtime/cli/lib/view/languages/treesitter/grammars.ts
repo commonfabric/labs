@@ -1,5 +1,6 @@
 import type { TreeSitterGrammar } from "./adapter.ts";
 import { cGrammar, cppGrammar } from "../c-family/c-family.ts";
+import { goGrammar } from "../go/go.ts";
 import { hclGrammar } from "../hcl/hcl.ts";
 import { kotlinGrammar } from "../kotlin/kotlin.ts";
 import { pythonGrammar } from "../python/python.ts";
@@ -17,6 +18,7 @@ import { tomlGrammar } from "../toml/toml.ts";
 export const treeSitterGrammars: readonly TreeSitterGrammar[] = [
   cGrammar,
   cppGrammar,
+  goGrammar,
   hclGrammar,
   kotlinGrammar,
   pythonGrammar,
