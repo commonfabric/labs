@@ -225,7 +225,6 @@ import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
   IStorageManager,
-  IStorageNotification,
   IStorageProvider,
   MemorySpace,
   ReleaseOptions,
@@ -241,6 +240,7 @@ import {
   unmarkUiInputBlindWriteTx,
 } from "./storage/reactivity-log.ts";
 import { isRetryableCommitRejection } from "./storage/rejection.ts";
+import { observeStorageResets } from "./storage/subscription.ts";
 import { getDirectTransactionReadActivities } from "./storage/transaction-inspection.ts";
 import {
   getWriteStackTrace,
@@ -3597,23 +3597,14 @@ export class Runtime {
     const manager = this.storageManager;
     // A replacement replica starts without the selector coverage the old
     // replica established. An ordinary disconnect retains that coverage.
-    const resetObserver: IStorageNotification = {
-      next: (notification) => {
-        if (notification.type === "reset") {
-          for (const [key, entry] of this.#linkedDocLoads) {
-            if (
-              entry.space !== notification.space || entry.status !== "settled"
-            ) continue;
-            this.#linkedDocLoads.delete(key);
-            entry.release?.();
-          }
-        }
-        return { done: false };
-      },
-    };
-    manager.subscribe(resetObserver);
     const cancels = [
-      () => manager.unsubscribe?.(resetObserver),
+      observeStorageResets(manager, (space) => {
+        for (const [key, entry] of this.#linkedDocLoads) {
+          if (entry.space !== space || entry.status !== "settled") continue;
+          this.#linkedDocLoads.delete(key);
+          entry.release?.();
+        }
+      }),
       manager.subscribeHoldsCollected?.(() => {
         void this.#requestDocumentRelease();
       }),
