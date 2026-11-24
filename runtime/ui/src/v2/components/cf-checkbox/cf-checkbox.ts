@@ -126,7 +126,6 @@ export class CFCheckbox extends BaseElement {
         display: none;
       }
 
-
       /* Hover state */
       :host(:not([disabled]):hover) .checkbox:not(.checked):not(.indeterminate) {
         border-color: var(--primary, #0f172a);
