@@ -1292,9 +1292,19 @@ executing:
   The loop records at the end of a cycle whose settle did not exhaust its
   deadline, with the scheduler idle and no effect outstanding, for the
   pieces a computation of which changed, once the wave has committed every
-  contribution. A record names the slices of the runs the serving runtime
-  holds, which are those of the viewers demanding the piece then, and
-  replaces them; a slice it does not name keeps its rows and its mark. A
+  contribution. A record names the slices a live computation of the piece
+  ran at, which are those of the viewers demanding the piece then, and
+  replaces them; a viewer's slice it does not name keeps its rows and its
+  mark. A record that names no `space` slice was taken while nothing live
+  ran at the space's key, as a runtime takes of a piece an enclosing start
+  instantiated while no session demands what it writes. Where the record
+  is vouched for, it leaves a `space` slice that is clean and of the
+  recording epoch with its rows, which a later change to an instance they
+  name marks as it marks an absent viewer's. It replaces any other, the
+  held slice of a record that is not vouched for among them, or the missing
+  one of a piece with no record, with a slice that read nothing: a slice that passes no judgment
+  would otherwise stand until a session demands what its computations
+  wrote. A
   slice is stored marked when a live computation that ran at its key is not
   clean, or read a document in another space at no one instance or at a
   seq its replica cannot name, or one whose writer names

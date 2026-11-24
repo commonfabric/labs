@@ -3,7 +3,10 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
+import {
+  judgeCurrencyRoots,
+  selectCurrencyPiece,
+} from "@commonfabric/memory/v2/currency-index";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
@@ -95,6 +98,31 @@ const NESTED_PROGRAM: RuntimeProgram = {
       ">(({ value }) => ({",
       "  inner: Inner.asScope('session')({ value }),",
       "  tripled: computed(() => value * 3),",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
+/**
+ * A piece that encloses another in the space, each with one derived output
+ * from an input of its own: the outer piece's start instantiates the inner
+ * one, and a change to `extra` is a change to the outer piece alone.
+ */
+const ENCLOSING_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "const Inner = pattern<{ value: number }, { doubled: number }>(",
+      "  ({ value }) => ({ doubled: computed(() => value * 2) }),",
+      ");",
+      "export default pattern<",
+      "  { value: number; extra: number },",
+      "  { inner: { doubled: number }; tripled: number }",
+      ">(({ value, extra }) => ({",
+      "  inner: Inner({ value }),",
+      "  tripled: computed(() => extra * 3),",
       "}));",
     ].join("\n"),
   }],
@@ -866,6 +894,83 @@ describe("SpaceServer", () => {
 
         await awaitEach(cycles, () => serves(piece.root));
         expect(host.stats().currency.rearmed).toBe(1);
+      });
+
+      it("keeps the record of a piece an enclosing piece's start instantiates and no session demands, under `skip`", async () => {
+        host = newHost("skip");
+        const setup = openRuntime(setupSigner);
+        const compiled = await setup.patternManager.compilePattern(
+          ENCLOSING_PROGRAM,
+          { space },
+        );
+        const argument = setup.getCell<{ value: number; extra: number }>(
+          space,
+          "currency enclosing argument",
+          compiled.argumentSchema,
+        );
+        const result = setup.getCell<
+          { inner: { doubled: number }; tripled: number }
+        >(space, "currency enclosing result", compiled.resultSchema);
+        const tx = setup.edit();
+        argument.withTx(tx).set({ value: 2, extra: 1 });
+        setup.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await result.pull();
+        const documentOf = (cell: { getAsNormalizedFullLink(): unknown }) =>
+          ({
+            ...cell.getAsNormalizedFullLink() as NormalizedFullLink,
+            path: [],
+          }) as NormalizedFullLink;
+        const outer = result.getAsNormalizedFullLink();
+        const inner = documentOf(result.key("inner").resolveAsCell());
+        const tripled = documentOf(result.key("tripled").resolveAsCell());
+        const doubled = documentOf(
+          result.key("inner").key("doubled").resolveAsCell(),
+        );
+        setup.runner.stop(result);
+        await setup.idle();
+        await setup.storageManager.synced();
+        await closeLastRuntime();
+
+        // The first viewer watches the inner piece as a root of its own, as
+        // a board's viewer watches each piece the board lists.
+        const innerView: Demanded[] = [
+          { link: inner, root: true },
+          { link: doubled, root: false },
+        ];
+        /** The roots the store can serve of the inner piece, for that view. */
+        const innerServable = async () =>
+          judgeCurrencyRoots(await server.engineForSpace(space), {
+            space,
+            roots: [inner.id],
+            rows: innerView.map(({ link }) => ({
+              id: link.id,
+              scopeKey: "space",
+            })),
+            epoch: EPOCH,
+          }).servable;
+        await demand({ link: outer, root: true }, ...innerView);
+        await awaitEach(cycles, () => serves(outer));
+        await settled();
+        expect(await innerServable()).toEqual([inner.id]);
+        await host.spaceServer(space)!.park("test-park");
+
+        // The second viewer demands nothing of the inner piece. The outer
+        // piece never vouched for `tripled`, so it starts, and its start
+        // instantiates the inner piece with none of its computations live.
+        const stored = host.stats().currency.recordsStored;
+        demanded = [
+          { link: outer, root: true },
+          { link: tripled, root: false },
+        ];
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => serves(outer) && host!.stats().currency.recordsStored > stored,
+        );
+        await settled();
+
+        expect(await innerServable()).toEqual([inner.id]);
       });
 
       describe("with a piece that records a source origin", () => {

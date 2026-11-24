@@ -148,7 +148,8 @@ describe("currency-index", () => {
       }
       return slice;
     };
-    // A record of a piece names its `space` slice, whatever else it names.
+    // A record this builds names the `space` slice, whatever else it names:
+    // a case about a record that names none takes it out.
     sliceAt("space");
     for (const read of parts.reads ?? []) sliceAt("space").reads.push(read);
     for (const { id, scopeKey } of parts.vouches ?? []) {
@@ -791,6 +792,65 @@ describe("currency-index", () => {
       expect(markOf("of:pieceC")).toBe(1);
     });
 
+    describe("with a reader of two marked producers, asked about once for each record stored", () => {
+      const pieceB = record("of:pieceB", {
+        reads: [input("of:a")],
+        produces: ["computed:b"],
+      });
+      const pieceY = record("of:pieceY", {
+        reads: [input("of:x")],
+        produces: ["computed:y"],
+      });
+
+      /**
+       * Records both producers and the reader, changes both producers'
+       * inputs, and stores the first producer clean, which leaves the reader
+       * waiting on the second. Returns the seq of the change.
+       */
+      const leaveWaitingOnSecond = (): number => {
+        const asOf = write("of:a", "of:x", "computed:b", "computed:y");
+        store(asOf, [
+          pieceB,
+          pieceY,
+          record("of:pieceC", {
+            reads: [derived("computed:b"), derived("computed:y")],
+          }),
+        ]);
+        const changed = write("of:a", "of:x");
+        advance();
+        store(changed, [pieceB]);
+        return changed;
+      };
+
+      it("leaves the reader marked `1` when the first producer is stored clean again", () => {
+        const changed = leaveWaitingOnSecond();
+
+        store(changed, [pieceB]);
+
+        expect(markOf("of:pieceC")).toBe(1);
+      });
+
+      it("clears the reader once the producer it waited on is stored clean", () => {
+        const changed = leaveWaitingOnSecond();
+        store(changed, [pieceB]);
+
+        store(changed, [pieceY]);
+
+        expect(markOf("of:pieceC")).toBe(0);
+      });
+
+      it("stores the reader clean once its record no longer reads the producer it waited on", () => {
+        const changed = leaveWaitingOnSecond();
+
+        store(changed, [
+          record("of:pieceC", { reads: [derived("computed:b")] }),
+        ]);
+
+        expect(markOf("of:pieceC")).toBe(0);
+        expect(markOf("of:pieceY")).toBe(2);
+      });
+    });
+
     it("settles together two pieces of one batch that read each other's writes", () => {
       const asOf = write("computed:b", "computed:c");
 
@@ -1051,18 +1111,114 @@ describe("currency-index", () => {
       ]).toEqual([0, 1]);
     });
 
-    it("leaves the `space` slice as it is for a record that names none, when the piece has one", () => {
-      const asOf = write("of:piece", "of:a");
-      store(asOf, [record("of:piece", { reads: [input("of:a")] })]);
-      write("of:a");
-      advance();
+    describe("with a record that names no `space` slice, of a piece that holds one", () => {
+      // Such a record is one taken while no live computation of the piece
+      // ran at the space's key, as a runtime takes of a piece it holds
+      // while no session demands what the piece writes.
 
-      store(asOf, [{ ...record("of:piece"), slices: [slice(ALICE_USER)] }]);
+      /** A record of `of:piece` that vouches for `computed:out` from `of:a`. */
+      const vouching = record("of:piece", {
+        reads: [input("of:a")],
+        produces: ["computed:out"],
+      });
 
-      expect([markOf("of:piece"), markOf("of:piece", ALICE_USER)]).toEqual([
-        2,
-        0,
-      ]);
+      /** A record of `of:piece` that names no slice at all. */
+      const unrun: CurrencyRecord = {
+        ...record("of:piece", { writes: ["computed:out"] }),
+        slices: [],
+      };
+
+      const OUT_ROW = { id: "computed:out", scopeKey: "space" };
+
+      /** What a judgment of `of:piece` finds, for a demand of its output. */
+      const judged = (epoch = EPOCH) => {
+        const { servable, refused } = judgeCurrencyRoots(engine, {
+          space: SPACE,
+          roots: ["of:piece"],
+          rows: [OUT_ROW],
+          epoch,
+        });
+        return { servable, refused: refused.map(({ reason }) => reason) };
+      };
+
+      it("leaves a clean slice of the batch's epoch vouching for what it vouched for", () => {
+        const asOf = write("of:piece", "of:a", "computed:out");
+        store(asOf, [vouching]);
+
+        store(asOf, [unrun]);
+
+        expect(markOf("of:piece")).toBe(0);
+        expect(judged()).toEqual({ servable: ["of:piece"], refused: [] });
+      });
+
+      it("leaves that slice its read rows, so a change to what it read marks it", () => {
+        const asOf = write("of:piece", "of:a", "computed:out");
+        store(asOf, [vouching]);
+        store(asOf, [unrun]);
+
+        write("of:a");
+
+        expect(advance()).toEqual(["of:piece"]);
+        expect(judged()).toEqual({ servable: [], refused: ["marked"] });
+      });
+
+      it("leaves a clean slice of the batch's epoch as it is where the record names another slice", () => {
+        const asOf = write("of:piece", "of:a", "computed:out");
+        store(asOf, [vouching]);
+
+        store(asOf, [{ ...unrun, slices: [slice(ALICE_USER)] }]);
+
+        expect([markOf("of:piece"), markOf("of:piece", ALICE_USER)]).toEqual([
+          0,
+          0,
+        ]);
+        expect(judged().servable).toEqual(["of:piece"]);
+      });
+
+      it("stores in place of a marked slice one that read nothing and vouches for nothing", () => {
+        const asOf = write("of:piece", "of:a", "computed:out");
+        store(asOf, [vouching]);
+        const changed = write("of:a");
+
+        store(changed, [unrun]);
+
+        expect(markOf("of:piece")).toBe(0);
+        expect(judged()).toEqual({
+          servable: [],
+          refused: ["unvouched-instance"],
+        });
+      });
+
+      it("stores in place of a slice of another epoch one of the batch's epoch that vouches for nothing", () => {
+        const asOf = write("of:piece", "of:a", "computed:out");
+        store(asOf, [vouching]);
+
+        storeCurrencyRecords(engine, {
+          space: SPACE,
+          asOf,
+          seen: [],
+          epoch: "epoch-two",
+          records: [unrun],
+        });
+
+        expect(selectCurrencyPiece(engine, { piece: "of:piece" })).toEqual({
+          mark: 0,
+          epoch: "epoch-two",
+        });
+        expect(judged("epoch-two")).toEqual({
+          servable: [],
+          refused: ["unvouched-instance"],
+        });
+      });
+
+      it("stores marked `2`, in place of a clean slice, the slice of a record that is not vouched for", () => {
+        const asOf = write("of:piece", "of:a", "computed:out");
+        store(asOf, [vouching]);
+
+        store(asOf, [{ ...unrun, vouched: false }]);
+
+        expect(markOf("of:piece")).toBe(2);
+      });
     });
 
     describe("with a viewer's slice that read what the `space` slice computes", () => {
