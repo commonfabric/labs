@@ -719,16 +719,10 @@ export class RunnersView {
       dot.style.background = this.#palette.color(entry.id);
       // Each line links to its run on GitHub, so that a keyboard reaches every
       // run on the board.
-      let title: HTMLElement;
-      if (entry.url?.startsWith("https://github.com/")) {
-        const link = document.createElement("a");
-        link.href = entry.url;
-        link.target = "_blank";
-        link.rel = "noopener";
-        title = link;
-      } else {
-        title = document.createElement("span");
-      }
+      const title = document.createElement("a");
+      title.href = entry.url;
+      title.target = "_blank";
+      title.rel = "noopener";
       title.className = "title";
       title.textContent = entry.title;
       title.title = entry.title;

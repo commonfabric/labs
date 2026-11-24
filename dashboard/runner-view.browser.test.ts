@@ -941,14 +941,14 @@ Deno.test("RunnersView names a ball pointed at on a board shown twice as wide, w
   }
 });
 
-Deno.test("RunnersView links each run in the legend to its page on GitHub, opening a tab of its own, and links no run whose address is elsewhere", () => {
+Deno.test("RunnersView links each run in the legend to its page on GitHub, not to the page of one of its jobs, opening a tab of its own", () => {
   const { elements, remove } = mount();
   try {
     const view = new RunnersView(elements);
     view.show(
       boardOf([
         job(1, 7, { repository: "alpha", running: false }),
-        job(2, 8, { repository: "beta", running: false, url: "https://example.com/acme/beta/actions/runs/8/job/2" }),
+        job(2, 8, { repository: "beta", running: false }),
       ]),
       noOutcome,
       true,
@@ -958,15 +958,12 @@ Deno.test("RunnersView links each run in the legend to its page on GitHub, openi
       "alpha · CI on main @ aaaaaaa",
       "beta · CI on main @ aaaaaaa",
     ]);
-    const [linked, unlinked] = titles;
-    if (!(linked instanceof HTMLAnchorElement)) throw new Error("the run on GitHub is not linked");
-    expect([linked.href, linked.target, linked.rel]).toEqual([
-      "https://github.com/acme/labs/actions/runs/7",
-      "_blank",
-      "noopener",
+    expect(titles.map((title) =>
+      title instanceof HTMLAnchorElement ? [title.href, title.target, title.rel] : title.tagName
+    )).toEqual([
+      ["https://github.com/acme/alpha/actions/runs/7", "_blank", "noopener"],
+      ["https://github.com/acme/beta/actions/runs/8", "_blank", "noopener"],
     ]);
-    expect(unlinked.tagName).toBe("SPAN");
-    expect(unlinked.hasAttribute("href")).toBe(false);
   } finally {
     remove();
   }
