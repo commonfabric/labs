@@ -1456,3 +1456,42 @@ export const Asked = pattern<
     );
     assert!(!text.contains("spaceAccess($h.v("), "{text}");
 }
+
+/// P454: a value of another cone spread into the record a callback returns
+/// is placed by its declared members, each read at its path without the
+/// value being read: where the value is the reference to a scoped place,
+/// each member of the row is a reference into that place, and the row
+/// reads nothing of the scope. A value of the element's own cone is spread
+/// as it is.
+#[test]
+fn a_value_of_another_cone_spread_into_a_row_is_placed_by_its_declared_members() {
+    let (_, code) = emitted(
+        r#"import { Writable, computed, pattern } from "commonfabric";
+interface Item { title: string }
+interface Rights { canEdit: boolean; label: string }
+const NONE: Rights = { canEdit: false, label: "" };
+export const P = pattern<{ items: Writable<Item[]> }>(({ items }) => {
+  const reader = new Writable.perSession<string>("");
+  const named = computed(() => reader.get().length > 0);
+  const rows = items.map((item) => ({
+    title: item.title,
+    ...(named ? { canEdit: true, label: item.title } : NONE),
+    ...{ size: 1 },
+  }));
+  return { rows };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let element = text
+        .lines()
+        .find(|line| line.contains("$rt.element("))
+        .expect("the element function");
+    assert!(
+        element.contains("...$h.spreadMembers($h.output(")
+            && element.contains("[\"canEdit\", \"label\"])"),
+        "{element}"
+    );
+    assert!(element.contains("...({ size: (1) })"), "{element}");
+}

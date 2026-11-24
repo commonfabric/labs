@@ -744,6 +744,49 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         }
     }
 
+    /// The code of a spread into the record `object` of a value another
+    /// cone computes, where the plan places the members of the record
+    /// that the spread gives as paths of that value: each such member read
+    /// at its path, and the value not read (P454). The host gives the
+    /// members as references into the place the value is stored at where
+    /// it holds a reference to a scoped place, and the value as it is
+    /// otherwise, so a row that spreads a value of a scope reads nothing
+    /// of the scope.
+    fn placed_spread(
+        &mut self,
+        object: &ObjectExpression<'a>,
+        argument: &Expression<'a>,
+    ) -> Option<String> {
+        let Some(Place::Value(value, path)) = self.place_of(argument) else {
+            return None;
+        };
+        if self.cone.is_none() || Some(self.generator.cone_of(value)) == self.cone {
+            return None;
+        }
+        let Some(Place::Record(fields)) = self.fact(object.span).map(|fact| fact.place) else {
+            return None;
+        };
+        let names: Vec<String> = fields
+            .iter()
+            .filter(|(name, place)| {
+                matches!(place, Place::Value(of, at)
+                    if *of == value
+                        && at.len() == path.len() + 1
+                        && at.starts_with(&path)
+                        && at.last() == Some(*name))
+            })
+            .map(|(name, _)| json!(name).to_string())
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        let code = self.render(argument, Want::Pass);
+        Some(format!(
+            "...$h.spreadMembers({code}, [{}])",
+            names.join(", ")
+        ))
+    }
+
     /// The default the callee's argument type declares for the path of
     /// its argument that is bound to `place`, in the context being
     /// written.
@@ -1520,6 +1563,10 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                             members.push(format!("{key}: {code}"));
                         }
                         ObjectPropertyKind::SpreadProperty(spread) => {
+                            if let Some(code) = self.placed_spread(object, &spread.argument) {
+                                members.push(code);
+                                continue;
+                            }
                             let code = self.render(&spread.argument, Want::Use);
                             members.push(format!("...{code}"));
                         }

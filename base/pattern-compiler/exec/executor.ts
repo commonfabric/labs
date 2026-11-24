@@ -1343,6 +1343,12 @@ export type Counts = {
    * element that leaves (provisional decision P31).
    */
   groupUpdates: number;
+  /**
+   * Entries of a scope key that a derivation brought up to date because
+   * nothing else demands them (`Instance.#pullScoped`): one per entry
+   * visited, whether or not it was then evaluated.
+   */
+  scopedPulls: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -2553,6 +2559,20 @@ export class Host {
     return value;
   }
 
+  /**
+   * The members `names` of a value another cone computes, spread into a
+   * record (P454): where `value` is the reference to the place of a value
+   * of a scope key, each member as a reference into that place, so the
+   * record reads nothing of the scope, and otherwise the value read whole,
+   * as a spread reads it.
+   */
+  spreadMembers(value: unknown, names: readonly string[]): unknown {
+    if (value instanceof Ref && this.#instance.isScopedPlace(value)) {
+      return Object.fromEntries(names.map((name) => [name, value.key(name)]));
+    }
+    return this.v(value);
+  }
+
   /** A path below a value: a reference stays one, and nothing gives none. */
   at(value: unknown, path: readonly unknown[]): unknown {
     let found = value;
@@ -3500,6 +3520,7 @@ export class Instance {
     staleByOwnWrite: 0,
     failures: 0,
     groupUpdates: 0,
+    scopedPulls: 0,
   };
   readonly valueOfOutput = new Map<number, number>();
   readonly bodies = new Map<number, (...given: unknown[]) => unknown>();
@@ -7978,8 +7999,10 @@ export class Instance {
     const { scopes } = this.store;
     if (scopes === undefined) return;
     for (const [key, pull] of [...this.#scopedPulls]) {
-      if (this.#kept.has(key)) pull();
-      else {
+      if (this.#kept.has(key)) {
+        this.counts.scopedPulls += 1;
+        pull();
+      } else {
         this.#scopedPulls.delete(key);
         scopes.forget(`${this.id}\n${key}`);
       }
@@ -8144,6 +8167,15 @@ export class Instance {
         this.#putScoped(doc, path, value);
         return new Ref(doc, [...path]);
       });
+  }
+
+  /**
+   * Whether a reference names the place of a value of a scope key that
+   * the cone of another value placed (`scopedValue`).
+   */
+  isScopedPlace(ref: Ref): boolean {
+    const { base, scope } = scopeOfDocument(ref.doc);
+    return scope !== undefined && this.root.#scopedValuesOf.has(base);
   }
 
   /**
