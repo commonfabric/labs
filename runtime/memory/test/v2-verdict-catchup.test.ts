@@ -391,10 +391,10 @@ Deno.test("memory v2 server: a failed fan-out requeues the batch and the schedul
 });
 
 Deno.test("memory v2 server: same-doc foreign novelty is not echo-suppressed by the writer's own commit", async () => {
-  // Pin the mixed-provenance machinery itself: with the own-write echo on,
-  // every own patch head is delivered regardless of provenance, so this
-  // test would pass vacuously. Suppression mode is where the clearing rule
-  // is load-bearing.
+  // Pin the mixed-provenance machinery itself, in suppression mode, where
+  // the clearing rule alone decides: with the own-write echo on, a patch
+  // head is also delivered to a writer that does not hold the revision it
+  // was applied over, which would let this test pass without the rule.
   setOwnWriteEchoConfig(false);
   try {
     const context = await setup({
@@ -633,8 +633,8 @@ Deno.test("memory v2 server: requeue after failure does not resurrect echo suppr
         // seq matches the delivered upsert's seq, so a fabricated seq would
         // never suppress and the pin would pass even without the provenance
         // rule it exists to guard. The op must be an ELIDABLE kind
-        // ("set"): a "patch" origin is delivered under CT-1965 regardless,
-        // which would also let the pin pass vacuously.
+        // ("set"): a "patch" origin that names no base is delivered under
+        // CT-1965 regardless, which would also let the pin pass vacuously.
         seq: 1,
         ops: new Map([["space\x00of:doc:b", "set" as const]]),
       });

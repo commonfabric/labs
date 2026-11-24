@@ -7,8 +7,13 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { parseDiff } from "../lib/view/diff.ts";
+import { commentOnlyFiles, diffCounts } from "../lib/view/diffcounts.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
+import {
+  languageForFile,
+  prepareLanguages,
+} from "../lib/view/languages/language.ts";
 import { parseDocument } from "../lib/view/languages/typescript/parse.ts";
 import type { Line } from "../lib/view/model.ts";
 import { overlayBox } from "../lib/view/render.ts";
@@ -561,12 +566,100 @@ Deno.test("jumplist: complete count context rebuilds after an edit", () => {
   const source = diffSource(ws, edit);
 
   const initial = source.diffCountContexts?.(diff);
-  assert(initial !== undefined);
-  assert(source.diffCountContexts?.(diff) === initial);
+  assertEquals(initial?.[0].newLines?.()?.[2].text, " * new note");
   const edited = diff.replace("+ * new note", "+ * newer note");
   const context = source.diffCountContexts?.(edited);
-  assert(context !== undefined);
-  assertEquals(context[0].newLines?.[2].text, " * newer note");
+  assertEquals(context?.[0].newLines?.()?.[2].text, " * newer note");
+});
+
+Deno.test("jumplist: counts read complete sides one file at a time", async () => {
+  const files = [
+    {
+      path: "lib.rs",
+      before: "/*\n * header\n * old note\n */\nfn main() {}\n",
+      removed: " * old note",
+      added: " * new note",
+    },
+    {
+      path: "run.sh",
+      before: "cat <<EOF\n# not a comment\nEOF\n# comment\n",
+      removed: "# not a comment",
+      added: "# changed text",
+    },
+    {
+      path: "notes.ts",
+      before: "run();\n// old\n",
+      removed: "// old",
+      added: "// new",
+    },
+    {
+      path: "code.ts",
+      before: "run();\nrun(1);\n",
+      removed: "run(1);",
+      added: "run(2);",
+    },
+  ];
+  await prepareLanguages(files.map(({ path }) => languageForFile(path)));
+  const diff = [
+    ...files.flatMap(({ path, before, removed, added }) => {
+      const lines = before.split("\n");
+      const at = lines.indexOf(removed) + 1;
+      return [
+        `diff --git a/${path} b/${path}`,
+        `index ${gitBlobName(before)}..${
+          gitBlobName(before.replace(removed, added))
+        } 100644`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        `@@ -${at} +${at} @@`,
+        `-${removed}`,
+        `+${added}`,
+      ];
+    }),
+    "",
+  ].join("\n");
+  const ws: DiffWorkspace = {
+    resolve: () => null,
+    read: () => null,
+    readBlob: (object) =>
+      files.find(({ before }) => gitBlobName(before) === object)?.before ??
+        null,
+  };
+  const { doc, edit } = buildDiffDocument(diff, parseDiff(diff)!, ws);
+  const asked: number[] = [];
+  const source = diffSource(ws, {
+    ...edit,
+    oldFileLines: (fileIndex) => {
+      asked.push(fileIndex);
+      return edit.oldFileLines(fileIndex);
+    },
+  });
+
+  const contexts = source.diffCountContexts?.(diff);
+  assertEquals(asked, []);
+  const counts = diffCounts(diff, doc.lines, "comments", contexts);
+  assertEquals(counts.files, [
+    { adds: 0, dels: 0 },
+    { adds: 1, dels: 1 },
+    { adds: 0, dels: 0 },
+    { adds: 1, dels: 1 },
+  ]);
+  // Only Rust and shell files are scanned across the lines between hunks,
+  // and each is read before the next.
+  assertEquals(asked, [...asked].sort((a, b) => a - b));
+  assertEquals([...new Set(asked)], [0, 1]);
+  asked.length = 0;
+  assertEquals(commentOnlyFiles(diff, contexts ?? []), [
+    true,
+    false,
+    true,
+    false,
+  ]);
+  assertEquals(asked, [...asked].sort((a, b) => a - b));
+  assertEquals([...new Set(asked)], [0, 1, 2, 3]);
+  asked.length = 0;
+  diffCounts(diff, doc.lines, "normal", contexts);
+  assertEquals(asked, []);
 });
 
 Deno.test("jumplist: complete count context retains final-newline changes", () => {
@@ -629,23 +722,25 @@ Deno.test("jumplist: complete count context retains final-newline changes", () =
   ].join("\n");
 
   assertEquals(
-    contexts(addsNewline, "new\n")?.newLines?.map((line) => line.text),
+    contexts(addsNewline, "new\n")?.newLines?.()?.map((line) => line.text),
     ["new", ""],
   );
   assertEquals(
-    contexts(removesNewline, "new")?.newLines?.map((line) => line.text),
+    contexts(removesNewline, "new")?.newLines?.()?.map((line) => line.text),
     ["new"],
   );
   assertEquals(
-    contexts(createsWithNewline, "value\n")?.newLines?.map((line) => line.text),
+    contexts(createsWithNewline, "value\n")?.newLines?.()?.map((line) =>
+      line.text
+    ),
     ["value", ""],
   );
   assertEquals(
-    contexts(deletesToEmpty, "")?.newLines?.map((line) => line.text),
+    contexts(deletesToEmpty, "")?.newLines?.()?.map((line) => line.text),
     [""],
   );
   assertEquals(
-    contexts(crlfChange, "new\r\n")?.newLines?.map((line) => line.text),
+    contexts(crlfChange, "new\r\n")?.newLines?.()?.map((line) => line.text),
     ["new", ""],
   );
   assertEquals(

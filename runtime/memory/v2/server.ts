@@ -268,6 +268,7 @@ import {
 } from "./server-sync.ts";
 import {
   authorizationError,
+  carriesOnlySessionOpenProofs,
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
@@ -1399,7 +1400,8 @@ type SessionHandle = {
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
  * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
  * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents, and `derived` heads, which the engine wrote from
+ * full post-apply documents unless the origin's `base` shows the writer
+ * reaches them by replay, and `derived` heads, which the engine wrote from
  * the commit rather than the writer supplying them, always ride it. */
 type DirtyOp = "set" | "patch" | "delete" | "derived";
 
@@ -1407,6 +1409,19 @@ type DirtyOrigin = {
   sessionId: string;
   seq: number;
   op: DirtyOp;
+
+  /**
+   * For a `patch` head, what the writing session's replica replays its own
+   * patches over to reach the head, when that is known. A number is the seq of
+   * the revision that precedes the unbroken run of the session's own patches
+   * ending at `seq`: a session that holds that revision reaches the head by
+   * replaying the patches it sent, so the head is left out of its frame. The
+   * value `own-write` says the run follows the session's own `set` or
+   * `delete` in the same dirty batch, whose outcome the session holds without
+   * a frame. Absent, nothing shows the session can reach the head, and the
+   * head rides the frame.
+   */
+  base?: number | "own-write";
 };
 
 /**
@@ -2914,7 +2929,8 @@ class Connection {
           this.#routedOwns !== undefined &&
           (!this.#routedOwns(parsed.space) || parsed.principal === undefined ||
             parsed.invocation !== undefined ||
-            parsed.authorization !== undefined ||
+            (parsed.authorization !== undefined &&
+              !carriesOnlySessionOpenProofs(parsed)) ||
             parsed.session.actingAs !== undefined)
         ) {
           this.#send({
@@ -8647,15 +8663,66 @@ export class Server {
           // decides the flush-time echo shape.
           const committedWrites: Array<{ id: string; scopeKey: ScopeKey }> = [];
           const dirtyOps = new Map<string, DirtyOp>();
+          const revisionCounts = new Map<string, number>();
+          for (const revision of commit.revisions) {
+            const dirtyKey = toDirtyKey(
+              revision.id,
+              revision.scopeKey as ScopeKey,
+            );
+            revisionCounts.set(
+              dirtyKey,
+              (revisionCounts.get(dirtyKey) ?? 0) + 1,
+            );
+          }
+          // For each document whose head this commit produced by applying
+          // one `patch` of the session's exactly as the session sent it, the
+          // seq of the revision the patch was applied over. The writer's
+          // replica promotes its pending layer by replaying those patches
+          // over what it holds, with the function the engine applied them
+          // with, so a writer holding that revision holds the head. A
+          // revision whose patches are not the array the operation carried
+          // is one the engine rewrote first, with an event's stamps for one,
+          // and a document the commit wrote more than once is promoted by a
+          // path that replays only part of it; neither gets an entry, and
+          // their heads ride the frame. So does every head of a commit that
+          // carries a field edit: the writer's layer shows the edited field
+          // as the text its transaction computed, and the engine stores the
+          // text the edit integrates to, or leaves the field as it was for an
+          // edit it has already integrated.
+          const replayable = getOwnWriteEchoConfig() &&
+            applyOperations.length === 0;
+          const precedingSeqs = new Map<string, number>();
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
+            if (
+              replayable && revision.op === "patch" &&
+              revision.derived !== true && revision.patches !== undefined
+            ) {
+              const dirtyKey = toDirtyKey(revision.id, scopeKey);
+              const sent = message.commit.operations[revision.opIndex];
+              if (
+                revisionCounts.get(dirtyKey) === 1 && sent?.op === "patch" &&
+                sent.patches === revision.patches
+              ) {
+                const preceding = Engine.precedingRevisionSeq(engine, {
+                  branch: commit.branch,
+                  id: revision.id,
+                  scopeKey,
+                  seq: commit.seq,
+                });
+                if (preceding !== undefined) {
+                  precedingSeqs.set(dirtyKey, preceding);
+                }
+              }
+            }
             // A revision the engine derived, a field's anchors document
             // rewritten for an edit, is no write of the committing session's,
-            // which holds nothing of it to promote. With own-write echo on, a
-            // `patch` head reaches its writer anyway; with it off, a `patch`
-            // head is withheld from its writer, so only the `derived` kind
-            // gets the rewrite to the session whose edit moved the anchors.
+            // which holds nothing of it to promote. A `patch` head is
+            // withheld from a writer that reaches it by replay, and from
+            // every writer with own-write echo off, so only the `derived`
+            // kind gets the rewrite to the session whose edit moved the
+            // anchors.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
               revision.derived === true ? "derived" : revision.op,
@@ -8666,6 +8733,7 @@ export class Server {
               sessionId: message.sessionId,
               seq: commit.seq,
               ops: dirtyOps,
+              precedingSeqs,
             });
           } else {
             // Every operation elided: nothing was written, so no document
@@ -8721,11 +8789,12 @@ export class Server {
           // Dirty-origin tracking decides the echo shape for the session's
           // own accepted writes (CT-1965): set- and delete-produced heads are
           // elided from the frame — the writer provably holds their outcome,
-          // and the verdict plus marker promote it — while patch-produced
-          // heads ride the frame as full post-apply documents, since merged
-          // state is truth the writer cannot extrapolate. REJECTED commits'
-          // docs are staged origin-less (stageConflictRefreshDirtyIds), so
-          // repair frames DO cover them.
+          // and the verdict plus marker promote it — while a patch-produced
+          // head rides the frame as the full post-apply document, since
+          // merged state is truth the writer cannot extrapolate, unless the
+          // writer holds the revision its patches were applied over.
+          // REJECTED commits' docs are staged origin-less
+          // (stageConflictRefreshDirtyIds), so repair frames DO cover them.
           session.pendingCaughtUpLocalSeq = Math.max(
             session.pendingCaughtUpLocalSeq,
             message.commit.localSeq,
@@ -12020,14 +12089,24 @@ export class Server {
                     // have moved it since, so `entry.doc` IS that commit's
                     // post-apply document. A `set`/`delete` head is then elided —
                     // the client supplied the bytes (or the absence) and the
-                    // verdict + marker promote them — while a `patch` head is
-                    // delivered in full: its post-apply state can contain merged
-                    // foreign content the writer's own ops cannot reproduce.
+                    // verdict + marker promote them. A `patch` head can contain
+                    // merged foreign content the writer's own ops cannot
+                    // reproduce, so it is elided only where the origin names
+                    // the base its run of patches started from and the session
+                    // holds that base: the revision this session was last sent
+                    // or last had elided, or its own `set` or `delete` in this
+                    // batch. Every revision from that base to the head is then
+                    // a patch the session sent, and replaying them over the
+                    // base yields `entry.doc`. Any other `patch` head is
+                    // delivered in full.
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&
                       origin.op !== "derived" &&
-                      (origin.op !== "patch" || !getOwnWriteEchoConfig());
+                      (origin.op !== "patch" || !getOwnWriteEchoConfig() ||
+                        origin.base === "own-write" ||
+                        (origin.base !== undefined &&
+                          previous?.seq === origin.base));
                     if (!held) {
                       upserts.push(entry);
                     }
@@ -12488,6 +12567,13 @@ export class Server {
       sessionId: string;
       seq: number;
       ops: ReadonlyMap<string, DirtyOp>;
+
+      /**
+       * For each dirty key whose head the commit produced by applying one
+       * `patch` exactly as the session sent it, the seq of the revision
+       * that patch was applied over.
+       */
+      precedingSeqs?: ReadonlyMap<string, number>;
     },
   ): void {
     if (dirtyIds !== undefined) {
@@ -12519,10 +12605,32 @@ export class Server {
           // every session, the writer included.
           origins?.delete(id);
         } else {
+          const op = origin.ops.get(id) ?? "patch";
+          const preceding = origin.precedingSeqs?.get(id);
+          // A patch applied over the head an origin of this session already
+          // names continues that origin's run: the two commits are adjacent
+          // revisions of the document, both the session's own. The run then
+          // keeps the base it started from, or starts at the session's own
+          // `set` or `delete`. A patch applied over any other revision
+          // starts a run at that revision.
+          const earlier = origins?.get(id);
+          const continues = earlier !== undefined &&
+            earlier.sessionId === origin.sessionId &&
+            earlier.seq === preceding;
+          const base = op !== "patch" || preceding === undefined
+            ? undefined
+            : !continues
+            ? preceding
+            : earlier.op === "patch"
+            ? earlier.base
+            : earlier.op === "derived"
+            ? undefined
+            : "own-write";
           origins?.set(id, {
             sessionId: origin.sessionId,
             seq: origin.seq,
-            op: origin.ops.get(id) ?? "patch",
+            op,
+            ...(base === undefined ? {} : { base }),
           });
         }
       }

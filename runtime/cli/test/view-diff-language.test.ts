@@ -16,6 +16,7 @@ import {
   buildDiffDocument,
   diffLanguages,
   type DiffWorkspace,
+  WorkspaceCache,
 } from "../lib/view/diffdoc.ts";
 import { createDiffHighlighter, diffSource } from "../lib/view/diffedit.ts";
 import {
@@ -318,7 +319,7 @@ describe("diff file languages", () => {
         { oldLanguage: pythonLanguage, newLanguage: pythonLanguage },
         { oldLanguage: plainTextLanguage, newLanguage: plainTextLanguage },
       ]);
-      const { doc } = buildDiffDocument(diff, model, ws, new Map());
+      const { doc } = buildDiffDocument(diff, model, ws, new WorkspaceCache());
       const classesOn = (text: string) =>
         doc.lines.find((line) => line.text === text)?.spans.map((span) =>
           span.cls

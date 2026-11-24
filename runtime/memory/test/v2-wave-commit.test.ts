@@ -719,6 +719,36 @@ Deno.test("wave commit: re-verification throws NAMING docs whose head passed the
   }
 });
 
+Deno.test("wave commit: a doc the batch writes twice is named once when its head passed the basis", async () => {
+  const { engine } = await createEngine();
+  setServerExecutionConfig(true);
+  try {
+    const holder = withLiveLease(engine);
+    applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: setCommit(1, [{ id: "of:x", n: 99 }]),
+    });
+    const error = assertThrows(
+      () =>
+        applyWaveCommit(engine, {
+          sessionId: holder,
+          space: SPACE,
+          commit: setCommit(1, [{ id: "of:x", n: 1 }, { id: "of:x", n: 2 }]),
+          commitClass: "derived",
+          holder,
+          waveBasis: { basisSeq: 0, rebasedHeads: [] },
+        }),
+      WaveCommitConflictError,
+    );
+    assertEquals(error.conflictedDocs, ["of:x space"]);
+    assertEquals(selectDocHead(engine, { id: "of:x", scopeKey: "space" }), 1);
+  } finally {
+    resetServerExecutionConfig();
+    close(engine);
+  }
+});
+
 Deno.test("wave commit: a rebased doc re-verifies against the exact head its merge decision observed", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);

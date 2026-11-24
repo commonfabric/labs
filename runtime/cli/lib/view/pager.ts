@@ -18,6 +18,7 @@ import {
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { CSI, term } from "./ansi.ts";
 import {
+  IN_PLACE_PARSE_BUDGET,
   type ParseJob,
   type ParseOutcome,
   workerParser,
@@ -476,9 +477,11 @@ export async function runPager(
   const quitting = Promise.withResolvers<null>();
 
   // The complete files whose parses the view left are shown as plain text,
-  // and parse in the background while keys keep arriving. Each batch of
-  // outcomes has the document parsed again and drawn, while the status bar
-  // shows how much of their source has been parsed. The parses stop when the
+  // and parse in the background while keys keep arriving, while the status
+  // bar shows how much of their source has been parsed. The document is
+  // parsed again and drawn each time the source parsed in the background has
+  // at least doubled, and grown by at least the in-place budget, since the
+  // document was last parsed again, and once more when every parse has ended. The parses stop when the
   // viewer closes, or when opening another file ends the progress.
   const parses = options.parses ?? [];
   let stopParses: (() => void) | undefined;
@@ -491,6 +494,7 @@ export async function runPager(
   const startParses = () => {
     const total = parses.reduce((sum, job) => sum + job.text.length, 0);
     let parsed = 0;
+    let shown = 0;
     let unfinished = parses.length;
     const failures: string[] = [];
     const deliver = (outcomes: readonly ParseOutcome[]) => {
@@ -511,10 +515,14 @@ export async function runPager(
             failures.push(outcome.failure);
           }
         }
-        session.reparse({ force: true });
         if (unfinished > 0) {
           session.showHighlightProgress(parsed / Math.max(1, total));
+          // The spinner's next frame draws the gauge.
+          if (parsed - shown < Math.max(IN_PLACE_PARSE_BUDGET, shown)) return;
+          shown = parsed;
+          session.reparse({ force: true });
         } else {
+          session.reparse({ force: true });
           endParses(
             failures.length === 0 ? undefined : "Some files could not be " +
               `highlighted, and are shown as plain text: ${failures[0]}`,

@@ -126,7 +126,8 @@ over its read prefix, skips write-destination reads too.
 
 **The write-destination marking sites:** `normalizeAndDiff` and the preserved
 output attempt read in `data-updating.ts`; `CellImpl.isStream` as called from
-`set()` and the append snapshot of `push` and `pushAll` in `cell.ts`;
+`set()`, the append snapshot of `push` and `pushAll`, and the add-unique
+snapshot of `addUnique` in `cell.ts`;
 `storedQueryState` and `storedRequestHash` in `builtins/sqlite-builtins.ts`;
 `storedCellsRead` in `builtins/fetch.ts`; the setup's comparison of the
 projection it builds with the stored result (`#nextResultProjection` in

@@ -375,6 +375,7 @@ export {
   schema,
   type SchemaWithoutCell,
   type StreamValue,
+  SUGGESTIONS,
   TESTS,
   TILE_UI,
   type toJSON,

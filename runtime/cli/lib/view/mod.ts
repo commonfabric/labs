@@ -24,7 +24,7 @@ import {
   diffLanguages,
   type DiffWorkspace,
   realWorkspace,
-  type WorkspaceCache,
+  WorkspaceCache,
 } from "./diffdoc.ts";
 import {
   byteInputFor,
@@ -388,8 +388,9 @@ function builtView(selected: ViewSelection, pending?: PendingParses): {
   if (selected.model !== null) {
     const { model, ws } = selected;
     // One workspace cache shared by the initial build and every deferred
-    // re-parse, so the named files are read and parsed once per session.
-    const cache: WorkspaceCache = new Map();
+    // re-parse, so the named files are read once per session and a re-parse
+    // builds again only the file sections an edit changed.
+    const cache = new WorkspaceCache();
     const { doc, maps, edit } = buildDiffDocument(
       text,
       model,

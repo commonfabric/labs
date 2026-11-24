@@ -230,6 +230,12 @@ const NEW_DB_PRAGMAS = `
   PRAGMA page_size = 32768;
 `;
 
+/** The default branch every store holds, which the schema seeds. */
+const SEED_DEFAULT_BRANCH = `
+INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
+VALUES ('', 0, 0, 'active');
+`;
+
 // The schema, like the migrations below, opens with an immediate transaction:
 // it takes the write lock up front and waits on the busy timeout for it. A
 // deferred transaction reads the schema first and writes after, and fails at
@@ -286,8 +292,8 @@ CREATE TABLE IF NOT EXISTS "commit" (
   -- the action whose run made each write) and
   -- the eventIds the commit consequences (protocol.md §7: consequenceOf,
   -- derived only — bounded by the wave's input, never graph-scaled). JSON
-  -- arrays; NULL on every non-derived class. Attribution is recorded, not
-  -- read (protocol.md §1); the scopeKey half was CONSUMED at admission to
+  -- arrays; NULL on every non-derived class. Attribution decides nothing
+  -- (protocol.md §1); the scopeKey half was CONSUMED at admission to
   -- key scoped rows.
   annotations        JSON,
   consequence_of     JSON,
@@ -429,9 +435,7 @@ CREATE TABLE IF NOT EXISTS branch (
   deleted_at     TEXT,
   FOREIGN KEY (parent_branch) REFERENCES branch(name)
 );
-INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
-VALUES ('', 0, 0, 'active');
-
+${SEED_DEFAULT_BRANCH}
 -- Unused: the single-deriver lease lives in the memory server's memory
 -- (docs/specs/server-side-execution/serving-loop.md §2). Nothing reads or
 -- writes this table. TODO(seefeld): Drop it once no deployed process writes
@@ -502,9 +506,9 @@ CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
 -- One row per recorded slice: the raw id of the piece's result document, the
 -- slice's mark (0 clean, 1 a piece that writes one of its inputs is marked,
 -- 2 one of its own rows is behind or it was not vouched for), whether it has
--- been clean since its record was stored, the epoch of the build that
--- recorded it, and whether its latest record was stored not vouched for. A
--- recorded piece always has a 'space' slice.
+-- been clean since its record was stored, the epoch it was recorded under,
+-- and whether its latest record was stored not vouched for. A recorded piece
+-- always has a 'space' slice.
 CREATE TABLE IF NOT EXISTS currency_slice (
   branch    TEXT    NOT NULL,
   slice     TEXT    NOT NULL,
@@ -940,6 +944,20 @@ WHERE branch = :branch
   AND scope_key = :scope_key
   AND seq <= :seq
 ORDER BY seq DESC, op_index DESC
+LIMIT 1
+`;
+
+// The seq of the newest revision of an instance below a seq, on the branch's
+// own rows. It selects no revision data, so a `set` row costs no more than a
+// `patch` row.
+const SELECT_PRECEDING_REVISION_SEQ = `
+SELECT seq
+FROM revision
+WHERE branch = :branch
+  AND id = :id
+  AND scope_key = :scope_key
+  AND seq < :seq
+ORDER BY seq DESC
 LIMIT 1
 `;
 
@@ -2108,6 +2126,7 @@ const STATEMENTS = {
   insertSnapshot: INSERT_SNAPSHOT,
   selectActiveOperationFields: SELECT_ACTIVE_OPERATION_FIELDS,
   selectAtSeqLocal: SELECT_AT_SEQ_LOCAL,
+  selectPrecedingRevisionSeq: SELECT_PRECEDING_REVISION_SEQ,
   selectAuthoredSeqThrough: SELECT_AUTHORED_SEQ_THROUGH,
   selectBlob: SELECT_BLOB,
   selectBranch: SELECT_BRANCH,
@@ -2632,6 +2651,48 @@ const dropCurrencyRecordsBeforeDecides = (database: Database): void => {
   }).immediate();
 };
 
+/**
+ * Brings a store's tables to the current schema: drops the layouts the schema
+ * replaces, creates whatever it lacks, and migrates what remains.
+ */
+const prepareSchema = (database: Database): void => {
+  dropUnslicedCurrencyTables(database);
+  dropCurrencyRecordsBeforeDecides(database);
+  database.exec(INIT);
+  migrateScopedEntityTables(database);
+  migrateHeadCurrentOp(database);
+  migrateCommitClass(database);
+  migrateCommitHolder(database);
+  migrateCommitWaveCarriage(database);
+  migrateCommitDerivedThrough(database);
+  migrateCommitDelegation(database);
+  migrateExecutionOutboxEventCarriage(database);
+  migrateExecutionOutboxPayloadEncoding(database);
+  migrateSchedulerObservationTablesToBasis(database);
+  migrateIntegratedOperationIds(database);
+};
+
+/**
+ * The in-memory database holding the current schema and no rows, which
+ * `open()` copies into every in-memory store with SQLite's backup API before
+ * seeding the store's default branch. It depends on nothing but this module's
+ * schema and is never written once prepared, so each isolate keeps one for as
+ * long as it runs.
+ */
+let memorySchema: Database | undefined;
+
+/** Returns `memorySchema`, preparing it on first use. */
+const memorySchemaTemplate = (): Database => {
+  if (memorySchema === undefined) {
+    const database = new Database(":memory:");
+    database.exec(NEW_DB_PRAGMAS);
+    prepareSchema(database);
+    database.exec("DELETE FROM branch");
+    memorySchema = database;
+  }
+  return memorySchema;
+};
+
 export const open = async (
   {
     url,
@@ -2659,23 +2720,18 @@ export const open = async (
     documentCacheBudgetBytes,
     documentCacheMaxEntries,
   });
-  const database = await new Database(toDatabaseAddress(url), { create: true });
+  const inFile = url.protocol === "file:";
+  const database = await new Database(inFile ? url : ":memory:", {
+    create: true,
+  });
   database.exec(NEW_DB_PRAGMAS);
   database.exec(PRAGMAS);
-  dropUnslicedCurrencyTables(database);
-  dropCurrencyRecordsBeforeDecides(database);
-  database.exec(INIT);
-  migrateScopedEntityTables(database);
-  migrateHeadCurrentOp(database);
-  migrateCommitClass(database);
-  migrateCommitHolder(database);
-  migrateCommitWaveCarriage(database);
-  migrateCommitDerivedThrough(database);
-  migrateCommitDelegation(database);
-  migrateExecutionOutboxEventCarriage(database);
-  migrateExecutionOutboxPayloadEncoding(database);
-  migrateSchedulerObservationTablesToBasis(database);
-  migrateIntegratedOperationIds(database);
+  if (inFile) {
+    prepareSchema(database);
+  } else {
+    memorySchemaTemplate().backup(database);
+    database.exec(SEED_DEFAULT_BRANCH);
+  }
   const prepared = preparedOnFirstUse(database);
   return {
     url,
@@ -3464,6 +3520,29 @@ export const headSeq = (
   engine: Engine,
   branch: BranchName = DEFAULT_BRANCH,
 ): number => getBranch(engine, branch)?.headSeq ?? 0;
+
+/**
+ * Returns the seq of the newest revision of the instance `scopeKey` of
+ * document `id` that `branch` itself holds below `seq`, or `undefined` when
+ * it holds none there. A revision the branch reads through its parent is not
+ * one it holds, and neither is one that compaction removed, so `undefined`
+ * does not say the instance had no earlier state.
+ */
+export const precedingRevisionSeq = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+  },
+): number | undefined =>
+  (engine.statement("selectPrecedingRevisionSeq").get({
+    branch: revision.branch,
+    id: revision.id,
+    scope_key: revision.scopeKey,
+    seq: revision.seq,
+  }) as { seq: number } | undefined)?.seq;
 
 export const serverSeq = (engine: Engine): number => {
   return (engine.statement("selectServerSeq").get() as { seq: number }).seq;
@@ -11178,8 +11257,4 @@ const commitMetadataRefsRequired = (database: Database): boolean => {
   const byName = new Map(rows.map((row) => [row.name, row.notnull] as const));
   return byName.get("invocation_ref") === 1 ||
     byName.get("authorization_ref") === 1;
-};
-
-const toDatabaseAddress = (url: URL): URL | string => {
-  return url.protocol === "file:" ? url : ":memory:";
 };

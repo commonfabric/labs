@@ -1,18 +1,22 @@
 import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
+import { consume } from "@lit/context";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import type { DID } from "@commonfabric/identity";
+import type { RuntimeClient } from "@commonfabric/runtime-client";
 import { BaseElement } from "../../core/base-element.ts";
+import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 import "../cf-button/index.ts";
 
 /** The width and height, in pixels, of the image an avatar is stored as. */
 export const AVATAR_PIXELS = 128;
 
 /**
- * Returns the bytes of a square avatar made from `image`: its centered square,
- * scaled to `AVATAR_PIXELS` on each side, encoded as WebP, or as PNG where the
- * browser cannot encode WebP.
+ * Returns a square avatar made from `image`: its centered square, scaled to
+ * `AVATAR_PIXELS` on each side, encoded as WebP, or as PNG where the browser
+ * cannot encode WebP, with the media type it is encoded as.
  */
-export async function avatarBytesFromImage(image: Blob): Promise<Uint8Array> {
+export async function avatarFromImage(image: Blob): Promise<Blob> {
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(image);
@@ -35,17 +39,16 @@ export async function avatarBytesFromImage(image: Blob): Promise<Uint8Array> {
       AVATAR_PIXELS,
       AVATAR_PIXELS,
     );
-    const blob = await canvas.convertToBlob({
+    return await canvas.convertToBlob({
       type: "image/webp",
       quality: 0.85,
     });
-    return new Uint8Array(await blob.arrayBuffer());
   } finally {
     bitmap.close();
   }
 }
 
-/** Thrown by {@link avatarBytesFromImage} for a file that is not an image. */
+/** Thrown by {@link avatarFromImage} for a file that is not an image. */
 export class NotAnImageError extends Error {
   constructor() {
     super("The file is not an image");
@@ -53,19 +56,24 @@ export class NotAnImageError extends Error {
 }
 
 /**
- * CFAvatarInput - Picks an image file and hands it on as avatar bytes.
+ * CFAvatarInput - Picks an image file and hands it on as an avatar, stored as
+ * a blob in the blob store of the space it is shown in, as `cf-file-input`
+ * stores a file.
  *
  * The picked image is cropped to its centered square and scaled down to
- * `AVATAR_PIXELS` on each side, so what a profile stores is small whatever
+ * `AVATAR_PIXELS` on each side, so what a profile shows is small whatever
  * the user picks.
  *
  * @element cf-avatar-input
  *
  * @attr {boolean} disabled - Disables the button
  *
- * @fires cf-change - The picked image. detail: { bytes: FabricBytes }
- * @fires cf-error - The picked file is not an image, or the browser could not
- *   draw it into a picture. detail: { message: string }
+ * @fires cf-change - The picked image: its bytes, and the blob they are stored
+ *   in, by its space's DID and its id there. detail: { bytes: FabricBytes,
+ *   blob: { space: string, id: string } }
+ * @fires cf-error - The picked file is not an image, the browser could not
+ *   draw it into a picture, or it could not be stored. detail:
+ *   { message: string }
  */
 export class CFAvatarInput extends BaseElement {
   static override styles = [
@@ -84,6 +92,16 @@ export class CFAvatarInput extends BaseElement {
   @property({ type: Boolean, reflect: true })
   accessor disabled = false;
 
+  /** The runtime that stores the picked image as a blob. */
+  @consume({ context: runtimeContext, subscribe: true })
+  @property({ attribute: false })
+  accessor runtime: RuntimeClient | undefined = undefined;
+
+  /** The space whose blob store the picked image is stored in. */
+  @consume({ context: spaceContext, subscribe: true })
+  @property({ attribute: false })
+  accessor space: DID | undefined = undefined;
+
   @state()
   private accessor _busy = false;
 
@@ -98,15 +116,32 @@ export class CFAvatarInput extends BaseElement {
     // Cleared so that picking the same file again still fires a change.
     input.value = "";
     this._busy = true;
+    // What failed, as the error that follows will say it.
+    let failure = `${file.name} could not be made into a picture`;
     try {
-      const bytes = new FabricBytes(await avatarBytesFromImage(file), true);
-      this.emit("cf-change", { bytes });
-    } catch (error) {
-      this.emit("cf-error", {
-        message: error instanceof NotAnImageError
-          ? `${file.name} is not an image`
-          : `${file.name} could not be made into a picture`,
+      const avatar = await avatarFromImage(file);
+      const body = new Uint8Array(await avatar.arrayBuffer());
+      failure = `${file.name} could not be stored`;
+      const { runtime, space } = this;
+      if (runtime === undefined || space === undefined) {
+        throw new Error("There is no runtime or space to store it in");
+      }
+      const { id } = await runtime.uploadBlob({
+        space,
+        contentType: avatar.type,
+        body,
       });
+      this.emit("cf-change", {
+        bytes: new FabricBytes(body, true),
+        blob: { space, id },
+      });
+    } catch (error) {
+      if (error instanceof NotAnImageError) {
+        this.emit("cf-error", { message: `${file.name} is not an image` });
+        return;
+      }
+      console.error(`cf-avatar-input: ${failure}`, error);
+      this.emit("cf-error", { message: failure });
     } finally {
       this._busy = false;
     }
