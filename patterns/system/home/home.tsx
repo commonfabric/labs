@@ -1,3 +1,9 @@
+/**
+ * The personal home space, a tabbed view of your spaces, favorites, profile,
+ * Self, agent runs, chats, and social spaces. The Spaces tab lists your spaces
+ * with links to open or remove them and a field to create a new one, plus a
+ * setting for the default app new spaces use.
+ */
 import {
   __cf_data,
   computed,

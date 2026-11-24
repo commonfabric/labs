@@ -1,3 +1,10 @@
+/**
+ * A wish tester: type a wish query such as `#note`, choose whether to search
+ * your home space, the current space, and any other space by DID, and see the
+ * matching piece rendered inline.
+ * Demonstrates `wish()` with a reactive `query` and a computed `scope` list of
+ * `"~"`, `"."`, and arbitrary DIDs.
+ */
 import {
   computed,
   DID,

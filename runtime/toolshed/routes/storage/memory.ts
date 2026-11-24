@@ -30,10 +30,12 @@ export type MemoryEnvironment = Pick<
   | "MEMORY_MINIMUM_CLIENT_GENERATION"
   | "API_URL"
   | "MEMORY_SYNC_CID_REFERENCES"
+  | "MEMORY_STORE_READS_DIGEST"
   | "MEMORY_ACL_DELEGATIONS"
   | "MEMORY_DOCUMENT_CACHE_BUDGET_BYTES"
   | "MEMORY_DOCUMENT_CACHE_MAX_ENTRIES"
   | "MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES"
+  | "MEMORY_UNTRUSTED_MESSAGE_SLOTS"
 >;
 
 /** A memory server and the handle that closes it with its private listener. */
@@ -220,8 +222,12 @@ export async function openMemory(
       : {}),
     documentCacheBudgetBytes: environment.MEMORY_DOCUMENT_CACHE_BUDGET_BYTES,
     documentCacheMaxEntries: environment.MEMORY_DOCUMENT_CACHE_MAX_ENTRIES,
+    // On unless the deployment turns it off, as it must before rolling back to
+    // a version that predates digest-form rows.
+    storeReadsDigest: environment.MEMORY_STORE_READS_DIGEST,
     documentCacheTotalBudgetBytes:
       environment.MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
+    untrustedMessageSlots: environment.MEMORY_UNTRUSTED_MESSAGE_SLOTS,
   });
   const routedListener = await routerPolicy?.start(server).catch(
     async (error) => {

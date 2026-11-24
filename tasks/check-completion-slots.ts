@@ -146,6 +146,16 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "a `system:` ref or fabric URL the caller names for the piece to follow",
   ],
   ["piece new:request-key", "an opaque caller retry key"],
+  ["piece new:version-description", "free prose the caller writes"],
+  ["piece setsrc:version-description", "free prose the caller writes"],
+  [
+    "piece new:built-from",
+    "the index pattern the caller built its source from, which it names",
+  ],
+  [
+    "piece setsrc:built-from",
+    "the index pattern the caller built its source from, which it names",
+  ],
   [
     "piece new:from-index",
     "a published pattern's id, which a pattern-index search answers",

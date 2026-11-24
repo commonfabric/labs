@@ -216,8 +216,9 @@ export async function judgeCompatibility(
     const allFindings = checkPattern(key, current, baselines);
     const checkMs = performance.now() - checkStarted;
     const ms = Math.round(checkMs);
-    // A slow check means a contract CHANGED and its proof is expensive — the
-    // schema machinery blows up combinatorially on some shapes.
+    // A slow check means validating an unrecorded contract, or proving the
+    // contract against one of the baselines, is expensive — the schema
+    // machinery blows up combinatorially on some shapes.
     if (input.slowCheckMs !== undefined && ms > input.slowCheckMs) {
       input.say(`  check ${ms}ms  ${key}`);
     }

@@ -1,3 +1,9 @@
+/**
+ * Asks a language model for a concise summary of a topic, optionally using
+ * extra context passed in, and shows the text. It uses `generateText` and
+ * makes no request until a topic is given.
+ */
+
 import {
   type AsyncResult,
   computed,

@@ -59,7 +59,7 @@ The attribute names below are the components' HTML attributes. In pattern JSX a
 prop sets the property, so write the camel-case property name: `default-size` is
 `defaultSize`, `button-text` is `buttonText`. Only `data-*`, `aria-*` and event
 props (`oncf-change`) keep a hyphen; any other hyphenated prop sets nothing, and
-the compiler warns of it.
+the compiler refuses it.
 
 ### 1. cf-button
 

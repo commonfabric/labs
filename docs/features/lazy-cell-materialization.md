@@ -298,13 +298,19 @@ is not enough, because a reader can catch it — so the throw also records the
 refusal on the transaction, where it survives any `try`/`catch` in the body and
 any `await` in an async one.
 
-The runner checks after the body returns and treats a recorded refusal as an
-argument that did not resolve: an undefined result through the ordinary result
-path, **not** an action error and not logged as one. A refusal the body throws
-takes the same path whether it escapes synchronously or as the rejection of an
-async body. A run that could not proceed on the data available is a non-event.
-The reads it took stay registered, including the one that failed, so it runs
-again when the data changes and may then find it valid.
+The runner treats a recorded refusal like an argument that did not resolve,
+whether the body catches it, throws it, or returns a rejected promise. It is
+not an action error. The reads stay registered, including the one that
+refused, so the computation can recover.
+
+If the missing document is still loading, the run makes no output write.
+Another client keeps seeing the last committed result, and a result that has
+never been written remains absent. Once the load settles, even if no data
+arrived, the computation runs again. A confirmed absence or invalid value
+that fails the declared schema replaces a stale output with a native
+`schemaMismatch` error. A failed load produces a native `sync` error with its
+cause. See [the refusal rule](../specs/server-side-execution/speculation.md)
+and [read readiness](../specs/data-unavailability.md#syncing-versus-schema-mismatch).
 
 The view withdraws the record for a refusal it catches itself — the optional
 property, a property default, or an array-item substitute. It clears only

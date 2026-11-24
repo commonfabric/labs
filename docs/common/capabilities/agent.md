@@ -126,14 +126,18 @@ channel independently of the selected task tools.
   reference in it keeps its own label.
 - `error` carries the run's error code when it ended any other way —
   `INVALID_INPUT`, `INVALID_RESULT`, `LIMIT_REACHED`, `PROVIDER_FAILURE`, `RUNNER_LOST`,
-  `CANCELLED`, `REFUSED` — or the refusal text when the request never left
-  the graph.
+  `CANCELLED`, `REFUSED`, `CFC_REFUSED` — or the refusal text when the request
+  never left the graph.
 - `INVALID_RESULT` means the model loop completed without a structured result
   satisfying `resultSchema`: the result was missing, malformed JSON, or
   schema-invalid. The model returns its result through `submit_result`, which
   must be the only tool call in its model turn; a turn that pairs it with
   another call is refused and the run continues. Model and tool failures use
   `PROVIDER_FAILURE`.
+- `CFC_REFUSED` means the session's read ceiling withheld a value the run
+  read, and that ended the run: the information-flow rules stopped it, rather
+  than a model or tool. The run's state is `failed`; `REFUSED`, with the state
+  `refused`, is a result the boundary would not release.
 - `run` is a link to the run's `AgentRun` record: its `state`, `stateSince`,
   and, once finished, `outcome`, `usage`, `modelTurns`, and `toolCalls`, for
   a pattern that wants to show progress or cost. Optional `modelResponses`

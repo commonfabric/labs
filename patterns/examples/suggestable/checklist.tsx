@@ -1,3 +1,10 @@
+/**
+ * Asks a language model for a checklist of actionable steps for a topic, shown
+ * as checkboxes bound to each item's done state with `$checked`. It uses
+ * `generateObject` with a schema and makes no request until a topic is
+ * given.
+ */
+
 import {
   type AsyncResult,
   computed,

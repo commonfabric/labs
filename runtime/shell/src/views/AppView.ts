@@ -1341,6 +1341,7 @@ export class XAppView extends BaseView {
             .pieceReference="${this.#getPieceReference()}"
             .isViewingDefaultPattern="${isViewingDefaultPattern}"
             .showDebuggerView="${config.showDebuggerView ?? false}"
+            .showHistoryView="${config.showHistoryView ?? false}"
           ></x-header-view>
         `}
         <div class="content-area">

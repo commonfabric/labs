@@ -1,3 +1,10 @@
+/**
+ * A shared board of topics, each a unit of team attention with a title, a
+ * living body, and a comment thread. The board shows a card for each topic with
+ * its number, a snippet of its body, its author, comment count, and last
+ * activity, shows the profile you are acting as, and has a field to start a new
+ * topic.
+ */
 import {
   action,
   computed,

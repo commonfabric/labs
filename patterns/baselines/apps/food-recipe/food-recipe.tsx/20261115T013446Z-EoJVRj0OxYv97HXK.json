@@ -1,0 +1,1046 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Difficulty": {
+        "enum": [
+          "easy",
+          "medium",
+          "hard"
+        ]
+      },
+      "Ingredient": {
+        "properties": {
+          "amount": {
+            "description": "Free text so \"1 1/2\", \"2-3\" and \"a handful\" all fit.",
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "amount",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "OvenNeed": {
+        "properties": {
+          "duration": {
+            "description": "Minutes in the oven.",
+            "type": "number"
+          },
+          "heightSlots": {
+            "description": "Rack height the dish takes: 1 a sheet pan, 2 a casserole, 5 a turkey.",
+            "type": "number"
+          },
+          "temperature": {
+            "description": "°F.",
+            "type": "number"
+          },
+          "width": {
+            "enum": [
+              "full",
+              "half"
+            ]
+          }
+        },
+        "required": [
+          "temperature",
+          "duration",
+          "heightSlots",
+          "width"
+        ],
+        "type": "object"
+      },
+      "RecipeStep": {
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
+      },
+      "StepGroup": {
+        "properties": {
+          "duration": {
+            "description": "Minutes the group takes, active and passive.",
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "maxWaitMinutes": {
+            "description": "Minutes its result can wait before the next group without suffering.",
+            "type": "number"
+          },
+          "minutesBeforeServing": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nightsBeforeServing": {
+            "type": "number"
+          },
+          "oven": {
+            "$ref": "#/$defs/OvenNeed",
+            "description": "Absent when the group does not use the oven."
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/$defs/RecipeStep"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "steps"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "category": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "other",
+        "enum": [
+          "appetizer",
+          "bread",
+          "dessert",
+          "main",
+          "other",
+          "side",
+          "starch",
+          "vegetable"
+        ]
+      },
+      "cookTime": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 0,
+        "type": "number"
+      },
+      "cuisine": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "difficulty": {
+        "$ref": "#/$defs/Difficulty",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "medium"
+      },
+      "holdTime": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 0,
+        "description": "Minutes the finished dish can wait and stay good.",
+        "type": "number"
+      },
+      "ingredients": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Ingredient"
+        },
+        "type": "array"
+      },
+      "name": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "notes": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "Free text: a pasted recipe to extract from, or the cook's own notes.",
+        "type": "string"
+      },
+      "prepTime": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 0,
+        "description": "Minutes.",
+        "type": "number"
+      },
+      "restTime": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 0,
+        "description": "Minutes to rest after cooking, before serving.",
+        "type": "number"
+      },
+      "servings": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 4,
+        "type": "number"
+      },
+      "source": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "Where it came from: URL, book, person.",
+        "type": "string"
+      },
+      "stepGroups": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/StepGroup"
+        },
+        "type": "array"
+      },
+      "tags": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "yield": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "What the recipe makes: \"12 cookies\", \"1 loaf\".",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/food-recipe/food-recipe.tsx",
+  "resultSchema": {
+    "$defs": {
+      "DietaryCompatibility": {
+        "properties": {
+          "compatible": {
+            "description": "Dietary tags the dish meets: \"vegan\", \"gluten-free\", \"nut-free\", ...",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "incompatible": {
+            "description": "Dietary tags the dish fails.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "primaryIngredients": {
+            "description": "The handful of ingredients that define the dish, for \"no-X\" matching.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "Readable caveats: \"Contains dairy (butter)\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "compatible",
+          "incompatible",
+          "warnings",
+          "primaryIngredients"
+        ],
+        "type": "object"
+      },
+      "DietarySource": {
+        "enum": [
+          "analyzed",
+          "stale",
+          "declared",
+          "none"
+        ]
+      },
+      "Difficulty": {
+        "enum": [
+          "easy",
+          "medium",
+          "hard"
+        ]
+      },
+      "ExtractedStepGroup": {
+        "properties": {
+          "duration": {
+            "type": "number"
+          },
+          "maxWaitMinutes": {
+            "type": "number"
+          },
+          "minutesBeforeServing": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nightsBeforeServing": {
+            "type": "number"
+          },
+          "oven": {
+            "$ref": "#/$defs/OvenNeed"
+          },
+          "steps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "GroupNumberField": {
+        "enum": [
+          "nightsBeforeServing",
+          "minutesBeforeServing",
+          "duration",
+          "maxWaitMinutes"
+        ]
+      },
+      "Ingredient": {
+        "properties": {
+          "amount": {
+            "description": "Free text so \"1 1/2\", \"2-3\" and \"a handful\" all fit.",
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "amount",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "OvenField": {
+        "enum": [
+          "temperature",
+          "duration",
+          "heightSlots",
+          "width"
+        ]
+      },
+      "OvenNeed": {
+        "properties": {
+          "duration": {
+            "description": "Minutes in the oven.",
+            "type": "number"
+          },
+          "heightSlots": {
+            "description": "Rack height the dish takes: 1 a sheet pan, 2 a casserole, 5 a turkey.",
+            "type": "number"
+          },
+          "temperature": {
+            "description": "°F.",
+            "type": "number"
+          },
+          "width": {
+            "enum": [
+              "full",
+              "half"
+            ]
+          }
+        },
+        "required": [
+          "temperature",
+          "duration",
+          "heightSlots",
+          "width"
+        ],
+        "type": "object"
+      },
+      "OvenRequirements": {
+        "properties": {
+          "needsOven": {
+            "type": "boolean"
+          },
+          "tempChanges": {
+            "description": "More than one temperature is needed.",
+            "type": "boolean"
+          },
+          "temps": {
+            "description": "Every distinct temperature, ascending.",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "needsOven",
+          "temps",
+          "tempChanges"
+        ],
+        "type": "object"
+      },
+      "RecipeExtraction": {
+        "properties": {
+          "category": {
+            "enum": [
+              "appetizer",
+              "bread",
+              "dessert",
+              "main",
+              "other",
+              "side",
+              "starch",
+              "vegetable"
+            ]
+          },
+          "cookTime": {
+            "type": "number"
+          },
+          "cuisine": {
+            "type": "string"
+          },
+          "difficulty": {
+            "$ref": "#/$defs/Difficulty"
+          },
+          "holdTime": {
+            "type": "number"
+          },
+          "ingredients": {
+            "items": {
+              "$ref": "#/$defs/Ingredient"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prepTime": {
+            "type": "number"
+          },
+          "remainingNotes": {
+            "description": "The notes with everything extracted taken out.",
+            "type": "string"
+          },
+          "restTime": {
+            "type": "number"
+          },
+          "servings": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string"
+          },
+          "stepGroups": {
+            "items": {
+              "$ref": "#/$defs/ExtractedStepGroup"
+            },
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "yield": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RecipeStep": {
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
+      },
+      "StepGroup": {
+        "properties": {
+          "duration": {
+            "description": "Minutes the group takes, active and passive.",
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "maxWaitMinutes": {
+            "description": "Minutes its result can wait before the next group without suffering.",
+            "type": "number"
+          },
+          "minutesBeforeServing": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nightsBeforeServing": {
+            "type": "number"
+          },
+          "oven": {
+            "$ref": "#/$defs/OvenNeed",
+            "description": "Absent when the group does not use the oven."
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/$defs/RecipeStep"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "TimingSuggestion": {
+        "properties": {
+          "duration": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "maxWaitMinutes": {
+            "type": "number"
+          },
+          "minutesBeforeServing": {
+            "type": "number"
+          },
+          "nightsBeforeServing": {
+            "type": "number"
+          },
+          "oven": {
+            "$ref": "#/$defs/OvenNeed"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "TimingSuggestions": {
+        "properties": {
+          "stepGroups": {
+            "items": {
+              "$ref": "#/$defs/TimingSuggestion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stepGroups"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Food recipe with ingredients, timed step groups and dietary info. #recipe",
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addIngredient": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "addStep": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "addStepGroup": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "analyzeDiet": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Run the dietary analysis on the recipe as it stands."
+      },
+      "applyExtraction": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "applyTiming": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "cancelExtraction": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "cancelTiming": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "category": {
+        "enum": [
+          "appetizer",
+          "bread",
+          "dessert",
+          "main",
+          "other",
+          "side",
+          "starch",
+          "vegetable"
+        ]
+      },
+      "cook": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Open the cooking view."
+      },
+      "cookTime": {
+        "type": "number"
+      },
+      "cuisine": {
+        "type": "string"
+      },
+      "dietaryCompatibility": {
+        "$ref": "#/$defs/DietaryCompatibility"
+      },
+      "dietarySource": {
+        "$ref": "#/$defs/DietarySource",
+        "description": "Whether `dietaryCompatibility` is a current analysis, a stale one, or\nnothing yet (\"none\": empty lists mean unknown, not safe)."
+      },
+      "difficulty": {
+        "$ref": "#/$defs/Difficulty"
+      },
+      "extract": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Ask the model to extract fields from the notes and photos.",
+        "tier": "wrapper"
+      },
+      "extraction": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RecipeExtraction"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The extraction under review, or null."
+      },
+      "holdTime": {
+        "type": "number"
+      },
+      "ingredients": {
+        "items": {
+          "$ref": "#/$defs/Ingredient"
+        },
+        "type": "array"
+      },
+      "moveStep": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "delta": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "step": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "step",
+          "delta"
+        ],
+        "type": "object"
+      },
+      "moveStepGroup": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "delta": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "delta"
+        ],
+        "type": "object"
+      },
+      "name": {
+        "type": "string"
+      },
+      "notes": {
+        "type": "string"
+      },
+      "ovenRequirements": {
+        "$ref": "#/$defs/OvenRequirements"
+      },
+      "prepTime": {
+        "type": "number"
+      },
+      "removeIngredient": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "removeStep": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "step": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "step"
+        ],
+        "type": "object"
+      },
+      "removeStepGroup": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "restTime": {
+        "type": "number"
+      },
+      "scale": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Multiply servings and every ingredient amount.",
+        "properties": {
+          "factor": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "factor"
+        ],
+        "type": "object"
+      },
+      "servings": {
+        "type": "number"
+      },
+      "setGroupNumber": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Set a group's timing field from input text; blank clears it.",
+        "properties": {
+          "field": {
+            "$ref": "#/$defs/GroupNumberField"
+          },
+          "id": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "field",
+          "value"
+        ],
+        "type": "object"
+      },
+      "setOven": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Set a group's oven field from input text; temperature 0 clears it.",
+        "properties": {
+          "field": {
+            "$ref": "#/$defs/OvenField"
+          },
+          "id": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "field",
+          "value"
+        ],
+        "type": "object"
+      },
+      "source": {
+        "type": "string"
+      },
+      "stepGroups": {
+        "items": {
+          "$ref": "#/$defs/StepGroup"
+        },
+        "type": "array"
+      },
+      "suggestTiming": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Ask the model to suggest timing for the step groups.",
+        "tier": "wrapper"
+      },
+      "tags": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "timingSuggestions": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TimingSuggestions"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The timing suggestions under review, or null."
+      },
+      "totalTime": {
+        "description": "prep + cook + rest, minutes.",
+        "type": "number"
+      },
+      "yield": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "cuisine",
+      "servings",
+      "yield",
+      "difficulty",
+      "prepTime",
+      "cookTime",
+      "restTime",
+      "holdTime",
+      "category",
+      "ingredients",
+      "stepGroups",
+      "tags",
+      "notes",
+      "source",
+      "totalTime",
+      "ovenRequirements",
+      "dietaryCompatibility",
+      "dietarySource",
+      "analyzeDiet",
+      "extraction",
+      "timingSuggestions",
+      "extract",
+      "applyExtraction",
+      "cancelExtraction",
+      "suggestTiming",
+      "applyTiming",
+      "cancelTiming",
+      "scale",
+      "addIngredient",
+      "removeIngredient",
+      "addStepGroup",
+      "removeStepGroup",
+      "moveStepGroup",
+      "addStep",
+      "removeStep",
+      "moveStep",
+      "setGroupNumber",
+      "setOven",
+      "cook",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

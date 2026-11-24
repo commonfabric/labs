@@ -29,6 +29,15 @@ import {
 } from "../acl.ts";
 import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
+  type BranchCreateRequest,
+  type BranchCreateResult,
+  type BranchDeleteRequest,
+  type BranchDeleteResult,
+  type BranchListRequest,
+  type BranchListResult,
+  type BranchName,
+  type BranchRestoreRequest,
+  type BranchRestoreResult,
   canResolveScopeKey,
   type CellScope,
   type ClientCommit,
@@ -39,6 +48,7 @@ import {
   type ConnectionAuthResult,
   dbNeedsColumnProvenance,
   decodeMemoryBoundary,
+  DEFAULT_BRANCH,
   encodeMemoryBoundary,
   type EntityDocument,
   type EntityIdListRequest,
@@ -59,6 +69,8 @@ import {
   type GraphQueryRequest,
   type GraphQueryResult,
   type HelloMessage,
+  type HistoryListRequest,
+  type HistoryListResult,
   identityOfScopeKey,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
@@ -166,6 +178,7 @@ import {
 import { executionLeaseHolder, ExecutionLeases } from "./execution-lease.ts";
 import { parseClientInfo } from "./client-info.ts";
 import { respondToHello } from "./handshake.ts";
+import { listCommits, restoreBranch } from "./history.ts";
 import {
   createDefaultOperationCodecRegistry,
   type OperationCodecRegistry,
@@ -257,11 +270,11 @@ import { referenceServerMessageSchemaDocuments } from "./sync-cid-references.ts"
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import {
   appendWatchSetPart,
-  halveSyncPart,
+  encodeSyncParts,
+  encodeUnlessTooLong,
   type PartLimits,
   payloadFits,
   serverMessageSync,
-  splitSyncMessage,
   stagedWatchSet,
   type SyncPartSession,
   wholeLimits,
@@ -950,6 +963,20 @@ function isDeclaredTable(
   return false;
 }
 
+/**
+ * Returns why a session may not create a branch named `name`, or `undefined`
+ * when it may. The server keys a session's graphs and its sync cache by
+ * branch name, so a name that carries a control character, or that begins
+ * as one of those keys does, could stand for another branch's entry there.
+ */
+const refusedBranchName = (name: string): string | undefined =>
+  // deno-lint-ignore no-control-regex
+  /[\u0000-\u001f\u007f]/.test(name)
+    ? "a branch name must not hold a control character"
+    : name.startsWith("view-demand:") || name.startsWith("view-support:")
+    ? "a branch name must not begin with `view-demand:` or `view-support:`"
+    : undefined;
+
 const respondTypedError = <Result>(
   requestId: string,
   error: V2Error,
@@ -1088,6 +1115,23 @@ type ConnectionChallengeState = {
 type SessionOpenChallengeState = SessionOpenChallenge & {
   consumed: boolean;
 };
+
+/**
+ * A request the server serves on a space's default branch alone: listing or
+ * probing entity ids, a pattern-lifecycle verb, resolving an event's
+ * attention, and a crossing to the space's owner.
+ */
+type DefaultBranchRequest = Extract<
+  ClientMessage,
+  {
+    type:
+      | "entity-id.list"
+      | "entity-id.exists"
+      | "pattern.lifecycle"
+      | "event.attention.resolve"
+      | "served";
+  }
+>;
 
 type SessionHandle = {
   space: string;
@@ -1493,6 +1537,12 @@ class Connection {
   readonly #inProcess: boolean;
   readonly #leaseHolderInstance: string | undefined;
 
+  /** The most slots a message from this connection's client may stand for. */
+  get #slotLimit(): number {
+    return this.#server.options.untrustedMessageSlots ??
+      MAX_UNTRUSTED_MESSAGE_SLOTS;
+  }
+
   constructor(
     readonly id: string,
     server: Server,
@@ -1532,15 +1582,26 @@ class Connection {
       }
       const prepared = this.#prepare(message);
       const encodeStart = performance.now();
-      const payload = encodeMemoryBoundary(prepared);
-      const fits = payloadFits(payload, wholeLimits(limits));
+      // A sync too long to encode whole is not yet undeliverable: its parts
+      // are encoded alone, and only an entry the engine cannot encode alone
+      // fails, as it would whole.
+      const payload = encodeUnlessTooLong(prepared);
+      const fits = payload !== undefined &&
+        payloadFits(payload, wholeLimits(limits));
       timing.time(encodeStart, "memory", "response", "encode");
       if (fits) {
         this.#transmit(prepared, payload);
         return;
       }
       const splitStart = performance.now();
-      const parts = this.#syncParts(message, prepared, payload, target, limits);
+      const parts = encodeSyncParts(
+        message,
+        prepared,
+        payload,
+        target,
+        limits,
+        (part) => this.#prepare(part),
+      );
       timing.time(splitStart, "memory", "response", "split");
       // The parts go to the transport in one synchronous pass, so that no
       // other message of this connection's comes between them, and only once
@@ -1551,42 +1612,6 @@ class Connection {
     } catch (cause) {
       throw new DeliveryError(cause);
     }
-  }
-
-  /**
-   * Helper for `#send()`, which divides a sync too large for one message into
-   * parts and returns each prepared and encoded. A part cut to its bounds by
-   * its entries can exceed them once it carries its own tables, as can the
-   * whole message when its entries fit one part, so a part that does is
-   * halved until its halves fit, or a half is one entry, which goes as it is.
-   */
-  #syncParts(
-    message: ServerMessage,
-    prepared: ServerMessage,
-    payload: string,
-    target: SyncPartSession,
-    limits: PartLimits,
-  ): [ServerMessage, string][] {
-    const split = splitSyncMessage(message, target, limits, prepared);
-    const queue: {
-      part: ServerMessage;
-      prepared?: ServerMessage;
-      payload?: string;
-    }[] = split.length === 1
-      ? [{ part: message, prepared, payload }]
-      : split.map((part) => ({ part })).reverse();
-    const ready: [ServerMessage, string][] = [];
-    while (queue.length > 0) {
-      const item = queue.pop()!;
-      const partPrepared = item.prepared ?? this.#prepare(item.part);
-      const partPayload = item.payload ?? encodeMemoryBoundary(partPrepared);
-      const halves = payloadFits(partPayload, limits)
-        ? undefined
-        : halveSyncPart(item.part, target);
-      if (halves === undefined) ready.push([partPrepared, partPayload]);
-      else queue.push({ part: halves[1] }, { part: halves[0] });
-    }
-    return ready;
   }
 
   /** Helper for `#send()`, which applies the negotiated table encodings. */
@@ -2059,6 +2084,7 @@ class Connection {
   async receive(payload: string): Promise<void> {
     const parsed = parseClientMessage(payload, {
       commitLabelTableV1: this.#commitLabelTable,
+      slotLimit: this.#slotLimit,
     });
     // A presence message or a session report is handled as it is handed
     // over, not behind the frames already queued here: it carries no seq and
@@ -2268,6 +2294,27 @@ class Connection {
   }
 
   /**
+   * Like {@link #requireSession}, for a request served on a space's default
+   * branch only, which a session of another branch is refused. The session
+   * is found on this connection first, so only its holder learns its branch.
+   */
+  async #requireDefaultBranchSession(
+    message: DefaultBranchRequest,
+  ): Promise<boolean> {
+    if (
+      !await this.#requireSession(
+        message.requestId,
+        message.space,
+        message.sessionId,
+      )
+    ) return false;
+    const refusal = this.#server.branchSessionRefusal(message);
+    if (refusal === undefined) return true;
+    this.#send(refusal);
+    return false;
+  }
+
+  /**
    * Helper for {@link #requireSession} and {@link #requireImmediateSession},
    * which returns the handle of the session `sessionId` on `space` when it is
    * open on this connection and its routed authority holds, and otherwise
@@ -2454,9 +2501,12 @@ class Connection {
   }
 
   async #receiveOrdered(
-    parsed: ClientMessage | RejectedClientMessage | null,
+    received: ClientMessage | RejectedClientMessage | null,
     payload: string,
   ): Promise<void> {
+    const parsed = received === null
+      ? null
+      : this.#server.withSessionBranch(received);
     const characters = payload.length;
     if (this.#closed) {
       return;
@@ -2483,7 +2533,7 @@ class Connection {
         error: toError(
           "MessageTooLargeError",
           "Memory message stands for more than " +
-            `${MAX_UNTRUSTED_MESSAGE_SLOTS} array slots and record members`,
+            `${this.#slotLimit} array slots and record members`,
         ),
       });
       return;
@@ -2677,11 +2727,7 @@ class Connection {
         return;
       case "entity-id.list":
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -2697,11 +2743,7 @@ class Connection {
         return;
       case "entity-id.exists":
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -2714,6 +2756,27 @@ class Connection {
             response,
           );
         }
+        return;
+      case "branch.create":
+      case "branch.delete":
+      case "branch.list":
+      case "history.list":
+      case "branch.restore":
+        if (
+          !await this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        this.#sendSessionResponse(
+          parsed.space,
+          parsed.sessionId,
+          parsed.requestId,
+          await this.#server.branchRequest(parsed),
+        );
         return;
       case "sqlite.query":
         if (
@@ -2951,11 +3014,7 @@ class Connection {
         return;
       case "event.attention.resolve":
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -2971,11 +3030,7 @@ class Connection {
         return;
       case "pattern.lifecycle": {
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -3038,11 +3093,7 @@ class Connection {
       }
       case "served": {
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -3731,10 +3782,26 @@ export class Server {
       documentCacheBudgetBytes?: number;
       documentCacheMaxEntries?: number;
 
+      /** Whether each space's engine stores admitted commits' reads as a
+       * digest where nothing reads them afterward; handed to Engine.open
+       * (see `OpenOptions.storeReadsDigest` there). On by default. */
+      storeReadsDigest?: boolean;
+
       /** Bound on decoded documents retained across every space this
        * server serves (default DOCUMENT_CACHE_TOTAL_BUDGET_BYTES; per
        * instance, see there), held least-recently-used space first. */
       documentCacheTotalBudgetBytes?: number;
+
+      /** The most slots one client message may stand for (default
+       * MAX_UNTRUSTED_MESSAGE_SLOTS in ../v2.ts, which says what a slot
+       * is). It bounds the work one message can cost the server, so a
+       * higher one is for a bounded operation that needs it, such as moving
+       * the source of a holder with thousands of members, whose update
+       * sends one watch per member document. It may only raise the default,
+       * and construction throws for one below it: a direct client sizes the
+       * parts it stages a watch set in by the default, and nothing tells it
+       * of a lower limit, so a set it would send in parts would be refused. */
+      untrustedMessageSlots?: number;
 
       authorizeSessionOpen: (
         message: SessionOpenRequest,
@@ -3882,6 +3949,16 @@ export class Server {
     ) {
       throw new RangeError(
         "Client retirement is disabled; `minimumClientGeneration` must be `0`",
+      );
+    }
+    if (
+      options.untrustedMessageSlots !== undefined &&
+      !(Number.isSafeInteger(options.untrustedMessageSlots) &&
+        options.untrustedMessageSlots >= MAX_UNTRUSTED_MESSAGE_SLOTS)
+    ) {
+      throw new RangeError(
+        "`untrustedMessageSlots` may only raise the limit: it must be an " +
+          `integer of at least ${MAX_UNTRUSTED_MESSAGE_SLOTS}`,
       );
     }
     this.#sessions = options.sessions ?? new SessionRegistry();
@@ -6890,6 +6967,53 @@ export class Server {
           ),
         );
       }
+      // After authorization, so a principal the space refuses learns nothing
+      // of its branches.
+      const sessionBranch = message.session.branch;
+      let descriptor = message.session;
+      let forkToMake: BranchName | undefined;
+      if (sessionBranch !== undefined && sessionBranch !== DEFAULT_BRANCH) {
+        const state = Engine.branchState(engine, sessionBranch);
+        if (state === null && message.session.forkBranch === true) {
+          const refused = refusedBranchName(sessionBranch);
+          if (refused !== undefined) {
+            return respondTypedError<SessionOpenResult>(
+              message.requestId,
+              toError("ProtocolError", refused),
+            );
+          }
+          // The fork keeps apart what the session writes, so only a session
+          // that can write gets one; any other is of the default branch. So
+          // is a session resumed that was given the default branch before:
+          // its replica holds that branch's documents.
+          const resumed = message.session.sessionId === undefined
+            ? undefined
+            : this.#sessions.peek(message.space, message.session.sessionId);
+          // The session writes as its own principal, whatever it reads as,
+          // so that is whose write access decides.
+          const mayWrite = resumed === undefined &&
+            this.#authorizeMessageWithEngine(
+                engine,
+                message.space,
+                capabilityPrincipal ?? principal,
+                "WRITE",
+              ) === null;
+          if (mayWrite) {
+            forkToMake = sessionBranch;
+          } else {
+            const { branch: _branch, ...onDefault } = message.session;
+            descriptor = onDefault;
+          }
+        } else if (state?.status !== "active") {
+          return respondTypedError<SessionOpenResult>(
+            message.requestId,
+            toError(
+              "ProtocolError",
+              `The space has no active branch ${JSON.stringify(sessionBranch)}`,
+            ),
+          );
+        }
+      }
       // INV-16's open clauses. After authorization, so a principal the space
       // refuses learns nothing of its mark, and in every ACL mode, since the
       // mark is not access control.
@@ -6924,9 +7048,12 @@ export class Server {
         : this.#sessions.get(message.space, message.session.sessionId)
           ?.ownerConnectionId;
       try {
+        // Made here, past every refusal above, so that an open the server
+        // refuses leaves no branch behind.
+        if (forkToMake !== undefined) Engine.createBranch(engine, forkToMake);
         opened = this.#sessions.open(
           message.space,
-          message.session,
+          descriptor,
           Engine.serverSeq(engine),
           connection.id,
           principal,
@@ -8149,16 +8276,20 @@ export class Server {
             }),
             eventId: decl.eventId,
           }));
-          this.#notifyCommitAdmitted({
-            space: message.space,
-            seq: commit.seq,
-            class: "authored",
-            sessionId: message.sessionId,
-            writes: committedWrites,
-            ...(admittedEventAppends.length > 0
-              ? { eventAppends: admittedEventAppends }
-              : {}),
-          });
+          // The feed is the default branch's: the serving loop runs that
+          // branch alone, and reads every write it is told of there.
+          if (commit.branch === DEFAULT_BRANCH) {
+            this.#notifyCommitAdmitted({
+              space: message.space,
+              seq: commit.seq,
+              class: "authored",
+              sessionId: message.sessionId,
+              writes: committedWrites,
+              ...(admittedEventAppends.length > 0
+                ? { eventAppends: admittedEventAppends }
+                : {}),
+            });
+          }
           // Stage the accept's catch-up obligation with the dirty mark. The
           // verdict response leaves this request before the independently
           // scheduled batch can send its covering frame. The batched fan-out
@@ -8558,6 +8689,226 @@ export class Server {
         ),
       );
     }
+  }
+
+  /**
+   * Returns `message` reading and writing the branch its session is of
+   * wherever it names none (`SessionDescriptor.branch`). A message of a
+   * session of the default branch, or of no session, is returned as it is.
+   */
+  withSessionBranch<Message extends ClientMessage | RejectedClientMessage>(
+    message: Message,
+  ): Message {
+    if (
+      message.type !== "transact" && message.type !== "graph.query" &&
+      message.type !== "op.query" && message.type !== "session.watch.set" &&
+      message.type !== "session.watch.add" && message.type !== "history.list"
+    ) return message;
+    // This runs for every such message, so it reads the registry without
+    // the pruning pass a `get()` makes over every session.
+    const branch = this.#sessions.peek(message.space, message.sessionId)
+      ?.branch;
+    if (branch === undefined) return message;
+    switch (message.type) {
+      case "transact":
+        return {
+          ...message,
+          commit: {
+            ...message.commit,
+            branch: message.commit.branch ?? branch,
+          },
+        };
+      case "graph.query":
+      case "op.query":
+        return {
+          ...message,
+          query: { ...message.query, branch: message.query.branch ?? branch },
+        };
+      case "session.watch.set":
+      case "session.watch.add":
+        return {
+          ...message,
+          watches: message.watches.map((watch) => ({
+            ...watch,
+            query: { ...watch.query, branch: watch.query.branch ?? branch },
+          })),
+        };
+      case "history.list":
+        return { ...message, branch: message.branch ?? branch };
+    }
+  }
+
+  /**
+   * Returns the refusal of `message`, a request the server serves on the
+   * default branch alone, where its session is of another branch. Served for
+   * such a session, the request would read or change the space itself rather
+   * than the branch. Returns `undefined` for a session of the default
+   * branch. A SQLite query is not such a request: it reads the space's
+   * database as it stands, no branch holding a copy of one.
+   */
+  branchSessionRefusal(
+    message: DefaultBranchRequest,
+  ): ResponseMessage<never> | undefined {
+    const branch = this.#sessions.get(message.space, message.sessionId)
+      ?.branch;
+    return branch === undefined ? undefined : respondTypedError<never>(
+      message.requestId,
+      toError(
+        "ProtocolError",
+        `\`${message.type}\` is served on a space's default branch only, ` +
+          `and this session is of the branch ${JSON.stringify(branch)}`,
+      ),
+    );
+  }
+
+  /**
+   * Serves a request about a space's branches or its history
+   * (04-protocol.md §4.3.8): reading either needs the session's READ
+   * capability, forking or deleting a branch its WRITE capability, and
+   * restoring the default branch its OWNER capability.
+   */
+  async branchRequest(
+    message:
+      | BranchCreateRequest
+      | BranchDeleteRequest
+      | BranchListRequest
+      | HistoryListRequest
+      | BranchRestoreRequest,
+  ): Promise<
+    ResponseMessage<
+      | BranchCreateResult
+      | BranchDeleteResult
+      | BranchListResult
+      | HistoryListResult
+      | BranchRestoreResult
+    >
+  > {
+    const session = this.#sessions.get(message.space, message.sessionId);
+    if (session === null) {
+      return respondTypedError(
+        message.requestId,
+        toError("SessionError", "Unknown session for space"),
+      );
+    }
+    const requirement: Capability = message.type === "branch.restore"
+      ? "OWNER"
+      : message.type === "branch.create" || message.type === "branch.delete"
+      ? "WRITE"
+      : "READ";
+    try {
+      const engine = await this.#openEngine(message.space);
+      const deny = this.#authorizeCurrentSessionWithEngine(
+        engine,
+        message.space,
+        message.sessionId,
+        session,
+        requirement,
+      );
+      if (deny) return respondTypedError(message.requestId, deny);
+      const respond = <Result extends FabricValue>(
+        result: Result,
+      ): ResponseMessage<Result> => ({
+        type: "response",
+        requestId: message.requestId,
+        ok: result,
+      });
+      switch (message.type) {
+        case "branch.create": {
+          const refused = refusedBranchName(message.name);
+          if (refused !== undefined) throw new Error(refused);
+          const branch = Engine.createBranch(engine, message.name, {
+            parentBranch: message.parentBranch,
+            forkSeq: message.forkSeq,
+          });
+          return respond({ serverSeq: Engine.serverSeq(engine), branch });
+        }
+        case "branch.delete":
+          Engine.deleteBranch(engine, message.name);
+          return respond({ serverSeq: Engine.serverSeq(engine) });
+        case "branch.list":
+          return respond({
+            serverSeq: Engine.serverSeq(engine),
+            branches: Engine.listBranches(engine),
+          });
+        case "history.list":
+          return respond({
+            serverSeq: Engine.serverSeq(engine),
+            commits: listCommits(engine, {
+              branch: message.branch,
+              before: message.before,
+              limit: message.limit,
+            }),
+          });
+        case "branch.restore": {
+          // A branch other than the default is computed by the client that
+          // opened it, so its documents and their labels are that client's
+          // word, which a restore would write onto the default branch. Only
+          // the default branch's own history is restored from until the
+          // specification rules on what a restore may admit.
+          // SPEC-PENDING https://github.com/commonfabric/specs/pull/105
+          if (
+            message.source !== undefined && message.source !== DEFAULT_BRANCH
+          ) {
+            throw new Error(
+              "a restore is served from the default branch's own history " +
+                "only",
+            );
+          }
+          const commit = await this.#restoreDefaultBranch(
+            message.space,
+            message,
+          );
+          return respond({
+            serverSeq: Engine.serverSeq(engine),
+            ...(commit === undefined ? {} : { seq: commit.seq }),
+          });
+        }
+      }
+    } catch (error) {
+      return respondTypedError(
+        message.requestId,
+        toError("QueryError", describeFailure(error)),
+      );
+    }
+  }
+
+  /**
+   * Helper for `branchRequest()`, which restores the default branch of
+   * `space` and tells the space's sessions and its serving loop of every
+   * document the restore wrote.
+   */
+  async #restoreDefaultBranch(
+    space: string,
+    from: { source?: BranchName; sourceSeq?: number },
+  ): Promise<Engine.AppliedCommit | undefined> {
+    return await this.#withSpacePublicationLock(space, async () => {
+      const engine = await this.#openEngine(space);
+      Engine.refuseDeletedSpace(engine);
+      const commit = restoreBranch(engine, {
+        space,
+        source: from.source,
+        sourceSeq: from.sourceSeq,
+        sessionId: this.#directSessionId,
+        localSeq: ++this.#directLocalSeq,
+      });
+      if (commit === undefined) return undefined;
+      const writes = commit.revisions.map((revision) => ({
+        id: revision.id,
+        scopeKey: revision.scopeKey as ScopeKey,
+      }));
+      this.markSpaceDirty(
+        space,
+        writes.map((write) => toDirtyKey(write.id, write.scopeKey)),
+      );
+      this.#notifyCommitAdmitted({
+        space,
+        seq: commit.seq,
+        class: "system",
+        sessionId: this.#directSessionId,
+        writes,
+      });
+      return commit;
+    });
   }
 
   async entityIdExists(
@@ -9358,7 +9709,16 @@ export class Server {
         ),
       );
     }
-    const views = parsedViews ?? session.views;
+    // A view names no branch on the wire, so it is of the session's.
+    const viewBranch = session.branch;
+    const views = parsedViews === undefined
+      ? session.views
+      : viewBranch === undefined
+      ? parsedViews
+      : parsedViews.map((view) => ({
+        ...view,
+        query: { ...view.query, branch: viewBranch },
+      }));
     for (const view of views) {
       const previous = session.views.find((candidate) =>
         candidate.id === view.id
@@ -13058,6 +13418,7 @@ export class Server {
         operationCheckpointInterval: this.options.operationCheckpointInterval,
         documentCacheBudgetBytes: this.options.documentCacheBudgetBytes,
         documentCacheMaxEntries: this.options.documentCacheMaxEntries,
+        storeReadsDigest: this.options.storeReadsDigest,
         documentCacheCoordinator: this.#documentCacheCoordinator,
         executionLeases: this.#executionLeases,
         // Every commit this engine decides, on whichever path, counts
@@ -13133,8 +13494,8 @@ function isSqliteNamedParamEntries(
 /**
  * A client message refused before it was understood, with the id of the
  * request it carried so that the refusal can be answered on that request:
- * `oversized` for one standing for more than `MAX_UNTRUSTED_MESSAGE_SLOTS`
- * slots, `invalid` for one that decoded but failed metadata expansion or
+ * `oversized` for one standing for more slots than the server admits
+ * (`MAX_UNTRUSTED_MESSAGE_SLOTS` unless it was given another limit), `invalid` for one that decoded but failed metadata expansion or
  * request-shape validation.
  */
 export type RejectedClientMessage = {
@@ -13166,11 +13527,11 @@ export const deleteInapplicableEntries = (
  */
 export const parseClientMessage = (
   payload: string,
-  options: { commitLabelTableV1?: boolean } = {},
+  options: { commitLabelTableV1?: boolean; slotLimit?: number } = {},
 ): ClientMessage | RejectedClientMessage | null => {
   let parsed: FabricValue;
   try {
-    parsed = decodeMemoryBoundary(payload);
+    parsed = decodeMemoryBoundary(payload, options.slotLimit);
   } catch (error) {
     if (error instanceof SlotLimitError) {
       const requestId = error.rootScalar("requestId");
@@ -13279,6 +13640,12 @@ const parseDecodedClientMessage = (
     if (
       parsed.session.demand !== undefined && parsed.session.demand !== false
     ) return null;
+    // A session opened on the default branch where its client named another
+    // would write there.
+    if (
+      parsed.session.branch !== undefined &&
+      typeof parsed.session.branch !== "string"
+    ) return null;
     const client = parseClientInfo(parsed.session.client) ?? undefined;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
@@ -13335,6 +13702,12 @@ const parseDecodedClientMessage = (
           : {}),
         ...(parsed.session.demand === false ? { demand: false as const } : {}),
         ...(invite === undefined ? {} : { invite }),
+        ...(parsed.session.branch === undefined
+          ? {}
+          : { branch: parsed.session.branch }),
+        ...(parsed.session.forkBranch === true
+          ? { forkBranch: true as const }
+          : {}),
       },
       invocation: isFabricPlainObject(parsed.invocation)
         ? parsed.invocation
@@ -13434,6 +13807,94 @@ const parseDecodedClientMessage = (
       space: parsed.space,
       sessionId: parsed.sessionId,
       id: parsed.id as EntityIdLookupRequest["id"],
+    };
+  }
+
+  if (
+    (parsed.type === "branch.create" || parsed.type === "branch.delete") &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    typeof parsed.name === "string"
+  ) {
+    const address = {
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      name: parsed.name,
+    };
+    if (parsed.type === "branch.delete") {
+      return { type: "branch.delete", ...address };
+    }
+    if (
+      (parsed.parentBranch === undefined ||
+        typeof parsed.parentBranch === "string") &&
+      (parsed.forkSeq === undefined || isNonNegativeInteger(parsed.forkSeq))
+    ) {
+      return {
+        type: "branch.create",
+        ...address,
+        ...(parsed.parentBranch === undefined
+          ? {}
+          : { parentBranch: parsed.parentBranch }),
+        ...(parsed.forkSeq === undefined ? {} : { forkSeq: parsed.forkSeq }),
+      };
+    }
+    return null;
+  }
+
+  if (
+    parsed.type === "branch.list" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string"
+  ) {
+    return {
+      type: "branch.list",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+    };
+  }
+
+  if (
+    parsed.type === "history.list" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    (parsed.branch === undefined || typeof parsed.branch === "string") &&
+    (parsed.before === undefined || isNonNegativeInteger(parsed.before)) &&
+    (parsed.limit === undefined ||
+      (isNonNegativeInteger(parsed.limit) && parsed.limit > 0))
+  ) {
+    return {
+      type: "history.list",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      ...(parsed.branch === undefined ? {} : { branch: parsed.branch }),
+      ...(parsed.before === undefined ? {} : { before: parsed.before }),
+      ...(parsed.limit === undefined ? {} : { limit: parsed.limit }),
+    };
+  }
+
+  if (
+    parsed.type === "branch.restore" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    (parsed.source === undefined || typeof parsed.source === "string") &&
+    (parsed.sourceSeq === undefined || isNonNegativeInteger(parsed.sourceSeq))
+  ) {
+    return {
+      type: "branch.restore",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      ...(parsed.source === undefined ? {} : { source: parsed.source }),
+      ...(parsed.sourceSeq === undefined
+        ? {}
+        : { sourceSeq: parsed.sourceSeq }),
     };
   }
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
@@ -9,14 +10,13 @@ import {
   type IExtendedStorageTransaction,
   resolveEntryIdentity,
   Runtime,
+  type RuntimeOptions,
   type Stream,
   systemPatternSource,
+  transactionFailureMessage,
   writtenPrincipalAt,
 } from "@commonfabric/runner";
-import {
-  cfcLabelViewForCell,
-  cfcLabelViewForResolvedTarget,
-} from "@commonfabric/runner/cfc";
+import { cfcLabelViewForResolvedTarget } from "@commonfabric/runner/cfc";
 import { representsPrincipalSubjects } from "@commonfabric/runner/cfc/represents-principal";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
@@ -37,6 +37,11 @@ const route = "/api/patterns/system/profile-home/profile-home.tsx";
 // A complete profile source from before the profile had a `picture` field.
 const previous = Deno.readTextFileSync(
   new URL("./fixtures/profile-home-dynamic-name.tsx.txt", import.meta.url),
+);
+// A complete profile source whose `picture` had no default and no owner, its
+// writer labeling each picture with whoever set it.
+const labeledByWriter = Deno.readTextFileSync(
+  new URL("./fixtures/profile-home-picture-by-writer.tsx.txt", import.meta.url),
 );
 const current = Deno.readTextFileSync(
   new URL(
@@ -84,6 +89,9 @@ type Profile = {
   setPicture: Stream<{ picture?: FabricBytes }>;
 };
 
+// The refusal `setPicture` gives every writer but the profile's owner.
+const OWNER_ONLY = /Only the profile's owner can set its picture/;
+
 // One cache for every runtime this file makes, so that a pattern compiles
 // once per file rather than once per case.
 const moduleByteCache = createCompileByteCache();
@@ -105,9 +113,16 @@ describe("profile picture ownership", () => {
     };
   };
 
-  /** A runtime acting as `identity` against the shared server. */
-  const open = (identity: Identity): Runtime => {
+  /**
+   * A runtime acting as `identity` against the shared server, with `options`
+   * for how it enforces policies.
+   */
+  const open = (
+    identity: Identity,
+    options: Pick<RuntimeOptions, "cfcEnforcementMode"> = {},
+  ): Runtime => {
     const runtime = new Runtime({
+      ...options,
       moduleByteCache,
       apiUrl: new URL("https://profile.test"),
       storageManager: EmulatedStorageManager.connectTo(server, {
@@ -244,8 +259,8 @@ describe("profile picture ownership", () => {
   /**
    * Sets the picture of `on`, the owner's profile unless given, to `bytes`,
    * or clears it for `"clear"`, through the profile's own writer from
-   * `writer`, and returns the message of the error its commit failed with, if
-   * it failed.
+   * `writer`, and returns why it failed, the writer's own error where it
+   * threw one, if it failed.
    */
   const setPicture = async (
     writer: Runtime,
@@ -267,7 +282,9 @@ describe("profile picture ownership", () => {
     );
     const status = (await settled.promise).status();
     await writer.settled();
-    return status.status === "error" ? status.error.message : undefined;
+    return status.status === "error"
+      ? transactionFailureMessage(status.error)
+      : undefined;
   };
 
   beforeEach(() => {
@@ -280,40 +297,84 @@ describe("profile picture ownership", () => {
     await server.close();
   });
 
+  /**
+   * Writes `value` into the picture's own cell from a visitor's runtime that
+   * enforces no policy, as a client that ignores policies writes it.
+   */
+  const writePastPolicy = async (value: FabricValue) => {
+    const writer = open(visitor, { cfcEnforcementMode: "disabled" });
+    const cell = writer.getCellFromLink<Profile>(
+      profile.getAsNormalizedFullLink(),
+    );
+    await cell.sync();
+    const target = cell.key("picture").resolveAsCell();
+    await target.sync();
+    const tx = writer.edit();
+    tx.writeValueOrThrow(target.getAsNormalizedFullLink(), value);
+    writer.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await writer.settled();
+  };
+
   describe("on a profile created before the field existed", () => {
     beforeEach(async () => {
       await createProfile(previous);
       await updateSource(current);
     });
 
-    it("attests the owner once the owner sets the picture", async () => {
+    it("holds no picture, credited to no one, after the update", async () => {
+      expect(await picture()).toEqual([]);
       expect(await pictureBy()).toEqual([]);
+    });
 
+    it("refuses every writer, the owner included, while the profile is no one's own", async () => {
+      // The name the earlier source stored carries no claim of whose profile
+      // it is, so `profileOwnerOf()` finds no owner, and no reader shows a
+      // face for it.
+
+      expect(await setPicture(runtime, [1, 2, 3])).toMatch(OWNER_ONLY);
+      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toMatch(
+        OWNER_ONLY,
+      );
+      expect(await picture()).toEqual([]);
+      expect(await faceShown()).toEqual({});
+    });
+  });
+
+  describe("on a profile whose picture anyone could set", () => {
+    beforeEach(async () => {
+      await createProfile(labeledByWriter);
+    });
+
+    it("keeps the owner's picture, credited to the owner, and refuses a visitor's after the update", async () => {
       expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
+      await updateSource(current);
+
       expect(await picture()).toEqual([1, 2, 3]);
-      expect(await pictureBy()).toEqual([owner.did()]);
-    });
-
-    it("attests the visitor, never the owner, for a picture a visitor sets over the owner's", async () => {
-      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
-
-      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toBeUndefined();
-      expect(await picture()).toEqual([9, 9, 9, 9]);
-      expect(await pictureBy()).toEqual([visitor.did()]);
-    });
-
-    it("attests the owner again once the owner sets the picture after a visitor did", async () => {
-      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toBeUndefined();
-      expect(await pictureBy()).toEqual([visitor.did()]);
-
-      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
+      expect(await pictureWriter()).toBe(owner.did());
+      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toMatch(
+        OWNER_ONLY,
+      );
       expect(await picture()).toEqual([1, 2, 3]);
-      expect(await pictureBy()).toEqual([owner.did()]);
+      expect(await faceShown()).toEqual({ picture: [1, 2, 3] });
     });
 
-    it("attests the owner over a picture stored without a label once the owner sets it again", async () => {
-      // A picture as a writer that brings no policy stores it: bytes, and
-      // no label.
+    it("lets the owner replace a picture a visitor set before the update, and refuses the visitor after it", async () => {
+      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toBeUndefined();
+      await updateSource(current);
+      expect(await pictureWriter()).toBe(visitor.did());
+      expect(await faceShown()).toEqual({});
+
+      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
+      expect(await pictureWriter()).toBe(owner.did());
+      expect(await faceShown()).toEqual({ picture: [1, 2, 3] });
+      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toMatch(
+        OWNER_ONLY,
+      );
+      expect(await picture()).toEqual([1, 2, 3]);
+    });
+
+    it("lets the owner replace a picture stored without a label, and refuses a visitor's", async () => {
       const tx = runtime.edit();
       tx.writeValueOrThrow(
         profile.key("picture").resolveAsCell().getAsNormalizedFullLink(),
@@ -321,9 +382,22 @@ describe("profile picture ownership", () => {
       );
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
-      expect(await picture()).toEqual([7, 7]);
-      expect(await pictureBy()).toEqual([]);
+      await updateSource(current);
+      expect(await pictureWriter()).toBeUndefined();
 
+      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toMatch(
+        OWNER_ONLY,
+      );
+      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
+      expect(await pictureWriter()).toBe(owner.did());
+    });
+
+    it("refuses a visitor's picture on a profile whose picture nobody set", async () => {
+      await updateSource(current);
+
+      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toMatch(
+        OWNER_ONLY,
+      );
       expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
       expect(await picture()).toEqual([1, 2, 3]);
       expect(await pictureBy()).toEqual([owner.did()]);
@@ -335,64 +409,16 @@ describe("profile picture ownership", () => {
       await createProfile(current);
     });
 
-    it("attests the visitor for a picture a visitor sets, whatever the profile's label says of the field", async () => {
-      // The profile's own label claims the field for its creator, which says
-      // nothing about who writes the bytes behind it.
-      expect(
-        representsPrincipalSubjects(
-          (cfcLabelViewForCell(profile)?.entries ?? []).filter((entry) =>
-            entry.path.length === 1 && entry.path[0] === "picture"
-          ),
-        ),
-      ).toEqual([owner.did()]);
-
-      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toBeUndefined();
-      expect(await pictureBy()).toEqual([visitor.did()]);
+    it("holds no picture, and shows no face, before anyone sets one", async () => {
+      expect(await picture()).toEqual([]);
+      expect(await faceShown()).toEqual({});
     });
 
     it("attests the owner once the owner sets the picture", async () => {
       expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
       expect(await picture()).toEqual([1, 2, 3]);
       expect(await pictureBy()).toEqual([owner.did()]);
-    });
-
-    it("credits a picture a visitor set to the visitor, though the profile's label claims the field for its owner", async () => {
-      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toBeUndefined();
-
-      expect(await pictureWriter()).toBe(visitor.did());
-    });
-
-    it("credits a picture its owner set to the owner", async () => {
-      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
-
       expect(await pictureWriter()).toBe(owner.did());
-    });
-
-    it("credits a picture a visitor set over the owner's to the visitor", async () => {
-      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
-      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toBeUndefined();
-
-      expect(await pictureWriter()).toBe(visitor.did());
-    });
-
-    it("credits the picture to the owner again once the owner sets it after a visitor did", async () => {
-      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toBeUndefined();
-      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
-
-      expect(await pictureWriter()).toBe(owner.did());
-    });
-
-    it("credits a picture stored without a label to no one", async () => {
-      const tx = runtime.edit();
-      tx.writeValueOrThrow(
-        profile.key("picture").resolveAsCell().getAsNormalizedFullLink(),
-        new FabricBytes(new Uint8Array([7, 7])),
-      );
-      runtime.prepareTxForCommit(tx);
-      expect((await tx.commit().settled).error).toBeUndefined();
-      expect(await picture()).toEqual([7, 7]);
-
-      expect(await pictureWriter()).toBeUndefined();
     });
 
     it("shows a picture its owner set as the profile's face", async () => {
@@ -401,55 +427,60 @@ describe("profile picture ownership", () => {
       expect(await faceShown()).toEqual({ picture: [1, 2, 3] });
     });
 
-    it("shows no face for a picture a visitor set, and the owner's once the owner sets it again", async () => {
-      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toBeUndefined();
-      expect(await faceShown()).toEqual({});
-
+    it("refuses a visitor's picture, and keeps the owner's as the profile's face", async () => {
       expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
+
+      expect(await setPicture(open(visitor), [9, 9, 9, 9])).toMatch(
+        OWNER_ONLY,
+      );
+      expect(await picture()).toEqual([1, 2, 3]);
+      expect(await pictureWriter()).toBe(owner.did());
       expect(await faceShown()).toEqual({ picture: [1, 2, 3] });
     });
 
-    it("shows no face for a picture stored without a label", async () => {
+    it("refuses a visitor's clear, and keeps the owner's picture", async () => {
+      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
+
+      expect(await setPicture(open(visitor), "clear")).toMatch(
+        OWNER_ONLY,
+      );
+      expect(await picture()).toEqual([1, 2, 3]);
+    });
+
+    it("refuses a write to the picture that does not go through its writer", async () => {
       const tx = runtime.edit();
       tx.writeValueOrThrow(
         profile.key("picture").resolveAsCell().getAsNormalizedFullLink(),
         new FabricBytes(new Uint8Array([7, 7])),
       );
       runtime.prepareTxForCommit(tx);
-      expect((await tx.commit().settled).error).toBeUndefined();
 
-      expect(await faceShown()).toEqual({});
+      expect((await tx.commit().settled).error?.message).toMatch(
+        /missing schema write-policy/,
+      );
+      expect(await picture()).toEqual([]);
     });
 
-    it("credits no one, and shows no face, for a picture a visitor redirects to one its owner set in another space", async () => {
-      // The owner sets the picture of the visitor's profile, in the
-      // visitor's space, so that its bytes are labeled as the owner's.
-      const theirs = await startProfile(visitor, visitorSpace, current);
-      expect(await setPicture(runtime, [5, 5, 5], theirs.profile))
+    it("credits no one, and shows no face, for a picture a client ignoring write policies redirects to one its owner set in another space", async () => {
+      // The owner's own profile in another space, whose picture is labeled as
+      // the owner's.
+      const elsewhere = await startProfile(owner, visitorSpace, current);
+      expect(await setPicture(runtime, [5, 5, 5], elsewhere.profile))
         .toBeUndefined();
-      await theirs.profile.pull();
+      await elsewhere.profile.pull();
       expect(
         representsPrincipalSubjects(
-          cfcLabelViewForResolvedTarget(theirs.profile.key("picture"))
+          cfcLabelViewForResolvedTarget(elsewhere.profile.key("picture"))
             ?.entries ?? [],
         ),
       ).toEqual([owner.did()]);
 
-      // The visitor, whom the owner's profile space lets write, points the
-      // owner's picture at those bytes.
-      const owners = theirs.runtime.getCellFromLink<Profile>(
-        profile.getAsNormalizedFullLink(),
+      // A visitor whose runtime ignores write policies points the owner's
+      // picture at those bytes.
+      await writePastPolicy(
+        elsewhere.profile.key("picture").resolveAsCell()
+          .getAsWriteRedirectLink(),
       );
-      await owners.sync();
-      const ownersPicture = owners.key("picture").resolveAsCell();
-      await ownersPicture.sync();
-      const tx = theirs.runtime.edit();
-      tx.writeValueOrThrow(
-        ownersPicture.getAsNormalizedFullLink(),
-        theirs.profile.key("picture").resolveAsCell().getAsWriteRedirectLink(),
-      );
-      theirs.runtime.prepareTxForCommit(tx);
-      expect((await tx.commit().settled).error).toBeUndefined();
       expect(await picture()).toEqual([5, 5, 5]);
 
       expect(await pictureWriter()).toBeUndefined();
@@ -460,7 +491,8 @@ describe("profile picture ownership", () => {
       expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
 
       expect(await setPicture(runtime, "clear")).toBeUndefined();
-      expect(await picture()).toBeUndefined();
+      expect(await picture()).toEqual([]);
+      expect(await faceShown()).toEqual({});
 
       expect(await setPicture(runtime, [4, 5])).toBeUndefined();
       expect(await picture()).toEqual([4, 5]);

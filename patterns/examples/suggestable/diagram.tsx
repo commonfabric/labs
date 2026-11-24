@@ -1,3 +1,9 @@
+/**
+ * Asks a language model for an ASCII diagram of a topic and shows it in a
+ * monospace block. It uses `generateText` and makes no request until a topic
+ * is given.
+ */
+
 import {
   type AsyncResult,
   computed,

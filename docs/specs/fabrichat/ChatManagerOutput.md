@@ -55,6 +55,12 @@ interface ChatManagerOutput {
   /** The people this user's rooms list, by principal. */
   people: PerUser<Record<string, Cell<ChatProfile>[]>>;
 
+  /** `people`, for a session that has asked for them; no one before. */
+  askedPeople: PerSession<Record<string, Cell<ChatProfile>[]>>;
+
+  /** Asks for `askedPeople`, for the session; records no outcome. */
+  askForPeople: Stream<unknown>;
+
   openDirect: Stream<{ requestId: string; counterpart: string }>;
   createGroup: Stream<{
     requestId: string;
@@ -133,10 +139,10 @@ which the room sends.
 ## Views
 
 The manager offers its facts and streams as a `[VIEWS]` group, `chats`, for
-hosts that draw natively: `rooms`, `direct`, `requests`, `outgoingNotices`, and
-`people`, and every stream below. A native client drives the manager through
-that group as it drives a room through the room's `room` group (see
-[`clients.md`](clients.md#showing-a-room)).
+hosts that draw natively: `rooms`, `direct`, `requests`, `outgoingNotices`,
+`people`, `askedPeople`, `askForPeople`, and every stream below. A native client
+drives the manager through that group as it drives a room through the room's
+`room` group (see [`clients.md`](clients.md#showing-a-room)).
 
 ## Scopes
 
@@ -158,6 +164,9 @@ which the manager doesn't store and which read no room, are `PerUser` as the
 people drawn from them are. A stream reads none of them, except
 `offerRoom`, which reads `people` for the user that sends it: every other
 request names a room's members by principal or by profile itself.
+`askedPeople` is `PerSession`, since whether it lists anyone is the session's
+own: each session that asks reads the rosters for itself, and one that hasn't
+asked lists no one, whatever another session of the same user has asked.
 
 What a manager says about its reader, rather than about the user's rooms, is
 `PerSession`: whether the reader can start a chat, and the chat address it shows
@@ -258,7 +267,19 @@ session that has none is refused.
   until a client reports it delivered, the room's roster lists a profile
   attesting its recipient, who then needs no telling, or the room is
   [deleted](../random-space-identities.md#deleting-a-space), as `rooms` tells
-  it, which leaves nothing to tell them of.
+  it, which leaves nothing to tell them of. A notice whose recipient has
+  joined is also dropped from what the manager stores, once the manager finds
+  them on the room's roster: as `openDirect` finds them there before offering
+  the room again, and otherwise, however they joined, an offer of this user's
+  or another member's adding them among the ways, the next time this user
+  [joins](#joinroomrequestid-string-room-cellchatroomoutput) the room. An
+  offer adds its member to the room's participants by an event of its own,
+  which can fail, so the notice stays until the roster lists them. A notice of
+  a room this user never joins again stays stored, left out of the list, until
+  a client reports it delivered. A notice of a room the catalog says is deleted
+  is dropped by the manager's next request naming a room, any room, which
+  reads the catalog already. Until then a runtime deriving the list asks the
+  memory server about that room's space, which opens it.
 - **`people`** holds the people this user shares a room with: for each
   principal, the profiles attesting it, read from the roster of each room in
   `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose
@@ -272,6 +293,16 @@ session that has none is refused.
   it to offer the people to name a new room's members by, through
   `createGroup`'s `profiles`, and a room's add control the people to add, and
   `offerRoom` offers a room through it to a member named by principal alone.
+  Reading it reads every listed room's roster, in each room's space; it is the
+  form `offerRoom` and hosts that already read it keep.
+- **`askedPeople`** holds `people` for a session that has sent `askForPeople`,
+  an event with no keys that records no outcome, and no one for a session that
+  hasn't. It is drawn from the listed rooms as `people` is, and reads no room's
+  roster until the session asks. A view SHOULD read `askedPeople`, and send
+  `askForPeople` when it opens a picker of the people, as the manager's group
+  control and a room's add control do, so that showing the manager, or a room,
+  reads no other room. Moving `people` itself behind the ask is a later step,
+  and a breaking one for whoever reads `people` now.
 
 ## Reading the list
 
@@ -371,9 +402,11 @@ outward act when it creates a room, or offers one it finds.
   still in `outgoingNotices`, is offered them through `profile`'s inbox, and
   `profile` is added to the room's participants, as for a new room, wherever
   it points; once that puts them on the room's roster, `outgoingNotices` leaves
-  the notice out. A room whose roster already lists a
+  the notice out, and the next join of the room drops it. A room whose roster
+  already lists a
   profile attesting `counterpart` is one they have joined, and is offered
-  nothing; so is one whose notice has been delivered. Nor is a room offered,
+  nothing, and the notice is dropped; a room whose notice has been delivered
+  is offered nothing either. Nor is a room offered,
   and its notice stays, when `requestId` is longer than an offer's `id` may be.
   A `direct` entry whose room's space is deleted, `spaceDeleted(room)`
   returning `true`, is no such entry: the request goes on as if `direct` had
@@ -576,6 +609,12 @@ opening the room's page.
   they differ, leaving the entry's revision and membership state as they are;
   with `messageAct`, which arrives with every message and reaction and none of
   which changes the title, not even that, and the room's `about` goes unread.
+  One read is added to either: a join of a room this user's manager holds a
+  notice of reads the room's roster, and drops each of those notices whose
+  recipient the roster lists, since a recipient who has joined, however they
+  came to, has nothing left to be told, and a notice kept would stay stored
+  until a client reports it delivered. A join of a room with no notice reads no
+  roster, and the notices are written only when one is dropped.
   A `messageAct` join of a room the catalog lists with no membership leaves it
   as it is too; any other join records its membership. Otherwise what
   `accept` does with no `counterpart` and without `keepArchived`: records an
@@ -648,7 +687,9 @@ A notice has to reach a principal who may share no space with this user. Until a
 pattern can deliver one itself (see [first
 contact](FabriChatManager.md#first-contact)), the manager lists notices in
 `outgoingNotices` and a client delivers them. The list leaves out a notice whose
-recipient the room's roster already lists. A notice says which room, and who
+recipient the room's roster already lists, and the manager drops such a notice
+from what it stores once it finds them there (see
+[facts](#facts)). A notice says which room, and who
 sent it: this user. A client MUST deliver only that, and MUST NOT deliver any of
 the room's contents. It then sends `delivered` with the notice's `id`.
 

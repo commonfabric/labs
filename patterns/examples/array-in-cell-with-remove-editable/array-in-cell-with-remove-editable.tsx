@@ -1,3 +1,10 @@
+/**
+ * An editable list of text items, each with an input to change its text and a
+ * Remove button, plus a message box that appends new items.
+ * Demonstrates mutating an array held in a `Writable`: pushing from a
+ * `cf-message-input`, replacing an item from `cf-input`, and removing an item
+ * by matching it with `equals()` before `toSpliced`.
+ */
 import { Default, handler, NAME, pattern, UI, Writable } from "commonfabric";
 
 interface Item {

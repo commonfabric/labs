@@ -12,6 +12,7 @@ import type { HarnessImageAttachment } from "@commonfabric/cf-harness/contracts/
 import { materializeImageAttachmentContentPart } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
+import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
 import {
@@ -917,11 +918,12 @@ describe("runHarnessJob()", () => {
       expect(result).toEqual({
         outcome: "failed",
         errorCode: "LIMIT_REACHED",
+        errorDetail: "exceeded max model turns (8)",
         recordedRun: false,
       });
     });
 
-    it("ends `failed` as `PROVIDER_FAILURE` when the loop failed any other way", async () => {
+    it("ends `failed` as `PROVIDER_FAILURE`, saying why, when the loop failed any other way", async () => {
       const { result } = await runScripted(
         plainSpec(),
         () => Promise.reject(new Error("the provider answered 500")),
@@ -930,7 +932,41 @@ describe("runHarnessJob()", () => {
       expect(result).toEqual({
         outcome: "failed",
         errorCode: "PROVIDER_FAILURE",
+        errorDetail: "the provider answered 500",
         recordedRun: false,
+      });
+    });
+
+    it("ends `failed` as `CFC_REFUSED`, saying why, when a read the session's read ceiling withholds ended the loop", async () => {
+      // Not a provider's failure, and not `REFUSED`: a job in the `refused`
+      // state is one its owner's bookkeeping does not count as ended.
+      const { result } = await runScripted(
+        plainSpec(),
+        () => Promise.reject(new CfcReadCeilingError()),
+      );
+
+      expect(result).toEqual({
+        outcome: "failed",
+        errorCode: "CFC_REFUSED",
+        errorDetail: "the runtime read ceiling withholds this value",
+        recordedRun: false,
+      });
+    });
+
+    it("ends `failed` as `CFC_REFUSED` when the read ceiling's refusal is the cause of the error that ended the loop", async () => {
+      const { result } = await runScripted(
+        plainSpec(),
+        () =>
+          Promise.reject(
+            new Error("exceeded max model turns while sealing", {
+              cause: new CfcReadCeilingError(),
+            }),
+          ),
+      );
+
+      expect(result).toMatchObject({
+        outcome: "failed",
+        errorCode: "CFC_REFUSED",
       });
     });
 

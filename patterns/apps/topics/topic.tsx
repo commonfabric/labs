@@ -585,19 +585,22 @@ export interface TopicMentionSource {
  * come from the same distinct list, so that topic appears once, at its first
  * entry, in the `mentionedBy` of each topic it mentions, and never in its own.
  *
- * Both sides are declared `unknown`, which is the whole design rather than a
- * shortcut. A row holds cell REFERENCES — `unknown` is the declaration that
- * lets a cell be written into one without a cast, and the one that stops any
- * reader of the table expanding a topic it did not ask for. Each consumer
- * declares what it wants to see through them.
+ * Both sides are declared `ComparableCell`, which is the whole design rather
+ * than a shortcut. A row holds cell REFERENCES, and a cell declaration is what
+ * stops a reader of the table at the reference. `unknown` does not: a query
+ * walks through a link it reaches under `unknown` into the document behind it,
+ * and every row's topic is a Topic piece, so a Topic's input read under a pivot
+ * declared that way carried every Topic's piece document (130 MB of a 135 MB
+ * sync on a board of 3,264 topics). Each consumer declares what it wants to see
+ * through the references.
  */
 export interface TopicCrossrefRow {
-  /** The topic this row is about. `unknown` because it is written as a
-   * reference and only ever compared — `equals` takes the raw link. Anything
-   * wider retrieves the piece instead of pointing at it: declared `object`,
-   * this field reads back as the whole expanded topic, `$UI` tree included. */
-  topic: unknown;
-  mentionedBy: unknown[];
+  /** The topic this row is about. A cell because it is written as a reference
+   * and only ever compared — `equals` takes the raw link. Anything wider
+   * retrieves the piece instead of pointing at it: declared `object`, this
+   * field reads back as the whole expanded topic, `$UI` tree included. */
+  topic: ComparableCell<unknown>;
+  mentionedBy: ComparableCell<unknown>[];
 }
 
 /**
@@ -626,10 +629,10 @@ export interface TopicCrossrefNamedRow extends TopicCrossrefRow {
  * membership: a reader checks the row it finds is its own.
  */
 export interface TopicCrossrefIndex {
-  /** The pivot the positions belong to. `unknown` for the reason
+  /** The pivot the positions belong to. A cell for the reason
    * `TopicCrossrefRow.topic` is: it is written as a reference and only ever
    * compared. */
-  source?: unknown;
+  source?: ComparableCell<unknown>;
 
   /** The pivot's positions, by the number their rows carry. A position past
    * the pivot's current end holds nothing, so a reader compares an element as
@@ -2024,15 +2027,13 @@ interface BacklinksInput {
   /** The pivot root's availability, without reading its rows. */
   tableReady: unknown;
 
-  table: ReadonlyCell<
-    { topic: ComparableCell<unknown>; mentionedBy: unknown[] }[]
-  >;
+  table: ReadonlyCell<TopicCrossrefRow[]>;
   index: ReadonlyCell<
     Default<{
       source?: ComparableCell<unknown>;
       byName: Record<
         string,
-        { topic: ComparableCell<unknown>; mentionedBy: unknown[] }[]
+        TopicCrossrefRow[]
       >;
       // deno-lint-ignore ban-types
     }, { byName: {} }>
@@ -2063,16 +2064,16 @@ interface BacklinksInput {
  * is fine: the rows are addressed by the topic each describes rather than by
  * position, so a re-run over an unchanged board recomputes the same links and
  * writes nothing. What would make it expensive is reading through the
- * references, which is why the parameter declares them `unknown`: `topic` is
+ * references, which is why the parameter declares both sides cells: `topic` is
  * compared by identity and `mentionedBy` is passed through as links, so
  * surveying the whole table expands no topic at all.
  * The root-only `tableReady` value names the same pivot as `table`, so an
  * unavailable pivot propagates before this callback reads its handle.
  *
- * HACK, as elsewhere in this pattern: reads `unknown[]`, publishes
- * `TopicSummary[]`. A reference through a lift is a link and resolves to the
- * whole topic however little the lift declared, so the assertion states what a
- * consumer receives while the narrow parameter bounds what this reads.
+ * HACK, as elsewhere in this pattern: reads cells, publishes `TopicSummary[]`.
+ * A reference through a lift is a link and resolves to the whole topic however
+ * little the lift declared, so the assertion states what a consumer receives
+ * while the narrow parameter bounds what this reads.
  */
 const backlinksOf = lift(
   (
@@ -2105,9 +2106,10 @@ const backlinksOf = lift(
     // expression instead of from a `?? []` bolted onto a miss. At most one row
     // matches: the board's pivot builds one row per distinct topic, compared by
     // `equals` as this lookup compares.
-    return (table.get() ?? [])
+    const mentioners: unknown[] = (table.get() ?? [])
       .filter((row) => equals(self, row.topic))
-      .flatMap((row) => row.mentionedBy) as TopicSummary[];
+      .flatMap((row) => row.mentionedBy);
+    return mentioners as TopicSummary[];
   },
   toSchema<BacklinksInput>(),
   toSchema<TopicSummary[]>(),

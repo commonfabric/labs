@@ -299,6 +299,17 @@ const pickerOf = (root: unknown): string => {
   }`;
 };
 
+/** Whether the room's control asking the manager for the people shows. */
+const askOf = (root: unknown): string =>
+  String(
+    readValue(
+      (propValue(
+        findNodeById(root, "fabrichat-add-member-ask-people"),
+        "style",
+      ) as { display?: unknown })?.display,
+    ),
+  );
+
 /** What the room shows the session about its latest add. */
 const shownOf = (root: unknown): string =>
   textContent(findNodeById(root, "fabrichat-add-member-outcome")).trim();
@@ -386,6 +397,20 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     outgoingNotices: notices,
   } as ManagerArg);
   const room = ManagedRoom({
+    myProfile: profile,
+    messages: setup.room.messages,
+    roster: setup.roster,
+    addRequests: Writable.of<Record<string, AddMemberOutcome>>({}),
+    manager: {
+      offerRoom: manager.offerRoom,
+      requests: manager.requests,
+      people: manager.people,
+      askedPeople: manager.askedPeople,
+    } as RoomManager,
+  });
+  // The same room, to a viewer whose manager is from before `askedPeople`,
+  // and lists its `people` without being asked.
+  const legacy = ManagedRoom({
     myProfile: profile,
     messages: setup.room.messages,
     roster: setup.roster,
@@ -493,9 +518,29 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: revokeGesture,
       },
       { action: action_list_room },
-      // The room's picker offers Alice, whom Bob's people list and the room's
-      // space doesn't.
-      { assertion: assert(() => pickerOf(room[UI]) === "block:1") },
+      // The room's picker offers no one until the session asks for the
+      // people, as its control does, and then offers Alice, whom Bob's people
+      // list and the room's space doesn't.
+      {
+        assertion: assert(() =>
+          pickerOf(room[UI]) === "none:0" && askOf(room[UI]) === "block"
+        ),
+      },
+      { action: manager.askForPeople, event: {} },
+      {
+        assertion: assert(() =>
+          pickerOf(room[UI]) === "block:1" && askOf(room[UI]) === "none"
+        ),
+      },
+      // A manager from before `askedPeople` is read through its `people`,
+      // with no control to ask it, and a viewer with no manager has none
+      // either.
+      {
+        assertion: assert(() =>
+          pickerOf(legacy[UI]) === "block:1" && askOf(legacy[UI]) === "none" &&
+          askOf(unmanaged[UI]) === "none"
+        ),
+      },
       // An offer names a group room, and nothing else in its space.
       {
         action: manager.offerRoom,

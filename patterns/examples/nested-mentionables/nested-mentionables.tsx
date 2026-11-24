@@ -1,3 +1,9 @@
+/**
+ * A fixture that exports a recursive tree of mentionables (Root with
+ * children A, B, and their descendants) and displays the tree as indented
+ * debug text. It demonstrates nested `mentionable` outputs and
+ * `toIndentedDebugString`.
+ */
 import { NAME, pattern, toIndentedDebugString, UI } from "commonfabric";
 
 interface Node {

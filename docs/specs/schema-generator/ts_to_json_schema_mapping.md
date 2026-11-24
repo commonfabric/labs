@@ -810,7 +810,12 @@ The wrapper vocabulary is deliberately split (header comment,
   ComparableCell | ReadonlyCell | WriteonlyCell | SqliteDb | Reactive`.
 - **Brand axis** — `CellBrand` (`cell-brand.ts`): the marker strings
   `"opaque" | "cell" | "stream" | "comparable" | "readonly" | "writeonly" |
-  "sqlite"` that land in schemas.
+  "sqlite"` that land in schemas. A cell type's brand is one of them, except
+  `ReadonlyCell`'s, which is the union `"readonly" | "cell"`: its own kind and
+  the kind of the cell type assignable to it (`base/api/index.ts`).
+  `getCellBrand()` reads that union as `"readonly"` (`KINDS_ASSIGNABLE_TO`,
+  `cell-brand.ts`); a brand that is any other union names no kind
+  (`test/typescript/cell-brand.test.ts`).
 
 Cell detection is **structural, not nominal**: brand marker properties, keyed
 by the `unique symbol`s `CELL_BRAND`/`CELL_INNER_TYPE` (named `__@` and the

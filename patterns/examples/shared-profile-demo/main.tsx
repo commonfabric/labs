@@ -1,3 +1,9 @@
+/**
+ * Shows the viewer's profile name and status, along with the profile's own
+ * rendered view. It finds them with `wish` using the `#profile` and
+ * `#profileName` tags, and shows "No profile" when the viewer has none.
+ */
+
 import {
   computed,
   hasError,

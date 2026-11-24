@@ -1,3 +1,10 @@
+/**
+ * A gallery of charts drawn from computed sample data: a sparkline, a line
+ * chart with axis labels and grid, an area chart layered under a line, a bar
+ * chart, and a scatter plot.
+ * Demonstrates `cf-chart` with the `cf-line-mark`, `cf-area-mark`,
+ * `cf-bar-mark`, and `cf-dot-mark` children bound to cells through `$data`.
+ */
 import { computed, NAME, pattern, UI } from "commonfabric";
 
 export default pattern(() => {

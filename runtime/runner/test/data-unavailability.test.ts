@@ -1165,7 +1165,7 @@ describe("JavaScript-node data unavailability", () => {
     });
     expect(remoteStates[0]).toBe("syncing");
     expect(remoteStates.at(-1)).toBe("error");
-    expect(remoteWrites[0]).toBe("syncing");
+    expect(remoteWrites).not.toContain("syncing");
     expect(remoteWrites.at(-1)).toBe("error");
     expectUnavailable(remoteOutput, "schemaMismatch");
 
@@ -1189,8 +1189,32 @@ describe("JavaScript-node data unavailability", () => {
     // The same-space pre-sync is already in flight when the value node joins
     // it, so the node exposes the same transient as a remote linked target.
     expect(localStates.at(-1)).toBe("error");
+    expect(localWrites).not.toContain("syncing");
     expect(localWrites.at(-1)).toBe("error");
     expectUnavailable(localOutput, "schemaMismatch");
+  });
+
+  it("keeps readiness detected before schema validation local to the reader", async () => {
+    for (const argumentSchema of [undefined, false] as const) {
+      const missing = runtime.getCell(
+        remoteSpace,
+        `preflight miss ${nextResultId++}`,
+      );
+      const selected: unknown[] = [];
+      const writes: unknown[] = [];
+      await runValueNode({
+        argument: { value: missing.getAsLink() },
+        argumentSchema,
+        implementation: () => "ready",
+        captureSelectedInput: (value) => selected.push(value),
+        captureWrittenResult: (value) => writes.push(value),
+      });
+      expect(
+        selected.some((value) => isUnavailable(value) && value.isSyncing()),
+      ).toBe(true);
+      expect(writes.some((value) => isUnavailable(value) && value.isSyncing()))
+        .toBe(false);
+    }
   });
 
   it("selects a concrete schema error ahead of syncing", async () => {
@@ -1514,7 +1538,7 @@ describe("JavaScript-node data unavailability", () => {
       });
 
       expect(attempts).toBeGreaterThanOrEqual(2);
-      expect(states[0]).toBe("syncing");
+      expect(states).not.toContain("syncing");
       expect(states.at(-1)).toBe("error");
       expectUnavailable(output, "schemaMismatch");
     } finally {

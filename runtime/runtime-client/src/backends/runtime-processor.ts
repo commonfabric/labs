@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
+  type CommitSummary,
   dbNeedsColumnProvenance,
   DEFAULT_BRANCH,
   eventAttentionEntryKey,
@@ -143,6 +144,7 @@ import {
   viewPieceSchema,
 } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
+import { historySteps } from "@commonfabric/runner/history-steps";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
@@ -310,10 +312,16 @@ import {
   type SnapshotSharePrepareRequest,
   type SnapshotSharePreview,
   type SpaceAclResponse,
+  type SpaceBranchCreateRequest,
+  type SpaceBranchDeleteRequest,
   type SpaceGetAclRequest,
+  type SpaceHistoryListRequest,
+  type SpaceHistoryListResponse,
   type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
+  type SpaceRestoreRequest,
+  type SpaceRestoreResponse,
   type SpaceRootPatternResponse,
   type SpaceSetAclEntryRequest,
   type SqliteExecRequest,
@@ -334,6 +342,7 @@ import {
 import type { RemoteResponse, VDomOp } from "@/protocol/types.ts";
 import {
   type EveryFieldOf,
+  normalizeBranches,
   normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
@@ -389,6 +398,9 @@ export function subscribeEventAttentionNotifications(
  * value that survives is smaller than the number here.
  */
 const MAX_CONSOLE_DEBUG_DEPTH = 7;
+
+/** How many commits of a space's history one page of its steps reads. */
+const HISTORY_PAGE_COMMITS = 500;
 
 const blobUploadCodec = newDefaultJsonCodecEngine();
 
@@ -898,6 +910,7 @@ export function securityContextFrom(
     apiUrl: normalizeOrigin(data.apiUrl),
     memoryUrl: normalizeMemoryUrl(data.memoryUrl, data.apiUrl),
     spaceHostMap: normalizeSpaceHostMap(data.spaceHostMap),
+    branches: normalizeBranches(data.branches),
     spaceDid: data.spaceDid,
     experimental: data.experimental,
     cfcEnforcementMode: data.cfcEnforcementMode,
@@ -4464,6 +4477,93 @@ export class RuntimeProcessor {
     };
   }
 
+  /**
+   * Returns the steps of the requested space's history that the next page of
+   * its commit log holds.
+   */
+  async handleSpaceHistoryList(
+    request: SpaceHistoryListRequest,
+  ): Promise<SpaceHistoryListResponse> {
+    const provider = this.#historyProvider(request.space);
+    const served = this.#runtime.experimental.serverExecution === true;
+    const commits: CommitSummary[] = [];
+    let before = request.before;
+    for (;;) {
+      const page = await provider.listHistory({
+        limit: HISTORY_PAGE_COMMITS,
+        ...(before !== undefined ? { before } : {}),
+      });
+      for (const commit of page) commits.push(commit);
+      const steps = historySteps(commits, { served });
+      const exhausted = page.length < HISTORY_PAGE_COMMITS;
+      // A page holding the first commit of no step is the middle of one, so
+      // the listing reads on until it has that step whole.
+      if (steps.length === 0 && !exhausted) {
+        before = page.at(-1)!.seq;
+        continue;
+      }
+      // A full page may have cut its oldest step's predecessor off, whose
+      // commits the next request holds from that step's first commit down.
+      const next = exhausted ? undefined : steps.at(-1)!.startSeq;
+      return { steps, ...(next !== undefined ? { next } : {}) };
+    }
+  }
+
+  /** Forks a branch of the requested space. */
+  async handleSpaceBranchCreate(
+    request: SpaceBranchCreateRequest,
+  ): Promise<void> {
+    await this.#historyProvider(request.space).createBranch(request.name, {
+      forkSeq: request.forkSeq,
+    });
+  }
+
+  /** Deletes a branch of the requested space. */
+  async handleSpaceBranchDelete(
+    request: SpaceBranchDeleteRequest,
+  ): Promise<void> {
+    await this.#historyProvider(request.space).deleteBranch(request.name);
+  }
+
+  /** Restores the requested space to a point of history. */
+  async handleSpaceRestore(
+    request: SpaceRestoreRequest,
+  ): Promise<SpaceRestoreResponse> {
+    const seq = await this.#historyProvider(request.space).restoreBranch({
+      ...(request.seq !== undefined ? { sourceSeq: request.seq } : {}),
+    });
+    return seq === undefined ? {} : { seq };
+  }
+
+  /**
+   * Helper for the space history handlers, which returns the history and
+   * branch methods of the storage provider of `space`.
+   *
+   * @throws When `space` is no DID, or its storage serves no history.
+   */
+  #historyProvider(space: DID): Required<
+    Pick<
+      ReturnType<Runtime["storageManager"]["open"]>,
+      "listHistory" | "createBranch" | "deleteBranch" | "restoreBranch"
+    >
+  > {
+    if (!isDID(space)) throw new Error("space history requires a space DID");
+    const provider = this.#runtime.storageManager.open(space);
+    const { listHistory, createBranch, deleteBranch, restoreBranch } = provider;
+    if (
+      listHistory === undefined || createBranch === undefined ||
+      deleteBranch === undefined || restoreBranch === undefined
+    ) {
+      throw new Error("the space's storage serves no history");
+    }
+    return {
+      listHistory: listHistory.bind(provider),
+      createBranch: createBranch.bind(provider),
+      deleteBranch: deleteBranch.bind(provider),
+      restoreBranch: restoreBranch.bind(provider),
+    };
+  }
+
   async detectNonIdempotent(
     request: DetectNonIdempotentRequest,
   ): Promise<DetectNonIdempotentResponse> {
@@ -4734,6 +4834,14 @@ export class RuntimeProcessor {
         return await this.handleUploadBlob(request);
       case RequestType.BlobUrl:
         return this.handleBlobUrl(request);
+      case RequestType.SpaceHistoryList:
+        return await this.handleSpaceHistoryList(request);
+      case RequestType.SpaceBranchCreate:
+        return await this.handleSpaceBranchCreate(request);
+      case RequestType.SpaceBranchDelete:
+        return await this.handleSpaceBranchDelete(request);
+      case RequestType.SpaceRestore:
+        return await this.handleSpaceRestore(request);
       case RequestType.VDomMount:
         return this.handleVDomMount(request, client);
       case RequestType.VDomUnmount:
@@ -5018,12 +5126,36 @@ export class RuntimeProcessor {
       space: data.spaceDid,
     };
 
+    // No serving loop runs a branch, so a runtime that takes its derived
+    // state from one would see a branch that never computes anything.
+    if (
+      normalizeBranches(data.branches) !== undefined &&
+      data.experimental?.serverExecution !== false
+    ) {
+      throw new Error(
+        "a runtime that opens a space on a branch computes what the branch " +
+          "stores itself, and declares `experimental.serverExecution` false",
+      );
+    }
+
+    // A runtime showing a fork keeps what it writes to every space apart, so
+    // a space the listing leaves out is opened on the listed branch as well,
+    // which the server forks there on the first open.
+    const listedBranches = new Set(
+      Object.values(normalizeBranches(data.branches) ?? {}),
+    );
+    const forkBranch = listedBranches.size === 1
+      ? [...listedBranches][0]
+      : undefined;
+
     const storageManager = StorageManager.open({
       as: identity,
       clientBuild: data.clientBuild ??
         { application: "runtime-client", gitSha: null },
       memoryHost,
       spaceHostMap: data.spaceHostMap,
+      ...(data.branches !== undefined ? { branches: data.branches } : {}),
+      ...(forkBranch !== undefined ? { forkBranch } : {}),
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap
       // watch-refresh round trips up to a bounded window. Off unless the host
       // set it; the default is strict single-flight.

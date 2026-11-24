@@ -523,3 +523,141 @@ describe("topic-board-pivot-sessions", () => {
     ).toEqual({ "1": ["Alpha"], "2": ["Beta"] });
   });
 });
+
+/**
+ * What a session that reads a topic loads of the other topics. The pivot's
+ * rows reach every topic, so a read that followed a row's references would
+ * load every topic's piece. Two reads are held to it: a topic's input under
+ * the argument schema its piece links it with, which is how `cf piece call`
+ * and `cf piece step` read it, and the pivot under the schema the backlinks
+ * lookup declares, which is what loading the pivot for the lookup costs.
+ */
+describe("topic-board-pivot-reads", () => {
+  let server: ReturnType<typeof newLoopbackServer>;
+  let opened: Session[];
+
+  beforeEach(() => {
+    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    opened = [];
+  });
+  afterEach(async () => {
+    for (const { runtime, storage } of opened) {
+      await runtime.dispose();
+      await storage.close();
+    }
+    await server.close();
+  });
+
+  const openSession = async (): Promise<Session> => {
+    const session = await openSessionOn(server);
+    opened.push(session);
+    return session;
+  };
+
+  /**
+   * A board on the current source holding four topics, Beta mentioning Alpha
+   * and Delta mentioning Gamma, with its pivot and index computed.
+   */
+  const boardOfFour = async () => {
+    const writer = await openSession();
+    const board = await writer.pieces.create(
+      await currentSource(writer.runtime),
+      { input: {} },
+    );
+    await writer.runtime.idle();
+    const result = board.getCell() as Cell<Record<string, unknown>>;
+    for (const title of ["Alpha", "Beta", "Gamma", "Delta"]) {
+      await result.key("addTopic").pull();
+      result.key("addTopic").send({ title, agentName: "Fixture" });
+      await writer.runtime.idle();
+    }
+    const [alpha, beta, gamma, delta] = result.asSchema(TOPIC_CELLS).key(
+      "topics",
+    ).get() as unknown as Cell<Record<string, unknown>>[];
+    for (const [source, target] of [[beta, alpha], [delta, gamma]]) {
+      await source.key("mention").pull();
+      source.key("mention").send({ topic: target });
+      await writer.runtime.idle();
+    }
+    await result.key("crossrefs").pull();
+    await result.key("crossrefIndex").pull();
+    await writer.runtime.idle();
+    await writer.pieces.synced();
+    return { writer, alpha, beta, gamma, delta };
+  };
+
+  /** Which of `topics`' pieces `session` holds a document for. */
+  const piecesHeld = (session: Session, topics: Cell<unknown>[]) => {
+    // Without reading through to the server, as `getDocument` does on a miss.
+    const replica = session.runtime.storageManager.open(space)
+      .replica as unknown as { confirmedDocumentSeq(id: string): number };
+    return topics.filter((topic) =>
+      replica.confirmedDocumentSeq(`of:${pieceId(topic)!}`) > 0
+    ).map((topic) => (topic.get() as Titled).title);
+  };
+
+  /**
+   * The schema the backlinks lookup (`backlinksOf`) reads the pivot under,
+   * taken from the current topic source as compiled: the lift whose
+   * parameters are `table`, `index` and `self`.
+   */
+  const backlinksTableSchema = async (session: Session) => {
+    const topic = await session.runtime.patternManager.compilePattern(
+      await currentSource(session.runtime, TOPIC_PATH),
+      { space },
+    );
+    const lookups = topic.nodes.flatMap((node) => {
+      const schema = (node.module as { argumentSchema?: JSONSchema })
+        .argumentSchema;
+      const properties = typeof schema === "object"
+        ? schema.properties
+        : undefined;
+      return properties?.table !== undefined &&
+          properties.index !== undefined && properties.self !== undefined
+        ? [schema as Exclude<JSONSchema, boolean>]
+        : [];
+    });
+    if (lookups.length !== 1) {
+      throw new Error(`the topic has ${lookups.length} backlinks lookups`);
+    }
+    const [lookup] = lookups;
+    return {
+      ...(lookup.properties!.table as Exclude<JSONSchema, boolean>),
+      ...(lookup.$defs === undefined ? {} : { $defs: lookup.$defs }),
+    } as JSONSchema;
+  };
+
+  it("reads a topic's input without loading another topic's piece", async () => {
+    const { alpha, beta, gamma, delta } = await boardOfFour();
+    const argument = parseLink(alpha.getMetaRaw("argument"), alpha);
+    if (argument === undefined) throw new Error("Alpha has no argument link");
+
+    const reader = await openSession();
+    const input = reader.runtime.getCellFromLink<unknown>(argument);
+    await input.sync();
+    await reader.runtime.storageManager.synced();
+
+    expect(piecesHeld(reader, [beta, gamma, delta])).toEqual([]);
+  });
+
+  it("reads the pivot for a topic's backlinks without loading a topic's piece", async () => {
+    // What the lookup's declaration of the rows costs a session that loads
+    // the pivot for it. With the lift's `mentionedBy` reverted to `unknown[]`
+    // by hand, this read loaded Beta and Delta, the two topics that mention
+    // another.
+    const { alpha, beta, gamma, delta } = await boardOfFour();
+    const argument = parseLink(alpha.getMetaRaw("argument"), alpha);
+    if (argument === undefined) throw new Error("Alpha has no argument link");
+
+    const reader = await openSession();
+    const table = reader.runtime.getCellFromLink<unknown>({
+      ...argument,
+      path: [...argument.path, "boardCrossrefs"],
+      schema: await backlinksTableSchema(reader),
+    });
+    await table.sync();
+    await reader.runtime.storageManager.synced();
+
+    expect(piecesHeld(reader, [alpha, beta, gamma, delta])).toEqual([]);
+  });
+});

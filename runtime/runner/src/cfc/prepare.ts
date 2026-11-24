@@ -250,11 +250,13 @@ import {
   type WritePolicyRelease,
   writerClaimStamp,
 } from "./schema-merge.ts";
+import { cfcSchemaDeclaresArray } from "./schema-primitives.ts";
 import {
   canonicalizeCfcSchemaDocument,
   cfcSchemaResolvedRoot,
   hoistCfcSchemaDefs,
   resolveCfcSchemaRefRoot,
+  resolveCfcSchemaRefs,
 } from "./schema-refs.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
@@ -2951,9 +2953,17 @@ const storedEnvelopesAtWrittenPaths = (
       const atPath = ContextualFlowControl.getSchemaAtPath(stored, [...path]);
       return atPath === undefined || atPath === true
         ? []
-        : [schemaEnvelopeForTargetPath(atPath, path)];
+        : [schemaEnvelopeForTargetPath(atPath, path, stored)];
     });
 
+/**
+ * Each target's candidate schema: the schemas its write-policy inputs carry,
+ * each placed at its input's path and merged. `storedSchemaFor` returns the
+ * schema a target's document stores, which decides whether an index in an
+ * input's path names an item of an array or a property
+ * ({@link schemaEnvelopeForTargetPath}); it is asked only for a target with
+ * an index in such a path.
+ */
 const candidateSchemasByTarget = (
   inputs: readonly WritePolicyInput[],
   identityForInput: (input: WritePolicyInput) =>
@@ -2963,6 +2973,7 @@ const candidateSchemasByTarget = (
     string,
     readonly (readonly string[])[]
   >,
+  storedSchemaFor: (key: string) => JSONSchema | undefined,
 ): Map<string, JSONSchema> => {
   const result = new Map<string, JSONSchema>();
   for (const input of inputs) {
@@ -2977,6 +2988,9 @@ const candidateSchemasByTarget = (
     const candidate = schemaEnvelopeForTargetPath(
       schema,
       input.target.path,
+      input.target.path.some(isArrayIndexPropertyName)
+        ? storedSchemaFor(key)
+        : undefined,
     );
     const existing = result.get(key);
     result.set(
@@ -3596,19 +3610,35 @@ const stampWriterClaim = (
   };
 };
 
-// The schema placed below the path segments is a document of its own, so its
-// `$defs` move to the envelope's root, which is where its `#/$defs/<name>`
-// refs point once it sits below another root.
+/**
+ * Places `schema` at `path` inside a document schema. Each segment of the path
+ * becomes a property of an object, except a segment that indexes an array,
+ * which becomes the array's `items`. A `*` segment indexes an array. A
+ * canonical index does where `stored`, the schema the document stores,
+ * declares an array at the segments above it, so that the result merges with
+ * the stored schema instead of clashing with it by type. Anywhere else,
+ * including where nothing is stored, an index names a property, as a numeric
+ * key of an object does. An index placed as `items` states the schema for
+ * every item of the array, which is where a claim on the items of an array is
+ * declared.
+ */
 const schemaEnvelopeForTargetPath = (
   schema: JSONSchema,
   path: readonly string[],
+  stored?: JSONSchema,
 ): JSONSchema => {
   const segments = canonicalizeLogicalPath(path);
   if (segments.length === 0) return schema;
+  // The schema placed below the path segments is a document of its own, so
+  // its `$defs` move to the envelope's root, which is where its
+  // `#/$defs/<name>` refs point once it sits below another root.
   const { fragments: [body], definitions } = hoistCfcSchemaDefs([schema]);
   let envelope = body;
-  for (const segment of [...segments].reverse()) {
-    envelope = segment === "*"
+  for (let depth = segments.length - 1; depth >= 0; depth--) {
+    const segment = segments[depth];
+    envelope = segment === "*" ||
+        (isArrayIndexPropertyName(segment) &&
+          storedDeclaresArrayAt(stored, segments.slice(0, depth)))
       ? {
         type: "array",
         items: envelope,
@@ -3624,6 +3654,19 @@ const schemaEnvelopeForTargetPath = (
     ...(envelope as Record<string, unknown>),
     $defs: definitions,
   } as JSONSchema;
+};
+
+/**
+ * Whether `stored` declares an array at `path`, where a reference there
+ * declares what the schema it names declares.
+ */
+const storedDeclaresArrayAt = (
+  stored: JSONSchema | undefined,
+  path: readonly string[],
+): boolean => {
+  const atPath = ContextualFlowControl.getSchemaAtPath(stored, [...path]);
+  return isObjectOrArray(atPath) &&
+    cfcSchemaDeclaresArray(resolveCfcSchemaRefs(atPath) ?? atPath);
 };
 
 // The reserved CFC document namespaces: the durable policy manifests a
@@ -12384,10 +12427,24 @@ export function* prepareBoundaryCommitSteps(
   const generatedOutputPaths = generatedOutputPathsByTarget(
     state.writePolicyInputs,
   );
+  const storedSchemas = new Map<string, JSONSchema | undefined>();
+  const storedSchemaFor = (key: string): JSONSchema | undefined => {
+    if (!storedSchemas.has(key)) {
+      // An envelope that cannot be read stores no schema here; the persist
+      // loop below loads it again and records why it could not.
+      const stored = loadStoredCfcEnvelope(tx, targetFromKey(key));
+      storedSchemas.set(
+        key,
+        stored.status === "loaded" ? stored.schema : undefined,
+      );
+    }
+    return storedSchemas.get(key);
+  };
   const candidates = candidateSchemasByTarget(
     state.writePolicyInputs,
     identityForInput,
     generatedOutputPaths,
+    storedSchemaFor,
   );
   // The schemas this transaction's writers brought themselves, which are the
   // ones that stamp the values they write (`ifc.addIntegrity`). A schema the
@@ -12399,6 +12456,7 @@ export function* prepareBoundaryCommitSteps(
     ),
     identityForInput,
     generatedOutputPaths,
+    storedSchemaFor,
   );
   const schemaInputPaths = schemaInputPathsByTarget(state.writePolicyInputs);
   const writeAuthorIdentities = writePolicyIdentitiesByTarget(

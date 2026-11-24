@@ -7,7 +7,8 @@ export const CELL_VARIANTS_PRELUDE = `
 interface Cell<T> extends BrandedCell<T, "cell"> {}
 interface Stream<T> extends BrandedCell<T, "stream"> {}
 interface ComparableCell<T> extends BrandedCell<T, "comparable"> {}
-interface ReadonlyCell<T> extends BrandedCell<T, "readonly"> {}
+// Mirrors the real brand, which names the kind of a \`Cell\` beside its own.
+interface ReadonlyCell<T> extends BrandedCell<T, "readonly" | "cell"> {}
 interface WriteonlyCell<T> extends BrandedCell<T, "writeonly"> {}
 
 declare const cells: {

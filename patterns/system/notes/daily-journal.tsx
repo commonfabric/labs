@@ -1,3 +1,12 @@
+/**
+ * A daily journal that keeps one dated note per day, with a calendar that marks
+ * the days that have entries and opens or creates a day's note, a "Go to
+ * Today's Note" button, an editable template for new notes, and a list of
+ * entries, newest first.
+ * Beside the calendar it can write an AI-generated weekly rollup of recent
+ * notes: a headline, themes, accomplishments, open threads, and mood.
+ */
+
 import {
   action,
   type AsyncResult,

@@ -66,6 +66,7 @@ if (import.meta.main) {
   await listenForHeapProfileSignal({
     directory: Deno.env.get("HEAP_PROFILE_DIR") ||
       `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-profiles`,
+    sampleMainThread: env.HEAP_PROFILE_MAIN_THREAD,
     workerHeapProfiles: (directory) =>
       serverExecutionHost()?.workerHeapProfiles(directory) ??
         Promise.resolve(undefined),

@@ -1,3 +1,9 @@
+/**
+ * A live code editor that compiles the TypeScript pattern source you type
+ * with `compileAndRun` and offers a button to navigate to the resulting piece,
+ * or shows the compile error. It starts with a simple counter pattern as the
+ * sample source.
+ */
 import {
   compileAndRun,
   compileDiagnosticsOf,

@@ -1,3 +1,11 @@
+/**
+ * Lists the entries of the space's summary index, found with
+ * `wish({ query: "#summaryIndex" })`, in a table of linked piece names and
+ * summaries, with a search box that filters by name or summary text. The
+ * browsing view is exported separately so it can be given any set of
+ * entries.
+ */
+
 import {
   type AsyncResult,
   computed,

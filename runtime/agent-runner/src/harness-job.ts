@@ -57,13 +57,36 @@ import type {
 } from "@commonfabric/cf-harness/task-classification";
 import {
   type AgentRunErrorCode,
+  CFC_REFUSED,
   INVALID_RESULT,
   LIMIT_REACHED,
   PROVIDER_FAILURE,
 } from "@commonfabric/runner/agent-run";
-import type { CfcObservationMaxConfidentiality } from "@commonfabric/runner/cfc";
+import {
+  type CfcObservationMaxConfidentiality,
+  CfcReadCeilingError,
+} from "@commonfabric/runner/cfc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { AgentRunReport } from "./agent-runner.ts";
+
+/**
+ * Whether `error`, or an error it was thrown for (its `cause`, at any depth),
+ * is the read ceiling withholding a value: a run the information-flow rules
+ * stopped, rather than one that failed.
+ */
+const isReadCeilingRefusal = (error: unknown): boolean => {
+  const seen = new Set<unknown>();
+  for (
+    let current = error;
+    current instanceof Error && !seen.has(current);
+    current = current.cause
+  ) {
+    if (current instanceof CfcReadCeilingError) return true;
+    seen.add(current);
+  }
+  return false;
+};
 
 /** The host command endpoint a job's command tools call. */
 export interface HarnessJobCommands {
@@ -307,7 +330,10 @@ export type HarnessJobResult =
 
       /**
        * Why, where the harness said: for `INVALID_RESULT`, that no result
-       * was submitted, or the field the schema refused and the reason.
+       * was submitted, or the field the schema refused and the reason; for a
+       * run that ended on a thrown error, that error described. That text
+       * is unlabelled and may carry host detail: it is for the job's owner
+       * and operator, never for a model or a share.
        */
       errorDetail?: string;
     }
@@ -702,15 +728,24 @@ export const runHarnessJob = async (
     };
   }
   if (loopResult === undefined) {
+    // A run that ended on a thrown error says which, so the job's owner can
+    // tell a model that failed from a read the runtime withheld.
     const limit = loopError instanceof Error &&
       loopError.message.includes("exceeded max model turns");
+    const errorDetail = loopError !== undefined
+      ? describeFailure(loopError)
+      : refusalDetail;
     return {
       outcome: "failed",
       recordedRun,
-      errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
-      ...(loopError === undefined && refusalDetail !== undefined
-        ? { errorDetail: refusalDetail }
-        : {}),
+      // The ceiling's refusal is decided first: the turn limit is told
+      // apart by its message alone, which a wrapping error could repeat.
+      errorCode: isReadCeilingRefusal(loopError)
+        ? CFC_REFUSED
+        : limit
+        ? LIMIT_REACHED
+        : PROVIDER_FAILURE,
+      ...(errorDetail !== undefined ? { errorDetail } : {}),
       ...(report !== undefined ? { report } : {}),
     };
   }

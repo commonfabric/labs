@@ -2501,9 +2501,20 @@ export interface AsReadonlyCell extends HKT {
   type: ReadonlyCell<this["_A"]>;
 }
 
+/**
+ * A cell handle that can be read through and not written through. Each cell
+ * type that can be read is assignable to it: a `Cell<T>`, and so a
+ * `Writable<T>`, passes where a `ReadonlyCell<T>` is declared, as does a cell
+ * that `.key()` returns from one. A `ReadonlyCell<T>` does not pass where a
+ * `Cell<T>` is declared, and a cell that cannot be read, such as a
+ * `WriteonlyCell<T>`, does not pass where a `ReadonlyCell<T>` is.
+ */
+// The brand names the kind of each cell assignable to this one: its own, and
+// `"cell"`, the kind of the other cell type that can be read. The schema
+// generator reads that union as the kind `"readonly"` (`getCellBrand()`).
 export interface ReadonlyCell<T>
   extends
-    BrandedCell<T, "readonly">,
+    BrandedCell<T, "readonly" | "cell">,
     IAnyCell<T>,
     ICreatable<ReadonlyCell<T>>,
     IReadable<T>,

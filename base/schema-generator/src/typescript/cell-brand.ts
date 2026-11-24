@@ -110,7 +110,43 @@ function computeCellBrand(
   if (brandType && (brandType.flags & ts.TypeFlags.StringLiteral)) {
     return (brandType as ts.StringLiteralType).value as CellBrand;
   }
+  if (brandType?.isUnion()) {
+    return kindOfBrandUnion(brandType);
+  }
 
+  return undefined;
+}
+
+/**
+ * For a kind, the other kinds of cell assignable to a cell of that kind. A
+ * cell type declares its brand as the union of its own kind and the kinds
+ * listed here for it, which is what makes cells of those kinds assignable to
+ * it: `ReadonlyCell` declares `"readonly" | "cell"`.
+ */
+const KINDS_ASSIGNABLE_TO: ReadonlyMap<CellBrand, readonly CellBrand[]> =
+  new Map([["readonly", ["cell"]]]);
+
+/**
+ * Helper for `computeCellBrand()`, which returns the kind a brand that is a
+ * union names: the kind whose entry in `KINDS_ASSIGNABLE_TO` lists exactly the
+ * union's other members. Any other union, such as the brand of a union of a
+ * cell and a stream, names no kind.
+ */
+function kindOfBrandUnion(brand: ts.UnionType): CellBrand | undefined {
+  const members = new Set<string>();
+  for (const member of brand.types) {
+    if (!member.isStringLiteral()) return undefined;
+    members.add(member.value);
+  }
+  for (const [kind, others] of KINDS_ASSIGNABLE_TO) {
+    if (
+      members.size === others.length + 1 &&
+      members.has(kind) &&
+      others.every((other) => members.has(other))
+    ) {
+      return kind;
+    }
+  }
   return undefined;
 }
 

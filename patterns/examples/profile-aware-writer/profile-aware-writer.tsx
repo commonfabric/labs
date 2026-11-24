@@ -1,3 +1,10 @@
+/**
+ * A writing assistant that asks a language model to write about a topic you
+ * enter, personalizing the result with a summary of the user found through
+ * `wish({ query: "#learnedSummary" })`. It shows the profile text in an
+ * editable `cf-code-editor` and the generated text beneath it.
+ */
+
 import {
   type AsyncResult,
   computed,
@@ -93,7 +100,7 @@ export const ProfileWriterResultPresentation = pattern<
     : resultState.availability === "pending"
     ? (
       <div style="margin-top: 16px;">
-        <cf-loader show-elapsed /> Generating personalized content...
+        <cf-loader showElapsed /> Generating personalized content...
       </div>
     )
     : resultState.availability === "syncing"

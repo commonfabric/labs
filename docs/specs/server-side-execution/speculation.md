@@ -152,9 +152,9 @@ currency. The existing overlay and retirement rules below still apply.
   whether or not its type admits `undefined` — see the carve-outs
   below): it registers the dead-end doc's read (the
   dependency that re-triggers the run when the doc arrives) and the run
-  is disposed as a non-event — **output `undefined`, no action failure,
-  re-triggered when any of its reads so far change, exactly like a
-  regular call whose inputs were not ready.** Scope, precisely (#6179
+  produces **no output write while the input is in transit**. It is
+  re-triggered when the load settles or its reads change; a confirmed
+  refusal produces a native error as described below. Scope, precisely (#6179
   review, item 5b): the refusal is on the SCHEMA-aware lazy read path
   only — a SCHEMA-LESS read takes `validateAndTransform`'s
   query-result-proxy early-out before resolution and so never reaches
@@ -218,13 +218,25 @@ currency. The existing overlay and retirement rules below still apply.
      own echo of it persists (§4's arrival gate).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch
-     it) and produces an undefined result through the ordinary result
-     path — the same non-event disposal, re-triggering on the reads so far. A
+     it) and takes the same readiness-dependent disposition as a refusal
+     recorded on the transaction, re-triggering on the reads so far. A
      pattern body cannot yet MINT the error itself (it is
      runner-internal; a pattern-facing refusal export is a flagged API
      question with the owner), so the built coverage is the
      read-propagation path — the OW51 shape — with the deliberate
      body-throw awaiting that export.
+
+  **A run refused for an input in transit makes no output write.** Local
+  readiness says what this replica knows, not what another replica should
+  store. An output that already holds a value keeps it; an output with no
+  revision stays unwritten. This holds for eager and lazy arguments. A
+  status-aware read of the missing input can report `Syncing` locally.
+  Once its load settles, the computation runs again even if the store had
+  nothing to deliver. A valid input produces the ordinary result, including
+  an authored `undefined` where the schema admits it. A confirmed absence
+  or wrong shape that fails the schema produces a native error of kind
+  `schemaMismatch`; a failed linked-document load produces a native error
+  of kind `sync` with its cause. Either diagnostic replaces a stale result.
 
   **The serving-side re-trigger, explicit (RULED 2026-08-21 — the
   option-3 ruling on the demand-closure fork):**
@@ -269,8 +281,11 @@ currency. The existing overlay and retirement rules below still apply.
   `scheduler/handler-load-wait.ts` for the handler withdrawal; pinned in
   `runtime/runner/test/unresolved-input-lift.test.ts` (the hop-target
   dead-end disposes and re-triggers on arrival; the stated-null
-  control still flows; its case has no previous result, so it does not
-  pin that one is overwritten), with the serving-runtime match
+  control still flows) and in
+  `runtime/runner/test/refused-run-keeps-result.test.ts` (a cold
+  start's refused run leaves a stored result in place and the run after
+  the input arrives writes the new one; a node holding no result writes
+  none until then), with the serving-runtime match
   witnessed by `integration/default-app.test.ts` greening ON (the
   surface whose serving-runtime crash first recorded the bug —
   verification-coverage.md OW51).

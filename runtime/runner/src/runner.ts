@@ -287,6 +287,7 @@ import {
   recordUnavailableRead,
 } from "./storage/read-availability.ts";
 import {
+  getDirectTransactionReadActivities,
   getTransactionReadActivities,
   getTransactionWriteDetails,
 } from "./storage/transaction-inspection.ts";
@@ -301,6 +302,7 @@ import {
   type ReadError,
   type Result,
   toThrowable,
+  type UnexaminedAbsence,
   type Unit,
   type URI,
 } from "./storage/interface.ts";
@@ -653,6 +655,7 @@ type UnavailableInput = Readonly<{
 
 type AvailabilityPreflight = Readonly<{
   unavailable?: UnavailableInput;
+  localSyncing?: boolean;
   accepted: readonly UnavailableInput[];
   requiresObservingScan?: boolean;
 }>;
@@ -863,7 +866,8 @@ function scanUnavailableInputs(
       sawConcreteUnaccepted = true;
       if (
         selected === undefined ||
-        dataUnavailableReasonPrecedes(value.reason, selected.value.reason)
+        dataUnavailableReasonPrecedes(value.reason, selected.value.reason) ||
+        (selectedIsSyntheticSyncing && value.reason === "syncing")
       ) {
         selected = { value, path };
         selectedIsSyntheticSyncing = false;
@@ -1021,6 +1025,7 @@ function scanUnavailableInputs(
     argumentSchema !== false;
   return {
     unavailable: deferSyntheticSyncingToSchema ? undefined : selected,
+    localSyncing: selectedIsSyntheticSyncing,
     accepted,
     ...(requiresObservingScan ? { requiresObservingScan: true } : {}),
   };
@@ -14758,7 +14763,7 @@ export class Runner {
         argument: undefined,
         isValidArgument: false,
         unavailable: availability.unavailable.value,
-        unavailableFromInput: true,
+        unavailableFromInput: !availability.localSyncing,
       };
     }
 
@@ -15416,6 +15421,85 @@ export class Runner {
       )
       : undefined;
     return { resultCell, cancelDeferredStart };
+  }
+
+  /** Local readiness of a refused link; a settled load leaves schema validation authoritative. */
+  #refusedLinkStatus(
+    tx: IExtendedStorageTransaction,
+    link: NormalizedFullLink,
+    sourceSpace: MemorySpace,
+  ): UnavailableVariant | undefined {
+    const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
+      tx.tx.scopeKeyIdentity;
+    const status = this.#runtime.ensureLinkedDocLoaded(
+      link,
+      sourceSpace,
+      identity,
+    );
+    if (status === "settled") return undefined;
+    if (status === "error") {
+      return unavailableError(
+        this.#runtime.linkedDocLoadError(link, identity) ??
+          "Linked document load failed",
+        "sync",
+      );
+    }
+    recordUnavailableRead(tx, toMemorySpaceAddress(link));
+    return UNAVAILABLE_SYNCING;
+  }
+
+  /** Classifies absent document reads for an eager argument that did not resolve. */
+  #eagerTransitStatus(
+    tx: IExtendedStorageTransaction,
+    sourceSpace: MemorySpace,
+  ): UnavailableVariant | undefined {
+    let pending = false;
+    for (const absence of this.#transitAbsences(tx)) {
+      const link = this.#runtime.getCellFromLink({
+        space: absence.space,
+        id: absence.id,
+        scope: absence.scope,
+        path: [],
+      }).getAsNormalizedFullLink();
+      const status = this.#refusedLinkStatus(tx, link, sourceSpace);
+      if (status?.reason === "error") return status;
+      if (status?.reason === "syncing") pending = true;
+    }
+    return pending ? UNAVAILABLE_SYNCING : undefined;
+  }
+
+  /**
+   * The documents `tx` read as absent that are still in transit to this
+   * replica: ones the replica has never examined, so that a load of each
+   * is in flight or was never asked for
+   * (`IStorageProvider.unexaminedAbsences()`), and that the store has not
+   * reported holding nothing at either (`storeReportedAbsent()`). Such an
+   * absence says nothing about the document yet, where one the replica or
+   * the store has reported is what the document holds (`speculation.md` §2,
+   * "transit, not knowledge").
+   */
+  #transitAbsences(
+    tx: IExtendedStorageTransaction,
+  ): UnexaminedAbsence[] {
+    const spaces = new Set<MemorySpace>();
+    for (const read of getDirectTransactionReadActivities(tx.tx) ?? []) {
+      spaces.add(read.space);
+    }
+    const identity = tx.tx.scopeKeyIdentity;
+    const found: UnexaminedAbsence[] = [];
+    for (const space of spaces) {
+      const provider = this.#runtime.storageManager.open(space);
+      for (const absence of provider.unexaminedAbsences?.(tx.tx) ?? []) {
+        if (
+          provider.storeReportedAbsent?.(
+            { id: absence.id, scope: absence.scope },
+            identity,
+          ) === true
+        ) continue;
+        found.push(absence);
+      }
+    }
+    return found;
   }
 
   /**
@@ -16192,18 +16276,19 @@ export class Runner {
         if (this.#runtime.experimental.lazyMaterialization) {
           tx.markLazyMaterialize(true);
         }
-        const { argument, isValidArgument, unavailable } = (() => {
-          try {
-            return this.#readJavaScriptArgument(
-              module,
-              runInputsCell,
-              tx,
-              { bindTxToSchema: true },
-            );
-          } finally {
-            logger.timeEnd("action", "readInputs");
-          }
-        })();
+        const { argument, isValidArgument, unavailable, unavailableFromInput } =
+          (() => {
+            try {
+              return this.#readJavaScriptArgument(
+                module,
+                runInputsCell,
+                tx,
+                { bindTxToSchema: true },
+              );
+            } finally {
+              logger.timeEnd("action", "readInputs");
+            }
+          })();
 
         this.#updateInvalidInputFlag(
           name,
@@ -16233,11 +16318,13 @@ export class Runner {
             // body that caught it — its own `try`/`catch`, a discarded
             // rejection — does not get to hand back a result built on data the
             // schema does not describe. Either way the run is disposed of as an
-            // argument that did not resolve: an unavailable result through the
-            // ordinary path, not an error. The reads it took are registered,
+            // argument that did not resolve. A replica miss makes no output
+            // write, even for a node with no prior result. Otherwise the refusal
+            // is represented by its native availability state. Reads are kept,
             // including the one that failed, so it runs again when the data
             // changes and may then find it valid.
             const refusal = tx.takeSchemaRefusal();
+            let waitingForInput = false;
             if (refusal !== undefined) {
               logger.info(
                 "action",
@@ -16247,30 +16334,34 @@ export class Runner {
                 ],
               );
               if (isUnresolvedInputError(refusal)) {
-                const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
-                  tx.tx.scopeKeyIdentity;
-                const status = this.#runtime.ensureLinkedDocLoaded(
+                const status = this.#refusedLinkStatus(
+                  tx,
                   refusal.link,
                   runInputsCell.getAsNormalizedFullLink().space,
-                  identity,
                 );
-                if (status === "pending") {
-                  recordUnavailableRead(tx, toMemorySpaceAddress(refusal.link));
-                }
-                result = status === "pending"
-                  ? UNAVAILABLE_SYNCING
-                  : status === "settled"
-                  ? unavailableMismatch()
-                  : unavailableError(
-                    this.#runtime.linkedDocLoadError(refusal.link, identity) ??
-                      "Linked document load failed",
-                    "sync",
-                  );
+                waitingForInput = status?.reason === "syncing";
+                result = status ?? unavailableMismatch();
               } else result = unavailableMismatch();
+            } else if (!isValidArgument && !unavailableFromInput) {
+              if (unavailable?.reason === "syncing") {
+                waitingForInput = true;
+              } else if (unavailable?.errorKind === "schemaMismatch") {
+                // An eager read can refuse an absent argument without having
+                // reached a link through the native readiness path.
+                const transit = this.#eagerTransitStatus(
+                  tx,
+                  runInputsCell.getAsNormalizedFullLink().space,
+                );
+                if (transit !== undefined) {
+                  waitingForInput = transit.reason === "syncing";
+                  result = transit;
+                }
+              }
             }
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
+            if (waitingForInput) return undefined;
             const normalized = normalizeSandboxResult(result, name);
             const written = this.#writeJavaScriptActionResult(
               tx,

@@ -17,11 +17,23 @@ import {
 import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
+  type BranchCreateRequest,
+  type BranchCreateResult,
+  type BranchDeleteRequest,
+  type BranchDeleteResult,
+  type BranchInfo,
+  type BranchListRequest,
+  type BranchListResult,
+  type BranchName,
+  type BranchRestoreRequest,
+  type BranchRestoreResult,
   type ClientCommit,
+  type CommitSummary,
   compatibleMemoryProtocolFlags,
   type ConnectionAuthResult,
   type ConnectionChallengeResult,
   decodeTrustedMemoryBoundary,
+  DEFAULT_BRANCH,
   encodeMemoryBoundary,
   type EntityId,
   type EntityIdListOptions,
@@ -33,6 +45,8 @@ import {
   getMemoryProtocolFlags,
   type GraphQuery,
   type GraphQueryResult,
+  type HistoryListRequest,
+  type HistoryListResult,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
   MEMORY_PROTOCOL,
@@ -446,6 +460,18 @@ export type MountOptions = {
    * the session's reopens, which the grant it conferred already admits.
    */
   invite?: { inviteId: string; code: string };
+
+  /**
+   * The branch the session is of (the wire `SessionDescriptor.branch`),
+   * carried on every reopen. Absent, the default branch.
+   */
+  branch?: BranchName;
+
+  /**
+   * Asks the server to fork `branch` when the space has none of that name
+   * (the wire `SessionDescriptor.forkBranch`), carried on every reopen.
+   */
+  forkBranch?: true;
 };
 
 /**
@@ -1252,6 +1278,8 @@ export class Client {
       options.resumeKey,
       options.resumeAttempt,
       result.serverBuild,
+      options.branch,
+      options.forkBranch,
     );
     this.#spaces.add(session);
     // The server answered the open on a connection the client has since
@@ -1674,6 +1702,24 @@ export class Client {
           "memory server does not record a session's read ceiling " +
             "(`sessionReadCeiling` is not among its protocol flags), so a " +
             "session declaring one cannot be bounded by it",
+        );
+      }
+      // A server that does not know the field would open the session on
+      // the default branch, and the session would write there.
+      // The server forks only a branch the open names, so an open asking
+      // for a fork of none would be of the default branch, and write there.
+      if (
+        session.forkBranch === true &&
+        (session.branch === undefined || session.branch === DEFAULT_BRANCH)
+      ) {
+        throw protocolError(
+          "a session that asks for its branch to be forked names the branch",
+        );
+      }
+      if (session.branch !== undefined && this.serverFlags?.branches !== true) {
+        throw protocolError(
+          "memory server does not open a session on a branch (`branches` " +
+            "is not among its protocol flags)",
         );
       }
       if (
@@ -2472,12 +2518,11 @@ export class Client {
     this.#helloPending = ack;
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
     // `patternLifecycle`, `patternLifecycleOrigins`,
-    // `patternLifecycleScopes`, `servedRequests`, `spaceInvites` and
-    // `instanceNameMark` are the server's capabilities alone: the client
-    // reads them from `hello.ok` and
-    // never offers them. Other flags an endpoint does not know are ignored
-    // there, since the routed flag allowlists were removed (infra DEVIATIONS
-    // row 41).
+    // `patternLifecycleScopes`, `servedRequests`, `spaceInvites`,
+    // `instanceNameMark` and `branches` are the server's capabilities alone:
+    // the client reads them from `hello.ok` and never offers them. Other
+    // flags an endpoint does not know are ignored there, since the routed
+    // flag allowlists were removed (infra DEVIATIONS row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
@@ -2488,6 +2533,7 @@ export class Client {
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
       instanceNameMark: _instanceNameMarkServerOnly,
+      branches: _branchesServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -3614,6 +3660,8 @@ export class SpaceSession {
   readonly #routeSignal?: AbortSignal;
   readonly #actingAs?: "space-owner";
   readonly #readCeiling?: SessionReadCeiling;
+  readonly #branch?: BranchName;
+  readonly #forkBranch?: true;
   readonly #genesisRoot?: GenesisRoot;
   readonly #spaceKindIntent?: string;
   #declaredSpaceKind?: DeclaredSpaceKind;
@@ -3638,8 +3686,12 @@ export class SpaceSession {
     resumeKey: string = crypto.randomUUID(),
     resumeAttempt = 1,
     serverBuild?: string,
+    branch?: BranchName,
+    forkBranch?: true,
   ) {
     this.#client = client;
+    this.#branch = branch;
+    this.#forkBranch = forkBranch;
     this.#resumeKey = resumeKey;
     this.#resumeAttempt = resumeAttempt;
     this.#auth = auth;
@@ -4140,6 +4192,119 @@ export class SpaceSession {
         : {}),
     });
 
+    this.#noteResult(result.serverSeq);
+    return result;
+  }
+
+  /**
+   * Forks the branch `name` from `options.parentBranch` (absent, the default
+   * branch) as of `options.forkSeq` (absent, the parent's head), and returns
+   * it.
+   *
+   * @throws When the server does not advertise `branches`, when the session
+   * lacks write access, when the name is taken, or when the fork point lies
+   * outside the parent's history.
+   */
+  async createBranch(
+    name: BranchName,
+    options: { parentBranch?: BranchName; forkSeq?: number } = {},
+  ): Promise<BranchInfo> {
+    const result = await this.#branchRequest<BranchCreateResult>({
+      type: "branch.create",
+      name,
+      ...options,
+    });
+    return result.branch;
+  }
+
+  /**
+   * Deletes the branch `name`: it takes no further commit, and its name stays
+   * taken.
+   *
+   * @throws When the server does not advertise `branches`, when the session
+   * lacks write access, or when there is no such branch.
+   */
+  async deleteBranch(name: BranchName): Promise<void> {
+    await this.#branchRequest<BranchDeleteResult>({
+      type: "branch.delete",
+      name,
+    });
+  }
+
+  /**
+   * Returns the space's branches, deleted ones included.
+   *
+   * @throws When the server does not advertise `branches`.
+   */
+  async listBranches(): Promise<BranchInfo[]> {
+    const result = await this.#branchRequest<BranchListResult>({
+      type: "branch.list",
+    });
+    return result.branches;
+  }
+
+  /**
+   * Returns the commits of a branch's history, newest first: those of
+   * `options.branch` (absent, the branch this session is of) below
+   * `options.before`, and at most `options.limit` of them.
+   *
+   * @throws When the server does not advertise `branches`, or when there is
+   * no such branch.
+   */
+  async listHistory(
+    options: { branch?: BranchName; before?: number; limit?: number } = {},
+  ): Promise<CommitSummary[]> {
+    const result = await this.#branchRequest<HistoryListResult>({
+      type: "history.list",
+      ...options,
+    });
+    return result.commits;
+  }
+
+  /**
+   * Restores the space's default branch to the state `options.source`
+   * (absent, the default branch) held as of `options.sourceSeq` (absent, its
+   * head), and returns the seq of the commit that did, or `undefined` when
+   * the default branch already held that state.
+   *
+   * @throws When the server does not advertise `branches`, when the session
+   * lacks owner access, or when the point lies outside the source's history.
+   */
+  async restoreBranch(
+    options: { source?: BranchName; sourceSeq?: number } = {},
+  ): Promise<number | undefined> {
+    const result = await this.#branchRequest<BranchRestoreResult>({
+      type: "branch.restore",
+      ...options,
+    });
+    return result.seq;
+  }
+
+  /**
+   * Helper for the branch and history methods, which sends `request` for
+   * this session and notes the server seq its result reports.
+   */
+  async #branchRequest<Result extends { serverSeq: number } & FabricValue>(
+    request:
+      | Omit<BranchCreateRequest, "requestId" | "space" | "sessionId">
+      | Omit<BranchDeleteRequest, "requestId" | "space" | "sessionId">
+      | Omit<BranchListRequest, "requestId" | "space" | "sessionId">
+      | Omit<HistoryListRequest, "requestId" | "space" | "sessionId">
+      | Omit<BranchRestoreRequest, "requestId" | "space" | "sessionId">,
+  ): Promise<Result> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.branches !== true) {
+      throw protocolError(
+        "memory server does not serve branch and history requests " +
+          "(`branches` is not among its protocol flags)",
+      );
+    }
+    const result = await this.#client.request<Result>({
+      ...request,
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+    });
     this.#noteResult(result.serverSeq);
     return result;
   }
@@ -5798,6 +5963,9 @@ export class SpaceSession {
       ...(this.#readCeiling !== undefined
         ? { readCeiling: this.#readCeiling }
         : {}),
+      // A reopen without it would move the session to the default branch.
+      ...(this.#branch !== undefined ? { branch: this.#branch } : {}),
+      ...(this.#forkBranch === true ? { forkBranch: true as const } : {}),
     };
     const holdings = this.#declaredHoldings();
     const restored = await runWithAbortSignal(

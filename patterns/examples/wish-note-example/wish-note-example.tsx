@@ -1,3 +1,8 @@
+/**
+ * The smallest example of `wish`: it looks up a note with the `#note` tag and
+ * shows its content as text followed by the note's own rendered view.
+ */
+
 import {
   computed,
   hasError,

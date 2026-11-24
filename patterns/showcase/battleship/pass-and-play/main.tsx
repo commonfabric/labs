@@ -1,3 +1,9 @@
+/**
+ * A two-player Battleship game for one shared device. Players take turns
+ * firing at the opponent's grid, a hand-off screen hides each board while the
+ * device is passed, and the game ends when one fleet is sunk, with a button to
+ * play again.
+ */
 import {
   action,
   computed,

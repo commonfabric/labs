@@ -15,7 +15,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import {
+  type CfcConfClause,
+  CfcReadCeilingError,
+} from "@commonfabric/runner/cfc";
 import type { CfHarnessEngine } from "@commonfabric/cf-harness/engine";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import { getBuiltinTool } from "@commonfabric/cf-harness/tools";
@@ -2593,6 +2596,23 @@ describe("agent runner", () => {
       const record = await waitForState(result, "failed");
 
       expect(record.errorCode).toBe("PROVIDER_FAILURE");
+    });
+
+    it("fails as `CFC_REFUSED` a run a read above the session's read ceiling ended, saying why in the operator log", async () => {
+      const messages: string[] = [];
+      await startHarnessRunner(
+        () => Promise.reject(new CfcReadCeilingError()),
+        { report: (message) => messages.push(message) },
+      );
+      const result = await submit();
+      const record = await waitForState(result, "failed");
+
+      expect(record.errorCode).toBe("CFC_REFUSED");
+      expect(messages).toContainEqual(
+        expect.stringContaining(
+          "the runtime read ceiling withholds this value",
+        ),
+      );
     });
 
     it("fails as `INVALID_RESULT` a result that does not fit the schema", async () => {

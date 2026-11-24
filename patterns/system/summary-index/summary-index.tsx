@@ -1,4 +1,9 @@
-/** Indexes mentionable piece summaries for reactive search and table views. */
+/**
+ * A searchable list of the pieces in the space that carry a summary. It shows
+ * each piece with its summary, filters as you type by name or summary text, and
+ * reports how many pieces match.
+ * Assistants can also use it as a search tool.
+ */
 
 import {
   type AsyncResult,

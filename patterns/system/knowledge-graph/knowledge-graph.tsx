@@ -1,3 +1,9 @@
+/**
+ * A map of how the pieces in a space relate to one another. A Build Graph
+ * button has a model analyst enrich explicit mentions with descriptions, find
+ * hidden connections from piece summaries, and cluster related pieces into
+ * groups, shown as tables of groups and links.
+ */
 import {
   type BuiltInLLMMessage,
   computed,

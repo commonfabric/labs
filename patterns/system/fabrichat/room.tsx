@@ -351,9 +351,18 @@ export interface RoomManager extends JoiningManager {
 
   /**
    * The people the viewer's rooms list, other than the viewer: by principal,
-   * the profiles attesting it.
+   * the profiles attesting it. Reading it reads every listed room's roster.
    */
   people: PerUser<Record<string, ProfileCell[]>>;
+
+  /**
+   * `people`, for a session that has asked for them, and no one before; what
+   * the room's picker reads.
+   */
+  askedPeople?: PerSession<Record<string, ProfileCell[]>>;
+
+  /** Asks for `askedPeople`, for the session, as a picker of them opens. */
+  askForPeople?: Stream<unknown>;
 }
 
 /** Each of the viewer's adds' outcomes, by its `requestId`. */
@@ -768,13 +777,18 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     );
     // Each person the manager lists who isn't a member of the room's space, by
     // the first profile attesting them, with what tells them apart from
-    // another of them under the same name, per user, as the manager's people
-    // are, and no one while the space's members aren't known. The binding's
-    // name is the value's cause, the identity of the document that stores it,
-    // so renaming it moves its data.
-    const candidatesForUser = computed((): PerUser<AddCandidate[]> => {
+    // another of them under the same name, per session, as the manager's
+    // `askedPeople` are, and no one while the space's members aren't known.
+    // `askedPeople` lists no one until the session asks for them
+    // (`askForPeople`), as the panel's control below does, so the room reads
+    // no other room until then. A manager with no `askedPeople`, one from
+    // before it had them, is read through its `people` instead, which it
+    // lists without being asked. The binding's name is the value's cause, the
+    // identity of the document that stores it, so renaming it moves its data.
+    const candidatesForSession = computed((): PerSession<AddCandidate[]> => {
       if (members === undefined) return [];
-      const listed = Object.entries(manager?.people ?? {}).flatMap(
+      const people = manager?.askedPeople ?? manager?.people ?? {};
+      const listed = Object.entries(people).flatMap(
         ([principal, profiles]) => {
           const profile = profiles[0];
           return members.some((member) => member.principal === principal) ||
@@ -793,7 +807,16 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       }));
     });
     const candidatesDisplay = computed((): ChatDisplay =>
-      candidatesForUser.length === 0 ? "none" : "block"
+      candidatesForSession.length === 0 ? "none" : "block"
+    );
+    // The control asking for the people shows while the picker offers no one,
+    // to a reader whose manager can be asked: one with `askedPeople`, which
+    // `askForPeople` comes with. A declared stream reads as present whether
+    // or not the manager holds one, so it is the people that say so.
+    const askDisplay = computed((): ChatDisplay =>
+      manager?.askedPeople !== undefined && candidatesForSession.length === 0
+        ? "block"
+        : "none"
     );
 
     return {
@@ -817,6 +840,19 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
             />
           </div>
           <div
+            id="fabrichat-add-member-ask-people"
+            hidden
+            style={{ display: askDisplay }}
+          >
+            <cf-button
+              size="sm"
+              variant="ghost"
+              onClick={manager?.askForPeople}
+            >
+              Add people from your chats
+            </cf-button>
+          </div>
+          <div
             id="fabrichat-add-member-people"
             hidden
             style={{ display: candidatesDisplay }}
@@ -825,7 +861,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
               <cf-text variant="caption">
                 Or add people from your chats:
               </cf-text>
-              {candidatesForUser.map((candidate) => (
+              {candidatesForSession.map((candidate) => (
                 <cf-hstack
                   gap="2"
                   align="center"

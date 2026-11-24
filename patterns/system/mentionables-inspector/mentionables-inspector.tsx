@@ -1,3 +1,9 @@
+/**
+ * A debugging list of everything in the space that can be mentioned. It shows
+ * each mentionable piece, the ones offered when you type a link or mention,
+ * as a clickable link.
+ */
+
 import { Default, NAME, pattern, resultOf, UI, wish } from "commonfabric";
 
 export default pattern<Record<string, never>>((_) => {

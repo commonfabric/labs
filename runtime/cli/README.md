@@ -1588,26 +1588,29 @@ A run plans first, read-only, and prints the plan; refuses a store the plan says
 it must not write — one whose schema is behind the engine's, so that opening it
 would migrate it (a table, index or column the engine declares and the store
 lacks, a column declared differently, a legacy table the engine drops), one with
-a second branch, one with no commit 1, one with foreign-key violations, one
-holding more than one ACL document or an ACL document whose value is not an ACL,
-one with a non-empty `-wal` or `-journal` beside it, one another connection
-holds, or a store or result path under a directory a local server serves; then
-opens the store through the engine with an exclusive lock and, in order: inserts
-the compaction commit at the next seq, a `system` commit under the
-`compaction:<run id>` session with the plan as its payload; compacts each
-selected instance in its own transaction — the oldest row the cut keeps becomes
-the base, rewritten as a `set` holding the engine's reconstruction at exactly
-that row if it was a patch, and attributed to the compaction commit whatever its
-op, with the rows and snapshots behind it deleted; hollows the payloads outside
-the window in seq-ranged batches; writes the audit revision on the space's ACL
-document, a whole-document `set` of the document as it stands with a
-`compaction` member beside `value`, when the store has a live one (a space with
-no ACL document gets none, and a tombstoned one is left as it is, since a `set`
-would recreate it); checks the foreign keys and the file's integrity; and writes
-the result with `VACUUM
-INTO` to `--out`, `<store>.compacted.sqlite` beside the
-source by default, never overwriting. A run interrupted anywhere leaves a store
-every reader can use, and running it again resumes it under a second compaction
+an active branch other than the default one and the leftover history forks a run
+deletes, one with no commit 1, one with foreign-key violations, one holding more
+than one ACL document or an ACL document whose value is not an ACL, one with a
+non-empty `-wal` or `-journal` beside it, one another connection holds, or a
+store or result path under a directory a local server serves; then opens the
+store through the engine with an exclusive lock and, in order: deletes every
+leftover history fork — an active branch named `history:…`, left by a page that
+went away with an earlier step of the space open — and inserts the compaction
+commit at the next seq, a `system` commit under the `compaction:<run id>`
+session with the plan as its payload; compacts each selected instance in its own
+transaction — the oldest row the cut keeps becomes the base, rewritten as a
+`set` holding the engine's reconstruction at exactly that row if it was a patch,
+and attributed to the compaction commit whatever its op, with the rows and
+snapshots behind it deleted; hollows the payloads outside the window in
+seq-ranged batches; writes the audit revision on the space's ACL document, a
+whole-document `set` of the document as it stands with a `compaction` member
+beside `value`, when the store has a live one (a space with no ACL document gets
+none, and a tombstoned one is left as it is, since a `set` would recreate it);
+checks the foreign keys and the file's integrity; and writes the result with
+`VACUUM
+INTO` to `--out`, `<store>.compacted.sqlite` beside the source by
+default, never overwriting. A run interrupted anywhere leaves a store every
+reader can use, and running it again resumes it under a second compaction
 commit. The run's own summary follows the plan on stdout; progress goes to
 stderr; `--json` emits the summary as one document.
 
@@ -2297,6 +2300,7 @@ What the Fabric lane does, in order:
 | hit the model-turn limit                              | `failed`, `LIMIT_REACHED`    |
 | finished without a result satisfying its schema       | `failed`, `INVALID_RESULT`   |
 | failed in the model, a tool, or storage               | `failed`, `PROVIDER_FAILURE` |
+| was stopped by a read the read ceiling withholds      | `failed`, `CFC_REFUSED`      |
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 
@@ -3440,13 +3444,13 @@ the same person through chains the root issues:
 `cf index sharing` shows the person's give-to-get setting, the same one their
 loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
 change it. On, which is the default, their patterns are shared anonymously once
-they open them in their loom and they pass the privacy check, and they see what
-others share; off, nothing of theirs is shared on its own (what they shared with
-`cf pattern share` stays shared until `cf pattern unshare`), and search and
-listings show them only patterns published under a name, though a shared pattern
-opened by its id, as an import or `--from-index` does, still works.
-`--self-built` says whether that covers the patterns they build themselves in
-`cf` and Claude Code.
+they have used them in their loom for a day with no newer version and they pass
+the privacy check, and they see what others share; off, nothing of theirs is
+shared on its own (what they shared with `cf pattern share` stays shared until
+`cf pattern unshare`), and search and listings show them only patterns published
+under a name, though a shared pattern opened by its id, as an import or
+`--from-index` does, still works. `--self-built` says whether that covers the
+patterns they build themselves in `cf` and Claude Code.
 
 `cf index whoami` says which member the index sees the identity as. An admin
 admits a key without an invite with `cf index admit <did>`.
@@ -3486,24 +3490,41 @@ the lineage of `<path>` rather than of the file deployed, for a deploy of a copy
 of it (a snapshot in a temporary directory), so the copy continues the
 original's history.
 
+An agent deploying a pattern it wrote for the person (a service building one for
+their piece) says so with `--version-origin agent` on `piece new <file>` or
+`piece setsrc`: the version is kept as agent work, so the person's sharing
+setting treats it as one, in the history of the piece it is deployed to rather
+than of the file, which for such a deploy is a staged copy. Its description and
+hashtags come from the doc comment of the program the deploy committed, not from
+the staged entry, which may be gone by the time the version is recorded.
+`--version-description <text>` says what the version does, in place of that doc
+comment's description (its hashtags stay). `--built-from <patternId>` names the
+index pattern the source was built from, as `piece getsrc` notes it for a file
+it writes: someone else's is credited as the remix's origin on the history's
+first version, and that pattern deployed unchanged keeps no version. None of
+them goes with `--no-index-version`, `setsrc --origin` or `new --from-index`
+(none of which keeps a version), and `--version-origin` does not go with
+`--version-entry`.
+
 `cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
 private version of the entry's lineage, without deploying: the pattern the piece
-points at, with its source, so it is exactly what was deployed. The sharing
-setting never shares it on its own (`keepPrivate`); `cf pattern share` does. It
-pairs with `--no-index-version` deploys, keeping one when a change is done, and
-exits 1 with the reason when no version was kept. A checkpoint of a source the
-newest version already has keeps no new one, says so, and exits 0. It refuses an
-entry file whose contents are not what the piece runs (another file, or this one
-edited since its deploy). A piece following an origin keeps no version, as a
-deploy of it does not.
+points at, with its source, so it is exactly what was deployed. It is shared as
+a deployed version is: by `cf pattern share`, or by the sharing setting once it
+settles. It pairs with `--no-index-version` deploys, keeping one when a change
+is done, and exits 1 with the reason when no version was kept. A checkpoint of a
+source the newest version already has keeps no new one, says so, and exits 0. It
+refuses an entry file whose contents are not what the piece runs (another file,
+or this one edited since its deploy). A piece following an origin keeps no
+version, as a deploy of it does not.
 
 A deploy never shares a version by itself: drafts land many times an hour. The
-index shares a version once it settles, when its owner opens it in a loom, and
-only while their sharing setting (kept by the index; `cf index sharing` and
-Loom's settings change it) covers what they build; the deploy's line says so,
-and `--json` carries it as `version.autoShare: "when_used"`. `cf pattern share`
-shares one at once. The index write follows the deploy's commit and never
-changes its outcome, but the command waits for it before exiting.
+index shares a version once it settles, when its owner has used it in a loom for
+a day with no newer version and it passes the privacy check, and only while
+their sharing setting (kept by the index; `cf index sharing` and Loom's settings
+change it) covers what they build; the deploy's line says so, and `--json`
+carries it as `version.autoShare: "when_used"`. `cf pattern share` shares one at
+once. The index write follows the deploy's commit and never changes its outcome,
+but the command waits for it before exiting.
 
 `cf pattern history` lists the person's lineages; `cf pattern history <entry>`
 lists one entry's versions, newest first, and where each stands.

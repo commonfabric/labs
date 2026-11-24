@@ -1,4 +1,8 @@
-/** Explores a space with a tool-enabled dialog and presents its findings. */
+/**
+ * An AI-written orientation to a space. On opening it explores the space's
+ * contents and shows a headline, the active themes, notable connections between
+ * pieces, and suggested things to explore next.
+ */
 
 import {
   type AsyncResult,

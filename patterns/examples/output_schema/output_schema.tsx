@@ -1,3 +1,8 @@
+/**
+ * A single button that shows a number and increments it on each click. It
+ * is a minimal pattern with explicit `Input` and `Output` types, used to
+ * exercise how a pattern's output schema is declared.
+ */
 import {
   Default,
   handler,

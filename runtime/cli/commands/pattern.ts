@@ -486,9 +486,9 @@ export interface CheckpointDeps {
 
 /**
  * `cf pattern checkpoint`: keeps what a piece runs now as a private version
- * of `entry`'s lineage, which the sharing setting never shares on its own.
- * It deploys nothing, so a pattern made with `--no-index-version` deploys is
- * kept once a change is finished. Exits 1 when no version was kept, since the
+ * of `entry`'s lineage, which the sharing setting may share once it settles,
+ * as it may a deployed one. It deploys nothing, so a pattern made with
+ * `--no-index-version` deploys is kept once a change is finished. Exits 1 when no version was kept, since the
  * person asked for one.
  */
 export async function checkpoint(
@@ -525,10 +525,8 @@ export async function checkpoint(
       // A piece following a system or repository pattern is not the
       // person's work, and keeps no version, as a deploy of it does not.
       ...(running.origin === undefined ? {} : { origin: running.origin }),
-      // Until the index shares a checkpoint only once it has settled (in
-      // use a full day, unchanged), viewing the piece would share it the
-      // first time it is opened; private until an explicit share.
-      keepPrivate: true,
+      // No keepPrivate: the sharing setting covers a checkpoint as it does a
+      // deploy, and the index shares one only once it has settled.
     });
   if (options.json) {
     out(versionJson(outcome), { json: true });
@@ -787,8 +785,8 @@ export const pattern = new Command()
         .description(
           "Keep what a piece runs now as a private checkpoint in a " +
             "pattern's history, the version cf pattern rollback goes back " +
-            "to. It deploys nothing, and stays private until " +
-            "cf pattern share.",
+            "to. It deploys nothing, and is shared as a deploy is: by " +
+            "cf pattern share, or by your sharing setting once it settles.",
         )
         .arguments("<entry:string>")
         .option(

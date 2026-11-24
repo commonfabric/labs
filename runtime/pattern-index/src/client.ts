@@ -142,6 +142,15 @@ export interface PatternIndexAggregate {
   lastSeenDay?: string;
 }
 
+/**
+ * One original along a remix's chain, as the index shows it to the reader:
+ * the pattern and its name, or `unavailable` for an original the reader may
+ * not read, which ends the chain.
+ */
+export type PatternIndexRemixLink =
+  | { patternId: string; name?: string }
+  | { unavailable: true };
+
 /** One hit from `searchPatterns`. Carries metadata and never source. */
 export interface PatternIndexSearchResult {
   patternId: string;
@@ -199,6 +208,12 @@ export interface PatternIndexSearchResult {
 
   /** Whether the caller is its author. */
   mine?: boolean;
+
+  /** A remix's nearest original, when the reader may follow it. */
+  remixedFrom?: string;
+
+  /** A remix's originals, nearest first, cut to what the reader may see. */
+  remixChain?: readonly PatternIndexRemixLink[];
 
   /** The first generation of this pattern's version chain. */
   lineageId?: string;
@@ -279,6 +294,10 @@ export interface PatternIndexPattern {
   dependencies: readonly string[];
   priorPatternId?: string;
   remixedFrom?: string;
+
+  /** A remix's originals, nearest first, cut to what the reader may see. */
+  remixChain?: readonly PatternIndexRemixLink[];
+
   lineageId?: string;
 
   /** The caller's own version with this source; owner only. */
@@ -475,8 +494,9 @@ export type PatternIndexUsageEventType =
 
 /**
  * A usage event and what it is about. The owner's `viewed_in_loom` about the
- * piece a version was deployed to settles that version: the index shares it
- * then, while the sharing setting covers it.
+ * piece a version was deployed to counts toward settling that version: once
+ * they have used it for a day with no newer version and it passes the
+ * privacy check, the index shares it, while the sharing setting covers it.
  */
 export type PatternIndexRecordUsageEventRequest = PatternIndexEventSubject & {
   eventType: PatternIndexUsageEventType;
@@ -838,7 +858,8 @@ export interface PatternIndexSetSharingSettingsRequest {
 /**
  * What a publish did about sharing the version it recorded. A publish never
  * shares by itself: `when_used` means the index shares the version once its
- * owner opens it in a loom, while the sharing setting allows.
+ * owner has used it in a loom for a day with no newer version and it passes
+ * the privacy check, while the sharing setting allows.
  */
 export type PatternIndexAutoShare =
   | "when_used"

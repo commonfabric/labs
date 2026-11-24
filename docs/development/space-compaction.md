@@ -31,13 +31,15 @@ The tool is `cf space compact`, described in
 things about it decide the shape of everything below. It rewrites a store in
 place and writes the result as a fresh file, so it runs against a **copy of
 the backup**, never the backup and never a served file. It **refuses** a store
-whose schema the engine would migrate on opening, a store with a second branch,
-foreign-key violations, more than one ACL document, a `-wal` or `-journal`
-beside it that is not empty, or one another connection holds, and a result
-path that exists or sits in a served directory, so a refusal is a
-message to read and not a thing to route around. And its `--verify --against`
-is a second implementation of what the run claims, run on the result and the
-backup, which is the step that stands between the result and the install.
+whose schema the engine would migrate on opening, a store with an active branch
+beside the default one, foreign-key violations, more than one ACL document, a
+`-wal` or `-journal` beside it that is not empty, or one another connection
+holds, and a result path that exists or sits in a served directory. A leftover
+history fork is the one branch that refuses nothing: a run deletes it. So a
+refusal is a message to read and not a thing to route around. And its
+`--verify --against` is a second implementation of what the run claims, run on
+the result and the backup, which is the step that stands between the result and
+the install.
 
 ## Before anything is stopped
 

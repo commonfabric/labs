@@ -182,7 +182,8 @@ cell in another space is refused, since its label says who wrote the value
 there, not that anyone put it at this field. A reader therefore names the field
 through the document holding it, as `profile.key("picture")` does: a write
 redirect of the reader's own to the field, stored in another space, is refused
-like any other. A profile's space lets anyone write, so within it a visitor can
+like any other. A profile's space lets anyone write, so within it a client that
+ignores write policies, or any writer while the field stores no policy, can
 still point a face field at another cell the owner wrote there. A write declared
 `RepresentsCurrentUser`, as a profile's `setPicture` is, labels the value with
 the principal it acts for, so `profileFace()` in

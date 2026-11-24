@@ -768,15 +768,16 @@ interface PaginatedResult {
 
 ## 5.9 Branch-Aware Queries
 
-All queries operate on a specific branch. If no branch is specified, the default
-branch is used.
+All queries operate on a specific branch. If no branch is specified, the branch
+the session was opened on is used (`04-protocol.md` section 4.10), which is the
+default branch unless the open named another.
 
 ### 5.9.1 Branch Resolution
 
 ```typescript
 // Shown at module scope.
 interface QueryOptions {
-  branch?: BranchName; // Omit for default branch
+  branch?: BranchName; // Omit for the session's branch
   atSeq?: number; // Point-in-time read (latest if omitted)
 }
 ```

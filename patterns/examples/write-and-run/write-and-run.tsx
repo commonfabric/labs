@@ -1,4 +1,9 @@
-/** Generates pattern source from a prompt, then compiles and presents it. */
+/**
+ * Takes a description of a pattern, has a language model write its source
+ * code, compiles and runs it with `compileAndRun`, renders the result inline,
+ * and offers a button to open it. The generated code is shown in a read-only
+ * code editor, and compile errors are reported inline.
+ */
 
 import {
   type AsyncResult,

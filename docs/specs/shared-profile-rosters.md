@@ -87,11 +87,12 @@ participants.push({ profile: myProfile, joinedAt: Date.now() });
 Copy the resolved `name` and the profile's face into the roster entry when the
 user joins. `profileFace()` from `patterns/system/profile-face/profile-face.ts`,
 given the profile cell, reads the face: the picture, or else the avatar text,
-only as the profile's owner set it.
-Anyone can write a profile's picture, so a picture copied any other way may be a
-visitor's. The copy carries no claim of its own: a reader of the roster cannot
-tell it from anything else a roster writer stored, and only a live
-`<cf-profile-badge>` checks the face it draws.
+only as the profile's owner set it. A stored picture may not be its owner's:
+earlier releases let anyone set one through `setPicture`, and bytes can be
+stored without a label, so a picture copied any other way may be someone else's.
+The copy carries no claim of its own: a reader of the roster cannot tell it from
+anything else a roster writer stored, and only a live `<cf-profile-badge>`
+checks the face it draws.
 
 ```ts
 // Shown inside a handler.

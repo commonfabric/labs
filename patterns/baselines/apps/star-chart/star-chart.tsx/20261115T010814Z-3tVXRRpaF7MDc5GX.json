@@ -1,0 +1,217 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "DayRecord": {
+        "properties": {
+          "date": {
+            "description": "The local calendar day, YYYY-MM-DD.",
+            "type": "string"
+          },
+          "earned": {
+            "description": "The child earned the star that day.",
+            "type": "boolean"
+          },
+          "protected": {
+            "description": "A forgiven missed day: shown dimmed, and it keeps the streak going.",
+            "type": "boolean"
+          },
+          "rotation": {
+            "description": "The sticker's tilt in degrees, -15 to 15, fixed when it was placed.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "earned",
+          "protected",
+          "rotation"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "days": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/DayRecord"
+        },
+        "type": "array"
+      },
+      "goalDescription": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "goalName": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "Gold Star Goal",
+        "type": "string"
+      },
+      "todayOverride": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "Pins \"today\" (YYYY-MM-DD). Empty uses the viewer's local date.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/star-chart/star-chart.tsx",
+  "resultSchema": {
+    "$defs": {
+      "DayRecord": {
+        "properties": {
+          "date": {
+            "description": "The local calendar day, YYYY-MM-DD.",
+            "type": "string"
+          },
+          "earned": {
+            "description": "The child earned the star that day.",
+            "type": "boolean"
+          },
+          "protected": {
+            "description": "A forgiven missed day: shown dimmed, and it keeps the streak going.",
+            "type": "boolean"
+          },
+          "rotation": {
+            "description": "The sticker's tilt in degrees, -15 to 15, fixed when it was placed.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "earned",
+          "protected",
+          "rotation"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "bestStreak": {
+        "type": "number"
+      },
+      "currentStreak": {
+        "type": "number"
+      },
+      "days": {
+        "items": {
+          "$ref": "#/$defs/DayRecord"
+        },
+        "type": "array"
+      },
+      "earnStar": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Earn today's star."
+      },
+      "goalDescription": {
+        "type": "string"
+      },
+      "goalName": {
+        "type": "string"
+      },
+      "milestone": {
+        "description": "The celebration for the current streak, or \"\" when it hits no milestone.",
+        "type": "string"
+      },
+      "today": {
+        "description": "Today's date, YYYY-MM-DD, or \"\" until the clock resolves.",
+        "type": "string"
+      },
+      "todayHasStar": {
+        "type": "boolean"
+      },
+      "toggleDay": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Parent correction: toggle the star on a day.",
+        "properties": {
+          "date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "goalName",
+      "goalDescription",
+      "days",
+      "today",
+      "currentStreak",
+      "bestStreak",
+      "todayHasStar",
+      "milestone",
+      "earnStar",
+      "toggleDay",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

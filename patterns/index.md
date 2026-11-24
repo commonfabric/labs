@@ -147,7 +147,20 @@ distinct contributors hold it), `product/lobby/`, `showcase/inductor/lofi/` (a
 model labels a stream of items while a regex rule set learns to match it; a
 proposed rule set replaces the current one only when it is in grammar, safe, and
 better on a held-out split), `apps/lunch-poll/`, `examples/math-note/`,
-`examples/profile-group-chat/`, `apps/project-list/`,
+`examples/profile-group-chat/`, `apps/project-list/`, `apps/star-chart/` (a
+kids' daily-habit sticker chart), `apps/meal-orchestrator/` (plan a multi-dish
+meal: link dishes from notes, dietary fit per guest, meal balance, and an oven
+plan with conflict detection), `apps/food-recipe/` (recipes with timed step
+groups, oven needs, photo/text extraction with diff review, a cooking view, and
+prepared food for meal planning), `apps/codenames-helper/` (a spymaster's
+companion for in-person Codenames, with photo reading and clue ideas),
+`apps/smart-rubric/` (score and rank options against a weighted rubric, with LLM
+Quick Add), `apps/story-weaver/` (brainstorm a story level by level with AI),
+`apps/redactor/` (asks a model about personal matters with every personal value
+swapped out, enforced by CFC; the CFC design and debt are in its README),
+`apps/assumption-surfacer/` (a chat that surfaces the assistant's assumptions
+for you to confirm or correct), `apps/reward-spinner/` (a kids' prize spinner
+with parent-set odds),
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,
 `examples/scoped-group-chat/`, `examples/scoped-user-directory/`,
@@ -964,6 +977,682 @@ interface HabitTrackerOutput {
   toggleHabit: Stream<{ habitName: string }>;
   addHabit: Stream<{ name: string; icon: string }>;
   deleteHabit: Stream<{ habit: Habit }>;
+}
+```
+
+## `apps/star-chart/star-chart.tsx`
+
+A reward calendar for a child learning one daily habit: tap the big star to earn
+today's sticker, watch the streak grow, and celebrate at 3, 7, 14 and 30 days.
+Until today's star is earned the streak shown is the one it would continue. A
+single missed day after three or more earned days is forgiven (derived, never
+stored) and shown as a dimmed "protected" day; a parent can correct past days.
+The timeline shows the last 30 days. Today is the viewer's local date from the
+`#now` clock; `todayOverride` pins it.
+
+**Keywords:** kids, rewards, streaks, daily-habit, calendar, #now
+
+### Input Schema
+
+```ts
+interface DayRecord {
+  date: string; // YYYY-MM-DD, local
+  earned: boolean;
+  protected: boolean; // written false and ignored: see protectedDays
+  rotation: number; // sticker tilt, -15..15
+}
+
+interface StarChartInput {
+  goalName?: PerSpace<Writable<string | Default<"Gold Star Goal">>>;
+  goalDescription?: PerSpace<Writable<string | Default<"">>>;
+  days?: PerSpace<Writable<DayRecord[] | Default<[]>>>;
+  todayOverride?: PerSpace<Writable<string | Default<"">>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface StarChartOutput {
+  goalName: string;
+  goalDescription: string;
+  days: DayRecord[];
+  today: string;
+  currentStreak: number;
+  bestStreak: number;
+  protectedDays: string[]; // forgiven days, derived from the record
+  todayHasStar: boolean;
+  milestone: string;
+  earnStar: Stream<void>;
+  toggleDay: Stream<{ date: string }>;
+}
+```
+
+## `apps/reward-spinner/reward-spinner.tsx`
+
+A slot-machine prize spinner for kids: tap the reel and it whirs through prizes
+for six seconds before landing on three jelly beans, one jelly bean or a big
+hug, with a burst of stars. A parent sets the odds with a quiet generosity
+control (0 = mostly hugs, 10 = mostly candy) that briefly shows the resulting
+odds, and every spin is recorded with its time and generosity. The prize and the
+reel strip are decided once in the spin action; the reel is a CSS animation to
+that strip's last cell, played only for spins made in the current session.
+
+**Keywords:** kids, rewards, random, weighted-odds, animation, css-keyframes
+
+### Input Schema
+
+```ts
+type PrizeId = "three-beans" | "one-bean" | "hug";
+
+interface SpinRecord {
+  timestamp: number; // ms since epoch
+  generosity: number; // 0-10, at the time of the spin
+  prize: PrizeId;
+}
+
+interface RewardSpinnerInput {
+  generosity?: PerSpace<Writable<number | Default<10>>>;
+  spinHistory?: PerSpace<Writable<SpinRecord[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface RewardSpinnerOutput {
+  generosity: number;
+  spinHistory: SpinRecord[];
+  lastPrize: string; // emoji the reel rests on; 🎁 before any spin
+  odds: { emoji: string; dots: string; percent: number }[];
+  reel: PerSession<string[]>; // this session's latest reel strip; empty before one
+  spin: Stream<void>;
+  moreGenerous: Stream<void>;
+  lessGenerous: Stream<void>;
+}
+```
+
+## `apps/assumption-surfacer/assumption-surfacer.tsx`
+
+A chat that shows, beside the conversation, the assumptions the assistant is
+making about you. Before each reply the assistant records its few most
+consequential guesses (your language, skill level, goal…) through a
+`recordAssumptions` tool, each with alternatives; the list is read from those
+tool calls in the chat, so only your verdicts are stored. The sidebar lists
+them, newest first; pick the right alternative or "None of these". A correction
+is also sent to the chat, and every settled assumption is folded into the system
+prompt so later replies build on it.
+
+**Keywords:** llm, chat, llmDialog, tools, assumptions, clarification
+
+### Input Schema
+
+```ts
+interface Assumption {
+  id: string; // a1, a2, … in recording order
+  turn: number; // which user message (1-based) the reply answered
+  about: string; // excerpt of that message
+  label: string;
+  description: string;
+  alternatives: string[];
+  assumedIndex: number;
+  status: "open" | "confirmed" | "corrected" | "rejected";
+  chosenIndex: number; // when corrected, else -1
+}
+
+interface AssumptionSurfacerInput {
+  messages?: PerSpace<Writable<BuiltInLLMMessage[] | Default<[]>>>;
+  // The user's verdict on each recorded assumption, by id. The assumptions
+  // themselves are read from the recordAssumptions calls in `messages`.
+  verdicts?: PerSpace<
+    Writable<
+      | Record<string, { status: Assumption["status"]; chosenIndex: number }>
+      | Default<{}>
+    >
+  >;
+  // Each message of assumption updates sent; one counts as told only once it
+  // appears in `messages` (the dialog drops a send made mid-reply).
+  updates?: PerSpace<Writable<SentUpdate[] | Default<[]>>>;
+  systemPrompt?: PerSpace<Writable<string | Default<"">>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface AssumptionSurfacerOutput {
+  messages: BuiltInLLMMessage[];
+  assumptions: Assumption[];
+  openCount: number;
+  settled: string[]; // settled facts, as fed to the model
+  unsent: string[]; // verdicts not yet told to the assistant in the chat
+  system: string; // the full system prompt
+  pending: boolean | undefined;
+  recordAssumptions: Stream<{ assumptions: ReportedAssumption[] }>;
+  confirmAssumption: Stream<{ id: string }>;
+  rejectAssumption: Stream<{ id: string }>;
+  chooseAlternative: Stream<{ id: string; index: number }>;
+  sendUpdates: Stream<void>; // tell the assistant every unsent verdict now
+  addMessage: Stream<BuiltInLLMMessage>;
+  cancelGeneration: Stream<void>;
+  clearChat: Stream<void>;
+}
+```
+
+## `apps/redactor/redactor.tsx`
+
+Ask a language model about something personal without sending it anything
+personal. Names, emails, phone numbers, SSNs, card numbers and addresses in a
+draft, from the embedded PII vault (`vault.tsx`) or found by format, are swapped
+for realistic stand-ins; only that redacted draft may be sent to the model, and
+the reply comes back with the originals restored for the owner. CFC enforces the
+boundary: the draft and vault are `Confidential` under `policy.tsx`, whose one
+exchange rule releases only what the `redactDraft` lift computes, and the
+model's prompt is a `MaxConfidentiality` store. See the README's CFC design and
+CFC debt sections.
+
+**Keywords:** privacy, PII, redaction, pseudonymization, llm, CFC, exchangeRule,
+TransformedBy, MaxConfidentiality
+
+### Input Schema
+
+```ts
+interface RedactorInput {
+  vaultEntries?: Writable<Default<Secret<PIIEntry>[], []>>;
+  draft: Writable<Secret<string>>; // no Default: see README, CFC debt 3
+  modelPrompt?: Writable<Default<PublicText, "">>;
+  pastedReply?: Writable<Default<string, "">>;
+}
+```
+
+### Output Schema
+
+```ts
+interface RedactorOutput {
+  redacted: string; // released
+  found: Detection[]; // secret
+  leaks: string[];
+  modelPrompt: PublicText;
+  reply: string;
+  restored: string; // secret
+  send: Stream<void>;
+  sendRawDraft: Stream<void>; // refused by the runtime
+  typeDraft: Stream<{ text: string }>;
+}
+```
+
+## `apps/story-weaver/story-weaver.tsx`
+
+Grow a story with AI, one level at a time. Commit a synopsis (or ask for ideas
+with Inspire me), and each spindle on the next level asks the model for four
+Markdown options built on its parent; pin one and its children appear on the
+level below, ready to generate. Levels (Characters & Themes, Chapters, ...) are
+editable, and each has a branch factor for how many sibling spindles a pinned
+parent gets. Respin asks for fresh options, a spindle can carry its own extra
+instruction, and pins built on text that has since changed are flagged stale.
+The board is a tree of paths derived from what was pinned (`story-logic.ts`),
+and the pinned story projects to `[FS]` Markdown.
+
+**Keywords:** llm, generateObject, writing, story, brainstorm, tree, branching
+
+### Input Schema
+
+```ts
+interface Level {
+  title: string;
+  prompt: string; // instruction each spindle at this level sends
+  branch: number; // siblings per pinned parent, 1..6
+}
+
+interface Spindle {
+  path: string; // sibling indices per level, e.g. "0.2"
+  pinned: number; // option index, or -1
+  pinnedText: string;
+  parentHash: string; // hash of the parent text when pinned (stale check)
+  extraPrompt: string;
+  respins: number;
+  requested: boolean; // levels below the first wait for Generate options
+}
+
+interface StoryWeaverInput {
+  title?: PerSpace<Writable<string | Default<"My Story Weaver">>>;
+  synopsis?: PerSpace<Writable<string | Default<"">>>;
+  synopsisDraft?: PerSpace<Writable<string | Default<"">>>;
+  levels?: PerSpace<Writable<Level[] | Default<typeof DEFAULT_LEVELS>>>;
+  spindles?: PerSpace<Writable<Spindle[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface StoryWeaverOutput {
+  title: string;
+  synopsis: string;
+  synopsisDraft: string;
+  levels: Level[];
+  spindles: Spindle[];
+  board: string[][]; // paths on the board, level by level
+  startStory: Stream<void>;
+  pin: Stream<{ path: string; option: number; text: string }>;
+  respin: Stream<{ path: string }>;
+  generate: Stream<{ path: string }>;
+  setExtraPrompt: Stream<{ path: string; text: string }>;
+  setBranch: Stream<{ level: number; branch: number }>;
+  addLevel: Stream<{ title: string; prompt: string }>;
+  updateLevel: Stream<{ level: number; title: string; prompt: string }>;
+  removeLastLevel: Stream<void>;
+}
+```
+
+## `apps/smart-rubric/smart-rubric.tsx`
+
+Weigh options against a weighted rubric. Define categorical dimensions (scored
+Excellent / Good / Fair / Poor) and numeric ones (an editable range mapped onto
+the same 0–10 scale, higher or lower is better), weight them, and set each
+option's values; options rank by weighted score. ▲/▼ pins an option at a slot by
+hand while the rest keep ranking by score. Quick Add sends a free-text
+description to `generateObject` and proposes the option's name and values,
+checked against the rubric, for review before adding.
+
+**Keywords:** decision, rubric, scoring, ranking, weights, generateObject, llm
+
+### Input Schema
+
+```ts
+interface CategoryOption {
+  label: string;
+  score: number;
+}
+
+interface Dimension {
+  name: string; // unique; option values refer to it
+  type: "categorical" | "numeric";
+  multiplier: number; // weight, 0..10 in steps of 0.5
+  categories: CategoryOption[];
+  numericMin: number;
+  numericMax: number;
+  higherIsBetter?: boolean; // numeric only; default true
+}
+
+interface RubricOption {
+  name: string; // unique
+  values: { dimensionName: string; value: string | number }[];
+  manualRank: number | null; // slot pinned by hand, or null
+}
+
+interface RubricInput {
+  title?: PerSpace<Writable<string | Default<"Decision Rubric">>>;
+  options?: PerSpace<Writable<RubricOption[] | Default<[]>>>;
+  dimensions?: PerSpace<Writable<Dimension[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface RubricOutput {
+  title: string;
+  options: RubricOption[];
+  dimensions: Dimension[];
+  ranked: RankedOption[]; // displayed order with scores
+  selected: string;
+  quickAddStatus: "idle" | "pending" | "error" | "ready";
+  quickAddPreview: QuickAddPreview;
+  addOption: Stream<{ name?: string }>;
+  removeOption: Stream<{ name: string }>;
+  addDimension: Stream<{ name?: string; type: "categorical" | "numeric" }>;
+  removeDimension: Stream<{ name: string }>;
+  changeWeight: Stream<{ name: string; delta: number }>;
+  toggleDirection: Stream<{ name: string }>;
+  // a numeric dimension's range; a bound left out stays, min >= max is refused
+  setRange: Stream<
+    { name: string; min?: number | string; max?: number | string }
+  >;
+  selectOption: Stream<{ name: string }>;
+  setValue: Stream<
+    { option: string; dimension: string; value: string | number }
+  >;
+  stepValue: Stream<{ option: string; dimension: string; delta: number }>;
+  moveOption: Stream<{ name: string; delta: number }>;
+  resetManualRanks: Stream<void>;
+  analyzeQuickAdd: Stream<void>;
+  acceptQuickAdd: Stream<void>;
+  clearQuickAdd: Stream<void>;
+  dismissQuickAdd: Stream<void>;
+}
+```
+
+## `apps/codenames-helper/codenames-helper.tsx`
+
+A spymaster's companion for playing the word game Codenames in person with the
+physical cards. Setup: type the 25 board words into the grid and give each card
+its key-card color (tap a card, then a color), or photograph the board and the
+key card and apply what an LLM reads from each after checking it. The color
+counts flag a key that is not 9/8/7/1. Play: tap a card when it is guessed to
+mark it out of play (tap again to undo), and ask for one-word clue ideas that
+connect your team's remaining words while avoiding the rest (ask again for
+different ideas). Board logic is pure functions in `board.ts`.
+
+**Keywords:** game companion, board game, word game, spymaster, LLM,
+generateObject, image input, 5x5 grid
+
+### Input Schema
+
+```ts
+type Team = "red" | "blue";
+type Owner = "red" | "blue" | "neutral" | "assassin" | "unassigned";
+type Mode = "setup" | "play";
+
+interface BoardCard {
+  word: string; // upper case, "" until entered
+  owner: Owner; // key-card color
+  revealed: boolean; // guessed, out of play
+}
+
+interface CodenamesHelperInput {
+  board?: PerSpace<Writable<BoardCard[] | Default<[]>>>; // padded to 25
+  myTeam?: PerUser<Writable<Team | Default<"red">>>; // each spymaster's own
+  mode?: PerSpace<Writable<Mode | Default<"setup">>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface CodenamesHelperOutput {
+  board: BoardCard[]; // always 25, row-major
+  myTeam: Team;
+  mode: Mode;
+  selectedIndex: number; // card picked for coloring, or -1
+  inPlay: Record<Owner, number>;
+  keyWarnings: string[];
+  clueRequest: string; // board prompt clue ideas were last requested for
+  tapCard: Stream<{ index: number }>;
+  assignOwner: Stream<{ owner: Owner }>;
+  setWord: Stream<{ index: number; word: string }>;
+  applyPhotoReading: Stream<{ reading: PhotoReading; photoId?: string }>;
+  clearColors: Stream<void>;
+  resetBoard: Stream<void>;
+  startPlay: Stream<void>;
+  editBoard: Stream<void>;
+  requestClues: Stream<void>;
+}
+```
+
+## `apps/food-recipe/food-recipe.tsx`
+
+One recipe with what a cook and a meal planner need from it: ingredients, steps
+grouped into phases timed against serving (nights before, or minutes before)
+with durations, how long each result can wait, and oven needs (temperature,
+minutes, rack height and width); servings scaling that understands fractions;
+dietary analysis (`recipe-analyzer.tsx`, run on request and flagged when out of
+date); and a cooking view with a checkbox per step (`viewer.tsx`). Paste a
+recipe or add photos and "Extract Recipe Data" has the model fill the fields,
+shown as a field-by-field diff (the notes as a word diff) to apply or cancel;
+"Suggest Timing" proposes timing for the step groups the same way. Shared types
+live in `schemas.tsx`; a meal planner should read the narrow `RecipeForMeal`
+role type rather than the full output.
+
+**Keywords:** recipe, cooking, meal-planning, generateObject, image extraction,
+diff review, oven, dietary
+
+### Input Schema
+
+```ts
+interface Ingredient {
+  item: string;
+  amount: string; // free text: "1 1/2", "2-3"
+  unit: string;
+}
+
+interface OvenNeed {
+  temperature: number; // °F
+  duration: number; // minutes in the oven
+  heightSlots: number; // 1 sheet pan, 2 casserole, 5 turkey
+  width: "full" | "half";
+}
+
+interface StepGroup {
+  id: string;
+  name: string;
+  nightsBeforeServing?: number; // exclusive with minutesBeforeServing
+  minutesBeforeServing?: number;
+  duration?: number;
+  maxWaitMinutes?: number;
+  oven?: OvenNeed; // absent when no oven
+  steps: { description: string }[];
+}
+
+interface FoodRecipeInput {
+  name?: PerSpace<Writable<string | Default<"">>>;
+  cuisine?: PerSpace<Writable<string | Default<"">>>;
+  servings?: PerSpace<Writable<number | Default<4>>>;
+  yield?: PerSpace<Writable<string | Default<"">>>;
+  difficulty?: PerSpace<Writable<Difficulty | Default<"medium">>>;
+  prepTime?: PerSpace<Writable<number | Default<0>>>;
+  cookTime?: PerSpace<Writable<number | Default<0>>>;
+  restTime?: PerSpace<Writable<number | Default<0>>>;
+  holdTime?: PerSpace<Writable<number | Default<0>>>;
+  category?: PerSpace<Writable<RecipeCategory | Default<"other">>>;
+  ingredients?: PerSpace<Writable<Ingredient[] | Default<[]>>>;
+  stepGroups?: PerSpace<Writable<StepGroup[] | Default<[]>>>;
+  tags?: PerSpace<Writable<string[] | Default<[]>>>;
+  notes?: PerSpace<Writable<string | Default<"">>>;
+  source?: PerSpace<Writable<string | Default<"">>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface FoodRecipeOutput {
+  // every input field, as a plain value, plus:
+  totalTime: number; // prep + cook + rest
+  ovenRequirements: {
+    needsOven: boolean;
+    temps: number[];
+    tempChanges: boolean;
+  };
+  dietaryCompatibility: {
+    compatible: string[];
+    incompatible: string[];
+    warnings: string[];
+    primaryIngredients: string[];
+  };
+  // "none" = not analyzed yet: empty lists mean unknown, not safe
+  dietarySource: "analyzed" | "stale" | "none";
+  analyzeDiet: Stream<void>;
+  extraction: RecipeExtraction | null; // under review
+  timingSuggestions: TimingSuggestions | null; // under review
+  extract: Stream<void>;
+  applyExtraction: Stream<void>;
+  cancelExtraction: Stream<void>;
+  suggestTiming: Stream<void>;
+  applyTiming: Stream<void>;
+  cancelTiming: Stream<void>;
+  scale: Stream<{ factor: number }>;
+  addIngredient: Stream<void>;
+  removeIngredient: Stream<{ index: number }>;
+  addStepGroup: Stream<void>;
+  removeStepGroup: Stream<{ id: string }>;
+  moveStepGroup: Stream<{ id: string; delta: number }>;
+  addStep: Stream<{ id: string }>;
+  removeStep: Stream<{ id: string; step: number }>;
+  moveStep: Stream<{ id: string; step: number; delta: number }>;
+  setGroupNumber: Stream<
+    { id: string; field: GroupNumberField; value: string }
+  >;
+  setOven: Stream<{ id: string; field: OvenField; value: string }>;
+  cook: Stream<void>; // opens the cooking view
+}
+```
+
+## `apps/food-recipe/prepared-food.tsx`
+
+A dish nobody cooks from a recipe (store-bought, guest-brought, takeout) for
+meal planning: servings, category, prep time, whether it needs reheating, and
+hand-declared dietary tags (common tags one tap away) and main ingredients. Its
+`dietaryCompatibility` has the recipe's shape so a planner treats both alike;
+`PreparedFoodForMeal` in `schemas.tsx` is the narrow role type.
+
+**Keywords:** meal-planning, prepared food, takeout, dietary tags, cf-tags
+
+### Input Schema
+
+```ts
+interface PreparedFoodInput {
+  name?: PerSpace<Writable<string | Default<"">>>;
+  servings?: PerSpace<Writable<number | Default<4>>>;
+  category?: PerSpace<Writable<RecipeCategory | Default<"other">>>;
+  dietaryTags?: PerSpace<Writable<string[] | Default<[]>>>;
+  primaryIngredients?: PerSpace<Writable<string[] | Default<[]>>>;
+  description?: PerSpace<Writable<string | Default<"">>>;
+  source?: PerSpace<Writable<string | Default<"">>>;
+  prepTime?: PerSpace<Writable<number | Default<0>>>;
+  requiresReheating?: PerSpace<Writable<boolean | Default<false>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface PreparedFoodOutput {
+  // every input field, as a plain value, plus:
+  dietaryCompatibility: DietaryCompatibility; // compatible = dietaryTags
+  dietarySource: "declared" | "none"; // "none" until a tag or ingredient is entered
+  addDietaryTag: Stream<{ tag: string }>;
+}
+```
+
+## `apps/meal-orchestrator/meal-orchestrator.tsx`
+
+Plan a meal of several dishes: the event (name, date, serving time, guests),
+equipment (ovens with rack positions and racks owned, stovetop burners), each
+guest's dietary needs, and the menu of recipes and prepared foods from
+`apps/food-recipe/`, read through the narrow `RecipeForMeal` /
+`PreparedFoodForMeal` role types. "Link Dishes from Notes" has the model pick
+the foods out of free-form planning notes, match each to a recipe or prepared
+food already in the space (`wish("#recipe" / "#preparedFood")`), or offer to
+create one, all reviewed with checkboxes before anything is added; existing
+dishes can also be added by hand. It works out the meal's balance (dishes and
+servings per course against the guest count), each guest's dietary fit (unknown
+is never read as safe; "Analyze Diets" runs the recipes' own analyzers), and an
+oven plan that gives every oven step an oven by temperature, racks and height
+and reports what cannot fit, drawn as a timeline in clock time. "Suggest
+Improvements" asks the model for menu ideas. Burners are recorded but not
+scheduled: recipes do not say when they use one.
+
+**Keywords:** meal-planning, recipe, prepared food, oven schedule, conflict
+detection, dietary, generateObject, wish, composition, mentionable
+
+### Input Schema
+
+```ts
+interface OvenConfig {
+  rackPositions: number; // 3-7
+  physicalRacks: number; // 1-3
+}
+
+interface GuestDietaryProfile {
+  guestName: string;
+  requirements: string[]; // "vegan", "gluten-free", "no-mushrooms"
+}
+
+// RecipeForMeal / PreparedFoodForMeal from ../food-recipe/schemas.tsx, every
+// field optional, plus the dish's own stream.
+interface MealRecipe extends Partial<RecipeForMeal> {
+  analyzeDiet?: Stream<void>;
+}
+interface MealPreparedFood extends Partial<PreparedFoodForMeal> {
+  addDietaryTag?: Stream<{ tag: string }>;
+}
+
+interface MealOrchestratorInput {
+  mealName?: PerSpace<Writable<string | Default<"">>>;
+  mealDate?: PerSpace<Writable<string | Default<"">>>; // "2026-11-26"
+  mealTime?: PerSpace<Writable<string | Default<"">>>; // "18:00"
+  guestCount?: PerSpace<Writable<number | Default<4>>>;
+  ovens?: PerSpace<Writable<OvenConfig[]>>; // default: one 5-position, 2-rack oven
+  stovetopBurners?: PerSpace<Writable<number | Default<4>>>;
+  dietaryProfiles?: PerSpace<Writable<GuestDietaryProfile[] | Default<[]>>>;
+  planningNotes?: PerSpace<Writable<string | Default<"">>>;
+  recipes?: PerSpace<Writable<MealRecipe[] | Default<[]>>>;
+  preparedFoods?: PerSpace<Writable<MealPreparedFood[] | Default<[]>>>;
+  notes?: PerSpace<Writable<string | Default<"">>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface MealOrchestratorOutput {
+  // every input field, as a plain value, plus:
+  ovenPlan: {
+    // start/end in minutes before serving; oven is an index, null if none fits
+    events: {
+      id: string;
+      dish: string;
+      step: string;
+      start: number;
+      end: number;
+      temperature: number;
+      heightSlots: number;
+      width: "full" | "half";
+      oven: number | null;
+    }[];
+    conflicts: {
+      id: string;
+      dish: string;
+      step: string;
+      at: number;
+      temperature: number;
+      with: string[];
+      reason: string;
+    }[];
+    offTimeline: { dish: string; step: string; reason: string }[]; // night before, unscheduled
+    warnings: string[]; // still in the oven after serving
+  };
+  balance: {
+    categories: {
+      category: RecipeCategory;
+      label: string;
+      dishes: number;
+      servings: number;
+    }[];
+    dishCount: number;
+    totalServings: number;
+    warnings: string[];
+  };
+  dietary: {
+    guest: string;
+    requirement: string;
+    fits: string[];
+    conflicts: string[];
+    unknown: string[];
+    warning: string;
+  }[];
+  linkAnalysis: { items: LinkItem[] } | null; // under review
+  suggestions: { suggestions: string[] } | null;
+  mentionable: (RecipeForMeal | PreparedFoodForMeal)[]; // dishes it created
+  addOven: Stream<void>;
+  removeOven: Stream<{ index: number }>;
+  setOvenField: Stream<
+    { index: number; field: "rackPositions" | "physicalRacks"; value: string }
+  >;
+  addGuest: Stream<void>;
+  removeGuest: Stream<{ index: number }>;
+  setRequirements: Stream<{ index: number; requirements: string[] }>;
+  linkNotes: Stream<void>;
+  toggleLinkItem: Stream<{ index: number }>;
+  applyLinking: Stream<void>;
+  cancelLinking: Stream<void>;
+  removeRecipe: Stream<{ index: number }>;
+  removePreparedFood: Stream<{ index: number }>;
+  analyzeDiets: Stream<void>;
+  markSuits: Stream<{ index: number; requirement: string }>;
+  suggest: Stream<void>;
+  clearSuggestions: Stream<void>;
 }
 ```
 

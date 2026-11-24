@@ -161,32 +161,32 @@ most-recently-used (MRU) ordering:
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
-a random DID that owns itself (`selfOwned`) and declares the `profile` kind:
-its ACL grants its own DID OWNER and the wildcard `"*"` WRITE, and the
-creating user, who is not in the list, holds instead a delegation the space's
-key issued over it before being destroyed. The home space records that
-delegation beside the allocation, in the list under the cause
-`{ delegations: <space DID> }`, in the commit that appends the profile link;
-the record is a list so that a delegation issued later, with another
-command or policy, has a place beside it. A runtime loads every profile's
-delegations at startup
+a random DID that owns itself (`selfOwned`) and declares the `profile` kind: its
+ACL grants its own DID OWNER and the wildcard `"*"` WRITE, and the creating
+user, who is not in the list, holds instead a delegation the space's key issued
+over it before being destroyed. The home space records that delegation beside
+the allocation, in the list under the cause `{ delegations: <space DID> }`, in
+the commit that appends the profile link; the record is a list so that a
+delegation issued later, with another command or policy, has a place beside it.
+A runtime loads every profile's delegations at startup
 (`Runtime.loadProfileDelegations`) so its sessions on the profile space act
-under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
-The creating runtime holds the delegation from the moment the key signs it, so
-the commit that places the profile and the copy of its pattern into the space
-are made under the profile's grant too, and creation needs nothing from the
-wildcard. A profile created before profiles owned themselves names its creator
-as owner and has no delegation; it keeps opening on the creator's grant. The
-wildcard WRITE is there because a runtime showing a profile writes into the
-profile's space, so a visitor needs more than READ. CFC owner-protects the
-profile's data fields that store an owner policy (all but `picture`, as below),
-and its view state is per session; nothing else in the space is protected from
-a visitor (a *named* `inSpace(name)` would put every
-profile created under one name in one space) —
-running `/api/patterns/system/profile-home/profile-home.tsx`; the link
-is appended to `profiles`. The home Profile tab renders the **profile picker**
-(`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
-the default, and stamp MRU. There is no `profileName` mirror field anymore.
+under the profile's own grant ([profile
+delegation](../../specs/profile-delegation.md)). The creating runtime holds the
+delegation from the moment the key signs it, so the commit that places the
+profile and the copy of its pattern into the space are made under the profile's
+grant too, and creation needs nothing from the wildcard. A profile created
+before profiles owned themselves names its creator as owner and has no
+delegation; it keeps opening on the creator's grant. The wildcard WRITE is there
+because a runtime showing a profile writes into the profile's space, so a
+visitor needs more than READ. CFC owner-protects the profile's data fields that
+store an owner policy, and `setPicture` takes a picture from the owner alone, as
+below; the edit form's drafts and view state are per session; nothing else in
+the space is protected from a visitor (a *named* `inSpace(name)` would put every
+profile created under one name in one space) — running
+`/api/patterns/system/profile-home/profile-home.tsx`; the link is appended to
+`profiles`. The home Profile tab renders the **profile picker**
+(`profile-picker.tsx`): it lists profiles, lets the user create more inline,
+pick the default, and stamp MRU. There is no `profileName` mirror field anymore.
 
 Each profile field holds a write redirect to an internal cell of the profile
 that holds the field's value, and the field's writer writes that cell. Two
@@ -212,17 +212,25 @@ the value is the whole of that cell, that cell is in the space of the document
 holding the field, and no link stored there leads elsewhere. That label says
 nothing of who pointed the field at the cell. A cell in another space is
 refused, since its label says who wrote the value there, not that anyone put it
-at this field. Within the profile's space, a visitor can still point a face
-field at another cell the owner wrote there. A reader names the field through
-the profile, as `profile.key("picture")` does: a write redirect of its own to
-the field, stored in its own space, is refused like any other. A pattern asks
-with `writtenPrincipalOf()`, a host holding a runtime with
+at this field. Within the profile's space, a client that ignores write
+policies, or any writer while the field stores no policy, can still point a
+face field at another cell the owner wrote there. A reader names the field
+through the profile, as `profile.key("picture")` does: a write redirect of its
+own to the field, stored in its own space, is refused like any other. A pattern
+asks with `writtenPrincipalOf()`, a host holding a runtime with
 `writtenPrincipalAt()`, and a host holding cell handles with
-`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read a
-face with `profileFace()` from `patterns/system/profile-face/profile-face.ts`,
-which compares that principal with `profileOwnerOf()`; `cf-profile-badge`
-compares it with the principal its seal shows. So a picture a visitor set, or
-one stored before pictures were labeled, is not shown as the owner's face.
+`observeWrittenPrincipal()` from `@commonfabric/runtime-client`, beside
+`observeRepresentedPrincipal()` for the owner. Each of those two observers
+passes every report a second argument, a `LabelReading`: `"current"` when the
+report was read from the label the worker delivered with the value, `"refused"`
+when the worker refuses the cell, and `"stale"` when the label the handle holds
+is not that label. Only a `"current"` report can name a principal. Patterns read
+a face with `profileFace()` from
+`patterns/system/profile-face/profile-face.ts`, which compares that principal
+with `profileOwnerOf()`; `cf-profile-badge` compares it with the principal its
+seal shows. So a picture someone other than the owner set, which earlier
+releases allowed, or one stored without a label, is not shown as the owner's
+face.
 
 A field's writes are checked only once a write stores its policy in the value
 cell. A field with a default, such as `name` or `bio`, has its owner-protected
@@ -230,10 +238,24 @@ policy stored with the default when setup writes it. On a profile created with
 the field, its creator is then its owner, and anyone else's write is refused.
 On a profile that gains the field in a later release, setup stores the policy
 on nobody's behalf, and the first principal to write the field becomes its
-owner. `picture` has no default. Its writer, `setPicture`, declares only that
-the value represents whoever writes it, so each write labels the picture with
-its writer, and no write is refused. A new field takes one of these two forms.
-A field with neither a default nor such a writer stores no policy, and nothing
+owner. Where the profile stores a record of its creator, which only the
+experimental `pieceCreatorRecord` option writes and which awaits a ruling on
+the CFC specification, that creator is its owner instead
+([protected initialization](../../specs/cfc-protected-initialization.md)).
+
+`setPicture` refuses every writer but the person whose own profile it is, by
+the rule `profileOwnerOf()` applies, so no one can set the picture of a profile
+that is no one's own through it. A profile created under a release that gives
+`picture` its default, empty bytes, or that gains the field in such a release,
+stores the field's owner-protected policy as `name` does. A profile created
+while the field had no default stores no policy there until the first write
+through `setPicture` stores the one it declares, and until then any writer can
+store bytes there directly, with no label. The policy `setPicture` declares
+names it as the field's only writer and labels each picture with its writer,
+but binds no owner. A picture an earlier release let anyone set carries the
+label of whoever set it, and binding an owner from that label would give the
+field to them. A new field has a default, or a writer that declares
+`RepresentsCurrentUser`. A field with neither stores no policy, and nothing
 checks or labels its writes.
 
 The create passes `root: true`, so the profile is its space's root: the space's
@@ -286,9 +308,10 @@ nothing writes now; its contract names `setDefaultProfile`, so nothing else can
 replace it either, and Home says its space as `legacyDefaultProfileSpace`,
 which is what its handlers and the picker read, since a handle to a cell whose
 root holds a link denotes the linked profile. Any pattern that reaches Home's
-streams can retire or restore a profile by sending those handlers' events, as
-it can rename one or set its picture; what the contracts refuse is a write by
-anything else. A link written into an older Home's lists before its source
+streams can retire or restore a profile by sending those handlers' events. It
+can send a profile's `setName` and `setPicture` events too, but the profile
+takes a new name or picture only from its owner. What the contracts refuse is
+a write by anything else. A link written into an older Home's lists before its source
 updated stays there, and is subject to the rule below like any other.
 
 A profile a list links is the person's own when its `name`, followed through

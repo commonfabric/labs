@@ -46,6 +46,8 @@ const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
   "format": ["ascii", "dot"],
   // `cf index sharing --self-built`.
   "self-built": ["on", "off"],
+  // `cf piece new|setsrc --version-origin`: who wrote the source a version holds.
+  "version-origin": ["agent"],
   // `cf piece survey --side`: which document holds the collection.
   "side": ["input", "result"],
   // `cf inspect entities --kind`, the seven its help enumerates.

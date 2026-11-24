@@ -1,3 +1,10 @@
+/**
+ * A brain-dump inbox: paste a transcript, meeting notes, or rough ideas and an
+ * assistant turns them into linked notes. It saves the raw text as a transcript
+ * note, searches the space for related content, and splits the text into
+ * atomic notes with wiki-links.
+ */
+
 import {
   type BuiltInLLMMessage,
   computed,

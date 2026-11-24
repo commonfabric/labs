@@ -206,9 +206,9 @@ export const searchWeb = pattern<
   });
   const result = resultOf(request);
 
-  // TODO(seefeld): Should we instead return { result, error }? Or allocate a
-  // special [ERROR] for errors? Ideally this isn't specific to using patterns as
-  // tools but a general pattern.
+  // TODO(tool-errors): Should we instead return { result, error }? Or allocate
+  // a special [ERROR] for errors? Ideally this isn't specific to using patterns
+  // as tools but a general pattern.
   return computed(() =>
     hasError(request) ? { error: request.message } : result
   );

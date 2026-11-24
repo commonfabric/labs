@@ -23,6 +23,7 @@ import type {
 } from "@commonfabric/memory/v2";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import type { MetaField, RuntimeSizes } from "@commonfabric/runner";
+import type { HistoryStep } from "@commonfabric/runner/history-steps";
 import type {
   CfcConfClause,
   CfcTrustConfigInput,
@@ -46,7 +47,7 @@ import type {
   WriteStackTraceMatcher,
 } from "@commonfabric/runner/shared";
 import type { SpaceHostRegistration } from "@commonfabric/runner/space-host";
-export type { JSONObject, JSONSchema, JSONValue, Program };
+export type { HistoryStep, JSONObject, JSONSchema, JSONValue, Program };
 
 export type { CfcLabelView };
 
@@ -484,6 +485,30 @@ export enum RequestType {
    * show or offer a blob it holds a reference to.
    */
   BlobUrl = "runtime:blobUrl",
+
+  // Space history (main -> worker)
+
+  /**
+   * Returns the steps of a space's history, newest first: what happened in
+   * the space, as its commit log records it, and no document's contents.
+   */
+  SpaceHistoryList = "space:history:list",
+
+  /**
+   * Forks a branch of a space from a point of its history. A runtime
+   * initialized with the branch in `InitializationData.branches` then runs
+   * the space as the branch holds it.
+   */
+  SpaceBranchCreate = "space:branch:create",
+
+  /** Deletes a branch of a space, which then takes no further commit. */
+  SpaceBranchDelete = "space:branch:delete",
+
+  /**
+   * Restores a space to the state a point of its history held, or to the
+   * state a branch holds, as one new commit of the space's history.
+   */
+  SpaceRestore = "space:restore",
 
   // Piece operations (main -> worker)
 
@@ -928,6 +953,20 @@ export type InitializationData = {
   spaceDid: DID;
 
   /**
+   * The branch each space listed here is opened on: the runtime runs such a
+   * space as that branch holds it, and everything it writes there lands on
+   * the branch. Where every listed space names the same branch, a space not
+   * listed is opened on that branch too, forked from the space as it stands
+   * when the runtime first opens it, so that nothing the runtime writes
+   * reaches a space itself; a space the principal may not write to is opened
+   * as it stands. Where the listed spaces name different branches, a space
+   * not listed is opened as it stands. No serving loop runs a branch, so a
+   * runtime given any declares `serverExecution` off and computes what the
+   * branch stores itself.
+   */
+  branches?: Record<DID, string>;
+
+  /**
    * Experimental space-model feature flags, declared by the host. The worker
    * runs the arm named here rather than resolving its own, so that the two
    * realms cannot diverge.
@@ -1210,6 +1249,7 @@ export type RuntimeSecurityContext =
     | "memoryUrl"
     | "spaceHostMap"
     | "spaceDid"
+    | "branches"
     | "experimental"
     | "cfcEnforcementMode"
     | "cfcFlowLabels"
@@ -2561,6 +2601,74 @@ export type BlobUrlRequest = BaseRequest & {
   download?: boolean;
 };
 
+/** The {@link RequestType.SpaceHistoryList} request. */
+export type SpaceHistoryListRequest = BaseRequest & {
+  type: RequestType.SpaceHistoryList;
+
+  /** The space whose history to list. */
+  space: DID;
+
+  /** Only steps that began below this seq: a `startSeq` already held. */
+  before?: number;
+};
+
+/** A stretch of a space's history. */
+export type SpaceHistoryListResponse = {
+  /** The steps, newest first. */
+  steps: HistoryStep[];
+
+  /**
+   * The seq to pass as `before` for the steps older than these, absent when
+   * no older steps remain.
+   */
+  next?: number;
+};
+
+/** The {@link RequestType.SpaceBranchCreate} request. */
+export type SpaceBranchCreateRequest = BaseRequest & {
+  type: RequestType.SpaceBranchCreate;
+
+  /** The space to fork a branch of. */
+  space: DID;
+
+  /** The branch's name, which no other branch of the space has had. */
+  name: string;
+
+  /** The point of the space's history the branch starts from. */
+  forkSeq: number;
+};
+
+/** The {@link RequestType.SpaceBranchDelete} request. */
+export type SpaceBranchDeleteRequest = BaseRequest & {
+  type: RequestType.SpaceBranchDelete;
+
+  /** The space whose branch to delete. */
+  space: DID;
+
+  /** The branch's name. */
+  name: string;
+};
+
+/** The {@link RequestType.SpaceRestore} request. */
+export type SpaceRestoreRequest = BaseRequest & {
+  type: RequestType.SpaceRestore;
+
+  /** The space to restore. */
+  space: DID;
+
+  /** The point of the space's history to restore; absent, its newest. */
+  seq?: number;
+};
+
+/** What a restore did. */
+export type SpaceRestoreResponse = {
+  /**
+   * The seq of the commit that restored the space, absent when the space
+   * already held the state.
+   */
+  seq?: number;
+};
+
 /** Where a blob is served from. */
 export type BlobUrlResponse = {
   /** The absolute URL the blob's space's host serves it at. */
@@ -3664,7 +3772,11 @@ export type IPCClientRequest =
   | GetPatternSourcesRequest
   | SetBreakpointsRequest
   | UploadBlobRequest
-  | BlobUrlRequest;
+  | BlobUrlRequest
+  | SpaceHistoryListRequest
+  | SpaceBranchCreateRequest
+  | SpaceBranchDeleteRequest
+  | SpaceRestoreRequest;
 
 /**
  * The requests naming a piece by id, read off {@link IPCClientRequest} rather
@@ -4620,6 +4732,8 @@ export type RemoteResponse =
   | PatternSourcesResponse
   | UploadBlobResponse
   | BlobUrlResponse
+  | SpaceHistoryListResponse
+  | SpaceRestoreResponse
   | OperationCapabilitiesResponse
   | OperationFieldResponse
   | OperationApplyResponse
@@ -5033,6 +5147,22 @@ export type Commands = {
   [RequestType.BlobUrl]: {
     request: BlobUrlRequest;
     response: BlobUrlResponse;
+  };
+  [RequestType.SpaceHistoryList]: {
+    request: SpaceHistoryListRequest;
+    response: SpaceHistoryListResponse;
+  };
+  [RequestType.SpaceBranchCreate]: {
+    request: SpaceBranchCreateRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.SpaceBranchDelete]: {
+    request: SpaceBranchDeleteRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.SpaceRestore]: {
+    request: SpaceRestoreRequest;
+    response: SpaceRestoreResponse;
   };
   // VDOM requests
   [RequestType.VDomMount]: {

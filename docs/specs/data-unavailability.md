@@ -648,9 +648,14 @@ The runner therefore needs a readiness result which distinguishes:
 - a missing or invalid value after synchronization; and
 - a value whose required storage coverage is still synchronizing.
 
-Existing first-run deferral may prevent many syncing values from being
-observable, but it is not a substitute for this distinction at every read
-boundary.
+A refused computation does not publish its replica's missing coverage as an
+output. While the required input is loading, a status-aware read can observe
+`Syncing` locally; the last committed output stays in place, and an output
+with no revision stays unwritten. Once loading settles, a valid input yields
+its ordinary result. A confirmed schema violation yields an error of kind
+`schemaMismatch`; a failed load yields an error of kind `sync` with its cause.
+This distinguishes a replica's readiness from a marker actually present in
+the input data.
 
 Idempotency diagnostics compare runs over the same input basis. A linked read
 whose coverage is missing records its exact scoped address. If the replay can
@@ -829,6 +834,11 @@ a reconnect and does not invalidate an in-flight load. A new ready epoch also
 invalidates errors retained from an initially refused session once an
 authenticated access-admission retry succeeds; no disconnected session is
 required for that recovery.
+
+Releasing an unused space session is not a connection failure. Its observers
+see `idle` at the last ready epoch, including observers that subscribe after
+release. The next demand opens the session; once restored, it reports `ready`
+at a higher epoch.
 
 ### Streaming generation
 

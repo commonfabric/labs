@@ -1,0 +1,439 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Level": {
+        "properties": {
+          "branch": {
+            "description": "How many sibling spindles each pinned parent gets at this level.",
+            "type": "number"
+          },
+          "prompt": {
+            "description": "The instruction every spindle at this level sends after its parent.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "prompt",
+          "branch"
+        ],
+        "type": "object"
+      },
+      "Spindle": {
+        "properties": {
+          "extraPrompt": {
+            "description": "Extra instruction for this spindle only.",
+            "type": "string"
+          },
+          "parentHash": {
+            "description": "`textHash` of the parent's text when this spindle was pinned.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "pinned": {
+            "description": "The pinned option's index, or -1.",
+            "type": "number"
+          },
+          "pinnedText": {
+            "description": "The pinned option's text: the input of this spindle's children.",
+            "type": "string"
+          },
+          "requested": {
+            "description": "Generation was asked for. Spindles below level 0 wait for it.",
+            "type": "boolean"
+          },
+          "respins": {
+            "description": "Bumped by Respin; part of the prompt, so it asks for fresh options.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "path",
+          "pinned",
+          "pinnedText",
+          "parentHash",
+          "extraPrompt",
+          "respins",
+          "requested"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "levels": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [
+          {
+            "branch": 1,
+            "prompt": "Based on the synopsis, identify the main characters, key plot points, and central themes of this story.",
+            "title": "Characters & Themes"
+          },
+          {
+            "branch": 1,
+            "prompt": "Write detailed chapter summaries that develop the characters and themes identified above.",
+            "title": "Chapters"
+          }
+        ],
+        "items": {
+          "$ref": "#/$defs/Level"
+        },
+        "type": "array"
+      },
+      "spindles": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Spindle"
+        },
+        "type": "array"
+      },
+      "synopsis": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "The committed synopsis: the root every level builds on.",
+        "type": "string"
+      },
+      "synopsisDraft": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "The synopsis being written; committed by Start story / Update synopsis.",
+        "type": "string"
+      },
+      "title": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "My Story Weaver",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/story-weaver/story-weaver.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Level": {
+        "properties": {
+          "branch": {
+            "description": "How many sibling spindles each pinned parent gets at this level.",
+            "type": "number"
+          },
+          "prompt": {
+            "description": "The instruction every spindle at this level sends after its parent.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "prompt",
+          "branch"
+        ],
+        "type": "object"
+      },
+      "Spindle": {
+        "properties": {
+          "extraPrompt": {
+            "description": "Extra instruction for this spindle only.",
+            "type": "string"
+          },
+          "parentHash": {
+            "description": "`textHash` of the parent's text when this spindle was pinned.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "pinned": {
+            "description": "The pinned option's index, or -1.",
+            "type": "number"
+          },
+          "pinnedText": {
+            "description": "The pinned option's text: the input of this spindle's children.",
+            "type": "string"
+          },
+          "requested": {
+            "description": "Generation was asked for. Spindles below level 0 wait for it.",
+            "type": "boolean"
+          },
+          "respins": {
+            "description": "Bumped by Respin; part of the prompt, so it asks for fresh options.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "path",
+          "pinned",
+          "pinnedText",
+          "parentHash",
+          "extraPrompt",
+          "respins",
+          "requested"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Interactive story generation board with levels and spindles. #storyWeaver",
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addLevel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "board": {
+        "description": "Paths of the spindles on the board, level by level.",
+        "items": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": "array"
+      },
+      "generate": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "levels": {
+        "items": {
+          "$ref": "#/$defs/Level"
+        },
+        "type": "array"
+      },
+      "pin": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Pin (or, for the pinned option, unpin) an option on a spindle.",
+        "properties": {
+          "option": {
+            "type": "number"
+          },
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "option",
+          "text"
+        ],
+        "type": "object"
+      },
+      "removeLastLevel": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "respin": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "setBranch": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "branch": {
+            "type": "number"
+          },
+          "level": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "level",
+          "branch"
+        ],
+        "type": "object"
+      },
+      "setExtraPrompt": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
+        "type": "object"
+      },
+      "spindles": {
+        "items": {
+          "$ref": "#/$defs/Spindle"
+        },
+        "type": "array"
+      },
+      "startStory": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Commit the draft synopsis."
+      },
+      "synopsis": {
+        "type": "string"
+      },
+      "synopsisDraft": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "updateLevel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "level": {
+            "type": "number"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "title",
+          "prompt"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "title",
+      "synopsis",
+      "synopsisDraft",
+      "levels",
+      "spindles",
+      "board",
+      "startStory",
+      "pin",
+      "respin",
+      "generate",
+      "setExtraPrompt",
+      "setBranch",
+      "addLevel",
+      "updateLevel",
+      "removeLastLevel",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

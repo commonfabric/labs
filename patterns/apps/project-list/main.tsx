@@ -1,3 +1,7 @@
+/**
+ * A checklist of projects whose items can be checked off or removed. Its add
+ * buttons append a new numbered project to the list.
+ */
 import {
   action,
   Default,

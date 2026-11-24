@@ -1,3 +1,10 @@
+/**
+ * The form for creating a profile, the identity others see. You type a name,
+ * optionally choose or remove a picture, and submit to add a new profile to
+ * your list; a name and picture suggested by your host can pre-fill it.
+ * It is used in the home space, including inside the profile picker.
+ */
+
 import {
   type Cell,
   Cfc,
@@ -177,9 +184,10 @@ export const seedProfileName = handler<
 // the file dialog closes, and the renderer vouches only for events the browser
 // marks trusted, so a gate here would refuse every real pick. A pattern that
 // reaches this surface's streams can therefore choose or remove the picture
-// the create then gives the new profile, as it can already set a profile's
-// picture through profile-home's ungated `setPicture`. The name and the create
-// stay gated. See README.md, "CFC debt".
+// the create then gives the new profile, as a pattern running for a profile's
+// owner can already set its picture through profile-home's `setPicture`, which
+// asks for no trusted gesture. The name and the create stay gated. See
+// README.md, "CFC debt".
 export type ChoosePictureState = {
   pictureChoice: Writable<PictureChoice | undefined>;
   remove?: boolean;

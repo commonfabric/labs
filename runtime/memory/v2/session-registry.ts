@@ -1,4 +1,5 @@
 import type {
+  BranchName,
   OpCursor,
   OperationWatchSpec,
   SessionDescriptor,
@@ -9,6 +10,7 @@ import type {
   ViewQuery,
   WatchSpec,
 } from "../v2.ts";
+import { DEFAULT_BRANCH } from "../v2.ts";
 import type { ClientInfo } from "./client-info.ts";
 import {
   type DocumentInterestQuery,
@@ -158,12 +160,22 @@ export type SessionState = {
    * mode. */
   servingOwn?: true;
 
-  /** Whether the session's latest open declared that it is not demand
-   * (`SessionDescriptor.demand`). Such a session is not client demand on
-   * any server, whoever signed it, where a serving loop's own session of
-   * another kind is left out only by the server whose loop it belongs to
-   * (`isServingSessionOf()`). Fresh per open, in every access-list mode. */
+  /**
+   * Whether the session is not client demand: its latest open declared so
+   * (`SessionDescriptor.demand`), or it is a session of a branch, which no
+   * serving loop runs. Such a session is not client demand on any server,
+   * whoever signed it, where a serving loop's own session of another kind
+   * is left out only by the server whose loop it belongs to
+   * (`isServingSessionOf()`). Fresh per open, in every access-list mode.
+   */
   notDemand?: true;
+
+  /**
+   * The branch the session is of (`SessionDescriptor.branch`), which its
+   * commits, queries and watches read and write when they name none.
+   * Absent for a session of the default branch.
+   */
+  branch?: BranchName;
 
   /** Client report supplied by the latest admitted open. */
   client?: ClientInfo;
@@ -288,8 +300,8 @@ const openedEvent = (session: SessionState): SessionLifecycleEvent => ({
 /**
  * Whether the serving loop of `principal` leaves `session` out of client
  * demand: the session is one of that loop's own
- * (`SessionState.servingOwn`, signed by `principal`), or it declared that it
- * is not demand (`SessionState.notDemand`), whoever signed it. A session of
+ * (`SessionState.servingOwn`, signed by `principal`), or it is not
+ * demand (`SessionState.notDemand`), whoever signed it. A session of
  * that principal from a client that made no such declaration, and any
  * session when `principal` is `undefined`, is not left out.
  */
@@ -402,6 +414,18 @@ export class SessionRegistry {
         `session ${sessionId} is already bound to ${existing.principal}`,
       );
     }
+    // A session's replica holds one branch's documents, which a resume on
+    // another branch would leave it holding as though they were that one's.
+    if (
+      existing !== undefined &&
+      (existing.branch ?? DEFAULT_BRANCH) !== (session.branch ?? DEFAULT_BRANCH)
+    ) {
+      throw authorizationError(
+        `session ${sessionId} is of another branch`,
+      );
+    }
+    const onBranch = session.branch !== undefined &&
+      session.branch !== DEFAULT_BRANCH;
     if (
       existing !== undefined &&
       session.sessionToken !== existing.sessionToken &&
@@ -506,7 +530,12 @@ export class SessionRegistry {
           session.demand === false
         ? { servingOwn: true as const }
         : {}),
-      ...(session.demand === false ? { notDemand: true as const } : {}),
+      // No serving loop runs a branch, so a session of one is demand on
+      // nothing.
+      ...(session.demand === false || onBranch
+        ? { notDemand: true as const }
+        : {}),
+      ...(onBranch ? { branch: session.branch } : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
       ...(chainIssuers !== undefined ? { chainIssuers } : {}),

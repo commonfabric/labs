@@ -1,3 +1,10 @@
+/**
+ * A phone-style home screen with a bottom tab bar (Home, Search, Inbox,
+ * Profile), task cards, shortcuts, and artifact tiles, plus a button that
+ * opens a New Task sheet and shows a confirmation toast. It demonstrates
+ * mobile-oriented `cf-` components such as `cf-tab-bar`, `cf-modal`, and
+ * `cf-toast`, styled with a custom `cf-theme`.
+ */
 import {
   action,
   computed,

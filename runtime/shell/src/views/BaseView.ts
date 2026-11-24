@@ -18,7 +18,14 @@ export const SHELL_COMMAND = "shell-command";
 export type Command =
   | { type: "set-view"; view: AppView }
   | { type: "set-identity"; identity: Identity | undefined }
-  | { type: "set-config"; key: AppStateConfigKey; value: boolean };
+  | { type: "set-config"; key: AppStateConfigKey; value: boolean }
+  // Shows the viewed space as it stood at the point `seq` of its history, in
+  // a fork that leaves the space itself alone.
+  | { type: "open-history"; seq: number }
+  // Returns from a fork to the space as it stands, discarding the fork.
+  | { type: "close-history" }
+  // Restores the viewed space to the state the open fork holds.
+  | { type: "restore-history" };
 
 export class BaseView extends LitElement {
   #_debugController = DEBUG_RENDERER ? new DebugController(this) : null;

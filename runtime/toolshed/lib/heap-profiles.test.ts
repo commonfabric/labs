@@ -1,6 +1,7 @@
 /**
- * A round of heap profiles: the main thread's file, then what the serving
- * workers wrote, and a manifest beside them naming each file and its spaces.
+ * A round of heap profiles: the main thread's file where it samples, then
+ * what the serving workers wrote, and a manifest beside them naming each file
+ * and its spaces.
  */
 
 import { assert, assertEquals } from "@std/assert";
@@ -30,15 +31,18 @@ Deno.test("writes the main thread's profile and a manifest naming it and each wo
         asked.push(where);
         return Promise.resolve(workers);
       },
+      { sampleMainThread: true },
     );
     assertEquals(asked, [directory]);
-    assert(manifest.main.startsWith(`${directory}/heap-${Deno.pid}-main-`));
-    const profile = JSON.parse(await Deno.readTextFile(manifest.main));
+    const main = manifest.main;
+    assert(main !== undefined);
+    assert(main.startsWith(`${directory}/heap-${Deno.pid}-main-`));
+    const profile = JSON.parse(await Deno.readTextFile(main));
     assert(Array.isArray(profile.samples));
     assertEquals(manifest.workers, workers);
     assertEquals(JSON.parse(await Deno.readTextFile(path)), manifest);
     assertEquals(await modeOf(directory), 0o700);
-    for (const file of [manifest.main, path]) {
+    for (const file of [main, path]) {
       assertEquals(await modeOf(file), 0o600, file);
     }
   } finally {
@@ -53,9 +57,35 @@ Deno.test("leaves the workers out of the manifest where the serving loop has non
     const { manifest } = await writeHeapProfiles(
       directory,
       () => Promise.resolve(undefined),
+      { sampleMainThread: true },
     );
     assertEquals("workers" in manifest, false);
+    assert(manifest.main !== undefined);
     assert((await Deno.stat(manifest.main)).size > 0);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("leaves the main thread's profile out where the main thread does not sample, and writes the workers'", async () => {
+  const directory = await Deno.makeTempDir({ prefix: "heap-profiles-" });
+  try {
+    const workers: WorkerHeapProfile[] = [
+      { outcome: { path: `${directory}/heap-worker-1` }, spaces: ["did:a"] },
+    ];
+    const { path, manifest } = await writeHeapProfiles(
+      directory,
+      () => Promise.resolve(workers),
+      { sampleMainThread: false },
+    );
+    assertEquals("main" in manifest, false);
+    assertEquals(manifest.workers, workers);
+    assertEquals(JSON.parse(await Deno.readTextFile(path)), manifest);
+    const written = [];
+    for await (const entry of Deno.readDir(directory)) {
+      written.push(entry.name);
+    }
+    assertEquals(written, [path.slice(directory.length + 1)]);
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
