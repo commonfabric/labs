@@ -99,7 +99,8 @@ does not run. An enclosing piece's start instantiates every piece beneath
 it, and the computations of one of those are live only while a session
 demands what they write or a live computation reads it: a viewer of the
 enclosing piece who demands nothing of the inner one leaves it without one,
-and so does a viewer who left before the loop reached it. The record has nothing to put in the slice's place, so:
+and so does a viewer who left before the loop reached it. The record has
+nothing to put in the slice's place, so:
 
 - a `space` slice that is clean and of the recording epoch is left as it is,
   where the record is vouched for. Its rows are the ones a clean run left,
@@ -523,7 +524,18 @@ wrong.
 ## Known limits
 
 - **A piece is recorded only after a cycle that ran it settled.** A piece
-  served before the index was on starts on its first demand.
+  served before the index was on starts on its first demand. A cycle does
+  not settle while the pass that loads the demanded roots is under way, so a
+  space whose every root is loaded at once has nothing recorded until that
+  pass ends, and a tenure that parks before then, as one does when its last
+  session leaves, has recorded nothing.
+- **A piece beneath a started one runs, whether or not its own root is left
+  unstarted.** An enclosing piece's start instantiates the pieces beneath
+  it, and the writer of an instance a session demands is live from the
+  moment it is registered, so it runs. Leaving such a root unloaded saves
+  its structure load alone: where a board's own piece starts, every demanded
+  computation of the pieces it lists runs again, and `servedFromStore`
+  counts the roots that were not loaded, not the pieces that did not run.
 - **A slice is marked whole.** A computation that is not live when a record
   is taken contributes no reads and no vouch, so an undemanded part of a
   piece does not keep it marked. Where that leaves a live computation at the
@@ -712,6 +724,9 @@ of which exist:
 27. A snapshot names the slices a live computation ran at, and none for a
     piece whose computations are registered and not live
     (`runtime/runner/test/scheduler/piece-currency.test.ts`).
+28. A piece that an enclosing piece's start instantiates for a viewer who
+    demands nothing of it keeps its record, and the store can still serve
+    its root to the viewer it was recorded for.
 
 ## Related
 
