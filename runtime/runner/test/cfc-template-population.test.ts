@@ -27,6 +27,7 @@ import {
   linkResolutionProbe,
   machineryRead,
 } from "../src/storage/reactivity-log.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 import { labelsThroughLink } from "./support/reached-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-template-population");
@@ -104,11 +105,12 @@ describe("CFC template population (Stage A): the two under-taints", () => {
 
   const entriesOf = (id: string): StoredEntry[] => {
     const replica = storageManager!.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { cfc?: unknown } | undefined;
     };
-    return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    );
   };
 
   const readAddress = (id: string, path: string[]) => ({
@@ -624,11 +626,12 @@ describe("CFC template population (SC-8 remainder): generic pure-link containers
 
   const entriesOf = (id: string): StoredEntry[] => {
     const replica = storageManager!.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { cfc?: unknown } | undefined;
     };
-    return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    );
   };
 
   const readAddress = (id: string, path: string[]) => ({
@@ -940,11 +943,12 @@ describe("CFC template population (Stage A): class-split resolution", () => {
 
   const entriesOf = (id: string): StoredEntry[] => {
     const replica = storageManager!.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { cfc?: unknown } | undefined;
     };
-    return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    );
   };
 
   const readAddress = (id: string, path: string[]) => ({
@@ -1190,11 +1194,12 @@ describe("CFC template population (Stage A): record-only additionalProperties wa
 
   const entriesOf = (id: string): StoredEntry[] => {
     const replica = storageManager!.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: StoredEntry[] } };
-      } | undefined;
+      getDocument(id: string): { cfc?: unknown } | undefined;
     };
-    return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+    return storedLabelEntries<StoredEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    );
   };
 
   const persistThroughSchema = async (
@@ -1375,12 +1380,12 @@ describe("CFC template population (Stage A): cross-space label protection", () =
       expect((await tx.commit().settled).ok).toBeDefined();
 
       const replica = storageManager.open(space).replica as unknown as {
-        getDocument(id: string): {
-          cfc?: { labelMap?: { entries: StoredEntry[] } };
-        } | undefined;
+        getDocument(id: string): { cfc?: unknown } | undefined;
       };
-      const entries = replica.getDocument(listId)?.cfc?.labelMap?.entries ??
-        [];
+      const entries = storedLabelEntries<StoredEntry>(
+        replica.getDocument(listId)?.cfc,
+        (labelId) => replica.getDocument(labelId),
+      );
       const templates = entries.filter((e) =>
         e.origin === "structure" && e.path.length === 1 && e.path[0] === "*"
       );

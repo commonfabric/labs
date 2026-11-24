@@ -235,6 +235,23 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
       join(root, "runtime", "cli", "lib", "multi-user-test-worker.ts"),
     );
     assertEquals(
+      config.cliParseWorkerPath(),
+      join(root, "runtime", "cli", "lib", "view", "parseworker.ts"),
+    );
+    assertEquals(
+      config.cliProgramWorkerPath(),
+      join(
+        root,
+        "runtime",
+        "cli",
+        "lib",
+        "view",
+        "languages",
+        "typescript",
+        "programworker.ts",
+      ),
+    );
+    assertEquals(
       config.toolshedServingWorkerPath(),
       join(root, "runtime", "toolshed", "lib", "serving-worker.ts"),
     );
@@ -247,6 +264,8 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
     assert(
       config.includePaths("toolshed").includes(config.compileWorkerPath()),
     );
+    assert(config.includePaths("cf").includes(config.cliParseWorkerPath()));
+    assert(config.includePaths("cf").includes(config.cliProgramWorkerPath()));
     assertEquals(config.fusePackagePath(), join(root, "runtime", "fuse"));
     assertEquals(config.distDir(), join(root, "dist"));
     assertEquals(config.distPath("cf"), join(root, "dist", "cf"));

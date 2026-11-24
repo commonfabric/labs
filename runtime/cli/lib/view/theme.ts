@@ -165,6 +165,9 @@ export const ui = {
 
   statusDim: { fg: C.fgDim, bg: C.panel } as Style,
 
+  /** The spinner and filled part of the status bar's highlighting progress. */
+  statusBusy: { fg: C.cyan, bg: C.panel, bold: true } as Style,
+
   /** The notice region above the status bar (e.g. the files a save would
    * write), tinted to read as a callout rather than ordinary content. */
   noticeBar: { fg: C.ink, bg: C.cyan } as Style,

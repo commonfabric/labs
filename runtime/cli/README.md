@@ -515,25 +515,33 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, Rust, TOML, HCL, Lean, shell, makefile, Java properties, INI,
-ProGuard, XML, and Org mode files use their own highlighting. HCL covers
-OpenTofu and Terraform configuration named `.tf` or `.tofu`, variable
-definitions files named `.tfvars`, backend configuration files named
-`.tfbackend`, and other `.hcl` files, such as dependency lock files. A string's
-interpolations and template directives are colored as code inside the string.
-Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or `.command`,
-and Bash's startup files, such as `.bashrc` and `.profile`. A heredoc's body is
-colored as a string, with the expansions its delimiter allows. The makefile
-language reads GNU make's syntax in files named `Makefile`, `makefile`,
-`GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so they are
-colored as shell. The same is true of the command in a `!=` assignment and the
-argument of the `shell` function. Make's own variable references and function
-calls are colored inside that shell text. A Swift package manifest is Swift
-source under its `.swift` extension, and a module's `.swiftinterface` is Swift
-as well. Gradle build and settings scripts are Kotlin scripts under the `.kts`
-extension. Gradle version catalogs and Cargo manifests are TOML, as are Cargo
-lock files. The ProGuard language covers the keep rules that ProGuard and R8
-read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
+Swift, Kotlin, Rust, TOML, HCL, Lean, C, C++, CUDA, shell, makefile, Java
+properties, INI, ProGuard, XML, and Org mode files use their own highlighting. A
+lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`,
+`.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select
+CUDA. C++ and CUDA share one grammar, which colors CUDA's qualifiers, such as
+`__global__`, as keywords. C and C++ both write `.h` headers, so a `.h` file is
+colored in a mode that claims neither dialect, using the C++ grammar, which
+reads the declarations C headers usually make; a C header that uses one of C++'s
+keywords, such as `new`, as a name is colored as C when piped with
+`--language
+c`. HCL covers OpenTofu and Terraform configuration named `.tf` or
+`.tofu`, variable definitions files named `.tfvars`, backend configuration files
+named `.tfbackend`, and other `.hcl` files, such as dependency lock files. A
+string's interpolations and template directives are colored as code inside the
+string. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
+`.command`, and Bash's startup files, such as `.bashrc` and `.profile`. A
+heredoc's body is colored as a string, with the expansions its delimiter allows.
+The makefile language reads GNU make's syntax in files named `Makefile`,
+`makefile`, `GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so
+they are colored as shell. The same is true of the command in a `!=` assignment
+and the argument of the `shell` function. Make's own variable references and
+function calls are colored inside that shell text. A Swift package manifest is
+Swift source under its `.swift` extension, and a module's `.swiftinterface` is
+Swift as well. Gradle build and settings scripts are Kotlin scripts under the
+`.kts` extension. Gradle version catalogs and Cargo manifests are TOML, as are
+Cargo lock files. The ProGuard language covers the keep rules that ProGuard and
+R8 read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
 another `.pro` file uses it when one of its lines starts with one of ProGuard's
 option names, because Qt project files and Prolog use that suffix as well. XML
 covers Android manifests, resources, and layouts, SVG images, and Apple property
@@ -641,6 +649,20 @@ and `github-known-hosts`), and keys and certificates (`.pem`, `.crt`, `.key`)
 are plain text by name, so a shebang or an XML declaration at the start of their
 content does not select another language.
 
+Ignore files are colored by the rules of the tool that reads each one, for its
+comments, negation, wildcards, and white space. `.gitignore` uses Git's
+patterns, and so do `.denoignore` and Claude Code's `.worktreeinclude`, which
+are written in Git's syntax. Each part of a Git pattern is colored: a leading
+`!` that negates it, the wildcards `*` and `?`, a bracket expression, the `/`
+between directories, and a backslash that makes the next character literal.
+`.dockerignore`, a Docker ignore file named after its Dockerfile, such as
+`Dockerfile.build.dockerignore`, and Podman's `.containerignore` use Docker's
+patterns, which differ from Git's in that white space before a pattern, after
+its `!`, and at its end, escaped or not, is not part of it, and in that bracket
+expressions follow Go's rules, where only `^` negates one. `.bazelignore` lists
+directories for Bazel to leave out, one literal path to a line, so `*` and `!`
+have no meaning there. In all of them, a line that starts with `#` is a comment.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
@@ -669,6 +691,22 @@ not guessed from its syntax.
 A diff shows its whole-diff change totals at the top right corner of its first
 line: the added line count and the removed line count, colored like additions
 and removals.
+
+A diff colors its lines from the complete files on both sides of each change,
+and parsing large files can take seconds. The interactive pager parses up to
+131,072 characters of those files before it shows the diff, and shows the lines
+of the rest as plain text. It parses them in the background while it takes keys,
+and colors the files that have finished each time source as long as a sixteenth
+of the diff, and at least 131,072 characters, has finished parsing since it last
+colored them, and again once every parse has ended. A file stays plain until
+both of its sides have finished parsing. Meanwhile, the status bar shows a
+spinner and a gauge of how much of their source has been parsed, before the
+current file's name, with the word "Highlighting" when there is room. Key hints
+make way for the gauge, except the first two, Help and Quit. When files cannot
+be parsed, the status line says so, with the reason the first one failed, and
+they stay plain. A file saved before its parse finishes is parsed again as
+saved, and a file opened from the viewer stops the parses. Output that is not to
+a terminal is colored in full before it is written.
 
 Dialogs share Up / Down, Page Up / Page Down, and Home / End for navigation.
 Ctrl-F / Ctrl-B also page down / up. Pages follow the dialog's visible height,
@@ -781,10 +819,16 @@ that summary in the status line. Quit (`Q`) closes the viewer, first offering to
 save any unsaved edits. Git asks nothing on the terminal while the viewer holds
 it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
 names, and fails when it names none. `P` refuses to push `origin`'s default
-branch, and refuses when `origin` names no default branch
-(`git remote set-head origin --auto` finds it). It also refuses a checkout not
-on a branch, and refuses when git started the viewer as its pager for a
-different repository.
+branch, and refuses when `origin` names no default branch or cannot be asked
+which it is. It asks `origin`'s server which branch that is, with
+`git ls-remote --symref`, when a push starts, before any question below, and
+shows what git prints only when that fails. The push that the question confirms,
+and any retry of it, uses that answer rather than asking again. Asking is a
+connection to `origin` of its own, which can mean one more passphrase prompt or
+security key touch. The viewer asks the server because the
+`refs/remotes/origin/HEAD` that git sets when it clones stays as it is when the
+default branch changes. It also refuses a checkout not on a branch, and refuses
+when git started the viewer as its pager for a different repository.
 
 The push and land dialogs draw what the viewer says in bright text, and the
 names it mentions, such as a branch, a repository, a commit, or a pull request's
@@ -814,9 +858,12 @@ button is the default, so Enter does nothing until a button has the focus, and
 pressing `P` again does not push.
 
 When git fails to push or is aborted, as it can when the network is unreliable,
-a Retry push button (`P`) pushes again, unless git says the push was rejected,
-or GitHub says the account has no permission to push, which pushing again cannot
-change. Each later push's output follows the earlier one's in the same dialog.
+or does not learn which branch is `origin`'s default, a Retry push button (`P`)
+starts the push again, unless git says the push was rejected, or GitHub says the
+account has no permission to push, which pushing again cannot change. The retry
+asks before pushing, as `P` does, unless the question had confirmed the push
+that failed. Each later push's output follows the earlier one's in the same
+dialog.
 
 Once the push succeeds, the settings say what happens next, and the radio
 buttons under "Pull requests" choose one of the four ways below. The first and
@@ -827,10 +874,10 @@ succeeds, including one that had nothing new to push, unless the branch already
 has an open pull request, which they look for as `L` does, below. The pull
 request goes to the GitHub repository of the remote named `upstream`, `github`,
 or `origin`, whichever is the first to name one, and merges into that remote's
-default branch, from the branch on `origin`. Its title and description are the
-subject and the rest of the message of the branch's oldest commit that the
-default branch, as last fetched, does not have, leaving out merges and commits
-whose changes that branch already has.
+default branch, as its server names it then, from the branch on `origin`. Its
+title and description are the subject and the rest of the message of the
+branch's oldest commit that the default branch, as last fetched, does not have,
+leaving out merges and commits whose changes that branch already has.
 
 - "Just push, and link to them": the summary gives the page's address, which the
   status line makes a link for terminals that open links.
@@ -2312,9 +2359,11 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--max-concurrent-local`    | How many local jobs run at once, beside and apart from `--max-concurrent`. Defaults to 2.                                         |
 | `--local-only`              | Serve local jobs and start no Fabric lane; `--identity` and `--api-url` are then not needed.                                      |
 
-The model provider is the one `cf-harness` is configured with under its harness
-home directory. The Fabric lane uses the `context` prompt role, so the default
-`enforce-strict` mode admits only `submit_result`; set
+The model provider is the one `cf-harness` resolves, from
+`CF_HARNESS_MODEL_PROVIDER` and then the persisted preference in its harness
+home directory, except for a local job whose profile names one
+([Local jobs](#local-jobs)). The Fabric lane uses the `context` prompt role, so
+the default `enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
 A run's sandbox, and a local job's, is the one `cf-harness` selects from the
@@ -2539,6 +2588,27 @@ last step, and the parent's step resumes when no child remains. Children cannot
 delegate further; nested progress needs lineage in the harness's transcript
 contract before that restriction is widened.
 
+A profile may name the `model` its jobs run, in place of the runner's `--model`,
+and the `modelProvider` they run on, `openai-codex` or
+`openai-compatible-gateway`, which the runner passes to `cf-harness` as
+`--model-provider`. A profile naming a provider fixes the provider its jobs'
+model calls go to; one naming none leaves `cf-harness` to resolve a provider as
+each job starts, from `CF_HARNESS_MODEL_PROVIDER` and then the harness home's
+persisted preference. Such a profile that bounds model calls fails each job that
+resolves to `openai-compatible-gateway`, which cannot verify the bounds. The
+runner refuses a profile file naming a provider `cf-harness` does not know. A
+follow-up continues its predecessor's recorded run, and `cf-harness` refuses to
+continue a run on a provider other than the one it recorded, or on another model
+where it recorded one. A follow-up under a profile whose `modelProvider` differs
+from its predecessor's recorded provider therefore fails `PROVIDER_FAILURE`
+before any model call, with the `errorDetail`
+`continue provider mismatch: run uses <recorded>, requested <profile's>`. It
+records no run, so the conversation it ends can open no further follow-up; a
+host that changes a profile's provider starts a new job instead. A job pinned to
+`openai-codex` runs without `CF_HARNESS_GATEWAY_BASE_URL` and
+`CF_HARNESS_GATEWAY_AUTH_MODE`, which the harness refuses beside that provider,
+so one runner can serve gateway and Codex profiles alike.
+
 A host profile may bound each model call with `maxInputBytes` and
 `maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
 `openai-codex`, make one provider attempt without transport retries (a request
@@ -2548,12 +2618,15 @@ provider's output-token ceiling, including reasoning tokens. The byte check
 includes instructions, history and tool schemas and rejects oversized context
 without discarding it. The same model client carries these limits into research
 and delegated calls. A run under the gateway provider refuses these limits as
-its model client is built, before any model call. An input-byte ceiling is not a
-token count; callers budgeting tokens must reserve separate provider framing
-headroom. Provider-added native-search context and image token expansion require
-separate accounting; the serialized byte check does not bound them. A response
-that reaches its output-token ceiling ends as a provider failure, with no
-partial structured result admitted.
+its model client is built, before any model call; a profile pinned to
+`openai-compatible-gateway` that sets either is refused when the profile file is
+read, and a request naming either under such a profile is refused
+`beyond_profile`. An input-byte ceiling is not a token count; callers budgeting
+tokens must reserve separate provider framing headroom. Provider-added
+native-search context and image token expansion require separate accounting; the
+serialized byte check does not bound them. A response that reaches its
+output-token ceiling ends as a provider failure, with no partial structured
+result admitted.
 
 `imageAttachments` contains at most eight `{mediaType, base64}` objects, using
 PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature
@@ -2565,8 +2638,9 @@ key.
 
 Enqueue commits its job and first event in a SQLite WAL transaction with
 `synchronous = FULL` before acknowledging it. Repeating a caller's idempotency
-key with the same request returns that job; a different request or profile
-returns a conflict.
+key with the same request returns that job, even after the host's profiles
+change or drop the job's profile, since only a job to be added is held to the
+profiles; a different request or profile returns a conflict.
 
 A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
 1 MiB of UTF-8 JSON:

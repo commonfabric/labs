@@ -40,10 +40,13 @@ GitHub's Team plan allows the organization
 That capacity is shared by every workflow and repository in the organization.
 Keep the first dependency-free wave of this workflow below half the limit so
 two overlapping runs do not queue behind one another and later jobs can start
-as soon as their dependencies finish. `LANES_MAX` holds a run's lanes to the same
-half, and `FULL_LANES_MAX` holds the full run's to two thirds of the limit, so
-that a full run still leaves room for what runs beside it, and two at that size
-overlap only by queueing. `tasks/ci-workflow.test.ts` checks all three.
+as soon as their dependencies finish. `LANES_MAX` holds runs other than full
+runs to the same half. The default branch and pull requests labelled `ci: full`
+use `FULL_LANES_MAX`, GitHub's 256-job matrix limit. The workflow's
+`max-parallel` limits each run to forty simultaneous test jobs, with extra
+lanes queued. Concurrent runs share the organization's runner pool;
+`max-parallel` does not reserve runners across runs.
+`tasks/ci-workflow.test.ts` checks the per-run limits.
 
 ## Required Pull Request Checks
 

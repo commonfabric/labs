@@ -368,6 +368,18 @@ interface JumpEntry {
   readonly fileIndex?: number;
 }
 
+/**
+ * Returns whether `a` and `b` have the same text, and their lines the same
+ * texts.
+ */
+function sameText(a: Document, b: Document): boolean {
+  if (a.text !== b.text || a.lines.length !== b.lines.length) return false;
+  for (let i = 0; i < a.lines.length; i++) {
+    if (a.lines[i].text !== b.lines[i].text) return false;
+  }
+  return true;
+}
+
 export class Session {
   /** The parsed source document used for editing, offsets, and source cards. */
   #sourceDoc: Document;
@@ -415,10 +427,18 @@ export class Session {
   /** Bumped whenever `collapsed` changes, to invalidate the fold-plan cache. */
   #foldVersion = 0;
 
-  #foldFileCache?: { doc: Document; files: DiffFileRange[] };
+  /**
+   * Bumped whenever the current document's text, or the text of any of its
+   * lines, may have changed, so that what is derived from text alone is kept
+   * when a document only colors the same text differently.
+   */
+  #textVersion = 0;
+
+  #foldFileCache?: { textVersion: number; files: DiffFileRange[] };
   #foldPlanCache?: { doc: Document; version: number; plan: FoldPlan };
   #wrapPlanCache?: {
-    lines: readonly Line[];
+    textVersion: number;
+    foldVersion: number;
     mode: DisplayMode;
     wrapMode: ActiveWrapMode;
     width: number;
@@ -426,7 +446,8 @@ export class Session {
     plan: WrapPlan;
   };
   #baseWrapPlanCache?: {
-    lines: readonly Line[];
+    textVersion: number;
+    foldVersion: number;
     mode: DisplayMode;
     wrapMode: ActiveWrapMode;
     width: number;
@@ -436,7 +457,7 @@ export class Session {
   #wrapDecorations = new Map<number, WrapDecoration>();
   #wrapDecorationKey = "";
   #displayColumnCache?: {
-    doc: Document;
+    textVersion: number;
     mode: DisplayMode;
     columns: Map<number, Uint32Array>;
   };
@@ -449,15 +470,19 @@ export class Session {
     return this.#wrapMode === "word" ? "word" : "hard";
   }
   #maxDisplayWidthCache?: {
-    lines: readonly Line[];
+    textVersion: number;
+    foldVersion: number;
     mode: DisplayMode;
     width: number;
   };
-  #nonPrintCache?: { doc: Document; value: boolean };
-  #fileLineCache?: { doc: Document; value: (number | null)[] | null };
+  #nonPrintCache?: { textVersion: number; value: boolean };
+  #fileLineCache?: {
+    textVersion: number;
+    value: (number | null)[] | null;
+  };
 
-  /** Diff metadata lines, cached against the parsed document. */
-  #diffMetadataCache?: { doc: Document; lines: readonly number[] };
+  /** Diff metadata lines, cached against the text. */
+  #diffMetadataCache?: { textVersion: number; lines: readonly number[] };
 
   width: number;
   height: number;
@@ -543,7 +568,16 @@ export class Session {
   transientMessage = false;
 
   /** How much context each hunk can reveal, cached against the document. */
-  #roomCache?: { doc: Document; room: ReadonlyMap<number, HunkRoom> };
+  #roomCache?: {
+    textVersion: number;
+    room: ReadonlyMap<number, HunkRoom>;
+  };
+
+  /** The hunk nodes of a flat structure, cached against it. */
+  #hunkCache?: {
+    flat: readonly StructureNode[];
+    hunks: readonly StructureNode[];
+  };
 
   /** The task dialog's title. */
   #taskTitle = "";
@@ -570,8 +604,14 @@ export class Session {
    * for the pull request to open or merge and quitting once it has. */
   #watchLog = new TaskLog();
 
-  /** How far the spinners of the task dialog's running steps have turned. */
+  /** How far the spinners of the task dialog's running steps, and of the
+   * status bar's highlighting progress, have turned. */
   #spinnerFrame = 0;
+
+  /** How much of the source left to color in the background has been
+   * parsed, from 0 to 1, or null when nothing is left, which opening another
+   * file makes so. */
+  #highlightProgress: number | null = null;
 
   /** The settings dialog's controls, while it is up. */
   #settingsDraft: SettingsDraft | null = null;
@@ -659,7 +699,7 @@ export class Session {
    */
   #jumpByNetChange = false;
   #commitHeaderCache?: {
-    readonly doc: Document;
+    readonly textVersion: number;
     readonly headers: readonly CommitHeader[];
   };
 
@@ -667,6 +707,10 @@ export class Session {
     readonly doc: Document;
     readonly mode: DiffCountMode;
     readonly counts: DiffCounts;
+  };
+  #commentOnlyCache?: {
+    readonly doc: Document;
+    readonly files: readonly boolean[];
   };
 
   constructor(
@@ -768,11 +812,20 @@ export class Session {
     this.#sourceDoc = doc;
     if (this.#viewMode === "rendered" && this.#source?.render) {
       const rendered = this.#source.render(doc);
-      this.#currentDoc = { ...doc, lines: rendered.lines };
+      this.#showDocument({ ...doc, lines: rendered.lines });
     } else {
       this.#viewMode = "source";
-      this.#currentDoc = doc;
+      this.#showDocument(doc);
     }
+  }
+
+  /**
+   * Makes `doc` the current document, keeping what is derived from text alone
+   * when `doc` has the text and line texts of the one it replaces.
+   */
+  #showDocument(doc: Document): void {
+    if (!sameText(this.#currentDoc, doc)) this.#textVersion++;
+    this.#currentDoc = doc;
   }
 
   /** Change representation while keeping the same source line at the top. */
@@ -824,9 +877,9 @@ export class Session {
    * Cached against the current document. */
   #foldFiles(): DiffFileRange[] {
     if (!this.#source?.isDiff) return []; // only a diff has foldable files
-    if (this.#foldFileCache?.doc !== this.#currentDoc) {
+    if (this.#foldFileCache?.textVersion !== this.#textVersion) {
       this.#foldFileCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         files: diffFiles(this.#currentDoc.text, this.#source.declaredTests),
       };
     }
@@ -859,9 +912,9 @@ export class Session {
   /** Whether the document holds any non-printable character, so cycling the
    * display mode would change what is shown. Cached against the document. */
   #hasNonPrintables(): boolean {
-    if (this.#nonPrintCache?.doc !== this.#currentDoc) {
+    if (this.#nonPrintCache?.textVersion !== this.#textVersion) {
       this.#nonPrintCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         value: this.#currentDoc.lines.some((l) => hasNonPrintable(l.text)),
       };
     }
@@ -901,14 +954,16 @@ export class Session {
     const lines = this.#foldPlan().displayLines;
     const width = this.#contentWidth();
     if (
-      this.#wrapPlanCache?.lines !== lines ||
+      this.#wrapPlanCache?.textVersion !== this.#textVersion ||
+      this.#wrapPlanCache.foldVersion !== this.#foldVersion ||
       this.#wrapPlanCache.mode !== this.#displayMode ||
       this.#wrapPlanCache.wrapMode !== this.#activeWrapMode ||
       this.#wrapPlanCache.width !== width ||
       this.#wrapPlanCache.decorations !== this.#wrapDecorationKey
     ) {
       this.#wrapPlanCache = {
-        lines,
+        textVersion: this.#textVersion,
+        foldVersion: this.#foldVersion,
         mode: this.#displayMode,
         wrapMode: this.#activeWrapMode,
         width,
@@ -930,13 +985,15 @@ export class Session {
     const lines = this.#foldPlan().displayLines;
     const width = this.#contentWidth();
     if (
-      this.#baseWrapPlanCache?.lines !== lines ||
+      this.#baseWrapPlanCache?.textVersion !== this.#textVersion ||
+      this.#baseWrapPlanCache.foldVersion !== this.#foldVersion ||
       this.#baseWrapPlanCache.mode !== this.#displayMode ||
       this.#baseWrapPlanCache.wrapMode !== this.#activeWrapMode ||
       this.#baseWrapPlanCache.width !== width
     ) {
       this.#baseWrapPlanCache = {
-        lines,
+        textVersion: this.#textVersion,
+        foldVersion: this.#foldVersion,
         mode: this.#displayMode,
         wrapMode: this.#activeWrapMode,
         width,
@@ -1358,6 +1415,10 @@ export class Session {
       hasNonPrintables: this.#hasNonPrintables(),
       notice: null,
       currentFile: this.#currentFile(),
+      highlighting: this.#highlightProgress === null ? null : {
+        fraction: this.#highlightProgress,
+        frame: this.#spinnerFrame,
+      },
     };
   }
 
@@ -2345,11 +2406,11 @@ export class Session {
     const l = this.doc.lines[line];
     if (!l || this.#displayMode === "pictures") return sourceCol;
     if (
-      this.#displayColumnCache?.doc !== this.#currentDoc ||
+      this.#displayColumnCache?.textVersion !== this.#textVersion ||
       this.#displayColumnCache.mode !== this.#displayMode
     ) {
       this.#displayColumnCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         mode: this.#displayMode,
         columns: new Map(),
       };
@@ -2905,15 +2966,24 @@ export class Session {
 
   /** Toggle the files whose changes touch only comments. */
   #toggleCommentOnlyFiles(): void {
-    let commentOnly: readonly boolean[] | undefined;
     this.#toggleFileCategory(
-      (file) =>
-        (commentOnly ??= commentOnlyFiles(
-          this.#sourceDoc.text,
-          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
-        ))[file.index],
+      (file) => this.#commentOnlyFiles()[file.index],
       "comment-only",
     );
+  }
+
+  /** Which files of the current source document change only comments. */
+  #commentOnlyFiles(): readonly boolean[] {
+    if (this.#commentOnlyCache?.doc !== this.#sourceDoc) {
+      this.#commentOnlyCache = {
+        doc: this.#sourceDoc,
+        files: commentOnlyFiles(
+          this.#sourceDoc.text,
+          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
+        ),
+      };
+    }
+    return this.#commentOnlyCache.files;
   }
 
   //
@@ -3799,7 +3869,7 @@ export class Session {
         // structure (navigation, cross-references) is refreshed on the deferred
         // re-parse.
         this.#sourceDoc = { ...this.#sourceDoc, text, lines };
-        this.#currentDoc = this.#sourceDoc;
+        this.#showDocument(this.#sourceDoc);
         this.needsReparse = true;
       } else {
         this.#setSourceDocument(
@@ -3895,9 +3965,22 @@ export class Session {
       TaskLog.spinning([this.#taskLog, this.#watchLog]);
   }
 
-  /** Turn the spinners of the task dialog's running steps a frame. */
+  /** Whether the status bar shows highlighting progress, whose spinner
+   * {@link advanceSpinner} turns. Opening another file ends it. */
+  get highlighting(): boolean {
+    return this.#highlightProgress !== null;
+  }
+
+  /** Turn the spinners of the task dialog's running steps, and of the
+   * highlighting progress, a frame. */
   advanceSpinner(): void {
     this.#spinnerFrame++;
+  }
+
+  /** Show on the status bar that `fraction` of the source left to color in
+   * the background has been parsed, or, given null, that nothing is left. */
+  showHighlightProgress(fraction: number | null): void {
+    this.#highlightProgress = fraction;
   }
 
   /**
@@ -4057,19 +4140,26 @@ export class Session {
    * when no edit asked for it, as when a language's parser has just loaded. */
   reparse({ force = false }: { force?: boolean } = {}): void {
     if (!this.#source || !this.#buffer || !(this.needsReparse || force)) return;
+    // The text is unchanged, so the selected node keeps its lines, while the
+    // new structure tree can number it differently.
+    const selected = this.#selectedNode();
+    const text = this.#buffer.text();
     this.#setSourceDocument(
       this.#source.parse(
-        this.#buffer.text(),
+        // The document's own text when no edit changed it: the same string,
+        // which a comparison finds equal without reading it.
+        text === this.#sourceDoc.text ? this.#sourceDoc.text : text,
         this.#buffer.lineEndingProvenance(),
       ),
     );
+    this.#reselect(selected, (line) => line);
     this.needsReparse = false;
     // Re-baseline the live highlighter from this authoritative parse while still
     // editing; drop it when leaving edit mode.
     if (this.#cursorOn) this.#seedHighlighter();
     else this.#highlighter = undefined;
     this.#clampScroll();
-    this.#ensureCursorVisible();
+    if (this.#cursorOn) this.#ensureCursorVisible();
   }
 
   #cursorPage(dir: number): void {
@@ -4136,14 +4226,20 @@ export class Session {
   #maxDisplayWidth(): number {
     const lines = this.#foldPlan().displayLines;
     if (
-      this.#maxDisplayWidthCache?.lines !== lines ||
+      this.#maxDisplayWidthCache?.textVersion !== this.#textVersion ||
+      this.#maxDisplayWidthCache.foldVersion !== this.#foldVersion ||
       this.#maxDisplayWidthCache.mode !== this.#displayMode
     ) {
       let width = 0;
       for (const line of lines) {
         width = Math.max(width, displayWidth(line, this.#displayMode));
       }
-      this.#maxDisplayWidthCache = { lines, mode: this.#displayMode, width };
+      this.#maxDisplayWidthCache = {
+        textVersion: this.#textVersion,
+        foldVersion: this.#foldVersion,
+        mode: this.#displayMode,
+        width,
+      };
     }
     return this.#maxDisplayWidthCache.width;
   }
@@ -4266,9 +4362,9 @@ export class Session {
    * the document, since every frame draws the gutter and the map costs a parse
    * of the whole diff. */
   #fileLineNumbers(): (number | null)[] | null {
-    if (this.#fileLineCache?.doc !== this.#currentDoc) {
+    if (this.#fileLineCache?.textVersion !== this.#textVersion) {
       this.#fileLineCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         value: this.#computeFileLineNumbers(),
       };
     }
@@ -4492,8 +4588,9 @@ export class Session {
       ) ?? current;
       this.#buffer.setBaseline(savedBaseline);
       // The save rewrote files, and an amend replaced a commit, that blame
-      // attributed.
+      // attributed. The hunks now sit where the files it wrote put them.
       this.#blames.clear();
+      this.#roomCache = undefined;
       const refreshedLineEndings = this.#source.lineEndingProvenance?.(current);
       if (refreshedLineEndings) {
         const retainedLineEndings = this.#buffer.lineEndingProvenance();
@@ -5132,7 +5229,7 @@ export class Session {
     }
     // Pager mode: re-point the selection at the same node (its line moved), and
     // put the pinned line back on the row it was on.
-    this.#reselectAfterExpand(selected, moved);
+    this.#reselect(selected, moved);
     const movedPin = moved(pinDoc);
     if (this.#wrapLines) {
       const basePlan = this.#baseWrapPlan();
@@ -5213,14 +5310,14 @@ export class Session {
     this.transientMessage = true;
   }
 
-  /** After a pager-mode expand rebuilds the structure tree, point the selection
-   * back at the same node, at wherever `moved` puts its line. Cleared when the
-   * node can no longer be found — a join takes one of the two hunks away, and
-   * there is nothing to point at. A hunk is matched on its line alone: only one
+  /** After a re-parse or a pager-mode expand rebuilds the structure tree, point
+   * the selection back at the same node, at wherever `moved` puts its line.
+   * Cleared when the node can no longer be found — a join takes one of the two
+   * hunks away, and there is nothing to point at. A hunk is matched on its line alone: only one
    * hunk starts at a given header line, and its label (the `@@` counts) changes
    * as the hunk grows; other kinds keep the label, which is stable and tells
    * apart nodes sharing a start line. */
-  #reselectAfterExpand(
+  #reselect(
     node: StructureNode | null,
     moved: (line: number) => number,
   ): void {
@@ -5286,9 +5383,9 @@ export class Session {
   /** How much context each hunk can still reveal, keyed by its header line.
    * Cached against the document, which the source rebuilds on every expand. */
   #expandRoom(): ReadonlyMap<number, HunkRoom> {
-    if (this.#roomCache?.doc !== this.#currentDoc) {
+    if (this.#roomCache?.textVersion !== this.#textVersion) {
       this.#roomCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         room: this.#source?.expandRoom?.(this.#currentDoc.text) ?? new Map(),
       };
     }
@@ -5297,7 +5394,7 @@ export class Session {
 
   /** Lines classified as file or hunk metadata by the diff parser. */
   #diffMetadataLines(): readonly number[] {
-    if (this.#diffMetadataCache?.doc === this.#currentDoc) {
+    if (this.#diffMetadataCache?.textVersion === this.#textVersion) {
       return this.#diffMetadataCache.lines;
     }
     const lines: number[] = [];
@@ -5310,7 +5407,7 @@ export class Session {
         }
       }
     }
-    this.#diffMetadataCache = { doc: this.#currentDoc, lines };
+    this.#diffMetadataCache = { textVersion: this.#textVersion, lines };
     return lines;
   }
 
@@ -5489,6 +5586,18 @@ export class Session {
     return { decorations, key };
   }
 
+  /** Returns the current document's hunk nodes, in document order. */
+  #hunks(): readonly StructureNode[] {
+    const flat = this.doc.flatStructure;
+    if (this.#hunkCache?.flat !== flat) {
+      this.#hunkCache = {
+        flat,
+        hunks: flat.filter((node) => node.kind === "hunk"),
+      };
+    }
+    return this.#hunkCache.hunks;
+  }
+
   /** Every hunk boundary visible at its expansion row. `markerLine` names the
    * first or last body line and is null when the hunk has no body. */
   #visibleEdges(
@@ -5499,12 +5608,8 @@ export class Session {
     const rows = this.#contentRows();
     const onScreen = (row: number) => row >= top && row < top + rows;
     const out: ExpandEdge[] = [];
-    for (const h of this.doc.flatStructure) {
-      if (
-        h.kind !== "hunk" || !this.#nodeOnScreenWithLayout(h, plan, top)
-      ) {
-        continue;
-      }
+    for (const h of this.#hunks()) {
+      if (!this.#nodeOnScreenWithLayout(h, plan, top)) continue;
       const r = room.get(h.startLine);
       if (!r) continue;
       const firstBodyLine = h.startLine + 1;
@@ -5543,8 +5648,8 @@ export class Session {
     const sel = this.#selectedNode();
     const own = sel && this.#nodeOnScreenWithLayout(sel, plan, top)
       ? edges.filter((e) =>
-        this.doc.flatStructure.some((h) =>
-          h.kind === "hunk" && h.startLine <= e.line && e.line <= h.endLine &&
+        this.#hunks().some((h) =>
+          h.startLine <= e.line && e.line <= h.endLine &&
           sel.startLine >= h.startLine && sel.startLine <= h.endLine
         )
       )
@@ -5745,6 +5850,10 @@ export class Session {
       return;
     }
     this.#source = opened.source;
+    // What is derived from the text depends on the source too.
+    this.#textVersion++;
+    // What was left to color belongs to the source shown until now.
+    this.#highlightProgress = null;
     if (opened.source.defaultViewMode === "rendered") {
       this.#viewMode = "rendered";
     }
@@ -5761,7 +5870,8 @@ export class Session {
         this.#buffer.lineEndingProvenance(),
       ),
     );
-    this.#semantics = undefined; // the old service was for the previous file
+    this.#semantics?.dispose(); // the old service was for the previous file
+    this.#semantics = undefined;
     this.#mode = "normal";
     this.#cursorOn = false;
     this.#overlay = null;
@@ -5805,9 +5915,9 @@ export class Session {
   /** Commit headers in the current diff, cached against its document. */
   #commitHeaders(): readonly CommitHeader[] {
     if (!this.#source?.isDiff) return [];
-    if (this.#commitHeaderCache?.doc !== this.#currentDoc) {
+    if (this.#commitHeaderCache?.textVersion !== this.#textVersion) {
       this.#commitHeaderCache = {
-        doc: this.#currentDoc,
+        textVersion: this.#textVersion,
         headers: findCommitHeaders(
           this.#currentDoc.lines.map((line) => line.text),
         ),

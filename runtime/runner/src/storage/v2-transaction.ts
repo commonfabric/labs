@@ -1326,6 +1326,10 @@ export class V2StorageTransaction implements IStorageTransaction {
   #branches = new Map<MemorySpace, SpaceBranch>();
   #readActivities: IReadActivity[] = [];
   #potentiallyExternalReadActivities: IReadActivity[] = [];
+  // How many times `#potentiallyExternalReadActivities` gained a record or
+  // was emptied, and how many of its leading records are frozen.
+  #potentiallyExternalReadRevision = 0;
+  #frozenReadActivityRecords = 0;
 
   /**
    * Per-transaction monotonic activity clock, shared between read activities
@@ -1461,6 +1465,8 @@ export class V2StorageTransaction implements IStorageTransaction {
     this.#branches.clear();
     this.#readActivities.length = 0;
     this.#potentiallyExternalReadActivities.length = 0;
+    this.#potentiallyExternalReadRevision++;
+    this.#frozenReadActivityRecords = 0;
     this.#writeAttemptLog.length = 0;
     this.#reactivityLogCache = undefined;
     this.#lastDocument = undefined;
@@ -1565,6 +1571,18 @@ export class V2StorageTransaction implements IStorageTransaction {
   /** @inheritDoc */
   getPotentiallyExternalReadActivities(): readonly IReadActivity[] {
     return this.#potentiallyExternalReadActivities;
+  }
+
+  /** @inheritDoc */
+  freezeReadActivityRecords(): number {
+    const records = this.#potentiallyExternalReadActivities;
+    for (
+      let index = this.#frozenReadActivityRecords;
+      index < records.length;
+      index++
+    ) Object.freeze(records[index]);
+    this.#frozenReadActivityRecords = records.length;
+    return this.#potentiallyExternalReadRevision;
   }
 
   getWriteAttemptLog(): readonly IWriteAttempt[] {
@@ -2341,7 +2359,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       const id = address.id;
       const path = toDocumentPath(address.path);
       const meta = skipCommitPrecondition
-        ? { ...readMeta, ...ignoreReadForCommit }
+        ? Object.freeze({ ...readMeta, ...ignoreReadForCommit })
         : readMeta;
       // Every read builds this record, so each arm is a whole literal: a
       // spread in an object literal copies its source member by member.
@@ -2630,7 +2648,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     const readMeta = options?.meta ?? EMPTY_META;
     const skipCommitPrecondition = isUiInputBlindWriteTx(this);
     const activityMeta = skipCommitPrecondition
-      ? { ...readMeta, ...ignoreReadForCommit }
+      ? Object.freeze({ ...readMeta, ...ignoreReadForCommit })
       : readMeta;
     const scope = normalizeCellScope(address.scope);
     if (options?.nonRecursive === true) {
@@ -3967,6 +3985,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       Object.freeze(read);
     } else {
       this.#potentiallyExternalReadActivities.push(read);
+      this.#potentiallyExternalReadRevision++;
     }
     this.#readActivities.push(read);
     return sealed;
@@ -4083,11 +4102,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     );
     // The runner's explicit-instance read, transaction layer (stage A): a
     // per-instance run's read of a scoped instance the replica has NEVER
-    // seen kicks an instance-named load — the serving replica only ever
-    // receives the SERVICE's instances through its own watches (the
-    // memory server resolves a root's scoped links against the loopback
-    // session), so a demander's instance arrives only when a read names
-    // it. The read itself stays absent; the read is logged under that
+    // seen kicks an instance-named load — the serving replica receives a
+    // demander's instances only through a watch root that names one, and
+    // through the links the memory server follows from such a root, so an
+    // instance that neither path reaches arrives only when a read names it.
+    // The read itself stays absent; the read is logged under that
     // instance, so the reader re-runs when the doc lands. Reserved once
     // per (space, instance, id) per manager (`shouldPullDoc`), like the
     // link-target kick in `Runtime.ensureLinkedDocLoaded`. Never on the
@@ -4637,7 +4656,10 @@ export class V2StorageTransaction implements IStorageTransaction {
       scope,
       id,
       path: toDocumentPath([]),
-      meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+      meta: Object.freeze({
+        ...writeDestinationRead,
+        ...ignoreReadForScheduling,
+      }),
       journalIndex: this.#activityClock++,
     });
     doc.validated = true;

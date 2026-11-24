@@ -226,6 +226,7 @@ function externalSession(destLine = 1, fileLines = 3): {
   const stub: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: (p) => p === filePath ? parseDocument(fileText).lines : null,
     definitionOf: () => [
       {
@@ -394,6 +395,7 @@ Deno.test("session: opening an unreadable external file reports an error", () =>
   const stub: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: () => null, // cannot read
     definitionOf: () => [
       { name: "ext", filePath, fileOffset: 0, line: 1, preview: "" },
@@ -2632,6 +2634,30 @@ Deno.test("filepickercov: opening an existing file swaps the buffer", () => {
   assertEquals(s.view().overlay, null, "picker closed");
   assert(s.view().message.includes("Opened"), s.view().message);
   assertEquals(s.doc.text, PFILES["/work/file00.ts"]);
+});
+
+Deno.test("filepickercov: opening another file disposes the semantics of the one shown", () => {
+  let disposed = 0;
+  const path = "/work/file00.ts";
+  const s = new Session(
+    parseDocument(PFILES[path], path),
+    { color: false, showLineNumbers: false },
+    { width: 60, height: 12 },
+    {
+      typeAt: () => null,
+      definitionOf: () => [],
+      fileLines: () => null,
+      prewarm: () => {},
+      dispose: () => disposed++,
+    },
+    pickerSource(path),
+    gateway(),
+  );
+  press(s, "ctrl-x", "ctrl-f");
+  type(s, "file00");
+  assertEquals(disposed, 0);
+  press(s, "enter");
+  assertEquals(disposed, 1);
 });
 
 Deno.test("filepickercov: the picker refuses to open with unsaved edits", () => {

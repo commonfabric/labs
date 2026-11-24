@@ -204,8 +204,9 @@ reactive computation, since the call throws in a pattern body, with
 only: the memory server does not check a claim against the session that
 committed it ([`principal-of.md`](../../features/principal-of.md)).
 
-A profile's face is its `picture`, or else its legacy `avatar` text, when that
-value's own cell represents its owner. The runtime decides whom a value's own
+A profile's face is its picture, the blob its `pictureBlob` names or else the
+bytes its `picture` holds, or else its legacy `avatar` text, the first of these
+whose value's own cell represents its owner. The runtime decides whom a value's own
 cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`): the
 one principal the label of the cell a write to the field lands in names, when
 the value is the whole of that cell, that cell is in the space of the document
@@ -245,7 +246,10 @@ the CFC specification, that creator is its owner instead
 
 `setPicture` refuses every writer but the person whose own profile it is, by
 the rule `profileOwnerOf()` applies, so no one can set the picture of a profile
-that is no one's own through it. A profile created under a release that gives
+that is no one's own through it. It writes `pictureBlob` for a picture
+sent as a blob and `picture` for one sent as bytes, empties the other, and
+each of the two fields stores and declares its policy as this paragraph says
+of `picture`. A profile created under a release that gives
 `picture` its default, empty bytes, or that gains the field in such a release,
 stores the field's owner-protected policy as `name` does. A profile created
 while the field had no default stores no policy there until the first write

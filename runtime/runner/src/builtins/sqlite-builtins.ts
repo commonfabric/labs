@@ -1373,7 +1373,10 @@ export function sqliteQuery(
       readTx: IExtendedStorageTransaction,
     ): QueryState | undefined =>
       result.withTx(readTx).getRaw({
-        meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+        meta: Object.freeze({
+          ...writeDestinationRead,
+          ...ignoreReadForScheduling,
+        }),
       }) as QueryState | undefined;
     const storedBeforeClaim = storedQueryState(tx);
     // The confidentiality THIS request carries: the transaction's flow join,
@@ -1671,7 +1674,10 @@ export function sqliteQuery(
             ...store,
             path: [...store.path, "requestHash"],
           }, {
-            meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+            meta: Object.freeze({
+              ...writeDestinationRead,
+              ...ignoreReadForScheduling,
+            }),
           }) as string | undefined;
         };
         // The acting reader at flush time: the CAPTURED run principal for

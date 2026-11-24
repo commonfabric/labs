@@ -54,7 +54,7 @@ OFF arm, the runtime's own authenticated session
 | 2 | `runner.ts` — `resultPatternCache` and `#writeJavaScriptActionResult`; N37's memo | `` Map<`${space}/${id}`, Map<ScopeKey, string>> `` | the ACTION instance whose result pattern is cached — two instances may resolve to different patterns | the run transaction's identity, falling back to `runtime.scopeKeyIdentity` |
 | 3 | `runner.ts` — `JavaScriptActionResultCells.byScope`, selected by `#writeJavaScriptActionResult` | `Map<ScopeKey, Cell<any>>` | one result cell PER INSTANCE, not per scope name: a name-keyed `byScope.get("session")` would return one cell where the server needs one per session | the run transaction's identity, falling back to `runtime.scopeKeyIdentity`, resolved over the discovered `effectiveOutputScope` |
 | 4 | `data-updating.ts` — `seedMemoKey(link, identity)`; dedupes eager scoped-property seeding | `` `${space}/${scope_key}/${id}` `` | per instance — one instance's presence must not suppress another's seed; at fan-out one USER's presence must not suppress another's | `runtime.scopeKeyIdentity` at the call sites |
-| 5 | `traverse.ts` — coverage key `isLinkedDocumentCovered` passes to `schemaTrackerCoversSelector` (constructed via site 6's `getTrackerKey`; consulted only for links that DECLARE a scope — an unscoped link refuses coverage explicitly, see the OFF-ARM NEUTRALITY note at the site) | `` `${space}/${scope_key}/${id}` `` | per instance read: coverage proven for one instance is not coverage of another | `TraversalContext.scopeKeyIdentity` (the traversal's acting identity; the memory server's query path supplies the querying session's — `runtime/memory/v2/query.ts`) |
+| 5 | `traverse.ts` — coverage key `isLinkedDocumentCovered` passes to `schemaTrackerCoversSelector` (constructed via site 6's `getTrackerKey`; consulted only for links that DECLARE a scope — an unscoped link refuses coverage explicitly, see the OFF-ARM NEUTRALITY note at the site) | `` `${space}/${scope_key}/${id}` `` | per instance read: coverage proven for one instance is not coverage of another | `TraversalContext.scopeKeyIdentity` (the traversal's acting identity; the memory server's query path supplies the identity a graph's roots are walked under, which is the querying session's, or that of a scope instance the roots name — `partitionGraphQuery` in `runtime/memory/v2/query.ts`) |
 | 6 | `traverse.ts` — `getTrackerKey(address, identity)`, over the exported `schemaTrackerKey(space, id, scope, identity)` that `runtime/memory/v2/query.ts`'s `toDocKey` also builds through (one construction for writer and query-side reader); the schema-tracker key | `` `${space}/${scope_key}/${id}` `` | same as 5 — one tracker entry per instance | `TraversalContext.scopeKeyIdentity` |
 | 7 | `StorageManager.#registerPendingLoad()` in `storage/v2.ts`, the `#pendingLoads` key (built with site 1's `entityKey`, which the scheduler cross-matches in `collectPendingLoadParkKeys`) | `` `${space}/${scope_key}/${id}` `` | per instance: two instances of one doc are two loads, and collapsing them makes one waiter observe another's failure | the explicit load instance when supplied, otherwise the manager's own `scopeKeyIdentity()`; immutable input sync carries the requesting identity to linked targets |
 | 8 | `storage/transaction/address.ts` — `toString(address, identity)`; notification-differential address identity (`storage/differential.ts`, whose `toKey` shares the vocabulary) | `` `/${scope_key}/${id}/${JSON.stringify(path)}` `` (no space — per-space by construction) | per instance within a batch: one batch may carry several instances of one doc (scopes.md §2), and they must not collapse to one change entry | the owning session's identity, threaded through `Differential.create/load/checkout` from the replica |
@@ -323,7 +323,7 @@ per-run identities where run contexts carry them):
 **Recorded sound-per-session:**
 
 - `runtime/memory/v2/query.ts` — the `EngineObjectManager` caches
-  (`load`, `detail`, `invalidateIds`) key
+  (`load`, `detail`, `forgetInstance`) key
   `${scope_key}/${id}/${type}`, the scope key resolved against the
   manager's bound identity (`#scopeKeyFor`), and are sound because the
   constructor binds ONE identity per manager: every entry a manager
@@ -348,10 +348,12 @@ per-run identities where run contexts carry them):
   evaluations ACROSS identities, and its sharing rests on an
   assumption wider than key construction: evaluation is
   recipient-blind. The walk consults the requesting identity only
-  to resolve scope instances, so `classifyStateScope` decides
-  shareability from scope keys alone — a scope-pure entry serves
-  every identity, an absent-residue entry serves after per-requester
-  absence probes, and anything else keys to the evaluating identity.
+  to resolve scope instances, so shareability is decided from the
+  scope keys an evaluation reached (`classifyStateScope`) and from
+  whether it left a link unfollowed for want of a session — a
+  scope-pure entry serves every identity, an absent-residue entry
+  serves after per-requester absence probes, and anything else is
+  not kept.
   ACL changes hold the invariant from outside: they are commits, and
   any commit rotates the cache. A per-recipient filter INSIDE
   evaluation (CFC label enforcement, say — the runtime's flow-label

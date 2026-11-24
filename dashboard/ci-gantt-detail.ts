@@ -20,6 +20,11 @@
  * recognize, or a damaged file — is reported as absent rather than as empty,
  * so the collector treats it exactly like an attempt that was never stored and
  * collects it again.
+ *
+ * An attempt is written under the repository name it is given, and read and
+ * pruned under that name and every name the repository had before it, so the
+ * detail written before a repository was renamed stays that repository's
+ * detail.
  */
 
 import { dirname, join } from "@std/path";
@@ -30,6 +35,7 @@ import {
   isCachedGanttJob,
 } from "./ci-job-cache.ts";
 import { dashboardCacheFile, replaceFile } from "./history-files.ts";
+import { formerRepoNames } from "./repository-names.ts";
 
 export const CI_GANTT_DETAIL_DIRNAME = "fabric-wall-ci-gantt";
 
@@ -74,14 +80,15 @@ const encodeSegment = (value: string): string =>
     (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
   );
 
-const sourcePrefix = (source: CiGanttDetailSource): string =>
-  `${encodeSegment(source.repo)}.${encodeSegment(source.workflow)}`;
+const sourcePrefix = (repo: string, workflow: string): string =>
+  `${encodeSegment(repo)}.${encodeSegment(workflow)}`;
 
-const detailName = (
-  source: CiGanttDetailSource,
-  runId: number,
-  runAttempt: number,
-): string => `${sourcePrefix(source)}.${runId}.${runAttempt}.json`;
+// The prefixes of a source's file names under its repository's name and each
+// name the repository had before it.
+const sourcePrefixes = (source: CiGanttDetailSource): string[] =>
+  [source.repo, ...formerRepoNames(source.repo)].map((repo) =>
+    sourcePrefix(repo, source.workflow)
+  );
 
 interface ParsedName {
   prefix: string;
@@ -122,12 +129,8 @@ export class CiGanttDetailStore {
     return this.#directory = current ? current() : defaultDirectory();
   }
 
-  #path(
-    source: CiGanttDetailSource,
-    runId: number,
-    runAttempt: number,
-  ): string {
-    return join(this.directory, detailName(source, runId, runAttempt));
+  #path(prefix: string, runId: number, runAttempt: number): string {
+    return join(this.directory, `${prefix}.${runId}.${runAttempt}.json`);
   }
 
   async read(
@@ -135,13 +138,16 @@ export class CiGanttDetailStore {
     runId: number,
     runAttempt: number,
   ): Promise<CachedCiGanttJob[] | null> {
-    let compressed: Uint8Array;
-    try {
-      compressed = await Deno.readFile(this.#path(source, runId, runAttempt));
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) return null;
-      throw error;
+    let compressed: Uint8Array | undefined;
+    for (const prefix of sourcePrefixes(source)) {
+      try {
+        compressed = await Deno.readFile(this.#path(prefix, runId, runAttempt));
+        break;
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      }
     }
+    if (compressed === undefined) return null;
     let parsed: unknown;
     try {
       parsed = JSON.parse(await gunzip(compressed));
@@ -162,7 +168,11 @@ export class CiGanttDetailStore {
     runAttempt: number,
     jobs: CachedCiGanttJob[],
   ): Promise<void> {
-    const target = this.#path(source, runId, runAttempt);
+    const target = this.#path(
+      sourcePrefix(source.repo, source.workflow),
+      runId,
+      runAttempt,
+    );
     // Only the detail directory itself, so a missing dashboard cache directory
     // reports itself here the way it does for the run index.
     try {
@@ -181,9 +191,10 @@ export class CiGanttDetailStore {
 
   /**
    * Drops the attempts of one repository and workflow that `keep` does not
-   * name, and removes temporary files a crashed write left behind. Attempts of
-   * other repositories are left alone, so pruning one source can never take
-   * another's detail. A temporary this store is still writing is left alone.
+   * name, under its name and every name it had before, and removes temporary
+   * files a crashed write left behind. Attempts of other repositories are left
+   * alone, so pruning one source can never take another's detail. A temporary
+   * this store is still writing is left alone.
    */
   async prune(
     source: CiGanttDetailSource,
@@ -193,7 +204,7 @@ export class CiGanttDetailStore {
     for (const { runId, runAttempt } of keep) {
       wanted.add(`${runId}.${runAttempt}`);
     }
-    const prefix = sourcePrefix(source);
+    const prefixes = sourcePrefixes(source);
     const removals: string[] = [];
     try {
       for await (const entry of Deno.readDir(this.directory)) {
@@ -208,7 +219,7 @@ export class CiGanttDetailStore {
           continue;
         }
         if (
-          parsed.prefix === prefix &&
+          prefixes.includes(parsed.prefix) &&
           !wanted.has(`${parsed.runId}.${parsed.runAttempt}`)
         ) removals.push(path);
       }

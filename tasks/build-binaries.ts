@@ -276,6 +276,22 @@ export class BuildConfig {
     return this.#path("runtime", "cli", "lib", "multi-user-test-worker.ts");
   }
 
+  cliParseWorkerPath() {
+    return this.#path("runtime", "cli", "lib", "view", "parseworker.ts");
+  }
+
+  cliProgramWorkerPath() {
+    return this.#path(
+      "runtime",
+      "cli",
+      "lib",
+      "view",
+      "languages",
+      "typescript",
+      "programworker.ts",
+    );
+  }
+
   fusePackagePath() {
     return this.#path("runtime", "fuse");
   }
@@ -304,6 +320,8 @@ export class BuildConfig {
       this.docsCommonPath(),
       this.cliEntryPath(),
       this.cliMultiUserTestWorkerPath(),
+      this.cliParseWorkerPath(),
+      this.cliProgramWorkerPath(),
       this.fusePackagePath(),
       ...COMPILE_FINGERPRINT_INPUTS.map((input) =>
         this.#path(...input.split("/"))
@@ -341,6 +359,12 @@ export class BuildConfig {
           // The worker `cf test` spawns in multi-user mode. The compile does
           // not follow a worker's module, so it is named here.
           this.cliMultiUserTestWorkerPath(),
+          // The worker `cf view` parses a diff's large files in, which the
+          // compile does not follow either.
+          this.cliParseWorkerPath(),
+          // The worker `cf view` builds its TypeScript program in, which the
+          // compile does not follow either.
+          this.cliProgramWorkerPath(),
           // The build metadata `runtime/cli/lib/build-info.ts` reads.
           this.cliEnvPath(),
         ];

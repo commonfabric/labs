@@ -194,12 +194,16 @@ import {
 import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
 import {
-  executeInvite,
+  applyInvite,
   type InviteRequest,
   type InviteResult,
   parseInviteOperation,
 } from "./invites.ts";
-import { type RedeemReceipt, SpaceInviteError } from "../space-invites.ts";
+import {
+  type RedeemReceipt,
+  SPACE_INVITES_REVISION_DOC_ID,
+  SpaceInviteError,
+} from "../space-invites.ts";
 import {
   isGenesisRoot,
   readGenesisRoot,
@@ -225,6 +229,7 @@ import {
   extendTrackedGraph,
   fromDirtyKey,
   fromDocKey,
+  partitionGraphQuery,
   type QueryDocKey,
   type QueryEvaluationCache,
   type QueryEvaluationCacheDiagnostics,
@@ -247,8 +252,6 @@ import {
   buildFullSync,
   cacheKeyForEntity,
   compareSyncAddress,
-  graphWatchesByBranch,
-  groupedQueries,
   holdingsToCacheEntries,
   isEmptySync,
   mergeWatchesById,
@@ -261,10 +264,11 @@ import {
   toWireUpsert,
   trackedAndPieceKeysFromEntries,
   trackedIdsFromEntries,
-  unionQuery,
+  watchGraphGroups,
 } from "./server-sync.ts";
 import {
   authorizationError,
+  carriesOnlySessionOpenProofs,
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
@@ -699,10 +703,11 @@ export type SlowQuery = {
    * the delivered snapshots to the wire. */
   rootsElapsedMs?: number;
 
-  /** Query and watch operations: engine document reads across every branch
-   * group. Unlike `rootsVisited`, this exposes roots whose declarations fan
-   * out over many documents, and unlike `slowestRoot.reads`, it accounts for
-   * the complete request rather than only its costliest root. */
+  /** Query and watch operations: engine document reads across every graph
+   * the request evaluates. Unlike `rootsVisited`, this exposes roots whose
+   * declarations fan out over many documents, and unlike
+   * `slowestRoot.reads`, it accounts for the complete request rather than
+   * only its costliest root. */
   managerReads?: number;
 
   /** watch.add, watch.remove, and a refresh by dirty document: changed
@@ -732,7 +737,7 @@ export type SlowQuery = {
   rows?: number;
 };
 
-/** The root attribution accumulated across one request's branch groups. */
+/** The root attribution accumulated across the graphs a request evaluates. */
 type RootAttribution = {
   rootsVisited: number;
   rootsElapsedMs: number;
@@ -767,13 +772,6 @@ const foldRootAttribution = (
   ) {
     into.slowestRoot = stats.slowestRoot;
   }
-};
-
-/** The attribution for a request that evaluated exactly one query. */
-const rootAttributionOf = (stats: QueryTraversalStats): RootAttribution => {
-  const attribution = createRootAttribution();
-  foldRootAttribution(attribution, stats);
-  return attribution;
 };
 
 const slowQueries: SlowQuery[] = [];
@@ -1205,9 +1203,10 @@ function isDeclaredTable(
 
 /**
  * Returns why a session may not create a branch named `name`, or `undefined`
- * when it may. The server keys a session's graphs and its sync cache by
- * branch name, so a name that carries a control character, or that begins
- * as one of those keys does, could stand for another branch's entry there.
+ * when it may. The server builds the keys of a session's graphs and of its
+ * sync cache from branch names, so a name that carries a control character,
+ * or that begins as one of those keys does, could stand for another entry
+ * there.
  */
 const refusedBranchName = (name: string): string | undefined =>
   // deno-lint-ignore no-control-regex
@@ -1401,7 +1400,8 @@ type SessionHandle = {
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
  * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
  * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents, and `derived` heads, which the engine wrote from
+ * full post-apply documents unless the origin's `base` shows the writer
+ * reaches them by replay, and `derived` heads, which the engine wrote from
  * the commit rather than the writer supplying them, always ride it. */
 type DirtyOp = "set" | "patch" | "delete" | "derived";
 
@@ -1409,6 +1409,19 @@ type DirtyOrigin = {
   sessionId: string;
   seq: number;
   op: DirtyOp;
+
+  /**
+   * For a `patch` head, what the writing session's replica replays its own
+   * patches over to reach the head, when that is known. A number is the seq of
+   * the revision that precedes the unbroken run of the session's own patches
+   * ending at `seq`: a session that holds that revision reaches the head by
+   * replaying the patches it sent, so the head is left out of its frame. The
+   * value `own-write` says the run follows the session's own `set` or
+   * `delete` in the same dirty batch, whose outcome the session holds without
+   * a frame. Absent, nothing shows the session can reach the head, and the
+   * head rides the frame.
+   */
+  base?: number | "own-write";
 };
 
 /**
@@ -2916,7 +2929,8 @@ class Connection {
           this.#routedOwns !== undefined &&
           (!this.#routedOwns(parsed.space) || parsed.principal === undefined ||
             parsed.invocation !== undefined ||
-            parsed.authorization !== undefined ||
+            (parsed.authorization !== undefined &&
+              !carriesOnlySessionOpenProofs(parsed)) ||
             parsed.session.actingAs !== undefined)
         ) {
           this.#send({
@@ -5954,7 +5968,11 @@ export class Server {
     }
   }
 
-  /** Executes an authenticated invitation operation with ordinary ACL publication. */
+  /**
+   * Executes an authenticated invitation operation, and publishes what it
+   * committed as any commit is published: a redemption's ACL grant, and the
+   * move of the ledger's revision document (`SPACE_INVITES_REVISION_DOC_ID`).
+   */
   async invite(request: InviteRequest): Promise<InviteResult["result"]> {
     return await this.#withSpacePublicationLock(request.space, async () => {
       if (!(await this.#spaceStoreExists(request.space))) {
@@ -5965,10 +5983,11 @@ export class Server {
         );
       }
       const engine = await this.#openEngine(request.space);
-      const { result, commit } = executeInvite(engine, {
+      const outcome = applyInvite(engine, {
         ...request,
         implicitOwner: this.#isServicePrincipal(request.principal),
       });
+      const { commit, revision } = outcome;
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
         this.#accessListChanged(engine, request.space);
@@ -5983,7 +6002,22 @@ export class Server {
           writes: [{ id: aclDocId(request.space), scopeKey: "space" }],
         });
       }
-      return result;
+      // Published before a refusal is thrown, since a refused preview or
+      // redemption can have retired an invitation.
+      if (revision !== undefined) {
+        this.markSpaceDirty(request.space, [
+          toDirtyKey(SPACE_INVITES_REVISION_DOC_ID),
+        ]);
+        this.#notifyCommitAdmitted({
+          space: request.space,
+          seq: revision.seq,
+          class: "system",
+          sessionId: "invite-service",
+          writes: [{ id: SPACE_INVITES_REVISION_DOC_ID, scopeKey: "space" }],
+        });
+      }
+      if ("failure" in outcome) throw new SpaceInviteError(outcome.failure);
+      return outcome.result;
     });
   }
 
@@ -6034,6 +6068,15 @@ export class Server {
       ) {
         throw new Engine.ProtocolError(
           "direct writes may not delete a space",
+        );
+      }
+      // The invitation service moves its revision document in the
+      // transaction that changes its ledger, and a direct write would say the
+      // ledger moved when it had not, which the store refuses of any commit
+      // but a system one (`refuseInviteRevisionWritesOutsideTheService`).
+      if (id === SPACE_INVITES_REVISION_DOC_ID) {
+        throw new Engine.ProtocolError(
+          "direct writes may not move the invitation service's revision document",
         );
       }
       if (this.#aclMode() !== "off") {
@@ -8620,15 +8663,66 @@ export class Server {
           // decides the flush-time echo shape.
           const committedWrites: Array<{ id: string; scopeKey: ScopeKey }> = [];
           const dirtyOps = new Map<string, DirtyOp>();
+          const revisionCounts = new Map<string, number>();
+          for (const revision of commit.revisions) {
+            const dirtyKey = toDirtyKey(
+              revision.id,
+              revision.scopeKey as ScopeKey,
+            );
+            revisionCounts.set(
+              dirtyKey,
+              (revisionCounts.get(dirtyKey) ?? 0) + 1,
+            );
+          }
+          // For each document whose head this commit produced by applying
+          // one `patch` of the session's exactly as the session sent it, the
+          // seq of the revision the patch was applied over. The writer's
+          // replica promotes its pending layer by replaying those patches
+          // over what it holds, with the function the engine applied them
+          // with, so a writer holding that revision holds the head. A
+          // revision whose patches are not the array the operation carried
+          // is one the engine rewrote first, with an event's stamps for one,
+          // and a document the commit wrote more than once is promoted by a
+          // path that replays only part of it; neither gets an entry, and
+          // their heads ride the frame. So does every head of a commit that
+          // carries a field edit: the writer's layer shows the edited field
+          // as the text its transaction computed, and the engine stores the
+          // text the edit integrates to, or leaves the field as it was for an
+          // edit it has already integrated.
+          const replayable = getOwnWriteEchoConfig() &&
+            applyOperations.length === 0;
+          const precedingSeqs = new Map<string, number>();
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
+            if (
+              replayable && revision.op === "patch" &&
+              revision.derived !== true && revision.patches !== undefined
+            ) {
+              const dirtyKey = toDirtyKey(revision.id, scopeKey);
+              const sent = message.commit.operations[revision.opIndex];
+              if (
+                revisionCounts.get(dirtyKey) === 1 && sent?.op === "patch" &&
+                sent.patches === revision.patches
+              ) {
+                const preceding = Engine.precedingRevisionSeq(engine, {
+                  branch: commit.branch,
+                  id: revision.id,
+                  scopeKey,
+                  seq: commit.seq,
+                });
+                if (preceding !== undefined) {
+                  precedingSeqs.set(dirtyKey, preceding);
+                }
+              }
+            }
             // A revision the engine derived, a field's anchors document
             // rewritten for an edit, is no write of the committing session's,
-            // which holds nothing of it to promote. With own-write echo on, a
-            // `patch` head reaches its writer anyway; with it off, a `patch`
-            // head is withheld from its writer, so only the `derived` kind
-            // gets the rewrite to the session whose edit moved the anchors.
+            // which holds nothing of it to promote. A `patch` head is
+            // withheld from a writer that reaches it by replay, and from
+            // every writer with own-write echo off, so only the `derived`
+            // kind gets the rewrite to the session whose edit moved the
+            // anchors.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
               revision.derived === true ? "derived" : revision.op,
@@ -8639,6 +8733,7 @@ export class Server {
               sessionId: message.sessionId,
               seq: commit.seq,
               ops: dirtyOps,
+              precedingSeqs,
             });
           } else {
             // Every operation elided: nothing was written, so no document
@@ -8694,11 +8789,12 @@ export class Server {
           // Dirty-origin tracking decides the echo shape for the session's
           // own accepted writes (CT-1965): set- and delete-produced heads are
           // elided from the frame — the writer provably holds their outcome,
-          // and the verdict plus marker promote it — while patch-produced
-          // heads ride the frame as full post-apply documents, since merged
-          // state is truth the writer cannot extrapolate. REJECTED commits'
-          // docs are staged origin-less (stageConflictRefreshDirtyIds), so
-          // repair frames DO cover them.
+          // and the verdict plus marker promote it — while a patch-produced
+          // head rides the frame as the full post-apply document, since
+          // merged state is truth the writer cannot extrapolate, unless the
+          // writer holds the revision its patches were applied over.
+          // REJECTED commits' docs are staged origin-less
+          // (stageConflictRefreshDirtyIds), so repair frames DO cover them.
           session.pendingCaughtUpLocalSeq = Math.max(
             session.pendingCaughtUpLocalSeq,
             message.commit.localSeq,
@@ -9568,13 +9664,13 @@ export class Server {
         identity,
         { ...context, part: "support", views: views.length },
       );
-    const graphs = new Map([...demand.graphs].map(([branch, graph]) => [
-      views.length === 0 ? branch : `view-demand:${branch}`,
+    const graphs = new Map([...demand.graphs].map(([key, graph]) => [
+      views.length === 0 ? key : `view-demand:${key}`,
       graph,
     ]));
     if (delivery !== demand) {
-      for (const [branch, graph] of delivery.graphs) {
-        graphs.set(`view-support:${branch}`, graph);
+      for (const [key, graph] of delivery.graphs) {
+        graphs.set(`view-support:${key}`, graph);
       }
     }
     return {
@@ -9622,12 +9718,12 @@ export class Server {
           views: session.views.length,
         },
       );
-    const graphs = new Map([...demandGraphs].map(([branch, graph]) => [
-      `view-demand:${branch}`,
+    const graphs = new Map([...demandGraphs].map(([key, graph]) => [
+      `view-demand:${key}`,
       graph,
     ]));
-    for (const [branch, graph] of delivery?.graphs ?? []) {
-      graphs.set(`view-support:${branch}`, graph);
+    for (const [key, graph] of delivery?.graphs ?? []) {
+      graphs.set(`view-support:${key}`, graph);
     }
     return {
       serverSeq: delivery?.serverSeq ?? Engine.serverSeq(engine),
@@ -9740,11 +9836,11 @@ export class Server {
       },
     );
     const graphs = new Map<string, TrackedGraphState>();
-    for (const [branch, graph] of demandGraphs) {
-      graphs.set(`view-demand:${branch}`, graph);
+    for (const [key, graph] of demandGraphs) {
+      graphs.set(`view-demand:${key}`, graph);
     }
-    for (const [branch, graph] of supportGraphs) {
-      graphs.set(`view-support:${branch}`, graph);
+    for (const [key, graph] of supportGraphs) {
+      graphs.set(`view-support:${key}`, graph);
     }
     return {
       serverSeq: Engine.serverSeq(engine),
@@ -9772,8 +9868,8 @@ export class Server {
       session.viewDemandGraphs,
     );
     const graphs = new Map(session.graphs);
-    for (const [branch, graph] of demandGraphs) {
-      graphs.set(`view-demand:${branch}`, graph);
+    for (const [key, graph] of demandGraphs) {
+      graphs.set(`view-demand:${key}`, graph);
     }
     const identity = this.#sessionScopeIdentity(session);
     return {
@@ -9864,10 +9960,10 @@ export class Server {
 
   /**
    * Helper for `#watchRemove()`, which releases the removed watches' roots
-   * from their branches' graphs (`releaseTrackedRoots`): what no remaining
+   * from the graphs tracking them (`releaseTrackedRoots`): what no remaining
    * root or link keeps retires and is retracted, a root a retired record
-   * had covered is walked again on its own, and a branch with no watch
-   * left drops its graph. Nothing else is walked.
+   * had covered is walked again on its own, and a graph with no root left
+   * is dropped. Nothing else is walked.
    */
   async #removeWatchesByRelease(
     message: WatchRemoveRequest,
@@ -9927,57 +10023,78 @@ export class Server {
       const remaining = session.watches.filter((watch) =>
         !removedIds.has(watch.id)
       );
-      const remainingByBranch = graphWatchesByBranch(remaining);
       const identity = this.#sessionScopeIdentity(session);
+      const remainingGroups = watchGraphGroups(remaining, identity);
       const graphs = new StagedMap(session.graphs);
       const graphCommits: Array<() => void> = [];
       const attribution = createRootAttribution();
       // The graphs the release walked roots of again, whose crossings the
       // session may not have been told of.
       const touchedGraphs: TrackedGraphState[] = [];
+      // Those same graphs by key, as the release has left them so far.
+      const stagedGraphs = new Map<string, TrackedGraphState>();
       const updates = new Map<string, SessionCacheEntry>();
       const removes = new Map<string, SessionCacheEntry>();
       const changedInterests = new Set<string>();
       for (
-        const [branch, removedGroup] of graphWatchesByBranch(removedWatches)
+        const { key: graphKey, branch, query: removedQuery }
+          of watchGraphGroups(
+            removedWatches,
+            identity,
+          ).values()
       ) {
-        const existing = graphs.get(branch);
+        const existing = graphs.get(graphKey);
         if (existing === undefined) continue;
+        // A session holds one graph over a branch for each identity its
+        // roots are walked under, so a document this graph lets go of can be
+        // one another still tracks. Only what no other graph of the session
+        // over the branch tracks is retracted.
+        const trackedElsewhere = (docKey: QueryDocKey): boolean => {
+          for (const [otherKey, other] of graphs) {
+            if (otherKey === graphKey || other.branch !== branch) continue;
+            if ((stagedGraphs.get(otherKey) ?? other).tracker.has(docKey)) {
+              return true;
+            }
+          }
+          return false;
+        };
         const retract = (docKey: QueryDocKey) => {
           const { id, scopeKey } = fromDocKey(docKey);
+          changedInterests.add(toDirtyKey(id, scopeKey));
+          if (trackedElsewhere(docKey)) return;
           const entry = session.entities.get(
             cacheKeyForEntity(branch, id, scopeKey),
           );
           if (entry !== undefined) {
             removes.set(cacheKeyForEntity(branch, id, scopeKey), entry);
           }
-          changedInterests.add(toDirtyKey(id, scopeKey));
         };
-        const group = remainingByBranch.get(branch) ?? [];
-        if (group.length === 0) {
+        const remainingGroup = remainingGroups.get(graphKey);
+        if (remainingGroup === undefined) {
           for (const docKey of existing.entities.keys()) retract(docKey);
           for (const [key] of existing.missed) {
             const { id, scopeKey } = fromDocKey(key as QueryDocKey);
             changedInterests.add(toDirtyKey(id, scopeKey));
           }
-          graphs.delete(branch);
+          graphs.delete(graphKey);
           continue;
         }
         // A root two watches share stays while either does.
         const kept = new Set(rootReferrersOf(
           message.space,
-          group.flatMap((watch) => watch.query.roots),
+          remainingGroup.query.roots,
           identity,
         ));
         const released = rootReferrersOf(
           message.space,
-          removedGroup.flatMap((watch) => watch.query.roots),
+          removedQuery.roots,
           identity,
         ).filter((referrer) => !kept.has(referrer));
         if (released.length === 0) continue;
         const staged = stageTrackedGraphState(engine, existing);
         graphCommits.push(staged.commit);
         touchedGraphs.push(staged.value);
+        stagedGraphs.set(graphKey, staged.value);
         const result = releaseTrackedRoots(
           message.space,
           engine,
@@ -10466,7 +10583,7 @@ export class Server {
     engine: Engine.Engine,
     watches: readonly WatchSpec[],
     previous: SessionState["graphs"],
-    keyOf: (branch: string) => string = (branch) => branch,
+    keyOf: (groupKey: string) => string = (groupKey) => groupKey,
   ) {
     const graphs = new Map(previous);
     const identity = this.#sessionScopeIdentity(session);
@@ -10481,19 +10598,19 @@ export class Server {
       );
     };
     const attribution = createRootAttribution();
-    for (const [branch, group] of graphWatchesByBranch(watches)) {
-      const key = keyOf(branch);
+    for (const group of watchGraphGroups(watches, identity).values()) {
+      const key = keyOf(group.key);
       const existing = graphs.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(
           session.space,
           engine,
-          unionQuery(branch, group),
+          group.query,
           undefined,
           {
-            principal: session.principal,
-            sessionId: session.id,
-            evaluationCache: this.#evaluationCacheFor(session.space),
+            principal: group.identity.principal,
+            sessionId: group.identity.sessionId,
+            ...this.#evaluationCacheOption(session.space, group.instance),
           },
         );
         foldRootAttribution(attribution, tracked.stats);
@@ -10514,7 +10631,7 @@ export class Server {
         session.space,
         engine,
         staged,
-        unionQuery(branch, group),
+        group.query,
       );
       foldRootAttribution(attribution, extended.stats);
       for (const [docKey, entity] of extended.updates) {
@@ -10526,15 +10643,15 @@ export class Server {
   }
 
   /**
-   * Moves `previous`, a session's graphs by branch, to the roots of `watches`.
-   * Each branch's graph releases the roots `watches` no longer name
-   * (`releaseTrackedRoots()`) and walks only the roots it adds
-   * (`extendTrackedGraph()`). Roots both sets name keep their coverage,
-   * refreshed by pending dirty documents before the added roots extend it. A
-   * branch `watches` adds is evaluated whole, a branch it leaves drops its
-   * graph, and a clean graph whose roots stay the same is returned as it
-   * stands. A moved graph is a clone, so `previous` is untouched until the
-   * caller installs the result.
+   * Moves `previous`, a session's graphs by graph key
+   * (`watchGraphGroups()`), to the roots of `watches`. Each graph releases
+   * the roots `watches` no longer name (`releaseTrackedRoots()`) and walks
+   * only the roots it adds (`extendTrackedGraph()`). Roots both sets name
+   * keep their coverage, refreshed by pending dirty documents before the
+   * added roots extend it. A graph `watches` adds is evaluated whole, a
+   * graph it leaves no root for is dropped, and a clean graph whose roots
+   * stay the same is returned as it stands. A moved graph is a clone, so
+   * `previous` is untouched until the caller installs the result.
    */
   #moveWatchGraphs(
     session: SessionState,
@@ -10546,18 +10663,20 @@ export class Server {
   ): Map<string, TrackedGraphState> {
     const graphs = new Map<string, TrackedGraphState>();
     const identity = this.#sessionScopeIdentity(session);
-    for (const [branch, group] of graphWatchesByBranch(watches)) {
-      const query = unionQuery(branch, group);
-      const existing = previous.get(branch);
+    for (
+      const { key, branch, query, identity: walker, instance }
+        of watchGraphGroups(watches, identity).values()
+    ) {
+      const existing = previous.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(session.space, engine, query, undefined, {
-          principal: session.principal,
-          sessionId: session.id,
-          evaluationCache: this.#evaluationCacheFor(session.space),
+          principal: walker.principal,
+          sessionId: walker.sessionId,
+          ...this.#evaluationCacheOption(session.space, instance),
         });
         foldRootAttribution(attribution, tracked.stats);
         this.#enforceEvaluationCacheBudget();
-        graphs.set(branch, tracked.state);
+        graphs.set(key, tracked.state);
         continue;
       }
       const referrers = rootReferrersOf(session.space, query.roots, identity);
@@ -10572,7 +10691,7 @@ export class Server {
         released.length === 0 && added.length === 0 &&
         (dirtyIds === undefined || dirtyIds.size === 0)
       ) {
-        graphs.set(branch, existing);
+        graphs.set(key, existing);
         continue;
       }
       const moved = cloneTrackedGraphState(engine, existing);
@@ -10605,7 +10724,7 @@ export class Server {
         });
         foldRootAttribution(attribution, result.stats);
       }
-      graphs.set(branch, moved);
+      graphs.set(key, moved);
     }
     return graphs;
   }
@@ -10794,18 +10913,18 @@ export class Server {
       // a new graph's state, or an extended graph's STAGED state, which is
       // where the extension's crossings sit until it commits.
       const touchedGraphs: TrackedGraphState[] = [];
-      for (const [branch, group] of graphWatchesByBranch(newWatches)) {
-        const existing = graphs.get(branch);
+      for (const group of watchGraphGroups(newWatches, identity).values()) {
+        const existing = graphs.get(group.key);
         if (existing === undefined) {
           const tracked = trackGraph(
             message.space,
             engine,
-            unionQuery(branch, group),
+            group.query,
             undefined,
             {
-              principal: session.principal,
-              sessionId: message.sessionId,
-              evaluationCache: this.#evaluationCacheFor(message.space),
+              principal: group.identity.principal,
+              sessionId: group.identity.sessionId,
+              ...this.#evaluationCacheOption(message.space, group.instance),
             },
           );
           foldRootAttribution(attribution, tracked.stats);
@@ -10813,7 +10932,7 @@ export class Server {
           // failure (or a failing operation-field attachment) must not
           // leave an already-inserted entry over budget.
           this.#enforceEvaluationCacheBudget();
-          graphs.set(branch, tracked.state);
+          graphs.set(group.key, tracked.state);
           touchedGraphs.push(tracked.state);
           this.#addMissedToTrackedIds(addedInterests, [tracked.state]);
           for (const [docKey, entity] of tracked.state.entities) {
@@ -10829,7 +10948,7 @@ export class Server {
           message.space,
           engine,
           staged.value,
-          unionQuery(branch, group),
+          group.query,
         );
         foldRootAttribution(attribution, extended.stats);
         for (const [docKey, entity] of extended.updates) {
@@ -10971,6 +11090,21 @@ export class Server {
     }
   }
 
+  /**
+   * The `evaluationCache` option of a walk of a graph over `space`: the
+   * space's cache for a session's own roots, and none for the roots of the
+   * scope instance `instance`, whose evaluation could be served to no other
+   * identity.
+   */
+  #evaluationCacheOption(
+    space: string,
+    instance: string | undefined,
+  ): { evaluationCache?: QueryEvaluationCache } {
+    return instance === undefined
+      ? { evaluationCache: this.#evaluationCacheFor(space) }
+      : {};
+  }
+
   #evaluationCacheFor(space: string): QueryEvaluationCache {
     let cache = this.#queryEvaluationCaches.get(space);
     if (cache !== undefined) {
@@ -11064,21 +11198,47 @@ export class Server {
       // `stats` is diagnostics, not wire: split it off here so the
       // response carries exactly the declared result shape.
       const queryEngine = engine ?? await this.#openEngine(space);
-      const { stats, ...result } = queryGraph(
-        space,
-        queryEngine,
-        query,
-        reuse,
-        {
-          ...scopeContext,
-          ...(cacheEligible
-            ? { evaluationCache: this.#evaluationCacheFor(space) }
-            : {}),
-        },
-      );
+      const attribution = createRootAttribution();
+      const evaluations: ReturnType<typeof queryGraph>["entities"][] = [];
+      let serverSeq = 0;
+      for (const partition of partitionGraphQuery(query, scopeContext)) {
+        const evaluated = queryGraph(
+          space,
+          queryEngine,
+          partition.query,
+          reuse,
+          {
+            ...scopeContext,
+            principal: partition.identity.principal,
+            sessionId: partition.identity.sessionId,
+            ...(cacheEligible
+              ? this.#evaluationCacheOption(space, partition.instance)
+              : {}),
+          },
+        );
+        foldRootAttribution(attribution, evaluated.stats);
+        serverSeq = evaluated.serverSeq;
+        evaluations.push(evaluated.entities);
+      }
+      let [entities] = evaluations;
+      if (evaluations.length > 1) {
+        // Two graphs can reach one document, which the result holds once. A
+        // query whose roots name an instance is answered with keyed
+        // snapshots, so each instance of a document has a key of its own.
+        const merged = new Map<string, (typeof entities)[number]>();
+        for (const entity of evaluations.flat()) {
+          merged.set(
+            `${entity.scopeKey ?? ""}\0${entity.scope ?? ""}\0${entity.id}`,
+            entity,
+          );
+        }
+        entities = [...merged.values()]
+          .toSorted((left, right) => left.id.localeCompare(right.id));
+      }
+      const result = { serverSeq, entities };
       recordSlowQueryDuration("graph.query", space, startedAt, {
         roots: query.roots.length,
-        ...rootAttributionOf(stats),
+        ...attribution,
       });
       if (query.includeAuthoredSeq === true) {
         return {
@@ -11124,21 +11284,22 @@ export class Server {
     let serverSeq = Engine.serverSeq(resolvedEngine);
 
     const attribution = createRootAttribution();
-    for (const [branch, query] of groupedQueries(watches)) {
+    for (const group of watchGraphGroups(watches, scopeContext).values()) {
       const result = trackGraph(
         space,
         resolvedEngine,
-        query,
+        group.query,
         reuse,
         {
-          ...scopeContext,
-          evaluationCache: this.#evaluationCacheFor(space),
+          principal: group.identity.principal,
+          sessionId: group.identity.sessionId,
+          ...this.#evaluationCacheOption(space, group.instance),
         },
       );
       foldRootAttribution(attribution, result.stats);
       serverSeq = result.serverSeq;
       this.#enforceEvaluationCacheBudget();
-      graphs.set(branch, result.state);
+      graphs.set(group.key, result.state);
     }
 
     recordSlowQueryDuration(record.operation, space, startedAt, {
@@ -11867,7 +12028,7 @@ export class Server {
                   engine,
                   this.#viewSupportWatches(session, session.views),
                   session.graphs,
-                  (branch) => `view-support:${branch}`,
+                  (groupKey) => `view-support:${groupKey}`,
                 );
                 grownGraphs = grown.graphs;
                 for (const [key, entry] of grown.updates) {
@@ -11928,14 +12089,24 @@ export class Server {
                     // have moved it since, so `entry.doc` IS that commit's
                     // post-apply document. A `set`/`delete` head is then elided —
                     // the client supplied the bytes (or the absence) and the
-                    // verdict + marker promote them — while a `patch` head is
-                    // delivered in full: its post-apply state can contain merged
-                    // foreign content the writer's own ops cannot reproduce.
+                    // verdict + marker promote them. A `patch` head can contain
+                    // merged foreign content the writer's own ops cannot
+                    // reproduce, so it is elided only where the origin names
+                    // the base its run of patches started from and the session
+                    // holds that base: the revision this session was last sent
+                    // or last had elided, or its own `set` or `delete` in this
+                    // batch. Every revision from that base to the head is then
+                    // a patch the session sent, and replaying them over the
+                    // base yields `entry.doc`. Any other `patch` head is
+                    // delivered in full.
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&
                       origin.op !== "derived" &&
-                      (origin.op !== "patch" || !getOwnWriteEchoConfig());
+                      (origin.op !== "patch" || !getOwnWriteEchoConfig() ||
+                        origin.base === "own-write" ||
+                        (origin.base !== undefined &&
+                          previous?.seq === origin.base));
                     if (!held) {
                       upserts.push(entry);
                     }
@@ -12396,6 +12567,13 @@ export class Server {
       sessionId: string;
       seq: number;
       ops: ReadonlyMap<string, DirtyOp>;
+
+      /**
+       * For each dirty key whose head the commit produced by applying one
+       * `patch` exactly as the session sent it, the seq of the revision
+       * that patch was applied over.
+       */
+      precedingSeqs?: ReadonlyMap<string, number>;
     },
   ): void {
     if (dirtyIds !== undefined) {
@@ -12427,10 +12605,32 @@ export class Server {
           // every session, the writer included.
           origins?.delete(id);
         } else {
+          const op = origin.ops.get(id) ?? "patch";
+          const preceding = origin.precedingSeqs?.get(id);
+          // A patch applied over the head an origin of this session already
+          // names continues that origin's run: the two commits are adjacent
+          // revisions of the document, both the session's own. The run then
+          // keeps the base it started from, or starts at the session's own
+          // `set` or `delete`. A patch applied over any other revision
+          // starts a run at that revision.
+          const earlier = origins?.get(id);
+          const continues = earlier !== undefined &&
+            earlier.sessionId === origin.sessionId &&
+            earlier.seq === preceding;
+          const base = op !== "patch" || preceding === undefined
+            ? undefined
+            : !continues
+            ? preceding
+            : earlier.op === "patch"
+            ? earlier.base
+            : earlier.op === "derived"
+            ? undefined
+            : "own-write";
           origins?.set(id, {
             sessionId: origin.sessionId,
             seq: origin.seq,
-            op: origin.ops.get(id) ?? "patch",
+            op,
+            ...(base === undefined ? {} : { base }),
           });
         }
       }
@@ -12886,15 +13086,18 @@ export class Server {
 
   /**
    * Tells each armed reader of `space` that registered an instance whose
-   * row moved since its pull, once, and disarms it. Called after each
-   * change to `space`'s currency index, whose rows are current by then.
+   * row moved since its pull, once, and disarms it, and shortens the arming
+   * of each reader armed for longer than `space` may now be rested on.
+   * Called after each change to `space`'s currency index, whose rows are
+   * current by then.
    */
   #tellCurrencyReaders(space: string, engine: Engine.Engine): void {
     try {
       this.#tellArmedCurrencyReaders(space, engine);
     } finally {
-      // The index changed, and a reader may have been disarmed: either can
-      // change which demand carried into `space` stands.
+      // The index changed, and a reader may have been disarmed or had its
+      // arming shortened: each can change which demand carried into `space`
+      // stands.
       this.#refreshCarriedDemand(space);
     }
   }
@@ -12919,15 +13122,44 @@ export class Server {
     }
     // A reader armed for longer than `space` now holds was told a later
     // time, or none, by a pull made before a slice here was recorded as
-    // expiring sooner.
+    // expiring sooner, or before `space` was armed with a space it reads
+    // for a limited time.
     const until = this.#currencyRestsUntil(space, engine);
-    if (until === undefined) return;
-    for (const [reader, entry] of [...armed]) {
+    if (until !== undefined) this.#shortenCurrencyArmings(space, until);
+  }
+
+  /**
+   * Shortens to `until` the arming of each reader armed with `space` for
+   * longer, and tells that reader, once `space` may be rested on only until
+   * then. Nothing in `space` moved, so the reader stays armed and pulls
+   * nothing, and its loop judges again, which returns it that time.
+   * Disarming it instead would have it pull again, and where it is read
+   * back by `space`, round a circle of spaces, the trigger would disarm
+   * `space` in turn, whose pull would arm the reader for longer again: the
+   * circle would go round with nothing moving in it, and never yield. A
+   * reader shortened may itself be rested on only until `until`, so its own
+   * readers are shortened in turn, which ends at the first space whose
+   * readers are armed until then or sooner.
+   *
+   * @returns Whether a reader of `space` was shortened. The caller brings
+   * the demand carried into `space` into line.
+   */
+  #shortenCurrencyArmings(space: string, until: number): boolean {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined) return false;
+    const shortened: string[] = [];
+    for (const [reader, entry] of armed) {
       if (entry.until !== undefined && entry.until <= until) continue;
-      armed.delete(reader);
-      this.#triggerCurrencyReader(reader);
-      this.#queueFollowForCarriedDemand(reader, space);
+      armed.set(reader, { ...entry, until });
+      shortened.push(reader);
     }
+    for (const reader of shortened) {
+      this.#notifyCurrencyChanged(reader);
+      if (this.#shortenCurrencyArmings(reader, until)) {
+        this.#refreshCarriedDemand(reader);
+      }
+    }
+    return shortened.length > 0;
   }
 
   /**
@@ -13325,7 +13557,12 @@ export class Server {
       running?: readonly string[];
     },
   ): Promise<{
-    servable: Array<{ root: string; piece: string }>;
+    /**
+     * The roots the store can serve, each with its piece and the pieces it
+     * rests on that record a source origin, which the loop follows before
+     * it leaves the root unstarted.
+     */
+    servable: Array<{ root: string; piece: string; origins: string[] }>;
     held: Array<{ root: string; piece: string; readers: string[] }>;
     upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
@@ -13440,11 +13677,16 @@ export class Server {
     const reasons = new Map(
       judgment.refused.map(({ root, reason }) => [root, reason]),
     );
-    const servable: Array<{ root: string; piece: string }> = [];
+    const origins = new Map(
+      judgment.origins.map(({ root, pieces }) => [root, pieces]),
+    );
+    const servable: Array<
+      { root: string; piece: string; origins: string[] }
+    > = [];
     const held: Array<{ root: string; piece: string; readers: string[] }> = [];
     for (const [root, piece] of pieces) {
       if (passing.has(piece)) {
-        servable.push({ root, piece });
+        servable.push({ root, piece, origins: origins.get(piece) ?? [] });
         continue;
       }
       const readers = holding.get(piece);

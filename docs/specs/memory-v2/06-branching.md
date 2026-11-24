@@ -801,6 +801,10 @@ seq brings it back.
 - **The access list.** Who may read and write a space is not part of the state
   a point of its history restores.
 - **Session-scoped instances.** The sessions they belonged to are gone.
+- **The invitation ledger's revision document** (`of:space-invites-revision`).
+  It follows the invitation service's ledger, which belongs to no branch and
+  which a restore does not touch
+  ([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
 - **A serving loop's records** of its own progress through the branch's
   commits: the event logs (`of:stream-events:` documents), the watermark, and
   the effect and attention indexes. Those describe what has happened on the

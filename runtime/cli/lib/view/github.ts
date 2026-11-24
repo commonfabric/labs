@@ -10,7 +10,7 @@ import type { GitQuery } from "./push.ts";
 import type { BeginStep } from "./tasklog.ts";
 
 /** The repository a pull request for the pushed branch goes to, and the
- * branches it merges. */
+ * branch it merges from. */
 export interface PullRequestTarget {
   /** The repository the pull request goes to, as `owner/name`. */
   readonly repository: string;
@@ -28,10 +28,6 @@ export interface PullRequestTarget {
 
   /** The pushed branch's name. */
   readonly branch: string;
-
-  /** The branch the pull request merges into: the default branch of
-   * {@link remote}. */
-  readonly base: string;
 }
 
 /** A pull request that is open on GitHub. */
@@ -174,9 +170,7 @@ function repositoryName(url: string | undefined): string | null {
 /**
  * Returns where a pull request for `branch`, pushed to `origin`, goes: to the
  * GitHub repository of the remote named `upstream`, `github`, or `origin`,
- * whichever is first to name one, merging into that remote's default branch.
- * Throws when `origin` is not on GitHub, or that remote names no default
- * branch.
+ * whichever is first to name one. Throws when `origin` is not on GitHub.
  */
 export function pullRequestTarget(
   git: GitQuery,
@@ -195,14 +189,6 @@ export function pullRequestTarget(
     repository = found;
     break;
   }
-  const base = git(["symbolic-ref", "--quiet", `refs/remotes/${remote}/HEAD`])
-    ?.trim().slice(`refs/remotes/${remote}/`.length);
-  if (!base) {
-    throw new Error(
-      `${remote}'s default branch is unknown. ` +
-        `\`git remote set-head ${remote} --auto\` finds it`,
-    );
-  }
   const owner = origin.split("/")[0];
   const same = origin.toLowerCase() === repository.toLowerCase();
   return {
@@ -211,23 +197,24 @@ export function pullRequestTarget(
     owner,
     head: same ? branch : `${owner}:${branch}`,
     branch,
-    base,
   };
 }
 
 /**
  * Returns the title and description of a pull request for the checked-out
- * commit into `target`: the subject and the rest of the message of its
- * oldest commit that the base branch, as last fetched, does not have,
- * leaving out merges and commits whose changes the base branch has. Throws
- * when there is no such commit.
+ * commit into branch `baseBranch` of `target`'s remote: the subject and the
+ * rest of the message of its oldest commit that the base branch, as last
+ * fetched, does not have, leaving out merges and commits whose changes the
+ * base branch has. Throws when there is no such commit, or git cannot compare
+ * the two, as when the base branch has never been fetched.
  */
 export function pullRequestText(
   git: GitQuery,
   target: PullRequestTarget,
+  baseBranch: string,
 ): { readonly title: string; readonly body: string } {
-  const base = `refs/remotes/${target.remote}/${target.base}`;
-  const [first] = git([
+  const base = `refs/remotes/${target.remote}/${baseBranch}`;
+  const listed = git([
     "rev-list",
     "--reverse",
     "--no-merges",
@@ -236,7 +223,14 @@ export function pullRequestText(
     "--end-of-options",
     `${base}...HEAD`,
     "--",
-  ])?.split("\n").filter((line) => line !== "") ?? [];
+  ]);
+  if (listed === null) {
+    throw new Error(
+      `git cannot compare the branch with ${base}. ` +
+        `Fetching ${target.remote} may fix that`,
+    );
+  }
+  const [first] = listed.split("\n").filter((line) => line !== "");
   if (first === undefined) {
     throw new Error(`the branch has no commits that ${base} does not have`);
   }

@@ -1172,6 +1172,7 @@ Deno.test("session: opening an external definition shows that file", () => {
   const stub: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: (p) => p === filePath ? parseDocument(fileText).lines : null,
     definitionOf: () => [
       {
@@ -1216,6 +1217,7 @@ Deno.test("session: an external definition opens framed at its line", () => {
   const stub: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: (p) => p === filePath ? parseDocument(fileText).lines : null,
     definitionOf: () => [
       { name: "ext", filePath, fileOffset: 0, line: 10, preview: "" },

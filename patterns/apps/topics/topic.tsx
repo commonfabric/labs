@@ -58,7 +58,12 @@ export interface TopicAuthor {
    * whose author kind is unknown. */
   kind: string;
   name: string;
-  /** The bytes of the author's profile picture, when they have one. */
+  /** The blob holding the author's profile picture, when they have one. Its
+   * type is spelled out, not named, because `TOPIC_UPGRADE_SCHEMA` embeds
+   * this type's schema where a reference to a named type does not resolve. */
+  pictureBlob?: { space: string; id: string };
+  /** The bytes of the author's profile picture, when their profile holds it
+   * as bytes. */
   picture?: FabricBytes;
   /** Avatar text, snapshotted instead when the author's profile has no
    * picture. */
@@ -3015,6 +3020,7 @@ export default pattern<TopicInput, TopicOutput>(
                         >
                           <cf-hstack gap="2" align="center">
                             <cf-avatar
+                              blob={comment.author?.pictureBlob}
                               bytes={comment.author?.picture}
                               src={comment.author?.avatar || ""}
                               name={topicAuthorLabel(comment.author)}

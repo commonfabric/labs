@@ -388,7 +388,7 @@ describe("rapids-workflows", () => {
       "app-id": "${{ vars.RAPIDS_APP_ID }}",
       "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
       owner: "commonfabric",
-      repositories: "infra,loom,labs,commonfabric-weaver,gvisor",
+      repositories: "infra,cfs,labs,weaver,gvisor",
       "permission-contents": "read",
       "permission-actions": "read",
     });
@@ -569,7 +569,7 @@ describe("rapids-workflows", () => {
       "app-id": "${{ vars.RAPIDS_APP_ID }}",
       "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
       owner: "commonfabric",
-      repositories: "infra,loom",
+      repositories: "infra,cfs",
       "permission-contents": "read",
     });
     const deploy = oneStep(steps, (step) => step.id === "deploy");
@@ -701,7 +701,7 @@ describe("rapids-workflows", () => {
     });
   });
 
-  it("notifies infra of every main deployment outcome and Loom only of green main CI", async () => {
+  it("notifies infra of every main deployment outcome and cfs only of green main CI", async () => {
     const notify = await workflow("notify-rapids.yml");
     expect(notify.permissions).toEqual({});
     expect(notify.on).toEqual({
@@ -722,7 +722,7 @@ describe("rapids-workflows", () => {
       head_branch: "main",
       head_repository: { full_name: "commonfabric/labs" },
     };
-    for (const target of ["infra", "loom"]) {
+    for (const target of ["infra", "cfs"]) {
       const job = notify.jobs[`notify-${target}`];
       // These guards use the shared boolean/property subset of Actions and JS.
       const accepts = new Function(
@@ -777,7 +777,7 @@ describe("rapids-workflows", () => {
 
   it("sends paired producer hints for CI and an empty-input reconciliation for deployment", async () => {
     const notify = await workflow("notify-rapids.yml");
-    for (const target of ["infra", "loom"]) {
+    for (const target of ["infra", "cfs"]) {
       const job = notify.jobs[`notify-${target}`];
       const send = oneStep(
         job.steps,

@@ -44,7 +44,11 @@ caller keeps them, walks them under a schema, and records what it reached.
   scoped addresses against; call `visit(document, selector)` for each root.
   A root that names an explicit scope instance passes its key as `visit`'s
   third argument, and records under THAT instance rather than one resolved
-  from the acting identity. The walk builds the read-only transaction the
+  from the acting identity. A link the walk follows resolves under the acting
+  identity, and a walk acting as a principal with no session follows no
+  session-scoped link; "One graph per acting identity" below says which
+  identity `memory` walks a root under. The walk builds the read-only
+  transaction the
   traverser reads through, carries the pointer-cycle tracker that stops a
   link loop, and loads, for every document it delivers, the schema document
   its `cfc` labels are stated against, which a reader needs in order to
@@ -132,6 +136,36 @@ current set of watch roots. Keeping those results across evaluations would
 retain obsolete schemas and could reuse results whose traversal effects have
 retired. A cache shared across evaluations must instead validate revisions and
 replay effects; a bare schema memo has neither contract.
+
+## One graph per acting identity
+
+A serving session may name another identity's instance of a scoped document as
+a root (`entityScopeKey`; `../specs/server-side-execution/protocol.md`, §2's
+read row). `memory` splits a query by the identity each root is walked under
+(`partitionGraphQuery()` in `runtime/memory/v2/query.ts`). The roots naming one
+scope instance that is not the session's own are walked under the identity
+that instance belongs to, in a tracked graph of their own, and every other root
+is walked under the session's identity. A link followed from a named root
+therefore resolves to that identity's instances, as it does in a walk that
+identity's own session runs. `trackGraph()` and `extendTrackedGraph()` refuse a
+root naming an instance of an identity other than the one they walk under,
+since walking it there would record the document under that identity's own
+instance as well.
+
+A session then holds one graph over a branch for each identity its roots are
+walked under, keyed as `watchGraphGroups()` in
+`runtime/memory/v2/server-sync.ts` keys them. Each graph has a tracker of its
+own, so a document two of them reach is walked once in each and delivered
+once, and a document one of them retires is retracted only when no other graph
+of the session over that branch tracks it.
+
+A `user` instance names a principal and no session. The walk of a root naming
+one follows no session-scoped link, since its identity resolves no instance of
+that scope, and counts each link it leaves
+(`GraphQueryWalkStats.unresolvedLinkScopes`). An evaluation that left one is
+not kept in the evaluation cache, since a walk under another identity would
+reach more. A walk under an identity that names no principal fails at a
+user- or session-scoped link.
 
 ## What this coupling costs
 

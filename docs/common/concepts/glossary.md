@@ -22,7 +22,7 @@ statically and dynamically.
 ## CFS (Common Fabric Service)
 
 The headless backend that the Weaver app talks to, kept in the
-`commonfabric/loom` repository. It runs against a pinned tag of this
+`commonfabric/cfs` repository. It runs against a pinned tag of this
 repository, and some features here, such as the
 [shared-space catalog](../../features/shared-space-catalog.md), have CFS as a
 caller.

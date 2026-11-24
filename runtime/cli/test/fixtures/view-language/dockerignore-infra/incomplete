@@ -1,0 +1,5 @@
+# Send the router crate and nothing else to the build.
+**
+!memory-router/
+!memory-router/Cargo.to
+!memory-router/src/**/*.r

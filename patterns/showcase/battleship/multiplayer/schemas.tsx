@@ -20,6 +20,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import type { PictureBlob } from "../../../system/profile-face/profile-face.ts";
 
 // ============ RE-EXPORT SHARED TYPES ============
 export type {
@@ -63,7 +64,11 @@ import { createEmptyGrid } from "../shared/game-logic.tsx";
 export interface PlayerData {
   name: string;
 
-  /** Picture bytes, snapshotted from the joiner's shared profile. */
+  /** Picture blob, snapshotted from the joiner's shared profile. */
+  pictureBlob?: PictureBlob;
+
+  /** Picture bytes, snapshotted instead when the joiner's profile holds its
+   * picture as bytes. */
   picture?: FabricBytes;
 
   /** Avatar text, snapshotted instead when the joiner's profile has no

@@ -1,8 +1,10 @@
 import { css, html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { blobReferenceOf } from "@commonfabric/runner/blob-record";
 import { BaseElement } from "../../core/base-element.ts";
 import { oneOf } from "../../core/property-guards.ts";
+import type { BlobReference } from "../../utils/blob-url.ts";
 import "../cf-image/index.ts";
 
 export type AvatarSize = "xs" | "sm" | "md" | "lg" | "xl";
@@ -64,10 +66,13 @@ export const initialsForName = (name: string | undefined): string => {
  * identity presentation lives in `<cf-profile-badge>`, which composes this.
  *
  * Rendering precedence:
- *   1. non-empty `bytes`             → the image they hold, via `<cf-image>`
- *   2. `src` that is a `data:` URI   → `<img>` (falls back to initials on error)
- *   3. a short typed glyph (emoji)   → the glyph as-is
- *   4. otherwise                     → initials derived from `name`.
+ *   1. a `blob` that names a blob    → the image its space's host serves,
+ *                                      via `<cf-image>`
+ *   2. non-empty `bytes`             → the image they hold, via `<cf-image>`
+ *      (either falls back to initials when it fails to load)
+ *   3. `src` that is a `data:` URI   → `<img>` (falls back to initials on error)
+ *   4. a short typed glyph (emoji)   → the glyph as-is
+ *   5. otherwise                     → initials derived from `name`.
  *      Remote URL/path-like `src` (http(s):, //host, blob:, /path, …) is never
  *      fetched and is not shown as raw text — it degrades to initials here
  *      (see `isAvatarImageUrl` / `isRemoteLikeSource`).
@@ -75,6 +80,8 @@ export const initialsForName = (name: string | undefined): string => {
  * @element cf-avatar
  * @property {FabricBytes} bytes - The bytes of a raster image, such as a
  *   profile's picture
+ * @property {object} blob - A blob holding a raster image, `{ space, id }`, a
+ *   space's DID and the blob's id there, such as a profile's picture
  * @attr {string} src   - A `data:` image URI, or a glyph/emoji string
  * @attr {string} name  - Display name; drives the initials fallback + alt text
  * @attr {string} alt   - Explicit alt text (defaults to `name`)
@@ -153,6 +160,11 @@ export class CFAvatar extends BaseElement {
   @property({ attribute: false })
   accessor bytes: FabricBytes | undefined = undefined;
 
+  /** A blob holding the image, by its space and its id, shown ahead of any
+   * `bytes`. */
+  @property({ attribute: false })
+  accessor blob: BlobReference | undefined = undefined;
+
   @property({ type: String })
   accessor src: string | undefined = undefined;
 
@@ -174,7 +186,9 @@ export class CFAvatar extends BaseElement {
   protected override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
     // A new src gets a fresh chance to load before we fall back to initials.
-    if (changed.has("src") || changed.has("bytes")) this._imgError = false;
+    if (changed.has("src") || changed.has("bytes") || changed.has("blob")) {
+      this._imgError = false;
+    }
     if (changed.has("size")) this.size = oneOf(this.size, avatarSizes, "md");
     if (changed.has("shape")) {
       this.shape = oneOf(this.shape, avatarShapes, "circle");
@@ -184,13 +198,18 @@ export class CFAvatar extends BaseElement {
   override render() {
     const src = (this.src ?? "").trim();
     const name = this.name;
-    const showBytes = (this.bytes?.length ?? 0) > 0;
+    const blob = blobReferenceOf(this.blob);
+    const bytes = blob === undefined && (this.bytes?.length ?? 0) > 0
+      ? this.bytes
+      : undefined;
+    const showPicture = (blob !== undefined || bytes !== undefined) &&
+      !this._imgError;
     const isImage = isAvatarImageUrl(src);
-    const showImage = !showBytes && isImage && !this._imgError;
+    const showImage = !showPicture && isImage && !this._imgError;
     // Short typed glyphs (emoji / a couple of letters) render as-is; URL/path
     // -like sources, and an image that failed to load, are neither fetched
     // nor shown as raw text — they fall through to initials.
-    const showGlyph = !showBytes && src.length > 0 && !isImage &&
+    const showGlyph = !showPicture && src.length > 0 && !isImage &&
       !isRemoteLikeSource(src);
 
     return html`
@@ -200,11 +219,13 @@ export class CFAvatar extends BaseElement {
         role="img"
         aria-label="${this.alt ?? name ?? "avatar"}"
       >
-        ${showBytes
+        ${showPicture
           ? html`
             <cf-image
-              .bytes="${this.bytes}"
+              .bytes="${bytes}"
+              .blob="${blob}"
               alt="${this.alt ?? name ?? ""}"
+              @cf-error="${this._onImgError}"
             ></cf-image>
           `
           : showImage

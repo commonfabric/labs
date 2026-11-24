@@ -36,6 +36,7 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "../src/storage/extended-storage-transaction.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-writer-fit");
 
@@ -67,7 +68,10 @@ const replicaEntries = (
   id: string,
   scope: "space" | "user" | "session" = "space",
 ): StoredEntry[] =>
-  storedDocument(storageManager, id, scope)?.cfc?.labelMap?.entries ?? [];
+  storedLabelEntries<StoredEntry>(
+    storedDocument(storageManager, id, scope)?.cfc,
+    (labelId) => storedDocument(storageManager, labelId),
+  );
 
 const newRuntime = (
   storageManager: ReturnType<typeof StorageManager.emulate>,
@@ -1569,13 +1573,20 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }
       target.set({ copied: read });
       tx.prepareCfc();
-      const staged = tx.readOrThrow({
-        space: signer.did(),
-        scope: "space",
-        id: target.getAsNormalizedFullLink().id,
-        path: [],
-      }) as { cfc?: { labelMap?: { entries: StoredEntry[] } } } | undefined;
-      const declared = (staged?.cfc?.labelMap?.entries ?? [])
+      const stagedDocument = (id: string) =>
+        tx.readOrThrow({
+          space: signer.did(),
+          scope: "space",
+          id: id as `${string}:${string}`,
+          path: [],
+        });
+      const staged = stagedDocument(target.getAsNormalizedFullLink().id) as
+        | { cfc?: unknown }
+        | undefined;
+      const declared = storedLabelEntries<StoredEntry>(
+        staged?.cfc,
+        stagedDocument,
+      )
         .filter((entry) => entry.origin === "declared")
         .flatMap((entry) => entry.label.confidentiality ?? []);
       const reasons = writerFitDiagnostics(tx);
@@ -1981,16 +1992,21 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
     const stagedDerivedConfidentiality = (
       tx: ReturnType<Runtime["edit"]>,
       id: `${string}:${string}`,
-    ): string[] =>
-      (((tx.readOrThrow({
-        space: signer.did(),
-        scope: "space",
-        id,
-        path: [],
-      }) ?? {}) as { cfc?: { labelMap?: { entries: StoredEntry[] } } })
-        .cfc?.labelMap?.entries ?? [])
+    ): string[] => {
+      const stagedDocument = (docId: string) =>
+        tx.readOrThrow({
+          space: signer.did(),
+          scope: "space",
+          id: docId as `${string}:${string}`,
+          path: [],
+        });
+      return storedLabelEntries<StoredEntry>(
+        ((stagedDocument(id) ?? {}) as { cfc?: unknown }).cfc,
+        stagedDocument,
+      )
         .filter((entry) => entry.origin === "derived")
         .flatMap((entry) => entry.label.confidentiality ?? []);
+    };
 
     it("records no writer-fit reason for an entry's `consequenced` mark", async () => {
       // The defect this exemption closes: a handler that read labeled data

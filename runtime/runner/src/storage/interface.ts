@@ -2212,6 +2212,17 @@ export interface IStorageTransaction {
   getPotentiallyExternalReadActivities?(): Iterable<IReadActivity> | undefined;
 
   /**
+   * Optional. Freezes every record that
+   * `getPotentiallyExternalReadActivities` lists, so that each keeps the
+   * metadata object it carries; that object stays as open to change as it
+   * was. Returns a count that advances whenever that list gains a record or
+   * is emptied, so two calls that return the same count frame a list of the
+   * same records, each with the same metadata object. Returns `undefined`
+   * where the transaction froze nothing.
+   */
+  freezeReadActivityRecords?(): number | undefined;
+
+  /**
    * Optional ordered log of every applied write attempt, in transaction
    * order, stamped on the same per-transaction activity clock as read
    * activities. Unlike `getWriteDetails` (per-path, last-value upserts,
@@ -3990,6 +4001,21 @@ export interface ISpaceReplica extends ISpace {
   /** Whether the server this replica's session is on reports the links
    * its walks follow out of the space (`syncCrossingsV1`). */
   crossingsReported?(): boolean;
+
+  /**
+   * Whether a watch through this replica on the space's invitation ledger
+   * revision document (`SPACE_INVITES_REVISION_DOC_ID`) sees it move with
+   * every change to the ledger: the session is on the space's default branch,
+   * where the invitation service moves it, and its server advertises
+   * `spaceInvitesRevision`, as the session's latest handshake said. A session
+   * on another branch sees the document as it stood at the fork, and one that
+   * asked to fork a branch is taken to be of it, even where the server opened
+   * it on the default branch, since `session.open` does not say. A session
+   * replaced on reconnect (`IStorageManager.subscribeSpaceSessionReplaced()`)
+   * is on a server that may answer otherwise, so a reader whose watch rests on
+   * the answer asks again then.
+   */
+  invitesRevisionWatchable?(): boolean;
 
   /** Waits for session restoration before issuing fallback subscriptions. */
   whenSessionRestored?(): Promise<void>;

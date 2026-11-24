@@ -34,6 +34,11 @@ import { typeScriptLanguage } from "./typescript/language.ts";
 import { markdownLanguage } from "./markdown/language.ts";
 import { jsonLanguage, jsonLinesLanguage } from "./json/language.ts";
 import { yamlLanguage } from "./yaml/language.ts";
+import {
+  bazelignoreLanguage,
+  dockerignoreLanguage,
+  gitignoreLanguage,
+} from "./ignore/language.ts";
 import { pythonLanguage } from "./python/language.ts";
 import { swiftLanguage } from "./swift/language.ts";
 import { kotlinLanguage } from "./kotlin/language.ts";
@@ -44,6 +49,12 @@ import { propertiesLanguage } from "./properties/language.ts";
 import { iniLanguage } from "./ini/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
 import { hclLanguage } from "./hcl/language.ts";
+import {
+  cFamilyHeaderLanguage,
+  cLanguage,
+  cppLanguage,
+  cudaLanguage,
+} from "./c-family/language.ts";
 import { shellLanguage } from "./shell/language.ts";
 import { makeLanguage } from "./make/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
@@ -113,9 +124,14 @@ export interface Semantics {
    * show a definition that lives outside the document. Null when unreadable. */
   fileLines(filePath: string): readonly Line[] | null;
 
-  /** Build the backing program now (off the interactive path), so the first
-   * real query does not pay the one-time cost. Safe to call repeatedly. */
+  /** Start building the backing program in a worker, so that the calling
+   * thread stays free while it builds and the first real query does not pay
+   * the one-time cost. Safe to call repeatedly. */
   prewarm(): void;
+
+  /** End any worker {@link prewarm} started. Queries still answer afterwards,
+   * building the program on the calling thread, and `prewarm` does nothing. */
+  dispose(): void;
 }
 
 /** Options a language needs to build its semantic layer. */
@@ -195,17 +211,17 @@ export interface HunkStructureContext {
   readonly sourceOmitsUtf8Bom: boolean;
 
   /** Line starts of the source text `doc` was parsed from. */
-  readonly sourceLineStarts: number[];
+  readonly sourceLineStarts: readonly number[];
 
   /** Last diff line of the hunk (its extent). */
   readonly hunkEnd: number;
 
-  readonly diffLineStarts: number[];
+  readonly diffLineStarts: readonly number[];
 
   /** Code-point columns of the diff text. */
   readonly diffColumnOf: ColumnOf;
 
-  readonly rawLines: string[];
+  readonly rawLines: readonly string[];
 
   /** Name → declaration index the remap contributes to (for `t` peeks). */
   readonly definitions: Map<string, Definition[]>;
@@ -491,6 +507,9 @@ function allLanguages(): readonly Language[] {
     jsonLanguage,
     jsonLinesLanguage,
     yamlLanguage,
+    gitignoreLanguage,
+    dockerignoreLanguage,
+    bazelignoreLanguage,
     pythonLanguage,
     swiftLanguage,
     kotlinLanguage,
@@ -499,6 +518,10 @@ function allLanguages(): readonly Language[] {
     hclLanguage,
     leanLanguage,
     leanToolchainLanguage,
+    cLanguage,
+    cppLanguage,
+    cudaLanguage,
+    cFamilyHeaderLanguage,
     shellLanguage,
     makeLanguage,
     propertiesLanguage,

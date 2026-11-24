@@ -11,7 +11,7 @@
  * manager then lists the room too. Last, the
  * first opens their manager again, creates a group from the group controls of
  * that new page, and starts another chat, whose row's link opens the new room.
- * Then someone who shares a group with another person adds them to a second
+ * Then someone who shares a direct chat with another person adds them to a
  * group from its page, by address alone; their manager offers it to the
  * person through the profile it lists for them, the room's page shows it was
  * offered, and the person's own manager lists it once they open it. And
@@ -74,7 +74,7 @@ describe("fabrichat-join", () => {
   let groupOwnerIdentity: Identity;
   let groupMemberIdentity: Identity;
 
-  // Two people who share a group room, one of whom adds the other to a second.
+  // Two people who share a direct room, one of whom adds the other to a group.
   let adderIdentity: Identity;
   let addedIdentity: Identity;
 
@@ -272,6 +272,16 @@ describe("fabrichat-join", () => {
     await waitForText(added, "#fabrichat-messages", "Hello from Grace");
     await waitForSettledText(adder, "cf-profile-badge", "Grace Hopper");
 
+    // Start a direct chat from Grace's own roster chip. Address-only offers
+    // consult that room's roster, not the roster of an unrelated group.
+    await clickTrustedAction(adder, START_ACTION);
+    await openChatManager(firstShell, adderIdentity);
+    await waitForSettledText(
+      adder,
+      "#fabrichat-rooms",
+      directRoomLabel(addedAddress),
+    );
+
     // The adder creates a second group, of their own alone, and opens it. Its
     // add control offers the person from their chats. The manager's views read
     // no room's roster until a picker of the people is opened, so the group
@@ -295,9 +305,8 @@ describe("fabrichat-join", () => {
     // Added by their address alone, the person is offered the room through
     // the profile the adder's manager lists for them, which points at their
     // Home's private inbox, and the room's page, reading the manager's verdict
-    // from the adder's home, says so. Under server execution the served offer
-    // finds that profile in the manager's per-user `people`, which this page
-    // derived while it listed the person among the add control's candidates.
+    // from the adder's home, says so. The offer reads the profile from their
+    // direct room's roster, independent of the session's people picker.
     const outcome = `Added ${addedAddress}, and offered them this chat.`;
     await fillCfInput(adder, "#fabrichat-add-member-address", addedAddress);
     await clickTrustedAction(adder, ADD_MEMBER_ACTION);

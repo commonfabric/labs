@@ -12,8 +12,12 @@ export {
 export {
   attachOptionsFrom,
   isCellHandle,
+  NAME,
   observeAuthorship,
+  observeRepresentedPrincipal,
+  observeWrittenPrincipal,
   RuntimeClient,
+  TILE_UI,
 } from "@commonfabric/runtime-client";
 export { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
 export { MessagePortRuntimeTransport } from "@commonfabric/runtime-client/transports/message-port";

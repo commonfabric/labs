@@ -247,7 +247,7 @@ describe("runtime-processor", () => {
           name: "",
         }),
       ).rejects.toThrow(
-        "uploadBlob requires any name it is given to be one a blob may hold",
+        "The name given is not one a blob may hold",
       );
     });
   });

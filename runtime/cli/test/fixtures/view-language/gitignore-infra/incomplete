@@ -1,0 +1,13 @@
+.vault_pass
+
+# OpenTofu / Terraform
+.terraform/
+*.tfstate
+crash.*.log
+
+*.terraform.lock.hcl
+!tofu/github-org/.terraform.lock.hcl
+!tofu/sh
+__pycache__/
+*.py[co
+memory-router/fuzz/targ

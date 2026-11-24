@@ -35,12 +35,23 @@ import {
   jsonLinesLanguage,
 } from "../lib/view/languages/json/language.ts";
 import { yamlLanguage } from "../lib/view/languages/yaml/language.ts";
+import {
+  bazelignoreLanguage,
+  dockerignoreLanguage,
+  gitignoreLanguage,
+} from "../lib/view/languages/ignore/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
 import { rustLanguage } from "../lib/view/languages/rust/language.ts";
 import { tomlLanguage } from "../lib/view/languages/toml/language.ts";
 import { hclLanguage } from "../lib/view/languages/hcl/language.ts";
+import {
+  cFamilyHeaderLanguage,
+  cLanguage,
+  cppLanguage,
+  cudaLanguage,
+} from "../lib/view/languages/c-family/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
@@ -147,6 +158,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("ndjson"), jsonLinesLanguage);
   assertEquals(languageForName("yaml"), yamlLanguage);
   assertEquals(languageForName("yml"), yamlLanguage);
+  expect(languageForName("gitignore")).toBe(gitignoreLanguage);
+  expect(languageForName("dockerignore")).toBe(dockerignoreLanguage);
+  expect(languageForName("bazelignore")).toBe(bazelignoreLanguage);
   assertEquals(languageForName("python"), pythonLanguage);
   assertEquals(languageForName("py"), pythonLanguage);
   assertEquals(languageForName("swift"), swiftLanguage);
@@ -161,6 +175,11 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("lean"), leanLanguage);
   assertEquals(languageForName("lean4"), leanLanguage);
   assertEquals(languageForName("lean-toolchain"), leanToolchainLanguage);
+  assertEquals(languageForName("c"), cLanguage);
+  assertEquals(languageForName("cpp"), cppLanguage);
+  assertEquals(languageForName("c++"), cppLanguage);
+  assertEquals(languageForName("cuda"), cudaLanguage);
+  assertEquals(languageForName("h"), cFamilyHeaderLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
@@ -193,6 +212,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "json",
     "json-lines",
     "yaml",
+    "gitignore",
+    "dockerignore",
+    "bazelignore",
     "python",
     "swift",
     "kotlin",
@@ -201,6 +223,10 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "hcl",
     "lean",
     "lean-toolchain",
+    "c",
+    "cpp",
+    "cuda",
+    "c-family-header",
     "shell",
     "make",
     "properties",
@@ -227,6 +253,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "ndjson",
     "yaml",
     "yml",
+    "gitignore",
+    "dockerignore",
+    "bazelignore",
     "python",
     "py",
     "swift",
@@ -243,6 +272,13 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "lean",
     "lean4",
     "lean-toolchain",
+    "c",
+    "cpp",
+    "c++",
+    "cxx",
+    "cuda",
+    "c-family-header",
+    "h",
     "shell",
     "sh",
     "bash",

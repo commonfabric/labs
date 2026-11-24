@@ -3594,6 +3594,7 @@ export class Scheduler {
           type: "cell.update",
           change,
         }),
+      writersOf: (entity) => this.#writeIndex.writersByEntity.get(entity),
       recordTriggerTrace: (entry) =>
         recordTriggerTraceState({ triggerTrace: this.#triggerTrace }, entry),
       markInvalid: (target, cause) =>

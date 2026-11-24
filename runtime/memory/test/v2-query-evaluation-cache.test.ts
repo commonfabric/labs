@@ -354,7 +354,7 @@ describe("v2 query evaluation cache", () => {
     }
   });
 
-  it("keys a session-scoped evaluation to its identity instead of sharing it", async () => {
+  it("does not keep an evaluation of a session-scoped root", async () => {
     const space = "did:key:z6Mk-eval-cache-scoped";
     const server = createServer("memory://eval-cache-scoped");
     const messagesA: ServerMessage[] = [];
@@ -376,10 +376,10 @@ describe("v2 query evaluation cache", () => {
       ]);
       const after = server.evaluationCacheDiagnostics(space);
 
-      // Two identities, each a miss: the tainted entry never crosses.
+      // Two identities, each a miss, and neither evaluation is kept.
       expect(after.misses - before.misses).toBe(2);
       expect(after.hits - before.hits).toBe(0);
-      expect(after.entriesTainted - before.entriesTainted).toBe(2);
+      expect(after.entries - before.entries).toBe(0);
     } finally {
       connectionA.close();
       connectionB.close();
@@ -646,10 +646,10 @@ describe("v2 query evaluation cache", () => {
       expect(after.residueRefusals - before.residueRefusals).toBe(1);
       expect(upsertIds(syncC)).toContain("of:doc:draft");
 
-      // C's refused evaluation was cached under its identity, and the
-      // shared entry must not shadow it: the same identity asking the
-      // same question again — here as a one-shot graph query, which
-      // shares the cache with watch establishment — is served from it.
+      // C's own evaluation reached its instance, so it is not kept: the
+      // same identity asking the same question again — here as a one-shot
+      // graph query, which shares the cache with watch establishment — is
+      // refused the shared entry again and evaluates again.
       const again = await server.evaluateGraphQuery(
         space,
         {
@@ -663,8 +663,10 @@ describe("v2 query evaluation cache", () => {
         { principal: "did:key:z6Mk-present-p3", sessionId: sessionC },
       );
       const retried = server.evaluationCacheDiagnostics(space);
-      expect(retried.hits - after.hits).toBe(1);
-      expect(retried.hitsIdentity - after.hitsIdentity).toBe(1);
+      expect(retried.hits - after.hits).toBe(0);
+      expect(retried.misses - after.misses).toBe(1);
+      expect(retried.residueRefusals - after.residueRefusals).toBe(1);
+      expect(retried.entriesAbsentResidue).toBe(1);
       expect(again.entities.map((entity) => entity.id)).toContain(
         "of:doc:draft",
       );
@@ -714,11 +716,9 @@ describe("v2 query evaluation cache", () => {
       rotations: 0,
       hitsPure: 0,
       hitsAbsentResidue: 0,
-      hitsIdentity: 0,
       residueRefusals: 0,
       entriesPure: 0,
       entriesAbsentResidue: 0,
-      entriesTainted: 0,
     });
   });
 
@@ -1128,19 +1128,165 @@ describe("v2 query evaluation cache", () => {
     // The refusal's single probe rides the full evaluation's own reads.
     expect(cache.misses).toBe(2);
     expect(evaluated.stats.managerReads).toBeGreaterThan(1);
-    const fallback = trackGraph(space, engine, query, undefined, {
+    const uncached = trackGraph(space, engine, query, undefined, cIdentity);
+    // Exactly ONE probe was performed before the refusal — not the
+    // residue's full length — so the refused evaluation reports one read
+    // more than the same evaluation made without a cache.
+    expect(cache.residueRefusals).toBe(1);
+    expect(evaluated.stats.managerReads).toBe(
+      uncached.stats.managerReads + 1,
+    );
+    const again = trackGraph(space, engine, query, undefined, {
       ...cIdentity,
       evaluationCache: cache,
     });
-    // Identity-fallback hit: exactly ONE probe was performed before the
-    // refusal — not the residue's full length. The shared entry is
-    // consulted (and refused) on EVERY ask, so both of C's asks count a
-    // refusal.
-    expect(cache.hitsIdentity).toBe(1);
+    // C's evaluation was not kept, so the shared entry is consulted, and
+    // refused, on every ask.
+    expect(cache.misses).toBe(3);
     expect(cache.residueRefusals).toBe(2);
-    expect(fallback.stats.managerReads).toBe(1);
+    expect(again.stats.managerReads).toBe(evaluated.stats.managerReads);
   });
 
+  it("does not keep an evaluation that left a link unfollowed for want of a session", async () => {
+    const space = "did:key:z6Mk-eval-cache-unresolved";
+    const engine = await openEngine({
+      url: new URL("memory:///eval-cache-unresolved"),
+    });
+    const owner = {
+      principal: "did:key:z6Mk-unresolved-owner",
+      sessionId: "unresolved-owner",
+    };
+    applyCommit(engine, {
+      ...owner,
+      invocation: {
+        iss: "did:key:test",
+        aud: "did:key:service",
+        cmd: "/memory/transact",
+        sub: space,
+      },
+      authorization: { proof: "ok" },
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [
+          {
+            op: "set" as const,
+            id: "of:doc:linked",
+            value: {
+              value: {
+                draft: {
+                  "/": {
+                    "link@1": {
+                      path: [],
+                      id: "of:doc:draft",
+                      space,
+                      scope: "session",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          {
+            op: "set" as const,
+            id: "of:doc:draft",
+            scope: "session" as const,
+            value: { value: { mine: true } },
+          },
+        ],
+      },
+    });
+    const cache = createQueryEvaluationCache();
+    const query = {
+      roots: [{ id: "of:doc:linked", selector: { path: [], schema: true } }],
+    };
+    const drafts = (tracked: ReturnType<typeof trackGraph>) =>
+      [...tracked.state.entities.keys()].filter((key) =>
+        key.endsWith("/of:doc:draft")
+      ).length;
+
+    // A walk as the owner's principal with no session, which is how a root
+    // naming a `user` instance is walked, has no instance of the `session`
+    // scope, so it reaches less than the owner's session does.
+    const sessionless = trackGraph(space, engine, query, undefined, {
+      principal: owner.principal,
+      evaluationCache: cache,
+    });
+    const owned = trackGraph(space, engine, query, undefined, {
+      ...owner,
+      evaluationCache: cache,
+    });
+
+    expect(drafts(sessionless)).toBe(0);
+    expect(drafts(owned)).toBe(1);
+    expect(cache.entries.size).toBe(0);
+  });
+
+  it("evaluates in full for an identity that resolves no instance of a kept evaluation's absent link", async () => {
+    const space = "did:key:z6Mk-eval-cache-unresolved-residue";
+    const engine = await openEngine({
+      url: new URL("memory:///eval-cache-unresolved-residue"),
+    });
+    const owner = {
+      principal: "did:key:z6Mk-unresolved-residue-owner",
+      sessionId: "unresolved-residue-owner",
+    };
+    applyCommit(engine, {
+      ...owner,
+      invocation: {
+        iss: "did:key:test",
+        aud: "did:key:service",
+        cmd: "/memory/transact",
+        sub: space,
+      },
+      authorization: { proof: "ok" },
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set" as const,
+          id: "of:doc:linked",
+          value: {
+            value: {
+              draft: {
+                "/": {
+                  "link@1": {
+                    path: [],
+                    id: "of:doc:draft",
+                    space,
+                    scope: "session",
+                  },
+                },
+              },
+            },
+          },
+        }],
+      },
+    });
+    const cache = createQueryEvaluationCache();
+    const query = {
+      roots: [{ id: "of:doc:linked", selector: { path: [], schema: true } }],
+    };
+    // The owner's session dead-ends on its absent draft, and its evaluation
+    // is kept for any identity whose own draft is absent too.
+    trackGraph(space, engine, query, undefined, {
+      ...owner,
+      evaluationCache: cache,
+    });
+    expect(cache.entries.size).toBe(1);
+
+    // The owner's principal with no session has no instance of the
+    // `session` scope to probe.
+    const sessionless = trackGraph(space, engine, query, undefined, {
+      principal: owner.principal,
+      evaluationCache: cache,
+    });
+
+    expect(cache.hitsAbsentResidue).toBe(0);
+    expect(cache.residueRefusals).toBe(1);
+    expect(cache.entries.size).toBe(1);
+    expect([...sessionless.state.missed]).toEqual([]);
+  });
   it("evicts the least-recently-evaluated space's cache beyond the space bound", async () => {
     const server = new Server({
       subscriptionRefreshDelayMs: 0,

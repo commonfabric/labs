@@ -465,18 +465,26 @@ export type SpaceServerPolicy = {
    * it. `record` loads every root regardless and counts the roots the store
    * could have served, and the pieces a judgment was wrong about
    * (`currency.falseClean`). `skip` leaves a root the store can serve
-   * unloaded and its piece unstarted, until an input marks the piece or a
-   * session's demand reaches an instance it does not vouch for (§1), and
-   * runs as `record` unless `currencyEpoch` is set. Unset, nothing is
-   * recorded or judged. The toolshed bootstrap reads
+   * unloaded and its piece unstarted, until an input marks the piece, a
+   * slice that read a clock expires (`currency.expiryWakes`), or a session's
+   * demand reaches an instance it does not vouch for (§1), and starts
+   * nothing else on the index's account: a root that is stale only through
+   * what is upstream of it is loaded as a refused one is. `start-upstream`
+   * does what `skip` does and starts the pieces upstream of such a root, and
+   * of a running piece that is stale the same way, holding the watermark
+   * meanwhile (§1, "A root stale upstream"). Unset, nothing is recorded or
+   * judged. The toolshed bootstrap reads
    * SERVER_EXECUTION_CURRENCY_INDEX.
    */
   currencyIndex?: CurrencyIndexMode;
 
   /**
-   * Names the build whose records the currency index trusts: a piece
-   * recorded under another epoch is started. A deployment changes it when a
-   * release can change what a stored output would be computed as.
+   * The epoch the currency index records under and trusts: a piece recorded
+   * under another epoch is started. Unset, it is `DEFAULT_CURRENCY_EPOCH`,
+   * under which the records of every build are trusted, including one that
+   * computed a stored output as this build would not. Naming a new epoch is
+   * how an operator stops trusting every record stored so far. The toolshed
+   * bootstrap reads SERVER_EXECUTION_CURRENCY_EPOCH.
    */
   currencyEpoch?: string;
 };
@@ -689,6 +697,17 @@ export type SpaceServerOptions = {
 
 /** The flush deadline a policy that names none takes (serving-loop.md §3). */
 export const DEFAULT_FLUSH_DEADLINE_MS = 100;
+
+/**
+ * The currency epoch a policy that names none takes
+ * (`SpaceServerPolicy.currencyEpoch`). It is one fixed value, the same for
+ * every build and every process, so a serving loop trusts the records of
+ * each loop that ran under it, whichever build that was. A record names its
+ * epoch by value: a change to this one leaves every record stored under it
+ * of another epoch, for every deployment at once.
+ */
+export const DEFAULT_CURRENCY_EPOCH = "default";
+
 const DEFAULT_IDLE_PARK_MS = 30_000;
 const DEFAULT_PARK_DISPOSE_TIMEOUT_MS = 5_000;
 
@@ -1215,6 +1234,14 @@ export class SpaceServer implements TransactionSealDestination {
    * one on its stream whose start the same wave admits.
    */
   readonly #originFollowsSettled = new Set<string>();
+
+  /**
+   * The result documents, by `originFollowKey()`, of the pieces that adopted
+   * new source when this tenure followed their origin. A root the store
+   * could serve that rests on one is loaded, so the piece starts on the
+   * source it adopted.
+   */
+  readonly #movedOrigins = new Set<string>();
 
   /**
    * Every wave a seal has opened and no commit has finished: what a
@@ -2303,23 +2330,12 @@ export class SpaceServer implements TransactionSealDestination {
 
     const currencyIndex = this.#options.policy?.currencyIndex;
     if (currencyIndex !== undefined) {
-      const epoch = this.#options.policy?.currencyEpoch;
-      // A record is trusted across builds only by the epoch it names, so
-      // leaving pieces unstarted on one takes a named epoch.
-      if (currencyIndex === "skip" && epoch === undefined) {
-        logger.warn("currency-skip-without-epoch", () => [
-          `space ${space}: the currency index is asked to leave current ` +
-          "pieces unstarted with no epoch named " +
-          "(`SpaceServerPolicy.currencyEpoch`); it records and judges, " +
-          "and starts every piece",
-        ]);
-      }
       runtime.scheduler.trackChangedPieces();
       this.#currency = new StoreCurrency({
         space,
         server: this.#options.server,
-        mode: epoch === undefined ? "record" : currencyIndex,
-        epoch: epoch ?? "",
+        mode: currencyIndex,
+        epoch: this.#options.policy?.currencyEpoch ?? DEFAULT_CURRENCY_EPOCH,
         serviceIdentity: this.#options.serviceIdentity,
         stats: this.#options.stats,
         onOwed: () => {
@@ -6282,10 +6298,11 @@ export class SpaceServer implements TransactionSealDestination {
       if (root !== undefined) rootKeys.set(key, root);
     }
     // The roots the store can serve as they stand (serving-loop.md §1):
-    // under `skip` they are neither loaded nor started, and stay awaiting a
-    // first load, so each later pass judges them again. A root, or a piece
-    // that runs, that is stale only through what is upstream of it is
-    // judged with them, for the pieces to start upstream.
+    // where the loop skips they are neither loaded nor started, and stay
+    // awaiting a first load, so each later pass judges them again. A root,
+    // or a piece that runs, that is stale only through what is upstream of
+    // it is judged with them, for the pieces to start upstream, which a
+    // `skip` loop starts none of.
     if (
       this.#currency !== undefined &&
       (rootKeys.size > 0 || this.#currency.staleUpstream)
@@ -6315,6 +6332,14 @@ export class SpaceServer implements TransactionSealDestination {
             ...judged.held.filter((key) => !released.has(key)),
           ]
         ) {
+          // A root that rests on a piece whose origin moved is loaded, and
+          // one whose origin this tenure has yet to follow is left unloaded
+          // meanwhile: what the store holds of it is what a client reads
+          // until the follow ends either way.
+          if (this.#originMoved(judged.origins.get(key))) {
+            this.#currency.load(key);
+            continue;
+          }
           rootKeys.delete(key);
           // A re-arm the judgment did not bear out leaves no retry owed.
           this.#pendingStructureLoads.delete(key);
@@ -7936,8 +7961,32 @@ export class SpaceServer implements TransactionSealDestination {
   };
 
   /**
+   * Helper for the demand pass, which has the origin of each of `pieces`
+   * followed where this tenure has not (§3e): the pieces a root the store
+   * can serve rests on that record a source origin. A piece left unstarted
+   * is one no start follows the origin of.
+   *
+   * @returns Whether one of them adopted new source when its origin was
+   * followed.
+   */
+  #originMoved(pieces: readonly string[] | undefined): boolean {
+    let moved = false;
+    for (const piece of pieces ?? []) {
+      const root: OwningRootAddress = {
+        space: this.#options.space,
+        id: piece as URI,
+        scope: "space",
+      };
+      if (this.#movedOrigins.has(originFollowKey(root))) moved = true;
+      else this.#originFollowed(root);
+    }
+    return moved;
+  }
+
+  /**
    * Follow the origin of a piece this tenure is about to start for the first
-   * time (§3e), beside the loop's cycles rather than inside one: the
+   * time, or to leave unstarted (§3e), beside the loop's cycles rather than
+   * inside one: the
    * reconciler's compile seals the candidate's closure into the wave open
    * when it finishes, and its adopting direct commit waits for that wave to
    * commit (`Runtime.sealsCommitted`), so a cycle awaiting the follow would
@@ -7957,6 +8006,7 @@ export class SpaceServer implements TransactionSealDestination {
       return runtime.sourceReconciler.reconcile(cell);
     }).then(
       (outcome) => {
+        if (outcome === "updated") this.#movedOrigins.add(key);
         logger.debug("origin-followed", () => [
           `space ${this.#options.space}: followed the origin of ${root.id} ` +
           `before its first start (${outcome})`,
@@ -9453,6 +9503,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#followedOrigins.clear();
     this.#originFollowsInFlight.clear();
     this.#originFollowsSettled.clear();
+    this.#movedOrigins.clear();
     this.#rearmedAwaitingSettle.clear();
     this.#rearmSeqsUnderRetry.clear();
     this.#rearmSeqsAwaitingFollow.clear();

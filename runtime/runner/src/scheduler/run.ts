@@ -66,6 +66,7 @@ import {
   fanOutInstancesToRun,
   type FanOutNodeState,
   fanOutRunFinished,
+  fanOutRunOpened,
   fanOutRunStarted,
   fanOutUnionLog,
   keyAtRatchet,
@@ -782,6 +783,9 @@ export async function runSchedulerAction(
     }
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
+    if (fanOut !== undefined && instance !== undefined) {
+      fanOutRunOpened(fanOut, instance, tx.tx);
+    }
     tx.tx.validateReactiveReads = true;
     // The mark's one effect is the local fold of a write the space refuses
     // (`IStorageTransaction.derivedWrites`), so the flag gating the fold
@@ -1117,19 +1121,19 @@ function finalizeSchedulerAction(
     args.actionEndTime,
     args.reads,
   );
+  const annotated = args.action as Partial<TelemetryAnnotations>;
+  const src = getAuthoredDebugSource(annotated.module?.implementation)?.src;
+  const piece = annotated.schedulerObservationIdentity?.pieceRootId;
   state.runtime.telemetry.submit({
     type: "scheduler.run.complete",
     actionId: args.actionId,
     actionInfo: state.getActionTelemetryInfo(args.action),
     durationMs: elapsed,
-    ...(args.reads
-      ? {
-        reads: args.reads,
-        src: getAuthoredDebugSource(
-          (args.action as Partial<TelemetryAnnotations>).module?.implementation,
-        )?.src,
-      }
-      : {}),
+    inputDriven: args.invalidCauses !== undefined &&
+      args.invalidCauses.length > 0,
+    ...(piece === undefined ? {} : { piece }),
+    ...(src === undefined ? {} : { src }),
+    ...(args.reads ? { reads: args.reads } : {}),
     ...(args.error !== undefined
       ? { error: args.error instanceof Error ? args.error.message : "error" }
       : {}),
@@ -1384,6 +1388,7 @@ function finalizeReactiveActionCommit(
         discovered: normalizeCellScope(args.tx.getNarrowestReadScope()),
         startGen: args.fanOutRun.startGen,
         log,
+        transaction: args.tx.tx,
       });
     }
     return log;

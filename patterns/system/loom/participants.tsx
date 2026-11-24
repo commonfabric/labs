@@ -4,6 +4,7 @@ import {
   type Default,
   handler,
   type ReadonlyCell,
+  type Stream,
   type Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
@@ -63,4 +64,30 @@ export const addParticipant = handler<
   // is pinned so the entry names this profile, not whatever an alias later
   // resolves to.
   roster.key("items").addUnique(profile.resolveAsCell());
+});
+
+/**
+ * Lists the viewer in the Loom: bound to the root's `addParticipant` and the
+ * viewer's `#profile`, it adds the viewer's own profile to the roster. The
+ * event carries no profile: the one it lists is always the sender's own. A
+ * host that admits its user to the Loom sends it, on joining and on each
+ * open; the roster adds a profile once, so a repeat changes nothing. A send
+ * that arrives before the viewer's profile resolves lists nothing, and the
+ * next send lists them.
+ *
+ * `void`, not an empty object: a host's send and a rendered click arrive with
+ * fields a closed empty object would refuse.
+ */
+export const joinAsViewer = handler<
+  void,
+  {
+    join: Stream<{ profile: ParticipantProfile }>;
+    profile: ParticipantProfile | undefined;
+  }
+>((_, { join, profile }) => {
+  // An unresolved profile arrives as an empty cell, and linking it would
+  // record no profile at all.
+  const target = profile?.resolveAsCell();
+  if (target === undefined || target.get() === undefined) return;
+  join.send({ profile: target });
 });
