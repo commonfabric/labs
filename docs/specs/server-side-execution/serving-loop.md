@@ -1297,11 +1297,12 @@ executing:
   replaces them; a viewer's slice it does not name keeps its rows and its
   mark. A record that names no `space` slice was taken while nothing live
   ran at the space's key, as a runtime takes of a piece an enclosing start
-  instantiated while no session demands what it writes. It leaves a
-  `space` slice that is clean and of the recording epoch with its rows,
-  which a later change to an instance they name marks as it marks an absent
-  viewer's, and replaces any other, or the missing one of a piece with no
-  record, with a slice that read nothing: a slice that passes no judgment
+  instantiated while no session demands what it writes. Where the record
+  is vouched for, it leaves a `space` slice that is clean and of the
+  recording epoch with its rows, which a later change to an instance they
+  name marks as it marks an absent viewer's. It replaces any other, the
+  held slice of a record that is not vouched for among them, or the missing
+  one of a piece with no record, with a slice that read nothing: a slice that passes no judgment
   would otherwise stand until a session demands what its computations
   wrote. A
   slice is stored marked when a live computation that ran at its key is not
