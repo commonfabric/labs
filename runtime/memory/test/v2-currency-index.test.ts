@@ -655,8 +655,16 @@ describe("currency-index", () => {
       expect(markOf("of:piece")).toBe(2);
     });
 
-    it("stores marked `1` a piece that read a derived document no recorded piece writes", () => {
+    it("stores clean a piece that read a derived document no recorded piece writes, which holds a value", () => {
       const asOf = write("computed:b");
+
+      store(asOf, [record("of:pieceC", { reads: [derived("computed:b")] })]);
+
+      expect(markOf("of:pieceC")).toBe(0);
+    });
+
+    it("stores marked `1` a piece that read a derived document no recorded piece writes and no computation has produced", () => {
+      const asOf = write("of:pieceC");
 
       const stored = store(asOf, [
         record("of:pieceC", { reads: [derived("computed:b")] }),
@@ -667,7 +675,7 @@ describe("currency-index", () => {
     });
 
     it("clears a piece marked `1` once the piece that writes its input is stored clean", () => {
-      const asOf = write("computed:b");
+      const asOf = write("of:pieceC");
       store(asOf, [record("of:pieceC", { reads: [derived("computed:b")] })]);
       expect(markOf("of:pieceC")).toBe(1);
 
@@ -870,7 +878,7 @@ describe("currency-index", () => {
     });
 
     it("settles a piece an earlier batch stored with one that names it and writes its input", () => {
-      const asOf = write("computed:b", "computed:c");
+      const asOf = write("computed:c");
       store(asOf, [
         record("of:pieceC", {
           reads: [derived("computed:b")],
@@ -896,8 +904,8 @@ describe("currency-index", () => {
       expect([markOf("of:pieceB"), markOf("of:pieceC")]).toEqual([0, 0]);
     });
 
-    it("leaves marked `1` a named piece of an earlier batch that reads a document no record writes", () => {
-      const asOf = write("computed:b", "computed:c", "computed:z");
+    it("leaves marked `1` a named piece of an earlier batch that reads a document no record writes and no computation has produced", () => {
+      const asOf = write("computed:c");
       store(asOf, [
         record("of:pieceC", {
           reads: [derived("computed:b"), derived("computed:z")],
@@ -3299,12 +3307,14 @@ describe("currency-index", () => {
         expect(pull()).toEqual([]);
       });
 
-      it("returns stale what a piece computes, once the source's index starts over with its records dropped", () => {
+      it("returns no change to what a piece computed, once the source's index starts over with its records dropped", () => {
         // What `open()` leaves of an index it drops the records of: the rows
-        // the store tells its readers, and no cursor.
+        // the store tells its readers, and no cursor. The instance is then
+        // one no recorded piece writes, which holds a value, and is read as
+        // an input.
 
         storeReading("of:piece", "computed:far");
-        const asOf = storeProducer();
+        storeProducer();
         pull();
         source.database.exec(`
           DELETE FROM currency_slice;
@@ -3323,12 +3333,7 @@ describe("currency-index", () => {
           }),
         });
 
-        expect(pulled.entries).toEqual([{
-          id: "computed:far",
-          scopeKey: "space",
-          head: asOf,
-          stale: true,
-        }]);
+        expect(pulled.entries).toEqual([]);
       });
     });
 
@@ -3401,14 +3406,14 @@ describe("currency-index", () => {
         expect(movedSince(marked)).toEqual([SPACE]);
       });
 
-      it("returns a space that registered an instance a piece no longer writes", () => {
+      it("returns no space for an instance a piece no longer writes, which holds what the piece wrote", () => {
         const asOf = storeProducer();
         register("computed:far");
         const before = position();
 
         storeSource(asOf, [record("of:producer")]);
 
-        expect(movedSince(before)).toEqual([SPACE]);
+        expect(movedSince(before)).toEqual([]);
       });
     });
 
@@ -3459,6 +3464,149 @@ describe("currency-index", () => {
         pull();
 
         expect(markOf("of:piece")).toBe(0);
+      });
+    });
+
+    describe("with instances of the source a serving loop wrote that no recorded piece writes", () => {
+      // What wrote such an instance is something the source's index has no
+      // record of, so it is read as an input. `of:owned` is a cell of
+      // `of:owner`, holding the `result` back-link its piece's setup writes.
+
+      const OWNER = "of:owner";
+      const OWNED = "of:owned";
+      let holder: string;
+
+      beforeEach(() => {
+        setServerExecutionConfig(true);
+        holder = executionLeaseHolder(`service:${SOURCE}`);
+        source.executionLeases.acquire(SOURCE, holder);
+      });
+
+      afterEach(() => {
+        resetServerExecutionConfig();
+      });
+
+      /**
+       * Commits to the source a serving loop's commit that writes `id`, a
+       * value where `produced` is `true` and the back-link alone, as setup
+       * leaves a cell no computation has written yet, where it is `false`.
+       * Returns the commit's seq.
+       */
+      const serve = (id: string, produced = true): number => {
+        localSeq += 1;
+        return applyWaveCommit(source, {
+          sessionId: holder,
+          space: SOURCE,
+          commitClass: "derived",
+          holder,
+          commit: {
+            localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set" as const,
+              id,
+              value: {
+                ...(produced && { value: { n: localSeq } }),
+                ...(id === OWNED &&
+                  { result: { "/": { "link@1": { id: OWNER, path: [] } } } }),
+              },
+            }],
+          },
+          annotations: [{ op: 0, action: "cf:module/derive" }],
+          waveBasis: { basisSeq: serverSeq(source), rebasedHeads: [] },
+        }).seq;
+      };
+
+      /** Whether the source reports `id` stale to the reading space now. */
+      const reportedStale = (id: string): boolean =>
+        registerCurrencyReads(source, {
+          space: SOURCE,
+          reader: SPACE,
+          reads: [{ id, scopeKey: "space" }],
+        }).entries[0].stale;
+
+      describe("registerCurrencyReads()", () => {
+        it("returns current an instance that holds a value", () => {
+          serve("of:root");
+
+          expect(reportedStale("of:root")).toBe(false);
+        });
+
+        it("returns current a cell that holds a value, of a piece whose record names no write of it", () => {
+          const asOf = serve(OWNED);
+          storeSource(asOf, [record(OWNER)]);
+
+          expect(reportedStale(OWNED)).toBe(false);
+        });
+
+        it("returns stale a cell that holds a value, of a piece the source holds no record of", () => {
+          serve(OWNED);
+
+          expect(reportedStale(OWNED)).toBe(true);
+        });
+
+        it("returns stale a cell that holds the back-link and no value, of a recorded piece", () => {
+          const asOf = serve(OWNED, false);
+          storeSource(asOf, [record(OWNER)]);
+
+          expect(reportedStale(OWNED)).toBe(true);
+        });
+
+        it("returns stale an absent `computed:` instance", () => {
+          expect(reportedStale("computed:never")).toBe(true);
+        });
+
+        it("returns stale an instance a recorded piece writes and vouches for none of", () => {
+          const asOf = serve(OWNED);
+          storeSource(asOf, [record(OWNER, { writes: [OWNED] })]);
+
+          expect(reportedStale(OWNED)).toBe(true);
+        });
+      });
+
+      describe("pullCurrencyExports()", () => {
+        it("returns current that cell once a write gives it a value", () => {
+          storeSource(serve(OWNED, false), [record(OWNER)]);
+          register(OWNED);
+
+          serve(OWNED);
+
+          expect(
+            pullCurrencyExports(source, {
+              space: SOURCE,
+              reader: SPACE,
+              since: 0,
+            }).entries.map(({ id, stale }) => ({ id, stale })),
+          ).toEqual([{ id: OWNED, stale: false }]);
+        });
+      });
+
+      describe("storeCurrencyRecords()", () => {
+        it("stores clean a slice that read such an instance", () => {
+          const head = serve("of:root");
+          register("of:root");
+
+          store(write("of:piece"), [
+            record("of:piece", { reads: [far("of:root", head)] }),
+          ]);
+
+          expect(markOf("of:piece")).toBe(0);
+        });
+      });
+
+      describe("applyCurrencyImports()", () => {
+        it("marks `2` a slice that read such an instance, once it is written again", () => {
+          const head = serve("of:root");
+          register("of:root");
+          store(write("of:piece"), [
+            record("of:piece", { reads: [far("of:root", head)] }),
+          ]);
+
+          serve("of:root");
+          pull();
+
+          expect(markOf("of:piece")).toBe(2);
+        });
       });
     });
 

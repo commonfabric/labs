@@ -36,6 +36,20 @@ The rule throughout: a start that was not needed is acceptable, and a stored
 value served as current when it is not is the failure to design out. Every
 case the record cannot decide starts the piece, as today.
 
+The rule has one exception, a document the index cannot account for. A
+document is either kept up to date by the recorded pieces that write it,
+or written by something no record names: a computation of a piece with no
+record, one that writes outside its declared surface, a setup run, a
+handler. A slice that read a document of the second kind treats it as an
+input. Its readers are marked when it changes, through their read rows, and
+not because its writer might run again: a reader may serve what it derived
+from such a document while the document's writer has not run since an
+input of that writer changed, and that is accepted, in preference to
+starting pieces to catch it ("Known limits"). One case of it is still held
+stale, so that a reader does not pass on what a piece's setup left before
+the piece ran: a cell of a piece that holds no value, or whose piece the
+index holds no record of.
+
 ## The modes
 
 `SERVER_EXECUTION_CURRENCY_INDEX` on a toolshed, or
@@ -281,10 +295,16 @@ inputs is stale, and `0` otherwise. An input is stale when:
 
 - a slice that decides it is marked, a broader slice of the same piece
   included;
-- it is a derived document no recorded piece writes. A document whose only
-  writer names no piece, and which the slice answers for, is not one of
-  these: the slice took over what that writer read, and records the
-  document as an input;
+- it is a derived document no recorded piece writes that no computation
+  may have produced yet: the store holds no instance of it, or it is a cell
+  of a piece, holding the `result` back-link its piece's setup writes, that
+  holds no value or whose piece has no record. Setup writes a piece's cells
+  before its computations run, a default into some, and only the piece's
+  record says which of them its computations write. Any other derived
+  document no recorded piece writes is an input like any other, and marks
+  its readers when it changes. A
+  document whose only writer names no piece, and which the slice answers
+  for, is an input too: the slice took over what that writer read;
 - a recorded piece computes it and no piece vouches for the instance read. A
   record taken while a computation was not running drops its vouches, and
   marks `1` each clean slice that read one of those instances. A viewer's
@@ -389,7 +409,8 @@ instance a piece behind on its own rows decides, reached through any number of
 slices marked `1` between, or an instance a recorded piece writes and none
 vouches for, as a viewer's own instance is before that piece has run for the
 viewer. A slice kept stale by anything else is not: a derived document no
-recorded piece writes, an instance of another space, a read that names no one
+recorded piece writes and no computation may have produced, an instance of
+another space, a read that names no one
 instance, or an instance of a piece whose record was stored not vouched for.
 That last piece has run and been recorded, and a further run is recorded the
 same way, so starting it clears nothing; the index keeps, for each slice,
@@ -630,6 +651,15 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
 
 ## Known limits
 
+- **A document no record accounts for is read as an input.** A derived
+  document no recorded piece writes, once a computation has produced a
+  value in it, is current for its readers until it changes. Where its
+  writer, a piece with no record or a computation writing outside its
+  declared surface, would compute another value from inputs that changed
+  while it did not run, its readers serve what they derived from the value
+  the store holds, until that writer runs for another reason and writes.
+  An index that drops its records, or a piece whose record is gone, turns
+  the outputs it held into documents of this kind.
 - **`skip` starts nothing upstream of a stale piece.** Under the default
   mode a piece that is stale only through a piece upstream of it, in its own
   space, derives from what the store holds of that piece, and its session
