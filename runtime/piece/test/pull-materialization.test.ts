@@ -220,6 +220,34 @@ function compiledMultiplierProgram(
   };
 }
 
+/**
+ * A piece whose input holds a list of items. `itemFields` adds to the item's
+ * declaration.
+ */
+function compiledRowHolderProgram(
+  version: string,
+  itemFields = "",
+): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [
+      {
+        name: "/main.tsx",
+        contents: [
+          "import { Default, NAME, pattern } from 'commonfabric';",
+          `interface Item { title: string; ${itemFields} }`,
+          "interface In { items?: Item[] | Default<[]>; }",
+          "interface Out { [NAME]: string; count: number; }",
+          "export default pattern<In, Out>(({ items }) => ({",
+          `  [NAME]: ${JSON.stringify("rows-" + version)},`,
+          "  count: items.length,",
+          "}));",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
 function compiledScopedInputProgram(version: string): RuntimeProgram {
   return {
     main: "/main.tsx",
@@ -1449,6 +1477,147 @@ describe("piece pull materialization", () => {
         },
       )
     ).not.toThrow();
+  });
+
+  it("judges a retained row that only links on by the contract of what it links to", async () => {
+    // The Topics board's shape: pushing a piece onto a list stores a row, a
+    // document with no contract of its own whose whole value is a link to
+    // the piece. The row only passes its reader on, so the link to it stands
+    // for the link it holds, and the piece's contract is the producer's.
+    const authorWith = (extra: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: {
+        kind: { type: "string" },
+        name: { type: "string" },
+        ...extra,
+      },
+      required: ["kind", "name"],
+    });
+    const argumentWith = (author: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        topics: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { createdBy: author },
+            required: ["createdBy"],
+          },
+        },
+      },
+      required: ["topics"],
+    });
+    const priorAuthor = authorWith({});
+    const candidateAuthor = authorWith({
+      pictureBlob: {
+        type: "object",
+        properties: { space: { type: "string" }, id: { type: "string" } },
+        required: ["space", "id"],
+      },
+    });
+    const prior = argumentWith(priorAuthor);
+    const candidate = argumentWith(candidateAuthor);
+    const producerWith = (author: JSONSchema, name: string | number = "Ada") =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: { type: "object", properties: {} },
+          resultSchema: {
+            type: "object",
+            properties: { createdBy: author },
+            required: ["createdBy"],
+          },
+          result: { createdBy: { kind: "person", name } },
+          nodes: [],
+        }),
+        {},
+        undefined,
+        { start: true },
+      );
+    const rowTo = async (
+      target: Cell<unknown>,
+      space = pieces.getSpace(),
+    ) => {
+      const row = runtime.getCell(space, "topic-row-" + crypto.randomUUID());
+      await runtime.editWithRetry((tx) => {
+        row.withTx(tx).set(target);
+      });
+      // Guard the premise: the row's whole value is a SERIALIZED link.
+      expect(isLink(row.getRaw())).toBe(true);
+      return row as Cell<unknown>;
+    };
+    const base = runtime.getCell(
+      pieces.getSpace(),
+      "row-holder-argument-" + crypto.randomUUID(),
+    );
+    const updateOver = async (
+      row: Cell<unknown>,
+      destination: JSONSchema,
+    ) => {
+      await runtime.editWithRetry((tx) => {
+        base.withTx(tx).set({ topics: [row] });
+      });
+      const raw = base.getRaw() as { topics: unknown[] };
+      expect(isLink(raw.topics[0])).toBe(true);
+      expect(isCell(raw.topics[0])).toBe(false);
+      return () =>
+        assertSuppliedLinkSchemasCompatible(
+          [{ path: ["topics", 0], value: raw.topics[0] }],
+          destination,
+          base,
+          pieces,
+          { priorArgumentSchema: prior, linksPreservedVerbatim: true },
+        );
+    };
+
+    const onPrior = await producerWith(priorAuthor);
+    const onCandidate = await producerWith(candidateAuthor);
+
+    // A producer whose contract leaves the name open admits any value under
+    // it, which the candidate does not accept.
+    expect(await updateOver(await rowTo(onPrior), candidate)).toThrow(
+      /topics\.0\.createdBy\.pictureBlob/,
+    );
+
+    // Once the producer's contract names the field, the reader's update is
+    // accepted, through one row or a chain of them.
+    expect(await updateOver(await rowTo(onCandidate), candidate)).not
+      .toThrow();
+    expect(
+      await updateOver(await rowTo(await rowTo(onCandidate)), candidate),
+    ).not.toThrow();
+
+    // The producer is judged even where the reader's contract is unchanged:
+    // one whose contract the reader's does not accept is refused.
+    const misfit = await producerWith(
+      authorWith({ name: { type: "number" } }),
+      7,
+    );
+    expect(await updateOver(await rowTo(misfit), prior)).toThrow(
+      /topics\.0\.createdBy\.name/,
+    );
+
+    // A row in another space is not read, so it is held to the reader's
+    // prior contract, as a row that links to nothing with a contract is.
+    expect(
+      await updateOver(
+        await rowTo(onCandidate, await runtime.createSpace()),
+        candidate,
+      ),
+    ).toThrow(/topics\.0\.createdBy/);
+
+    // Rows that link to each other reach no contract, and following them
+    // ends.
+    const first = runtime.getCell(
+      pieces.getSpace(),
+      "topic-row-" + crypto.randomUUID(),
+    ) as Cell<unknown>;
+    const second = await rowTo(first);
+    await runtime.editWithRetry((tx) => {
+      first.withTx(tx).set(second);
+    });
+    expect(await updateOver(first, candidate)).toThrow(
+      /topics\.0\.createdBy/,
+    );
   });
 
   it("fails closed for ambiguous producer and destination Cell contracts", async () => {
@@ -6165,6 +6334,76 @@ describe("piece pull materialization", () => {
       const contract = durableSourceContract(scopedSource, pieces);
       expect(contract?.schemas.length, `scope=${scope}`).toBeGreaterThan(0);
     }
+  });
+
+  it("updates a piece over a row once the piece the row links to names the new field", async () => {
+    // The whole path of the case above: a source update that names a new
+    // optional field on an item, over an input whose list holds a row that
+    // links to another piece. The update is refused while that piece's
+    // contract leaves the name open, and accepted once it names the field.
+    const candidate = () =>
+      compiledRowHolderProgram("v2", "pictureBlob?: number;");
+    const itemPiece = (extra: Record<string, JSONSchema>) =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: { type: "object", properties: {} },
+          resultSchema: {
+            type: "object",
+            properties: { title: { type: "string" }, ...extra },
+            required: ["title"],
+          },
+          result: { title: "a" },
+          nodes: [],
+        }),
+        {},
+        undefined,
+        { start: true },
+      );
+    const holderOver = async (item: Cell<unknown>) => {
+      const compiled = await runtime.patternManager.compilePattern(
+        compiledRowHolderProgram("v1"),
+        { space: pieces.getSpace() },
+      );
+      const piece = await pieces.runPersistent(
+        compiled,
+        {},
+        "row-holder-" + crypto.randomUUID(),
+        { start: true },
+      );
+      await runtime.idle();
+      const row = runtime.getCell(
+        pieces.getSpace(),
+        "item-row-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        row.withTx(tx).set(item);
+      });
+      const argument = pieces.getArgument(piece);
+      await runtime.editWithRetry((tx) => {
+        argument.withTx(tx).asSchema(undefined as never).key("items" as never)
+          .set([row] as never);
+      });
+      await runtime.idle();
+      const raw = argument.getRawUntyped({ lastNode: "top" }) as {
+        items: unknown[];
+      };
+      // Guard the premise: the list holds a link to a row, and the row's
+      // whole value is a link.
+      expect(isLink(raw.items[0])).toBe(true);
+      expect(isLink(row.getRaw())).toBe(true);
+      return new PieceController(pieces, piece);
+    };
+
+    const open = await holderOver(await itemPiece({}));
+    await expect(open.setPattern(candidate())).rejects.toThrow(
+      /input link at items\.0/,
+    );
+
+    const named = await holderOver(
+      await itemPiece({ pictureBlob: { type: "number" } }),
+    );
+    await named.setPattern(candidate());
+    expect(await named.result.get()).toMatchObject({ count: 1 });
   });
 
   it("updates a piece whose argument holds scoped and mergeable-element links", async () => {

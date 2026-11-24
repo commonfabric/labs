@@ -2085,7 +2085,62 @@ function deriveTargetContracts(
 }
 
 /**
- * Parse a supplied link and recover its producer's durable schema contract.
+ * The most documents {@link durableSourceThroughRows} reads on from one link.
+ * A row is one hop, so the bound is far past any stored shape; what it ends
+ * is a chain a write built on purpose.
+ */
+const MAX_ROW_HOPS = 8;
+
+/**
+ * Recover the contract of what `linkedCell` stands for, and the cell that
+ * carries it.
+ *
+ * A document with no contract of its own whose whole value is a link only
+ * passes its reader on: pushing a piece onto a list stores such a row, linked
+ * from the list and linking to the piece. The link to the row stands for the
+ * link the row holds, so the contract is the one found by following rows to
+ * the first document that carries one.
+ *
+ * A row is read only in the input document's own space and scope. One
+ * elsewhere is another audience's data, which setup's validation of the
+ * stored input does not read either. Following ends, with no contract, at a
+ * document elsewhere, one that is absent, one that holds anything but a link,
+ * one already visited, and after {@link MAX_ROW_HOPS} rows.
+ */
+function durableSourceThroughRows(
+  linkedCell: Cell<unknown>,
+  baseCell: Cell<unknown>,
+  pieces: PiecesController,
+): { durableSource: DurableSourceContract | undefined; source: Cell<unknown> } {
+  const base = baseCell.getAsNormalizedFullLink();
+  const visited = new Set<string>();
+  let source = linkedCell;
+  for (let hops = 0;; hops++) {
+    const durableSource = durableSourceContract(source, pieces);
+    if (durableSource !== undefined) return { durableSource, source };
+    const at = source.getAsNormalizedFullLink();
+    const key = JSON.stringify([at.space, at.scope, at.id, at.path]);
+    if (
+      hops === MAX_ROW_HOPS || visited.has(key) ||
+      at.space !== base.space || at.scope !== base.scope
+    ) break;
+    visited.add(key);
+    const stored = source.getRaw();
+    if (isCell(stored) || !isLink(stored)) break;
+    source = pieces.runtime.getCellFromLink(
+      { ...parseLinkOrThrow(stored, source), schema: undefined },
+      undefined,
+      cellTx(linkedCell),
+    );
+  }
+  return { durableSource: undefined, source: linkedCell };
+}
+
+/**
+ * Parse a supplied link and recover its producer's durable schema contract,
+ * through any rows between the link and the producer
+ * ({@link durableSourceThroughRows}); `source` is the cell that carries the
+ * contract, or the linked cell when none does.
  * A metadata-less linked document is held to the prior argument contract on
  * a pattern update, and `heldToPriorContract` says so. Dynamic binding can
  * explicitly accept an unproven source; other supplied-link operations
@@ -2103,6 +2158,7 @@ function resolveDurableSource(
 ): {
   link: NormalizedLink;
   linkedCell: Cell<unknown>;
+  source: Cell<unknown>;
   durableSource: DurableSourceContract | undefined;
   heldToPriorContract: boolean;
 } {
@@ -2115,7 +2171,9 @@ function resolveDurableSource(
   // A direct Cell view can be narrowed with asSchema() just as easily as a
   // serialized alias can carry a narrowed schema. Neither is a future-value
   // invariant, so a static producer proof needs producer-owned metadata.
-  let durableSource = durableSourceContract(linkedCell, pieces);
+  const through = durableSourceThroughRows(linkedCell, baseCell, pieces);
+  const source = through.source;
+  let durableSource = through.durableSource;
   const heldToPriorContract = durableSource === undefined &&
     priorArgumentSchema !== undefined;
   if (heldToPriorContract) {
@@ -2163,7 +2221,7 @@ function resolveDurableSource(
       }
     }
   }
-  return { link, linkedCell, durableSource, heldToPriorContract };
+  return { link, linkedCell, source, durableSource, heldToPriorContract };
 }
 
 /** Localize the destination contracts and derive their agreed outer shape. */
@@ -2636,7 +2694,7 @@ export function assertSuppliedLinkSchemasCompatible(
       suppliedLink.path,
       displayPath,
     );
-    const { link, linkedCell, durableSource, heldToPriorContract } =
+    const { link, linkedCell, source, durableSource, heldToPriorContract } =
       resolveDurableSource(
         suppliedLink,
         linkBase,
@@ -2661,6 +2719,11 @@ export function assertSuppliedLinkSchemasCompatible(
     if (preservedOuter !== undefined) preservedDirectHandles.add(suppliedLink);
 
     assertSourceScopeFits(targetContracts, linkedCell, displayPath);
+    // A producer reached through rows is read through them, so its scope is
+    // held to the destination's cap as the first document's is.
+    if (source !== linkedCell) {
+      assertSourceScopeFits(targetContracts, source, displayPath);
+    }
     if (durableSource === undefined) continue;
 
     const { rawSourceContracts, sourceContracts } = buildSourceContracts(

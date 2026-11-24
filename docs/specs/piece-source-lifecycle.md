@@ -853,6 +853,17 @@ accesses, so its policy does not have to be repeated on the unchanged consumer
 contract. Capability-kind and scope checks still apply. Changed handle contracts
 require the full producer-contract proof.
 
+A link to a document that carries no contract of its own, and whose whole value
+is a link, stands for the link that document holds. Pushing a piece onto an
+input list stores such a row, linked from the list and linking to the piece, and
+the producer contract proved for the list's link is the piece's: the one found
+by following rows to the first document that carries a contract. A row is read
+only in the input document's own space and scope. Following ends without a
+contract at a row elsewhere, an absent one, a document that holds anything but a
+link, a document already visited, and after eight rows, and the link is then
+proved as a link to a document with no contract is. A producer reached through
+rows is held to the destination's scope cap as the first document is.
+
 Retaining a handle proves continuity of the consumer contract, not a historical
 producer-contract check: writes that bypass `PiecesController.link`, such as
 `setRawUntyped` and `cf cell set`, can omit that check, and the producer schema
