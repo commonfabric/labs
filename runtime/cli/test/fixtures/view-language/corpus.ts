@@ -1332,6 +1332,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "dockerfile",
+    // An instruction line is a directive statement, a word and its arguments,
+    // and the directive configuration language colors its first word as a
+    // keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive"],
     surveyRepository: "infra",
     surveyCommit: "5b65688a0431cda75329734aa7784ba6fb3f76bb",
     surveyPath: "fly/pds/Dockerfile",
@@ -1344,6 +1348,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "dockerfile",
+    // An instruction line is a directive statement, a word and its arguments,
+    // and the directive configuration language colors its first word as a
+    // keyword, as this fixture's evidence is.
+    highlightingPeers: ["directive"],
     surveyRepository: "gvisor",
     surveyCommit: "90dc8548a354d618d05c968111931ba2c4764dd6",
     surveyPath: "images/default/Dockerfile",
