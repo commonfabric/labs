@@ -23550,3 +23550,266 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    are one for each written path, each holding the join of what the transaction
    read. Whether such a document needs an entry for each path whose label equals
    that of the path above it is part of question 1 of round 13.
+
+## Round nineteen: why an edit of a Topics title follows the board
+
+Round nineteen (2026-11-23), on the branch `merge-attempt/serving-m6` from
+`364a53722e`. The notes are numbered from 990, the provisional decisions from
+P450. The logs are in the folder `r19-topics-edit/` of the session. Whenever a
+note says `map`, it names the case. Times are on an Apple M5 Max with 18 cores
+at the load averages given, from other sessions; the counts do not depend on the
+load.
+
+990. **Findings, first.**
+     - _Scale, structural, not built: a view that reads one value of a scope
+       stores every row it holds, once for each scope key, and compares it whole
+       at every change of a row_ (note 991). The rendered tree of the Topics
+       board reads whether the acting user has a profile (a `wish`, of the scope
+       `user`), so the cone of `[UI]` is of that scope, and
+       `Instance.scopedOutput` stores the whole tree, with the 1,000 cards of a
+       `map` over the array of topic references, in the scope instance of each
+       principal that demands the piece: 171 KB at 100 topics, 1.69 MB at 1,000,
+       3.39 MB at 2,000, for each principal. An edit of one title evaluates 8
+       entries and one card body, and then rebuilds, compares and writes that
+       document and sends it to every client. The cause is the scope round
+       (bisect below). The fix needs a decision; the plan is note 993.
+     - _Structure, closed for one case: the runs of one pass for several
+       sessions read the result of an instance a handler made before the commit
+       of its first derivation_ (note 992). A create on the Topics board was
+       refused one to three times, and each refusal restored the board's result
+       and gave the records of the whole board again: 20,297 records at 1,000
+       topics, 46,324 on the merged branch without the serving branch. Fixed
+       (P450): 152 to 187 records for a create. One refusal per create remains,
+       of the general kind of note 890.
+     - _Scale, structural, not built: a session that no client holds any more is
+       still given a run at each change._ The harness disposes of a third client
+       after it found the path of a caption; every edit afterwards still runs
+       the derivation three times, once for each session ever seen (note 890 has
+       the same for the memory of the principals ever seen).
+     - _Scale, structural, not built: the scope instance of the serving
+       runtime's own identity holds a copy of the whole view_ (1.69 MB at 1,000
+       topics), written by the first derivation (note 890) and never read or
+       updated.
+     - _Liveness, not diagnosed: a create on a board of 100 topics_ (one list
+       document of at most 128 rows, P393) throws `TypeMismatchError` in
+       `RuntimeTransactions.change` from `Instance.#storeResult` ("Cannot write
+       property at path [value] - expected object but found undefined") and the
+       step never ends. Seen once at `364a53722e`; a run of the same create at
+       `594b63b02e` ended with 187 records, and the run on the serving branch
+       alone went idle before the load (below), so whether a parent has it is
+       not known.
+     - _Liveness, as note 931: three of about 24 runs of the arm `serving` went
+       idle before the load_, with 1.4 to 4.9 seconds of processor time, two of
+       them on the serving branch alone.
+
+991. **The edit of a title: the cause, by bisect, counts and profile.**
+     - _Bisect,_ the arm `serving` of `compare/topics/scale.ts` on
+       `SCALE_BOARD=filing-order` with the boards of the measurement branch
+       copied in and no create (`SCALE_CREATES=0`), one run each at 1,000
+       topics, load averages 21 to 27. The piece's own time for an edit of a
+       title, the derivations, the evaluations, and the time until the second
+       client reads it:
+
+       | Tree                                                               | Own ms     | Derivations | Evaluations | Second client, ms |
+       | ------------------------------------------------------------------ | ---------- | ----------- | ----------- | ----------------- |
+       | serving branch alone, `c0e0a41014` (with the boards, `32b8b950a5`) | 4.1 to 7.7 | 1           | 5           | 31 to 105         |
+       | merged branch before the scopes, `1aa060a02b`                      | 3.7 to 6.1 | 1           | 5           | 30 to 74          |
+       | merged branch after the scopes, `f315960774`                       | 234 to 253 | 3           | 8           | 2,165 to 2,176    |
+       | merged branch, `121959d0fa` (load 35 to 43)                        | 287 to 301 | 3           | 8           | 2,357 to 2,734    |
+       | this branch, `364a53722e`                                          | 237 to 260 | 3           | 8           | 2,044 to 2,271    |
+
+       So the scope round (`75ad91d5f9` to `f315960774`) causes it, without the
+       resume by units, write integrity or lists in documents.
+     - _Counts at three sizes_ (this branch, load averages 11 to 21): the
+       evaluations (8), element evaluations (3), positions read (11), records
+       (4) and derivations (3) of an edit of a title are the same at 100, 1,000
+       and 2,000 topics. What follows the board is the scope instance of the
+       principal's view: 171,159, 1,693,961 and 3,388,961 bytes as JSON
+       (`SCALE_SCOPES`), and the piece's own time, 29 to 32, 237 to 260 and 437
+       to 495 ms, and the time until the second client reads, 0.24 to 0.33, 2.0
+       to 2.3 and 4.1 to 5.6 s. An edit of the mentions, which changes no card,
+       takes 7.5, 8.4 and 10.9 ms of the piece's own time.
+     - _Why the view is of the scope._ The value function of `[UI]` reads
+       `$h.v($h.output(29))` twice, output 29 being `hasProfile`, which reads
+       the outcome of the `wish` for `#profile`: in the `select` of
+       `hasProfile ? <cf-profile-badge> : <div>{profileWish[UI]}</div>` and in
+       `disabled={!hasProfile}`. Through `Host.output` the cone depends on the
+       value of an entry of the scope `user`, so `#ensure` makes the entry of
+       `[UI]` one of that scope, and `Instance.scopedOutput`, asked by the
+       result for the output `[UI]`, stores the whole value through
+       `#scopedPlace`, whose `Host.whole` settles the assembly of the cards (a
+       `map` over the array of topic references, held by reference in the tree)
+       into the stored value, and `#putScoped` compares it member by member. The
+       plan of the board lists the positions that read output 29 as kept outputs
+       of their own (a `select` at the badge, a `derive` at `disabled`), and the
+       cards at their own position as the output of the collection; the executor
+       stores the scope of the cone for the whole tree. Today's runtime makes
+       those two expressions `ifElse` and `derive` nodes, whose result cells
+       alone narrow to the scope, and the tree holds links to them and to the
+       cell of the `map`, which stays of the space.
+     - _Profile_ (`prof-m5-1000.cpuprofile`, ten edits of the middle title at
+       1,000 topics, 15.5 s sampled, load 16): 1,851 ms in `Instance.#settle`,
+       of which 1,832 in `#pullScoped`, which brings the place of the scoped
+       `[UI]` up to date for the key: `entriesOf` of `compiled/transactions.ts`
+       749 ms (the label entries of the scope instance, read again in
+       `#noteUnchanged` because a commit touched the document),
+       `Instance.stored` 508, `sameStored` 219, `Host.whole` 201. Outside the
+       piece: the memory server's synchronization of labels for each session
+       (`mapServerSync`, `compressLabelMetadata`, `mapLabelMetadataAtPath`)
+       3,881 ms, the client's handling of the message 2,308, the preparation of
+       the commits (`prepareTxForCommit`) 1,470, `deepFreeze` 1,707: the scope
+       instance is delivered to every client at each edit (`SCALE_COMMITS` lists
+       it), and each of these follows its size.
+
+992. **The create: which records, and which writers conflict (provisional
+     decision P450).**
+     - _The runs, by session_ (a debug log of each derivation, its stamp and the
+       documents it wrote, not committed). The handler of `addTopic` runs for
+       the sender and writes the created topic's result document. The next pass
+       runs the derivation for each of the three sessions of the principal. The
+       first run makes the first derivation of the created topic
+       (`Instance.settleMade`), which writes the topic's result again and, since
+       the piece is named, asks for the derivation again at the end of its
+       transaction. The runs for the other two sessions in the same pass read
+       their replica before that commit: one of them read the topic's result as
+       the handler stored it and was refused with
+       `StorageTransactionInconsistent` on that document. `CompiledPiece`'s
+       refusal then restores what the refused transaction wrote, which takes the
+       board's result document again with nothing of it counting as stored
+       (`Instance.restore`), and the next derivation gives a record for every
+       place of the board: 20,297 records at 1,000 topics on this branch, and
+       46,324 on the merged branch without the serving branch, of which 24,078
+       for places that stayed, where the lists of links were written whole
+       (6,015 row links).
+     - _The fix (P450)._ `CompiledPiece` keeps, from the run that made a first
+       derivation until the end of its transaction, that one is pending, and a
+       run in that time derives nothing (`#madePending`); the end of the
+       transaction asks for the derivation again, as before. Today's runtime has
+       no counterpart: a child it instantiates in a handler runs as its own
+       actions. The change helps every pattern whose handler makes an instance
+       that more than one principal or session demands. Test:
+       `made-session.test.ts` over `fixtures/made-session.tsx` (a handler that
+       makes an instance with state of the scope `session`, a `map` over the
+       list, an array of references, that reads each member's label, and state
+       of the scope `session` in the pattern), two clients of one principal
+       under the serving loop, at 10 and 100 members: seen failing with the
+       refusal on the made instance's result and 111 records at 100 members
+       where 10 members gave 8 to 21; with the fix no refusal and 8 records at
+       both sizes.
+     - _What remains._ With the fix a create at 1,000 topics gives 152 to 187
+       records and is refused once: after the first derivation committed, the
+       pass for the three sessions runs again, and the runs for the second and
+       third session each write the created topic's session instance and two
+       documents of the space; the third is refused on a document none of the
+       three wrote through its transaction. That is the open item of note 890
+       (the runs of one pass do not see each other's writes), whose plan is two
+       actions of the scheduler, one for what is of the space and one for what
+       is of a scope after its commit.
+
+993. **The plan for a view of a scope (not built; it needs a decision).**
+     - _What is to hold._ An edit of a field that one row of a collection reads
+       costs the same at every size of the collection, whatever the scope of
+       other positions of the tree that holds the collection: the rows of a
+       collection of the space are stored once, in documents of the space, and a
+       scope instance holds the positions of its scope alone, as
+       `execution-and-storage.md` §4.1 words it for the result document ("the
+       paths of that scope alone").
+     - _(A), in the crate and the executor, which today's runtime matches._ An
+       expression of a value function that reads an output or slot of a scope
+       narrower than the rest of the cone and stands at a position of the tree
+       (a `select` condition, a `derive` input, as the board's outputs 42, 44
+       and 48 are already listed) is planned as a value of its own (`plan.rs`,
+       where a promoted body is split into cones, and the emitter's `$h.output`
+       at the position). `Host.output` gives, in any cone and not in the result
+       alone, the reference to the scoped place of an output whose entry is of a
+       scope (`Instance.scopedOutput`, with a place named by the output where it
+       has no path of the result), so a cone that places such an output without
+       reading it stays of the space. The view's cone then reads nothing of a
+       scope, its collections are units of the result document, and only the
+       badge and `disabled` are in the scope instances.
+     - _(B), in the executor alone._ A kept output whose cone is of a scope
+       stores in the scope instance only the kept outputs below it whose
+       templates reach an output or slot of a scope, each behind a link of that
+       scope at its position in the result document, and the rest of the tree,
+       with its units, in the result document. It relies on the templates being
+       complete, as the labels already do, and a value that a template misses
+       would be stored for every reader, so it needs a check that the part of
+       the space comes out equal for each key.
+     - _Recommendation:_ (A), since the entry of each value then has the scope
+       of what it read, which is today's rule, and no reader can be given
+       another key's value through a template that missed a read. Both change
+       which positions carry the label of the scoped value: a position of the
+       space would no longer join the label of `hasProfile` read elsewhere in
+       the cone (CFC question 1 below).
+     - _Tests to write first._ An executor test over a view that reads a draft
+       of the scope `session` through a `computed` and holds a `map` over an
+       array of references whose rows compute a value
+       (`r19-topics-edit/outside/scoped-view.tsx` and
+       `scoped-view-scratch.test.ts` of the session, kept outside the
+       repository): an edit of one item's title at 10 and at 100 items gives a
+       scope instance of the same size and the same count of members compared at
+       both sizes, one element body evaluated, and each principal reads its own
+       `disabled`; today the scope instance holds every row (1,555 bytes at 10
+       items, 12,625 at 100, for each session). A runner test under the serving
+       loop with two sessions: the documents that the edit of one item changes
+       do not follow the items.
+
+994. **Measured before and after P450,** one run of each cell, one process at a
+     time, before at `364a53722e` and after at `594b63b02e`, with the boards of
+     the measurement branch copied in.
+     - _Topics, the arm `serving` on `filing-order`,_ the time until the second
+       client reads and the piece's own time, in milliseconds, at 1,000 topics
+       (load averages 14 to 20) and at 2,000 (14 to 20); a create is listed for
+       each of its three turns with its records and refusals.
+
+       | Step                          | 1,000 before          | 1,000 after         | 2,000 before         | 2,000 after         |
+       | ----------------------------- | --------------------- | ------------------- | -------------------- | ------------------- |
+       | edit of a title, middle topic | 2,076 / 233           | 1,708 / 190         | 4,889 / 388          | 3,484 / 363         |
+       | edit of the mentions          | 144 / 8.8             | 136 / 8.0           | 167 / 7.8            | 240 / 8.3           |
+       | edit of the `shortName`       | 2,614 / 240           | 2,453 / 237         | 5,020 / 407          | 3,124 / 372         |
+       | create, reader ms             | 3,432; 10,260; 36,460 | 3,235; 3,463; 2,930 | 6,401; 6,037; 11,890 | 6,292; 5,308; 6,515 |
+       | create, records               | 187; 20,297; 20,315   | 187; 152; 152       | 186; 123; 123        | 187; 152; 123       |
+       | create, refusals              | 1; 2; 3               | 1; 1; 1             | 1; 1; 1              | 1; 1; 1             |
+
+       The edits are the same before and after, as P450 does not reach them: 8
+       evaluations, 4 records and 3 derivations for a title. At 2,000 topics the
+       run before gave no create of 20,000 records; the restore of the whole
+       board follows a refusal of a run that wrote the board's result, and which
+       run of a pass is refused varies between runs (note 984 has 40,359 records
+       at 2,000). After P450 no create gave more than 187.
+     - _FabriChat_ (`SCALE_STAND_INS=table`,
+       `compare/fabrichat/scale.ts
+       runner room 100`): a send gives 188
+       records, 32 evaluations, 549 to 559 positions read and 18 documents
+       changed of 585 to 592 KB before and after. A send took 678 to 723 ms
+       before, at a load average of 11 to 16 with the gates of this round
+       running beside it, and 240 to 266 ms after, at 19 to 22; the times are
+       not to be compared.
+     - _`compare/serving-path.ts 1000`:_ before and after, the piece is found
+       current after the takeover with no evaluation and 6 evaluations at the
+       wake, 11 derivations and no refusal. The times of a client that watches
+       the whole list in chunks (note 984) are 2.5 to 3.5 s for a rename and 16
+       to 22 s for an add on both sides.
+
+995. **Provisional decision, and what was not verified.** P450: the runs of a
+     piece behind a run that made the first derivation of the instances a
+     handler made derive nothing until that run's transaction has ended (note
+     992). Not verified: the remaining refusal of a create was not traced to the
+     document it names; the failure of a create on a board of 100 topics was
+     seen once and not reproduced; the plan of note 993 is not built, so the
+     edit of a title still follows the board; the third session of the harness,
+     which no client holds, was not looked into on the scheduler's side; the
+     boards are the measurement branch's, copied into the worktree for the runs
+     and not committed.
+
+### CFC questions deferred, round nineteen
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Note 993: storing a position of a view of the space apart from the positions
+   that read a value of a scope gives the positions of the space no join of the
+   scoped value's label, where the whole tree joins it today. A change that can
+   store less label; today's runtime stores the same as (A).
+2. Note 992: a run that P450 holds back reads nothing and writes nothing, and
+   the run asked for at the end of the first derivation's transaction reads what
+   that transaction stored, labels included; no label decision changes.
