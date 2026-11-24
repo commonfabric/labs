@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The Topics content-safety drill: deploy a board, seed it, snapshot the
 # store, export, clobber a topic the worst way a bad migration would, restore
-# it, prove the restore byte-exact, and recreate the export on a fresh board
-# the way a board migrates to a new board pattern — the loop
+# it, prove the restore byte-exact, recreate the export on a fresh board the
+# way a board migrates to a new board pattern, and check how a topic's `board`
+# input is bound — the loop
 # docs/history/plans/topics-migration-rehearsal.md's "restore drill" section makes
 # part of every clean rehearsal pass, runnable as one command.
 #
@@ -135,10 +136,12 @@ TOPIC_ALIAS="$(jq -r '.result.topic["$link"] // empty' "$WORK/create.json")"
 # canonical fid comes from the export below either way. Seed through the
 # address the create returned when present, else through the one the board
 # publishes: its `topics` output, which is where the board lists its topics.
+# `topics` is computed, so the read steps the board first rather than taking
+# whatever output was last stored, which can predate the create.
 if [ -z "$TOPIC_ALIAS" ]; then
   TOPIC_ALIAS="$(
     "${CF[@]}" cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
-      topics --select '@' 2> /dev/null | jq -r '.[0]["$link"] // empty'
+      topics --step --select '@' 2> /dev/null | jq -r '.[0]["$link"] // empty'
   )"
 fi
 [ -n "$TOPIC_ALIAS" ] && ok "topic address in hand" || {
@@ -296,6 +299,7 @@ FRESH="$(grep -xE 'fid1:[A-Za-z0-9_-]+' "$WORK/deploy2.out" | head -1)"
 [ -n "$FRESH" ] && ok "fresh board deployed: $FRESH" || {
   bad "fresh board deploy produced no bare fid line on stdout"
   cat "$WORK/deploy2.err" >&2
+  exit 1
 }
 deno run -A "$REPO_ROOT/scripts/topics-recreate.ts" "$WORK/export.json" \
   --board "$FRESH" --space "$SPACE" --api-url "$API_URL" \
@@ -332,6 +336,51 @@ deno run -A "$REPO_ROOT/scripts/topics-recreate.ts" "$WORK/export.json" \
   grep -q "pass 1: created 0" &&
   ok "a second recreate creates nothing" ||
   bad "a second recreate created topics again"
+# A run stopped after a create and before its progress line was written
+# leaves a topic the progress file does not record, which is what an empty
+# file stands for here. The rerun reads the fresh board's namespace and
+# records the topic it holds rather than creating it again.
+: > "$WORK/recreate.jsonl"
+deno run -A "$REPO_ROOT/scripts/topics-recreate.ts" "$WORK/export.json" \
+  --board "$FRESH" --space "$SPACE" --api-url "$API_URL" \
+  --agent-name drill --progress "$WORK/recreate.jsonl" \
+  > "$WORK/recreate-resume.log" 2>&1
+RESUMED="$(jq -r 'select(.name == "1") | .to' "$WORK/recreate.jsonl" 2> /dev/null)"
+if grep -q "pass 1: created 0" "$WORK/recreate-resume.log" &&
+  [ -n "$RESUMED" ] && [ "$RESUMED" = "$RECREATED" ]; then
+  ok "a recreate missing its progress line records the topic the board holds"
+else
+  bad "a recreate missing its progress line recorded '$RESUMED', expected '$RECREATED'"
+  cat "$WORK/recreate-resume.log" >&2
+fi
+
+step "bind a topic's board input"
+# `topics-bind-board.ts` leaves alone a topic whose `board` already reaches
+# the named board's collection, and refuses, leaving it as it is, a topic
+# whose `board` reaches another board's. The drill's topic was filed on the
+# first board, not on the fresh one.
+if deno run --allow-run --allow-read --allow-env \
+  "$REPO_ROOT/scripts/topics-bind-board.ts" --board "$BOARD" \
+  --space "$SPACE" --api-url "$API_URL" --piece "$TOPIC" \
+  > "$WORK/bind-own.log" 2>&1 &&
+  grep -q "board link present" "$WORK/bind-own.log"; then
+  ok "bind-board leaves a topic bound to its own board alone"
+else
+  bad "bind-board did not find the topic bound to its own board"
+  cat "$WORK/bind-own.log" >&2
+fi
+if deno run --allow-run --allow-read --allow-env \
+  "$REPO_ROOT/scripts/topics-bind-board.ts" --board "$FRESH" \
+  --space "$SPACE" --api-url "$API_URL" --piece "$TOPIC" \
+  > "$WORK/bind-other.log" 2>&1; then
+  bad "bind-board accepted a topic bound to another board"
+  cat "$WORK/bind-other.log" >&2
+elif grep -q "left as it is" "$WORK/bind-other.log"; then
+  ok "bind-board refuses a topic bound to another board"
+else
+  bad "bind-board failed for a reason other than the other board"
+  cat "$WORK/bind-other.log" >&2
+fi
 
 step "the namespace verbs' own results"
 # `backfillNames` returns the names it wrote. Asserted here rather than in a
