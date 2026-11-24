@@ -8258,6 +8258,15 @@ export class Instance {
   readonly #placeScopes = new Map<string, Scope>();
 
   /**
+   * The narrowest scope that each value a cone of another value placed
+   * was stored in a scope instance of its own document in
+   * (`#valueDocument`), by the text of `["values", output, ...keys]`.
+   * Each such place is a document of its own, so a refused commit of the
+   * document of the scoped outputs leaves it as it is.
+   */
+  readonly #valueScopes = new Map<string, Scope>();
+
+  /**
    * The reference the result holds in the place of the output `index`,
    * where the output was evaluated for one scope key, and nothing where
    * it is one for every key: the value is stored at the path of the
@@ -8320,7 +8329,7 @@ export class Instance {
     const within = this.collectionsOf(output.cone);
     const keys = this.#keysIn(within, host.context);
     if (keys.includes("?")) return undefined;
-    if (!this.#placeScopes.has(JSON.stringify(["values", index, ...keys]))) {
+    if (!this.#valueScopes.has(JSON.stringify(["values", index, ...keys]))) {
       const probed = scopes.framed(() => this.evaluated(value)(host.context))
         .value;
       if (probed.scoped === undefined) return undefined;
@@ -8347,11 +8356,11 @@ export class Instance {
       this.#ensureReference(key, context, undefined, "value", (inner) => {
         const scopes = this.store.scopes!;
         const held = this.stored(inner.whole(inner.value(value)));
-        const before = this.#placeScopes.get(text);
+        const before = this.#valueScopes.get(text);
         const touched = scopes.touched ?? "user";
         const scope = before === "session" ? before : touched;
         if (before !== scope) {
-          this.#placeScopes.set(text, scope);
+          this.#valueScopes.set(text, scope);
           // The place moved to the instances of a narrower scope: each
           // key stores its value there.
           this.#staleAside(key);
@@ -9002,6 +9011,7 @@ export class Instance {
       this.#referenceStamps.delete(entry);
       if (entry.startsWith("scoped ")) {
         this.#placeScopes.delete(entry.slice("scoped ".length));
+        this.#valueScopes.delete(entry.slice("scoped ".length));
       }
       this.#markUsers(entry);
       this.#markUsers(tableName(entry));

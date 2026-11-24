@@ -418,6 +418,37 @@ for (const { fixture, case: written, plain, rowsOf } of ROW_CASES) {
   });
 }
 
+// `fixtures/scoped-rows-output.tsx`: the rows of a `map` over an array of
+// references read a value of the scope `session`, and the result holds that
+// value as an output as well, in the scope instances of the document of the
+// scoped outputs. Each row's value is a place of its own (P455).
+describe("the rows of a `map` over an array of references that read a value of the scope `session`, beside an output of that scope", () => {
+  it("evaluates as much at 10 items as at 100 after a refused commit of the document of the scoped outputs", async () => {
+    const evaluated: number[] = [];
+    for (const size of [10, 100]) {
+      const held = await started("scoped-rows-output", size);
+      // The instance of `ann` of the document of the scoped outputs: the
+      // one that holds the output `named`.
+      const [id, document] = [...held.instance.store.docs].find((
+        [id, { kind, value }],
+      ) =>
+        kind === "scope instance" && id.endsWith("~session:ann:s") &&
+        (value as { named?: unknown }).named !== undefined
+      )!;
+      const doc = id.slice(0, -":ann:s".length);
+      const before = held.instance.counts.evaluations;
+      // The storage refused a commit that wrote it, and holds what it held.
+      held.as("ann", () => held.instance.restore(doc, document.value));
+      const rows = held.view("ann").children?.[0] as unknown[];
+      evaluated.push(held.instance.counts.evaluations - before);
+
+      expect(rows.length).toBe(size);
+    }
+
+    expect(evaluated[1]).toBe(evaluated[0]);
+  });
+});
+
 describe("records returned by a `map` over an array of plain values in place, whose body reads a value of the scope `session`, when an item is appended", () => {
   it("writes the new row and its place for each principal, the same at 10 items as at 100", async () => {
     const appends = await Promise.all([10, 100].map(async (size) => {
