@@ -228,8 +228,8 @@ twenty).
   round).
   Round twenty-six (`a184f568a0`, notes 1077 to 1086, P474 to P478) fixed
   the reactions and answered the label question, and did not reproduce the
-  Topics create: the rows of a scoped collection below a row of another collection
-  are stored in a document per collection and outer element keys, with an
+  Topics create: the rows of a scoped collection below a row of another
+  collection are stored in a document per collection and outer element keys, with an
   instance per scope key, and an assembly is set aside with its element
   table when the acting principal changes (P474, P475), so FabriChat's
   dumps hold no error state at any size; Z96 is built (a row's stream
