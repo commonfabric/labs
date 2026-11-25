@@ -29,6 +29,28 @@ const OPEN: Record<string, string[]> = {
     "step 5 flow",
     "step 6 flow",
   ],
+  // Today's path stores, for an output a `computed` derived, the atom that
+  // names the code that transformed it, which the label templates of the
+  // compiled path give as the compiled pattern instead (`flow`). The
+  // confidentiality stored is the same on both paths.
+  "fixtures/get-iterated": [
+    "start 3 flow",
+    "step 0 flow",
+    "step 1 flow",
+    "step 2 flow",
+    "step 3 flow",
+  ],
+  "fixtures/get-iterated through a list": [
+    "start 0 flow",
+    "start 1 flow",
+    "start 2 flow",
+    "start 3 flow",
+    "start 4 flow",
+    "step 0 flow",
+    "step 1 flow",
+    "step 2 flow",
+    "step 3 flow",
+  ],
   // The compiled path is the stricter one: it holds a computed output to
   // the claims its result type declares, and a derivation is no writer a
   // claim admits. Today's path holds a computed output to no claim of the

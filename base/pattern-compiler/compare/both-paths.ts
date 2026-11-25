@@ -110,6 +110,11 @@ export type Scenario = {
   name: string;
   pieces: ScenarioPiece[];
   steps: ScenarioStep[];
+  /**
+   * Whether the confidentiality stored at each member of each result is
+   * compared as well (`labels`).
+   */
+  labels?: true;
 };
 
 /** What a path stored for one member of a result. */
@@ -135,6 +140,11 @@ export type StepOutcome = {
    * then by the path of its entry, where there is some.
    */
   flow: Record<string, Record<string, string[]>>;
+  /**
+   * The confidentiality stored, by piece and member and then by the path of
+   * its entry, each clause as text, where the scenario compares it.
+   */
+  labels?: Record<string, Record<string, string[]>>;
 };
 
 /** What one path did with a scenario. */
@@ -161,8 +171,8 @@ export type Difference = {
   /** `start <n>`, `step <n>` or `run`. */
   at: string;
   /**
-   * What differs: `committed`, `message`, `values`, `claims`, `flow` or
-   * `failure`.
+   * What differs: `committed`, `message`, `values`, `claims`, `flow`,
+   * `labels` or `failure`.
    */
   what: string;
   today: unknown;
@@ -418,9 +428,14 @@ const runPath = async (
   const claimsOf = (
     cell: Cell<unknown>,
     member: string,
-  ): { claims: StoredClaims; flow: Record<string, string[]> } => {
+  ): {
+    claims: StoredClaims;
+    flow: Record<string, string[]>;
+    labels: Record<string, string[]>;
+  } => {
     const claims: StoredClaims = { integrity: {}, policies: {} };
     const flow: Record<string, string[]> = {};
+    const labels: Record<string, string[]> = {};
     const tx = runtime.edit();
     try {
       const link = (cell.key(member as never) as Cell<unknown>).withTx(tx)
@@ -430,12 +445,17 @@ const runPath = async (
         id: link.id,
         scope: link.scope,
       });
-      if (metadata === undefined) return { claims, flow };
+      if (metadata === undefined) return { claims, flow, labels };
       const at = link.path.map(String);
       for (const entry of metadata.labelMap.entries) {
         const path = entry.path.map(String);
         if (at.some((step, index) => path[index] !== step)) continue;
         const key = `/${path.slice(at.length).join("/")}`;
+        const clauses = entry.label.confidentiality ?? [];
+        if (clauses.length > 0) {
+          labels[key] = clauses.map((clause) => comparable(text(clause), names))
+            .sort();
+        }
         for (const atom of entry.label.integrity ?? []) {
           const into = isObjectNotArray(atom) && "kind" in atom
             ? claims.integrity
@@ -459,15 +479,16 @@ const runPath = async (
     } finally {
       tx.abort();
     }
-    return { claims, flow };
+    return { claims, flow, labels };
   };
   /** What every piece holds now, and the claims stored for it. */
   const held = async (): Promise<
-    Pick<StepOutcome, "values" | "claims" | "flow">
+    Pick<StepOutcome, "values" | "claims" | "flow" | "labels">
   > => {
     const values: Record<string, string> = {};
     const claims: Record<string, StoredClaims> = {};
     const flow: StepOutcome["flow"] = {};
+    const labels: NonNullable<StepOutcome["labels"]> = {};
     for (const [name, result] of Object.entries(results)) {
       let value: unknown;
       try {
@@ -484,9 +505,12 @@ const runPath = async (
         if (Object.keys(stored.flow).length > 0) {
           flow[`${name}.${member}`] = stored.flow;
         }
+        if (Object.keys(stored.labels).length > 0) {
+          labels[`${name}.${member}`] = stored.labels;
+        }
       }
     }
-    return { values, claims, flow };
+    return { values, claims, flow, ...(scenario.labels ? { labels } : {}) };
   };
   try {
     for (const piece of scenario.pieces) {
@@ -615,6 +639,7 @@ export const differencesOf = (
         "values",
         "claims",
         "flow",
+        "labels",
       ] as const
     ) {
       if (text(a?.[what]) !== text(b?.[what])) {

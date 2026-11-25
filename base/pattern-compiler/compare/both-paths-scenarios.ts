@@ -231,6 +231,76 @@ export const SCENARIOS: Scenario[] = [
     steps: [{ stream: "sign", event: { text: "from alice" }, as: "alice" }],
   },
   {
+    // Three items, each a document whose title carries the clause its
+    // type declares, and a pattern over the array of references to them,
+    // whose type of an item declares none, that reads each title through
+    // the elements `get()` gives and through the handle by position once
+    // `show` is sent. The confidentiality stored at each member is
+    // compared: a clause at an output came from the items' documents.
+    name: "fixtures/get-iterated",
+    labels: true,
+    pieces: [
+      ...["first", "second", "third"].map((name) => ({
+        name,
+        module: "base/pattern-compiler/compare/fixtures/labeled-item.tsx",
+        as: "alice",
+      })),
+      {
+        name: "titles",
+        module: "base/pattern-compiler/compare/fixtures/get-iterated.tsx",
+        argument: ({ first, second, third }) => ({
+          items: [first, second, third],
+        }),
+        as: "alice",
+      },
+    ],
+    steps: [
+      ...["first", "second", "third"].map((piece) => ({
+        piece,
+        stream: "name",
+        event: { title: `the ${piece}` },
+        as: "alice",
+      })),
+      { piece: "titles", stream: "show", event: {}, as: "alice" },
+    ],
+  },
+  {
+    // The same, with the items held by a list piece whose `items` the
+    // pattern is given: the array is reached through a link.
+    name: "fixtures/get-iterated through a list",
+    labels: true,
+    pieces: [
+      ...["first", "second", "third"].map((name) => ({
+        name,
+        module: "base/pattern-compiler/compare/fixtures/labeled-item-copy.tsx",
+        as: "alice",
+      })),
+      {
+        name: "list",
+        module: "base/pattern-compiler/compare/fixtures/labeled-list.tsx",
+        argument: ({ first, second, third }) => ({
+          items: [first, second, third],
+        }),
+        as: "alice",
+      },
+      {
+        name: "titles",
+        module: "base/pattern-compiler/compare/fixtures/get-iterated.tsx",
+        argument: ({ list }) => ({ items: list.key("items" as never) }),
+        as: "alice",
+      },
+    ],
+    steps: [
+      ...["first", "second", "third"].map((piece) => ({
+        piece,
+        stream: "name",
+        event: { title: `the ${piece}` },
+        as: "alice",
+      })),
+      { piece: "titles", stream: "show", event: {}, as: "alice" },
+    ],
+  },
+  {
     name: "fixtures/principal-derived",
     pieces: [{
       name: "derived",
