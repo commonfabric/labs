@@ -1009,10 +1009,12 @@ the checkout does not have, or leave it as it is. In a shallow checkout, whose
 history git cannot count to the end, it says so in place of the counts. It also
 gives the number and address of the pull request open from the branch, which it
 looks for as `L` does, below, or says that there is none, or why it could not
-look; Abort stops that search, and the dialog asks without it. Push (`u`) then
-pushes, its output following the question, and Cancel takes the dialog down. No
-button is the default, so Enter does nothing until a button has the focus, and
-pressing `P` again does not push.
+look. It looks for the pull request while it asks `origin`'s server for its
+default branch, and asks whether to push once both are done. Once the server has
+answered, Abort stops the search, and the dialog asks without it; before then,
+Abort stops the push. Push (`u`) then pushes, its output following the question,
+and Cancel takes the dialog down. No button is the default, so Enter does
+nothing until a button has the focus, and pressing `P` again does not push.
 
 When git fails to push or is aborted, as it can when the network is unreliable,
 or does not learn which branch is `origin`'s default, a Retry push button (`P`)
@@ -1031,10 +1033,12 @@ succeeds, including one that had nothing new to push, unless the branch already
 has an open pull request, which they look for as `L` does, below. The pull
 request goes to the GitHub repository of the remote named `upstream`, `github`,
 or `origin`, whichever is the first to name one, and merges into that remote's
-default branch, as its server names it then, from the branch on `origin`. Its
-title and description are the subject and the rest of the message of the
-branch's oldest commit that the default branch, as last fetched, does not have,
-leaving out merges and commits whose changes that branch already has.
+default branch, as its server names it then, from the branch on `origin`. When
+the viewer has to ask GitHub for the open pull request, it asks that remote's
+server for its default branch at the same time. The created pull request's title
+and description are the subject and the rest of the message of the branch's
+oldest commit that the default branch, as last fetched, does not have, leaving
+out merges and commits whose changes that branch already has.
 
 - "Just push, and link to them": the summary gives the page's address, which the
   status line makes a link for terminals that open links.
