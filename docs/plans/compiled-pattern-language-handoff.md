@@ -148,11 +148,14 @@ twenty).
   `wish` result of the scope `user` placed as a JSX child; and the rows'
   `authorProfile` (the link-following work). With the first three changed in
   a scratch worktree the tree is of the space and a send at 100 changes
-  220 KB. Not landed: `rootOf` without `failed` exposes an executor defect,
-  a value that becomes scoped after `#generated` stored it in a document of
-  the space is refused by `#refuseStoredForEveryKey` (plan in note 1030);
-  emitting the spread as a pass stores less label and waits for the owner's
-  ruling (CFC question 4 of round twenty-two).
+  220 KB. Round twenty-two did not land `rootOf` without `failed`: it
+  exposed an executor defect, a value that becomes scoped after `#generated`
+  stored it in a document of the space was refused by
+  `#refuseStoredForEveryKey` (note 1030). Round twenty-three fixed that
+  defect, the `#generated` case included (P458), and landed `rootOf`
+  without `failed` (P459). Still open: emitting the spread as a pass stores
+  less label and waits for the owner's ruling (CFC question 4 of round
+  twenty-two).
   Round twenty-three (`71fefaf1e3`, notes 1035 to 1043, P458 to P461) made
   the room's rendered tree of the space: a value that becomes of a scope
   after its array was stored in a document of the space moves to the scope
