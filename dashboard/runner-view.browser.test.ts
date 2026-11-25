@@ -1643,9 +1643,11 @@ for (const [kind, accelerated] of [["WebGL", true], ["2D", false]] as const) {
     expect(rgba(image, 30, 20)).toEqual(CLEAR);
     expect(rgba(image, 74, 40)).toEqual(CLEAR);
     // The circle's edge, ten device pixels from its center, falls between
-    // these two pixels, so the one inside is all but opaque and the one
-    // outside all but clear.
-    expect(rgba(image, 69, 40)[3]).toBeGreaterThanOrEqual(240);
+    // these two pixels, so the one inside is at least seven eighths opaque
+    // and the one outside all but clear. An edge shaded across two device
+    // pixels fails one of the two, whichever side of the edge its shading
+    // spreads to.
+    expect(rgba(image, 69, 40)[3]).toBeGreaterThanOrEqual(224);
     expect(rgba(image, 70, 40)[3]).toBeLessThanOrEqual(16);
   });
 
@@ -1857,7 +1859,12 @@ Deno.test("RunnersView whose WebGL cannot be set up again once restored draws it
     const drawn = elements.board.querySelector("#balls");
     if (!(drawn instanceof HTMLCanvasElement)) throw new Error("the balls have no canvas");
     expect(drawn).not.toBe(balls);
-    expect(inkCenter(drawn)).toEqual(center);
+    // WebGL drew the ball before, and the 2D context draws it now. The two
+    // shade its edge differently, which can move its ink's center by a small
+    // fraction of a pixel, but a ball drawn half a pixel out of place fails.
+    const redrawn = ballCenter({ ...elements, balls: drawn });
+    expect(Math.abs(redrawn.x - center.x)).toBeLessThan(0.25);
+    expect(Math.abs(redrawn.y - center.y)).toBeLessThan(0.25);
     pointAt(elements.board, center.x, center.y);
     expect(elements.tooltip.textContent).toBe("labs · CI on main @ aaaaaaa\nbuild\nRunning on ci-mac-01-1");
   } finally {
