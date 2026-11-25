@@ -351,10 +351,7 @@ export interface TopicLink {
  * report success, and move a count on a topic nobody was looking at.
  */
 const isElementOf = (
-  array: {
-    get(): readonly unknown[];
-    key(index: number): { equals(other: object): boolean };
-  },
+  array: ReadonlyCell<readonly unknown[]>,
   candidate: object,
 ): boolean => {
   const stored = array.get();
