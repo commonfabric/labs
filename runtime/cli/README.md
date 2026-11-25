@@ -811,6 +811,15 @@ structure tree is that of the file the template produces. With `--language`,
 language's identifier or alias, as in `jinja-shell`, selects Jinja over that
 language.
 
+A Terraform template, the file OpenTofu's `templatefile` function reads, named
+with a `.tftpl` suffix, is colored in the same way, so `startup-script.sh.tftpl`
+is colored as shell, with its interpolations and directives colored as HCL code.
+In the escapes `$${` and `%%{`, the first character is colored as the
+template's, and the `${` or `%{` that the escape produces is colored as the
+file's. With `--language`, `terraform-template` selects it over plain text, and
+`terraform-template-` followed by another text language's identifier or alias,
+as in `terraform-template-shell`, selects it over that language.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each

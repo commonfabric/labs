@@ -65,7 +65,9 @@ namespaces, sections, and declarations, and a project's `lean-toolchain` file
 has highlighting of its own.
 OpenSSH authorized keys files and public key files have syntax highlighting and
 list their keys. A Jinja template is colored as the language the rest of its
-name selects, with Jinja's syntax colored inside it.
+name selects, with Jinja's syntax colored inside it, and so is a Terraform
+template, named `.tftpl`, with its interpolations and directives colored as HCL
+code.
 Directive configuration, which covers nginx, Apache httpd, nftables, Netdata
 health alerts, and sysusers.d, has syntax highlighting and a structure tree of
 blocks, sections, and alert entries. Logs, checksums, version files, PID files,
@@ -115,10 +117,9 @@ Python, Go, Swift, Kotlin, Rust, TOML, HCL, CSS, HTML, shell, C, C++, and
 Starlark run on Tree-sitter through a shared, language-neutral adapter. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
 and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
-assembly, SQL, linker scripts, systemd units, authorized keys files, and Jinja
-use focused scanners. The order
-is provisional because recent activity was measured in six of the 26 active
-organization repositories.
+assembly, SQL, linker scripts, systemd units, authorized keys files, Jinja, and
+Terraform templates use focused scanners. The order is provisional because
+recent activity was measured in six of the 26 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
@@ -126,8 +127,9 @@ Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, CSS, HTML, shell, C,
 C++, CUDA, makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git
 attributes, Git configuration, XML, Org mode, directive configuration,
 ignore-file, Graphviz DOT, CSV, TSV, `.dat` table, assembly, SQL, linker script,
-systemd unit, authorized keys, Jinja, and diff support to honest handling of
-every textual syntax in the active `commonfabric` repositories.
+systemd unit, authorized keys, Jinja, Terraform template, and diff support to
+honest handling of every textual syntax in the active `commonfabric`
+repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -1132,7 +1134,7 @@ selection path. The gate passes.
 ## Stage 8: OpenTofu, HCL, and infrastructure templates
 
 - [x] Add `.tf` and `.tfvars` HCL.
-- [ ] Layer Terraform interpolation over the shell host in `.tftpl`.
+- [x] Layer Terraform interpolation over the shell host in `.tftpl`.
 - [x] Layer Jinja delimiters over a separately selected host syntax.
 - [x] Cover the surveyed shell, systemd-unit, authorized-keys, and YAML Jinja
   hosts.
@@ -1212,6 +1214,34 @@ structure tree lists the keys by their comments. `authorized_keys`,
 public key files, which share the line format, select it. The checkouts hold three
 authorized keys files, all of them Jinja templates, and one public key file,
 all in Infra. The fixtures for both languages come from Infra.
+
+Terraform templates, the files OpenTofu's `templatefile` function reads, are a
+second template syntax over the same layer. `.tftpl` selects it, so
+`startup-script.sh.tftpl` is a Terraform template over shell, and
+`--language terraform-template` selects it over plain text. The host reads an
+interpolation as Jinja's expressions are read, a directive as blank space, and
+an escape, `$${` or `%%{`, as a word character followed by the text it produces.
+A focused scanner finds where each interpolation and directive ends and colors
+its code, which is HCL's expression syntax, as the HCL language colors the same
+code. It is used rather than the HCL grammar because, on 100 kilobytes of
+template denser in sequences than Infra's, a parse of that code with the grammar
+on each edit was estimated at 84 ms for the document parse and 54 ms for the
+re-color, against maximums of 50 and 25, in rounds run on a machine too loaded
+for the measurement method to accept. A November 22, 2026 read of the local
+checkouts of the organization's repositories found four templates, all in the
+Infra repository: three `.sh.tftpl` shell scripts and a Tailscale policy in
+HuJSON, which no language claims, with 16 path-change events on them in the six
+months before the read. They hold 29 interpolations, four directives, 170 `$${`
+escapes, and one `%%{` escape. Each reconstructed exactly, and every character
+other than white space inside a sequence has a token class. Over shell, 100
+kilobytes of the Infra template, repeated, measured inside every maximum, at
+about half what shell alone costs on its own measurement source. Templates built
+to be denser, and one with most of its interpolations not valid HCL, measured
+within 1.05 times shell alone's medians beside them, and inside every maximum,
+the closest the re-color after an edit, at an estimated 24.1 ms against 25 by
+medians. The [November 2026 Terraform template
+measurement](../history/runtime/cli/cf-view-terraform-template-2026-11.md)
+records the figures.
 
 ## Stage 9: build and operational configuration
 

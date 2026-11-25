@@ -272,6 +272,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   expect(languageForName("ssh-public-key")).toBe(authorizedKeysLanguage);
   expect(languageForName("jinja")?.id).toBe("jinja");
   expect(languageForName("j2")).toBe(languageForName("jinja"));
+  expect(languageForName("terraform-template")?.id).toBe("terraform-template");
+  expect(languageForName("tftpl")).toBe(languageForName("terraform-template"));
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -328,6 +330,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "sql",
     "authorized-keys",
     "jinja",
+    "terraform-template",
     "binary",
     "plain-text",
   ]);
@@ -440,6 +443,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "jinja",
     "jinja2",
     "j2",
+    "terraform-template",
+    "tftpl",
     "binary",
     "bytes",
     "plain-text",

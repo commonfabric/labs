@@ -1203,9 +1203,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "dotenv",
-    // Shell, and a Dockerfile's shell commands, color the operator of a
-    // `${NAME:-default}` expansion as dotenv does.
-    highlightingPeers: ["shell", "dockerfile"],
+    // Shell, a Dockerfile's shell commands, and a Terraform template, which
+    // reads `${NAME:-default}` as an interpolation, color the expansion's
+    // operator as dotenv does.
+    highlightingPeers: ["shell", "dockerfile", "terraform-template"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "c62f7166d063baab093da0874f745b490c02c643",
     surveyPath: "apple/scripts/asc-account.env",
@@ -1832,9 +1833,81 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "openssl", className: "callName" },
   },
   {
+    languageId: "terraform-template",
+    surveyRepository: "infra",
+    surveyCommit: "140b5e05417e2ca735ad29c91b20f2333246401c",
+    surveyPath: "tofu/tailnet/policy.hujson.tftpl",
+    // The template's directives and the entries the change touched, from the
+    // policy's `tagOwners` object, without its comments: the rest of the file
+    // names people and lists their addresses.
+    before: new URL(
+      "./terraform-template-infra/before.hujson.tftpl",
+      import.meta.url,
+    ),
+    after: new URL(
+      "./terraform-template-infra/after.hujson.tftpl",
+      import.meta.url,
+    ),
+    incomplete: new URL(
+      "./terraform-template-infra/incomplete.hujson.tftpl",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "tofu/tailnet/policy.hujson.tftpl",
+        "motd.tftpl",
+        "POLICY.HUJSON.TFTPL",
+      ],
+      aliases: ["terraform-template", "tftpl"],
+    },
+    beforeEvidence: { text: "endfor", className: "controlKeyword" },
+    afterEvidence: { text: "endfor", className: "controlKeyword" },
+    incompleteEvidence: { text: "endfor", className: "controlKeyword" },
+  },
+  {
+    languageId: "terraform-template-shell",
+    // Shell alone colors the same commands. The `terraform-template` fixture
+    // checks the template's own coloring.
+    highlightingPeers: ["shell"],
+    surveyRepository: "infra",
+    surveyCommit: "640487a0fded067f9c9fa5856f5349552ae34e8e",
+    surveyPath: "tofu/ci-runners/startup-script.sh.tftpl",
+    before: new URL(
+      "./terraform-template-shell-infra/before.sh.tftpl",
+      import.meta.url,
+    ),
+    after: new URL(
+      "./terraform-template-shell-infra/after.sh.tftpl",
+      import.meta.url,
+    ),
+    incomplete: new URL(
+      "./terraform-template-shell-infra/incomplete.sh.tftpl",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "tofu/ci-runners/startup-script.sh.tftpl",
+        "tofu/github-actions-runner/ephemeral-startup-script.sh.tftpl",
+        "tofu/github-actions-runner/startup-script.sh.tftpl",
+        "boot/STARTUP.SH.TFTPL",
+        "boot/startup.bash.tftpl",
+        "boot/.profile.tftpl",
+      ],
+      aliases: [
+        "terraform-template-shell",
+        "terraform-template-sh",
+        "terraform-template-bash",
+      ],
+    },
+    beforeEvidence: { text: "curl", className: "callName" },
+    afterEvidence: { text: "curl", className: "callName" },
+    incompleteEvidence: { text: "curl", className: "callName" },
+  },
+  {
     languageId: "plain-text",
-    // Jinja over plain text colors the text outside its tags as plain text.
-    highlightingPeers: ["jinja"],
+    // Jinja and Terraform templates over plain text color the text outside
+    // their sequences as plain text.
+    highlightingPeers: ["jinja", "terraform-template"],
     surveyRepository: "raia",
     surveyCommit: "6b9cc95befe5f7cf0929eb569d9a1157e62d2374",
     surveyPath: "LICENSE",
