@@ -1720,9 +1720,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
       ],
       aliases: ["authorized-keys", "ssh-authorized-keys", "ssh-public-key"],
     },
-    beforeEvidence: { text: "ssh-ed25519", className: "typeName" },
+    beforeEvidence: { text: "infra-read@example", className: "comment" },
     afterEvidence: { text: "restrict", className: "propertyName" },
-    incompleteEvidence: { text: "ssh-ed25519", className: "typeName" },
+    incompleteEvidence: { text: "restrict", className: "propertyName" },
   },
   {
     languageId: "jinja",
