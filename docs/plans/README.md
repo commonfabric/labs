@@ -10,6 +10,18 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [What patterns and agents are made of, in the spec's terms](spec-surface-alignment.md)
+  maps the runtime onto the CFC specification's abstract surface (§14.2.2):
+  labeled values, references, node contexts, trusted and untrusted transitions
+  and their operations. For each it says where the runtime matches, duplicates
+  or drifts from the spec, lists the cleanups that line it back up, and holds
+  the open questions for the specification's author.
+- [Skills and MCP servers in the fabric](skills-and-mcp-bridges.md) brings any
+  Agent Skill or MCP server into the fabric through an importer at the edge
+  that emits only existing records: a wrapper pattern whose verbs are the
+  tools, candidate tool descriptors trusted only inside an accepted registry
+  snapshot, and labeled text. Review unlocks trust, not use, and lowering a
+  tool into pattern code is rewriting one handler.
 - [Joining a Loom lists you in it](social-space-join-as-viewer.md) is a
   stopgap so that a browser host's guests are named on a Loom's roster: the
   host lists its guest through the existing `addParticipant`, and then the Loom
