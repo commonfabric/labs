@@ -27659,6 +27659,20 @@ to 2.5, from other sessions. Whenever a note says `map`, it names the case.
         every link from each result, a client reads no error state: 0 of 5
         documents (counter), 0 of 605 (list at 300 items), 0 of 247 (room), and
         0 of 83 for Topics on the standard path.
+      - _Fixed, the first compiled piece of a fresh space did not start:_ 3 of
+        the first 4 `cf piece new` runs in spaces just created waited out the 60
+        s start deadline, and the result document still held nothing minutes
+        later. `setUpCompiledPiece` wrote the result's `argument` metadata
+        through the result cell, which starts a load of the result document
+        while the setup transaction is open; that subscription reached the
+        serving loop before the commit, and the loop never started the piece
+        once the commit landed. Written through the transaction, 8 of 8 started
+        within about a second. The serving loop's part is not fixed: a root
+        demanded before the documents that name its compiled source exist is not
+        started when they arrive, under the toolshed's serving workers. The
+        in-process serving harness does not reproduce it (a client that watches
+        the result before the setup commits is served there), so the fix has no
+        test.
       - _Not working, FabriChat:_ a `sendMessage` sent with `cf piece call` is
         refused: the serving runtime aborts the handler's transaction, and the
         client is told no more than
@@ -27828,6 +27842,11 @@ to 2.5, from other sessions. Whenever a note says `map`, it names the case.
       them and the read of a path through a link that does not work.
 
 1093. **Planned, not built.**
+      - _A demand that precedes the setup:_ trace why the toolshed's serving
+        loop does not start a compiled piece whose result it was asked for
+        before the setup committed (note 1087), where the in-process harness
+        does; the loader reads the pointer document, which the verdict does not
+        list among the documents a commit re-arms it by.
       - _The result schema of a compiled piece in its metadata:_ the serving
         runtime writes the plan's result schema as the result document's
         `schema` metadata when it starts a piece (`writeResultSchemaMeta`, as
