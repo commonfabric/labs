@@ -70,6 +70,7 @@ import { xmlLanguage } from "./xml/language.ts";
 import { orgLanguage } from "./org/language.ts";
 import { directiveLanguage } from "./directive/language.ts";
 import { csvLanguage, datLanguage, tsvLanguage } from "./table/language.ts";
+import { assemblyLanguage } from "./assembly/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -560,6 +561,7 @@ function allLanguages(): readonly Language[] {
     csvLanguage,
     tsvLanguage,
     datLanguage,
+    assemblyLanguage,
     binaryLanguage,
     plainTextLanguage,
   ];

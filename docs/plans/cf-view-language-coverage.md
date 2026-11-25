@@ -71,6 +71,9 @@ negation, wildcards, and white space.
 Graphviz DOT has syntax highlighting and a structure tree of graphs, subgraphs,
 and the nodes that node statements declare. Comma-separated and tab-separated
 values and numeric `.dat` tables have syntax highlighting.
+Assembly, which covers the Go assembler's source and GNU assembler source that
+the C preprocessor reads first, has syntax highlighting and a structure tree of
+functions, symbols, macros, and labels.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -93,18 +96,17 @@ Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
-and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, and delimited
-tables use focused scanners.
-The order is provisional because recent activity was measured in six of the 26
-active organization repositories.
+and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
+and assembly use focused scanners. The order is provisional because recent
+activity was measured in six of the 26 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
 makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes,
 Git configuration, XML, Org mode, directive configuration, ignore-file, Graphviz
-DOT, CSV, TSV, `.dat` table, and diff support to honest handling of every
-textual syntax in the active `commonfabric` repositories.
+DOT, CSV, TSV, `.dat` table, assembly, and diff support to honest handling of
+every textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -1423,7 +1425,8 @@ without claiming the unrelated gVisor and Infra configurations.
 ## Stage 12: systems-language group
 
 - [x] Add C, C++, headers, and CUDA.
-- [ ] Add assembly and linker scripts.
+- [x] Add assembly.
+- [ ] Add linker scripts.
 - [ ] Add Protocol Buffers and protobuf text format.
 - [ ] Add Packetdrill.
 - [x] Use a neutral C-family mode for ambiguous headers.
@@ -1493,6 +1496,45 @@ records the costs and the coverage check.
 
 Completion gate: every systems-language family in the active gVisor branch
 passes direct-file and diff fixtures.
+
+Assembly is implemented ahead of the rest of this stage. A November 13, 2026
+read of the local checkouts of the organization's repositories found 64
+assembly files, all in gVisor: 56 Go assembler files named `.s`, and 8 GNU
+assembler files named `.S`, which the C preprocessor reads first. The six months
+before the read hold no path-change events on them. A ninth `.S` file,
+`pie.lds.S`, is a linker script, which the linker-script item covers.
+
+Assembly uses a focused scanner. The one Tree-sitter assembly grammar,
+[`RubixDev/tree-sitter-asm`](https://github.com/RubixDev/tree-sitter-asm),
+publishes neither an npm package nor a release holding its WebAssembly build.
+Both dialects share a lexical syntax that a scanner reads directly: `//` and
+`/*` comments, preprocessor lines, and statements made of labels, a directive or
+a mnemonic, and operands. `.s` and `.S` select the language, apart from
+`.lds.S`. The structure tree lists the functions that the Go assembler's `TEXT`
+directive declares, directly or through a call of a function-like `#define`
+macro that passes one of its parameters to it, under the argument that parameter
+receives; a macro sees the macros defined before it, and its call of itself adds
+nothing. Each line of a `#define` body that a `\` continues is a statement of
+its own, as the Go assembler reads it. It also lists the symbols that the
+`GLOBL` directive declares, `#define` and `.macro` macros, and labels. A label
+that an earlier GNU `.type` directive declares as a function or an object is
+listed as one. Any other label is listed inside the function it follows, and a
+macro inside the label or function whose code continues after it. Numeric local
+labels and the labels and functions in a macro's body are not listed.
+
+The scanner gave a token class to every character other than white space in the
+64 files, and reconstructed each file exactly. Timing ran on 100 kilobytes of
+gVisor's assembly in three rounds, each beside a makefile control run, on a
+machine whose load average was near 13; the control's 95th percentiles were 0.8
+to 1.6 times the figures recorded for it. The assembly scanner's 95th
+percentiles were at most 6.8 milliseconds for a full highlight, 4.9 for a
+document parse, and 4.1 for a re-color after one edit, inside the maximums for a
+parser-backed language. Each of the 100-kilobyte inputs measured that were built
+to slow the scanner, such as one line of 25,000 operands or 33,000 unclosed
+quotes, parsed in under 21 milliseconds of processor time at the 95th
+percentile. The slowest was 33,000 labels, at 44, whose cost is in the structure
+building the languages share: 33,000 INI keys took 37 in the same run. The
+fixture comes from gVisor.
 
 ## Stage 13: remaining active text formats
 
