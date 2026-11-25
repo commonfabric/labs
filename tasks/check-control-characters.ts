@@ -83,6 +83,12 @@ const EXEMPT_PATHS: readonly string[] = [
   "runtime/cli/test/fixtures/view-language/tsv-loom/after.tsv",
   "runtime/cli/test/fixtures/view-language/tsv-loom/before.tsv",
   "runtime/cli/test/fixtures/view-language/tsv-loom/incomplete.tsv",
+  // A Terraform template over a Tailscale policy from a real repository, which
+  // the file viewer's tests read. The policy indents with tabs, and the viewer
+  // is tested on the file as it is written.
+  "runtime/cli/test/fixtures/view-language/terraform-template-infra/after.hujson.tftpl",
+  "runtime/cli/test/fixtures/view-language/terraform-template-infra/before.hujson.tftpl",
+  "runtime/cli/test/fixtures/view-language/terraform-template-infra/incomplete.hujson.tftpl",
 ];
 
 /**
