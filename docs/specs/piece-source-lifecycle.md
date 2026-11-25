@@ -862,11 +862,15 @@ a contract. A row is a whole document: a link to a place inside one is not
 followed, since the path to that place could cross a link partway. A row's value
 is read only where stored-argument validation would read it, in the input
 document's own space and scope and storing no confidentiality label, and only in
-a document that belongs to no piece. Following ends without a contract at a row that is not
-such a document, an absent one, a document that holds anything but a link, a
-document already visited, and after eight rows, and the link is then proved as a
-link to a document with no contract is. A producer reached through rows is held
-to the destination's scope cap as the first document is.
+a document that belongs to no piece. Following ends without a contract at a row
+that is not such a document, an absent one, a document that holds anything but a
+link, a document already visited, and after eight rows, and the link is then
+proved as a link to a document with no contract is. A producer reached through
+rows is held to the destination's scope cap as the first document is. Where that
+producer is a piece's input, its contract is recovered through the piece's
+result, which is read under the same rule as a row: a result in another space or
+scope, or one storing a confidentiality label, is not read, and the contract is
+then unproven.
 
 Rows are followed for a retained link and not for a new binding. A row can be
 pointed at another producer after the binding is made, so a contract recovered

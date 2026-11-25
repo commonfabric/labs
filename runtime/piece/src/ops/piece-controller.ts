@@ -1659,11 +1659,17 @@ function canFollowSourceScope(
  * carried by the supplied alias. A caller can narrow a Cell view before
  * serializing it, so the envelope itself is not evidence about future writes.
  *
+ * The contract of a piece's input or internal document includes the result
+ * projections that expose it, and finding those reads the piece's result.
+ * `mayReadResult`, when given, is asked before that read, and a result it
+ * refuses leaves the contract unproven: `undefined`.
+ *
  * @internal Exported for focused producer-topology contract tests.
  */
 export function durableSourceContract(
   linkedCell: Cell<unknown>,
   pieces: PiecesController,
+  mayReadResult?: (result: NormalizedFullLink) => boolean,
 ): DurableSourceContract | undefined {
   const rawSourceLink = linkedCell.getAsNormalizedFullLink();
   // Producer-owned metadata (`schema`, and the `result` backlink) is
@@ -1807,6 +1813,14 @@ export function durableSourceContract(
   const ownerSchema = readResultSchemaMeta(ownerResult);
   const projected: DurableSchemaPath[] = [];
   if (ownerSchema !== undefined) {
+    // The projections are part of the contract, and finding them reads the
+    // owner's result. Where the caller may not read that result, the
+    // contract cannot be established, and it is unproven rather than
+    // partial.
+    if (
+      mayReadResult !== undefined &&
+      !mayReadResult(ownerResult.getAsNormalizedFullLink())
+    ) return undefined;
     const rawResult = ownerResult.getRawUntyped({ lastNode: "top" });
     const seen = new WeakSet<object>();
     const visit = (
@@ -2161,9 +2175,21 @@ function durableSourceThroughRows(
   pieces: PiecesController,
 ): { durableSource: DurableSourceContract | undefined; source: Cell<unknown> } {
   const visited = new Set<string>();
+  const home = baseCell.getAsNormalizedFullLink();
+  const tx = cellTx(linkedCell) ?? pieces.runtime.readTx();
+  // A producer reached through a row is one this proof went looking for.
+  // Recovering the contract of a piece's input reads that piece's result,
+  // and the result is read only where setup's validation of the stored
+  // input would read it. Elsewhere the contract is unproven.
+  const mayReadResult = (result: NormalizedFullLink) =>
+    isStoredArgumentOwnData(tx, result, home);
   let source: Cell<unknown> | undefined = linkedCell;
   for (let hops = 0; source !== undefined && hops <= MAX_ROW_HOPS; hops++) {
-    const durableSource = durableSourceContract(source, pieces);
+    const durableSource = durableSourceContract(
+      source,
+      pieces,
+      hops === 0 ? undefined : mayReadResult,
+    );
     if (durableSource !== undefined) return { durableSource, source };
     source = rowTarget(source, baseCell, pieces, visited);
   }
@@ -6027,7 +6053,8 @@ async function syncRetainedLinkMetadata(
         hops++
       ) {
         await load(source);
-        if (durableSourceContract(source, pieces) !== undefined) break;
+        // A document that is not a row ends the chain, a piece's among
+        // them, so nothing here recovers a contract or reads a result.
         source = rowTarget(source, argumentCell, pieces, visited);
       }
     }),

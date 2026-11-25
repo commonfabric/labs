@@ -2075,6 +2075,70 @@ describe("piece pull materialization", () => {
       await updateOver(inside.key("slot") as Cell<unknown>, candidate),
     ).toThrow(/topics\.0\.createdBy/);
 
+    // A row to a piece's input takes that piece's contract, which is
+    // recovered through the piece's result. Recovering it reads the result,
+    // so a result that is not the reader's own data to read, as one storing
+    // a confidentiality label is not, leaves the contract unproven and the
+    // row held to the reader's prior contract.
+    const inputProducerWith = () =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: {
+            type: "object",
+            properties: { createdBy: candidateAuthor },
+            required: ["createdBy"],
+          },
+          resultSchema: {
+            type: "object",
+            properties: { createdBy: candidateAuthor },
+            required: ["createdBy"],
+          },
+          result: {
+            createdBy: { $alias: { cell: "argument", path: ["createdBy"] } },
+          },
+          nodes: [],
+        }),
+        { createdBy: { kind: "person", name: "Ada" } },
+        undefined,
+        { start: true },
+      );
+    const readable = await inputProducerWith();
+    expect(
+      await updateOver(await rowTo(pieces.getArgument(readable)), candidate),
+    ).not.toThrow();
+    const guarded = await inputProducerWith();
+    const guardedResult = {
+      space: pieces.getSpace(),
+      scope: "space" as const,
+      id: guarded.getAsNormalizedFullLink().id,
+      path: [],
+    };
+    const label = runtime.edit();
+    writeSeedEnvelopeDoc(label, pieces.getSpace());
+    seedStoredEnvelope(label, guardedResult, {
+      ...(storedFields(label, guardedResult) as Record<string, never>),
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+                owner: pieces.getSpace(),
+              }],
+            },
+          }],
+        },
+      },
+    });
+    expect((await label.commit().settled).error).toBeUndefined();
+    expect(
+      await updateOver(await rowTo(pieces.getArgument(guarded)), candidate),
+    ).toThrow(/topics\.0\.createdBy/);
+
     // A row is followed only for a link the piece already holds. A row can
     // be pointed at another producer later, so a new binding through one
     // takes the row's own contract, which it has none of, and the same link
