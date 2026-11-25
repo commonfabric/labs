@@ -52,12 +52,14 @@ the server-execution serving loop, which is the `cf test` default.
    - The custody seal and `cf-share-snapshot` release one snapshot, through a
      host gesture.
 
-   The fix belongs where the label is written: have the connector label rows
-   with a policy the owner controls, such as
-   `AnyOf<[User{owner}, PolicyOf<ownerLocationRules>]>`, rather than a bare
-   `User{owner}`. Or build what specs#40 sketches (owner-trusted transformers;
-   `docs/specs/cfc-exchange-rules-authoring-extensions.md`, SC-37), a rule that
-   targets `User(P)` guarded by the owner's consent.
+   Berni's direction (top/3599, 2026-11-25): the owner, `User(A)`, reclassifies
+   their own data to `anyOf(User(A), PolicyOf<rules>)`, from a handler attached
+   to a trusted gesture. Under that label the policy's rules must add readers
+   (`addAlternatives`), not drop the clause: `dropClause` removes only the
+   alternative it matched (§4.4.5), so `anyOf(User(A), P)` narrows back to
+   `User(A)` and releases nothing. This fixture's `locationRules` drops because
+   its source is `[PolicyOf<locationRules>]` alone, a custody shape in which
+   only the blessed output is ever readable.
 3. **A pattern can name other people, but only at creation or by a gesture.**
    `inSpace()` grants take DIDs computed at run time, so one share space per
    person works (Robin's pairwise spaces). `grantSpaceAccess()` and
