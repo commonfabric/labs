@@ -62,6 +62,33 @@ export const argumentDocumentOf = (result: string): URI =>
 export const compiledFailureOf = (result: string): URI =>
   entityOfDocument(identifierOf({ type: "compiled failure", parent: result }));
 
+/**
+ * Whether the result document `id` of `space` is that of a piece of a
+ * compiled pattern: the document that names its source holds a source, as
+ * `setUpCompiledPiece` writes it. Brings that document into the replica of
+ * `runtime` first.
+ */
+export const namesCompiledPattern = async (
+  runtime: Runtime,
+  space: NormalizedFullLink["space"],
+  id: string,
+): Promise<boolean> => {
+  const pointer: NormalizedFullLink = {
+    space,
+    id: compiledPointerOf(id),
+    path: [],
+    scope: "space",
+  };
+  await runtime.getCellFromLink(pointer).sync();
+  const tx = runtime.edit();
+  try {
+    const named = tx.readValueOrThrow(pointer) as { source?: unknown };
+    return typeof named?.source === "string";
+  } finally {
+    tx.abort();
+  }
+};
+
 /** The text a program is stored as, and parsed from (`patternProgramOf`). */
 const textOfProgram = ({ main, mainExport, files }: PatternProgram): string =>
   JSON.stringify({

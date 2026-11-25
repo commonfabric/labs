@@ -679,6 +679,49 @@ describe("a compiled piece under the serving loop", () => {
       expect(serving.pieces().length).toBe(1);
     });
 
+    it("is opened by a client of a deployment that serves compiled pieces as a piece that runs on the serving runtime alone, where a document that names no pattern is refused", async () => {
+      const sender = new Runtime({
+        apiUrl: serving.url,
+        storageManager: StorageManager.open({
+          as: signer,
+          memoryHost: serving.url,
+        }),
+        experimental: { serverExecution: true, compiledPatterns: true },
+      });
+      clients.push(sender);
+      const program = await programOf("handler");
+      const result = sender.getCell<{ note: string }>(space, "handler");
+      await commit(sender, (tx) => {
+        setUpCompiledPiece(
+          sender,
+          tx,
+          program,
+          { secret: "s", note: "n" },
+          result.withTx(tx),
+        );
+      });
+      const cell = sender.getCellFromLink<{ note: string }>(
+        result.getAsNormalizedFullLink(),
+      );
+      cancels.push(cell.sink(() => {}));
+      await waitForCellValue<{ note: string }>(
+        sender,
+        cell,
+        (value) => value?.note === "n",
+        { stuckLabel: "a client reads the result of the load" },
+      );
+
+      // The start resolves, and says that the piece does not run here.
+      expect(await sender.start(cell)).toBe(false);
+      const plain = sender.getCell<{ note: string }>(space, "plain");
+      await commit(sender, (tx) => plain.withTx(tx).set({ note: "p" }));
+      await expect(sender.start(plain)).rejects.toThrow(
+        "Cannot start: no pattern identity",
+      );
+      expect(compiledPiecesOf(sender)).toEqual([]);
+      expect(serving.pieces().length).toBe(1);
+    });
+
     it("is not evaluated where a client wrote an artifact in the place of the source, and the client reads why", async () => {
       const sender = client();
       const artifact = await artifactOf("handler");

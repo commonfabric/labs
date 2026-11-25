@@ -8290,6 +8290,25 @@ export class Runner {
           return true;
         });
       }
+      // A client of a deployment whose serving runtimes start such pieces
+      // runs none of them itself: the serving runtime runs the piece, and
+      // the client reads what it stores.
+      if (
+        this.#runtime.experimental.compiledPatterns === true &&
+        this.#runtime.experimental.serverExecution === true &&
+        !this.#runtime.servingPosture
+      ) {
+        const { space, id } = rootCell.getAsNormalizedFullLink();
+        // Imported here, with the option on, so that a runtime that never
+        // reaches a compiled piece loads none of its modules.
+        // deno-lint-ignore cf-imports/no-inline-module-import -- the option gates the compiled path's modules
+        return import("./compiled/setup.ts").then(({ namesCompiledPattern }) =>
+          namesCompiledPattern(this.#runtime, space, id)
+        ).then((named) => {
+          if (!named) throw new Error(`Cannot start: no pattern identity`);
+          return true;
+        });
+      }
       return Promise.reject(
         new Error(`Cannot start: no pattern identity`),
       );
