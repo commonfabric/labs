@@ -41,8 +41,11 @@ hidden by policy" to a topic's creator.
   two browsers, show each user what today's path shows: every message's
   author, every topic open to its creator and to a second member, no
   "Content hidden by policy" that today's path does not show.
-- A value or a label of one principal is never stored in a document another
-  principal reads. A test stores labels under clauses that differ between
+- A value scoped to one principal, such as a per-user or per-session cell or
+  what a viewer's `wish` resolves to, and a value derived from it, is never
+  stored in a document another principal reads, nor is the label that scope
+  gives it. Content shared with the space, such as a message's author (Z100),
+  is not of this kind. A test stores labels under clauses that differ between
   principals for each construct that reads a value of a narrower scope: a
   `wish`, a per-user or per-session cell, a per-element construct whose body
   reads one, and an instance a handler makes.
@@ -95,8 +98,8 @@ exists. `cf piece new` treats a compiler crash as a refusal.
   compiled is reported with each change.
 
 Where it stands: Z92 and Z93 are not built. The Topics board compiles as it
-is; the FabriChat room and Home run as copies with stand-ins. Seven
-built-ins and every effect other than five are unanswered.
+is; the FabriChat room and Home run as copies with stand-ins. The four
+fetch effects are answered; seven built-ins and every other effect are not.
 
 ## 6. Contextual Flow Control
 
