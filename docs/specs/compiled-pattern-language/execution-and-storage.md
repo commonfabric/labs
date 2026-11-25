@@ -687,6 +687,19 @@ cell and from its own per-session `pickerOpen` cell
   the space, and every one for a key not evaluated for before. Whether
   such a document is made only for a key whose reader demands it is
   question 115.
+- **A value found to be of a narrower scope after it was stored.** The scope
+  of a cone instance is known once it is evaluated, and a value can become of
+  a narrower scope later, as a body over an array of references does when an
+  element comes to hold a link to a document of a scope. *Provisional
+  (decision P458 of the prototype):* a document that holds what a body
+  returned whole for an output, named in the space while the value was of
+  the space, is no place of the value from then on: the value is stored in
+  the document of its scope, nothing stores it in the document of the space
+  again, a row that holds a reference into that document is evaluated again,
+  and the rows of a collection over it that stood in a document of the space
+  are stored in the scope instances, as for a collection of that scope from
+  the first. The move is one way, since the scope of a cone instance only
+  narrows.
 
 The scheduler says which scope keys demand an instance. One derivation
 transaction may hold the evaluations for several scope keys, each carrying
@@ -5719,7 +5732,14 @@ document holds and which transaction writes each part.
   transaction of the operation the document holds `request` alone, and
   `pending`, `result` and `error` read as nothing. While a newer request is
   outstanding, `outcome` holds the pending mark and the result or the error of
-  the request before it (`scheduler-and-serving-loop.md` §6.2).
+  the request before it (`scheduler-and-serving-loop.md` §6.2). Provisional
+  (P459 of the prototype): where a request is not made because it holds an
+  error state (`scheduler-and-serving-loop.md` §6.2, step 1), `outcome` holds
+  that error state and no request is outstanding, so the next request that
+  holds none is made. A read of a path below the outcome then reads the error
+  state, as a read of a member of a value in an error state does
+  (`plan-and-label-templates.md` §5.2), and a cone that passes the result on by
+  reference reads nothing of the state document.
 - **A `wish`.** Provisional (P15; `builtin-inventory.md`, open question 18). A
   `wish` has no request transaction. The evaluation that stages its operands
   resolves it, in the transaction of the reader, and nothing is handed to the

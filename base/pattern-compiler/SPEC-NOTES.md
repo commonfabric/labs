@@ -25547,3 +25547,477 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    where the read of the whole record joined the labels of every member into
    each position the spread gives. A change that stores less label, to be ruled
    on before it is built.
+
+## Round twenty-three: the room's tree of the space, and the rows of a filter
+
+Round twenty-three (2026-11-24), on the branch
+`claude/compiled-pattern-scoped-rows` from `4df0c33bdf`. The notes are numbered
+from 1035, the provisional decisions from P458. The logs are in the folder
+`r23-tree-scope/` of the session. Whenever a note says `map` or `filter`, it
+names the case. Times are on an Apple M5 Max with 18 cores at the load averages
+given, from other sessions; the counts do not depend on the load.
+
+1035. **Findings, first.**
+      - _Soundness, fixed: a value of one user was written into a document of
+        the space._ The document that holds what a body returned whole for an
+        output (`Instance.#generated`) is named by the scope its value was found
+        to have when it is first stored. A value that becomes of a scope later,
+        as a `computed` over an array of references does when an element starts
+        to hold a link into a scoped document, is stored in a document of that
+        scope from then on, but the document of the space named before kept its
+        source: a read that reached it through a link stored elsewhere evaluated
+        the value for the acting key and stored it there, where every reader
+        reads it. On the runner path such a write, made inside a derivation, is
+        what `#refuseStoredForEveryKey` refused in
+        `examples/profile-group-chat/main.tsx` (note 1030). Fixed with three
+        defects found beside it (note 1036).
+      - _Soundness, fixed: a principal's rows read `null`._ The rows of a `map`
+        over the result of such a `computed` (an array of plain values generated
+        from scratch) stood in the result document of the space after the value
+        became of a scope, keyed by one principal's values, and a row of a key
+        that stayed held its reference into the document of the space; and once
+        both principals had evaluated the rows, the place of the scoped rows of
+        one principal was never brought up to date again, since nothing marked
+        it through an assembly formed again for another key (note 1036).
+      - _Soundness, fixed: a `filter` over the result of a `map` stored
+        `{ at: [] }` in place of an appended row._ The branch of
+        `Instance.#reassemble` that brings a `filter` up to date pushed the
+        source of each element as the value of the result; for the rows of a
+        `map`, the source is the record that names the row's entry, not the row
+        (note 1039).
+      - _Scale, fixed: the room's rendered tree is of the space._ With the read
+        of `failed` gone from `Instance.rootOf` (note 1037) and
+        `profileWish[UI]` read as a path (note 1038), the tree is in the result
+        document of the space, and no scope instance holds the rows of the main
+        conversation; each row of the main conversation is a row document of the
+        scope `user` of its own (note 1040; note 1031 has the rows read the
+        wish's state through `authorProfile`, read 4). Note 1031 had the spread
+        `...view` keep the tree of the scope `session` as well; with the other
+        two reads gone it does not: it keeps the room's result of that scope,
+        and the tree is an output of its own. A send at 1,000 messages changes
+        714 to 729 KB where it changed 2.37 MB (note 1040).
+      - _Scale, open, found in this round's measurements: the store step of the
+        room's result follows the room._ With the tree in the result document,
+        `Instance.#storeResult` places the result again at each send and notes
+        again the record of each position of the tree whose inputs changed at
+        every position those inputs reach (`#noteRecord`): 29 ms per send at 100
+        messages, 404 ms at 1,000, where the step took 90 ms at 1,000 before.
+        The piece's phases together still take less than before (1,160 against
+        1,212 ms per send at 1,000), since the storage phases fell with the
+        bytes, but the seed at 1,000 takes 694 s against 530 s. Not fixed; plan
+        in note 1042.
+      - _Scale, fixed: a `filter` brought up to date looked at every element._
+        An append to a source of 1,000 elements looked at 2,504 elements; it now
+        looks at 4, at every size, for a `filter` over an array of references,
+        over an array of plain values in place, and over the result of another
+        `filter` (note 1039).
+      - _Scale, open: an edit that takes an element in the middle out of a
+        `filter`, or puts one in, numbers again every member behind it_ (750 at
+        1,000 elements), as a `sortBy` and a `flatMap` do and as the element
+        table of the construct over the result does for its own elements. Plan
+        in note 1042.
+      - _Scale, open: a `filter` over the result of a `map` is formed whole at
+        every change_, since its elements are rows and not references (the
+        branch now forms it whole where it stored the wrong value). Plan in
+        note 1042.
+      - _Scale, open: the three lists of links of the room's tree are written
+        whole at each send at 100 messages_ (16 KB each): the tree is of the
+        space now, and its collections are stored as lists in documents (P392,
+        P393), whole up to 128 rows. Figures in note 1040.
+
+1036. **A value that becomes of a scope after it was stored in a document of the
+      space (step 1; provisional decision P458).**
+      - _The reproduction._ `fixtures/scoped-generated.tsx`: a `computed` over
+        `items`, an array of references, whose block body is not promoted,
+        returns for each item its owner, a link that a handler stores into an
+        item, to the acting user's nickname, a state cell of the scope `user`;
+        the rendered tree holds a `map` over the result, whose rows pass each
+        element on; a row's handler keeps the reference to its element in a
+        state cell of the space. `fixtures/scoped-generated-count.tsx` adds a
+        read of the array's length to the tree, so the tree becomes of the scope
+        too, as `participantCount` does in `profile-group-chat`. On the executor
+        in memory the defect does not take the form of the refusal, since the
+        write to the document of the space comes from a read that follows a link
+        outside the derivation's transaction (`result()`); on the runner path it
+        is the refusal (note 1030).
+      - _Four defects and what was built._ (1) The source of the document of the
+        space, `Store.sources`, stores what the value is for the acting key; it
+        now stores nothing where the value is of a narrower scope than the
+        document (`#generated`, `named() === id`), so a document of the space
+        holds what every reader may read, the value it held while it was of the
+        space. (2) A row of a key that stayed passed the reference to its
+        element on and read nothing a change marks, so it kept the reference
+        into the old document; an element whose place moved with its key
+        unchanged now marks what is kept under its key as not current
+        (`samePlace`, `#placeMoved` in `assembled`). (3) The unit of the
+        assembly stood in the result document of the space with the rows of one
+        key, and `#scopedRows` is consulted only when a unit is placed; a unit
+        whose assembly is found to be of a scope key is placed again, as
+        `#formOf` places such an assembly from the first (`#storeUnit`). (4) An
+        assembly is formed again for each key and not set aside, so a place of
+        the scoped rows of one key, set aside while another key acted, was
+        reached by no mark when its key's value changed; dropping the assembly
+        of a key now marks its users of that key, set aside or not
+        (`#markScopedUsers` in `#forActing`).
+      - _P458._ A document that holds what a body returned whole for an output,
+        named in the space while its value was of the space, is no place of the
+        value once the value is found to be of a scope: nothing stores the value
+        there again, the rows that hold references into it are evaluated again,
+        and a unit of an assembly over it moves to the scope instances. The
+        document is left in the store with what it held. As for the place of a
+        value (`#valuePlace`), the move is one way, since the scope of an entry
+        only narrows.
+      - _Tests_ (`exec/test/scoped-view.test.ts`, two principals): over both
+        fixtures at 10 and 100 items, each principal reads the rows its own
+        nickname selects (`Ann` for one, the empty name for the other), no
+        document of the space holds `Ann`, and no document links to the document
+        of the space but the state cell the handler wrote; over both at 10
+        items, each principal reads its own nickname after both changed it. At
+        `4df0c33bdf` the document of the space held the acting user's nickname
+        (four cases), and over `scoped-generated.tsx` a row read `null` after
+        the nicknames changed. Each of the four parts was taken out once:
+        without (1) the document of the space holds `Ann`; without (2) the rows
+        link to it; without (3) a principal's row reads `null`; without (4) a
+        row reads `null` after the nicknames changed. Without both (1) and (2),
+        `profile-group-chat` on the runner path with the patch of note 1037
+        gives the refusal again; with either, the module is handled.
+
+1037. **`Instance.rootOf` without the read of `failed` (step 2; provisional
+      decision P459).**
+      - _Landed as note 1030 built it,_ without its debug output: the result of
+        an operation is the reference to its outcome, the error state of a
+        request that was not made is the outcome itself, and `Store.locate`
+        gives that error state for a path below it.
+      - _Where the error state is read now_ (`fixtures/failed-request.tsx`, an
+        effect whose request holds a value whose cone fails for one address): a
+        cone that reads a member of the result takes it; a cone that passes the
+        reference on reads nothing, is not evaluated again when the request
+        fails, and holds the link; a handler that reads the result through a
+        handle takes it, where at `4df0c33bdf` it read nothing of it; a client
+        that reads the stored link reads it in the outcome, and reads a record
+        again once a request is made. Tests in `exec/test/effects.test.ts`; the
+        second and third were seen failing at the head of step 1 (the cone that
+        passes the reference was evaluated again, and the handler stored nothing
+        of the error state). The test over `fixtures/scoped-wish-view.tsx` of
+        note 1030 is kept: the scope instances held 3,014 bytes at 10 items and
+        25,334 at 100 before, the same at both sizes after.
+      - _P459._ Where a request is not made because it holds an error state (SS
+        §6.2, step 1), `outcome` holds that error state in place of the record
+        of `pending`, `result` and `error`, and no request is outstanding;
+        `execution-and-storage.md` §6.4 says so now.
+      - _`profile-group-chat`._ With step 1, the module on the runner path and
+        after a resume is handled and equal to the executor in memory, as at
+        `4df0c33bdf`; under the serving loop it is skipped for a `wish` the home
+        does not answer there, as before (`compare/runner-corpus.ts`, the module
+        alone in four modes).
+
+1038. **`{profileWish[UI]}` (step 3; provisional decision P460).**
+      - _Why the slot observed the value._ The crate planned `profile[UI]` as a
+        pick by a key computed at run time (`$h.slot(n, [$h.pick(m, UI)])`, a
+        slot that observes the `shape` at `*` and a pick slot that observes the
+        `value`), so the cone of the tree read the result of the `wish`.
+        `language-subset.md` §4.3 has an element access by a well-known key of
+        the API static, as one by a literal is; the crate did that for a key of
+        a record literal and for the checker, and not for a member read.
+      - _What was built._ `Emitter::well_known_key` in `src/plan.rs`: a computed
+        key of a member read that is a well-known key of the API (`UI`, `NAME`
+        and the others `api::ApiValue::WellKnownKey` lists) names the segment a
+        record literal gives the same key, `$UI`. The child then passes its
+        place on by the rule that already applies to a state cell or a path with
+        a string key (`Emitter::pass`, an `identity` slot), and the tree holds a
+        link of the scope `user` to the outcome's `$UI`.
+      - _P460: bound as `identity`, not planned apart._ The child is a path, not
+        an operator expression, and reads nothing; today's runtime passes a path
+        placed as a child by reference and gives a child a node of its own only
+        where it is a computation. P451's rule is for an expression that reads
+        the value; a position that passes a place on reads it in neither path.
+        So P451 is not extended; the crate follows §4.3. A pick by a key the
+        module computes (`profile[key]`) stays a pick that reads the container.
+      - _Tests._ `tests/plan.rs`,
+        `a_member_read_by_a_well_known_key_is_a_static_path`: the child gives an
+        `identity` slot at `$UI` and the tree one pick, that of `profile[key]`;
+        seen failing without the change. `exec/test/scoped-view.test.ts` over
+        `fixtures/scoped-wish-child.tsx`, two principals at 10 and 100 items:
+        the tree stays in the result document of the space, no scope instance
+        holds it, and an edit of one item writes the same two documents at both
+        sizes; before, the scope instances held 2,772 and 25,092 bytes. No other
+        emitted fixture changes.
+
+1039. **The rows of a `filter` (step 4; provisional decision P461).**
+      - _What it visited per element._ At each splice of the source or changed
+        flag, the branch for `moved` or `flagged` of `#reassemble` formed the
+        members from every element of the source, one object each, pushed each
+        element's source as the value, and compared the members it held with the
+        new ones from both ends; and a pass that changed no member counted as a
+        change (a new version and a delta with no splice), so the unit of a
+        stored result compared all its keys. Counted with
+        `Counts.elementsVisited` (new: the elements `#reassemble` looks at one
+        by one, and the rows `#storeUnit` compares by key; the probes of a
+        binary search are not counted).
+      - _What was built._ The positions of the source that a splice put in or
+        whose flag changed are looked at: the members before the first and
+        behind the last are found by binary search over the members by where
+        their elements stand now (both are monotonic: a member before the first
+        touched position kept its position, and one behind the last of them kept
+        its order from the end), and the members in between are spliced, as one
+        splice of the result. A pass that changes no member is none: the version
+        of the assembly stays, so a construct over the result, brought up to
+        date from the delta of each version, does not fall behind and form
+        itself whole at the next change; and `#storeUnit` leaves the stored rows
+        of an assembly whose members, value and version are those it saw. An
+        element that is no reference forms the assembly whole, as it does for a
+        window, which fixes the value a `filter` over the result of a `map`
+        stored.
+      - _P461._ As above. The same code covers a `filter` over an array of
+        references, over an array of plain values in place, and over the result
+        of another per-element construct whose elements are references, as a
+        `filter` over the result of a `filter`; over the rows of a `map` it is
+        formed whole.
+      - _Counts_ (elements looked at, at 10, 100 and 1,000 elements of
+        `fixtures/filter-rows.tsx`: `shown`, a `filter` over `items`, and
+        `titled`, a `filter` over its result; before / after):
+
+        | change                                  | references                 | plain values in place       |
+        | --------------------------------------- | -------------------------- | --------------------------- |
+        | an append the predicate keeps           | 29, 254, 2,504 / 4, 4, 4   | 29, 254, 2,504 / 4, 4, 4    |
+        | an append the predicate leaves out      | 22, 202, 2,002 / 2, 2, 2   | 22, 202, 2,002 / 2, 2, 2    |
+        | an edit that keeps the membership       | 0, 0, 0 / 0, 0, 0          | 25, 250, 2,500 / 6, 6, 6    |
+        | an edit that takes the last element out | 22, 247, 2,497 / 3, 3, 3   | 23, 248, 2,498 / 4, 4, 4    |
+        | an edit that takes the middle one out   | 0, 271, 2,746 / 0, 75, 750 | 21, 272, 2,747 / 2, 76, 751 |
+        | a removal of the last element           | 19, 199, 1,999 / 0, 0, 0   | 19, 199, 1,999 / 0, 0, 0    |
+
+        An edit of a plain value in place changes its key (no key field is
+        declared), so it is a splice of the source. No assembly is formed whole
+        in any of them, before or after.
+      - _Tests_ (`exec/test/growth.test.ts`): each change above but the middle
+        one, and an append left out followed by one kept, looks at as many
+        elements at 10 as at 100 and forms no assembly whole, over references
+        and over plain values in place; 12 of the 13 cases failed at the head of
+        step 3 (an edit that keeps the membership over references looked at
+        nothing before either). Without the version that stays, the append left
+        out followed by one kept formed the `filter` over the result whole. Over
+        `fixtures/filter-of-map.tsx` the result holds the rows each change
+        keeps; at the head of step 3 an appended row read as nothing.
+
+1040. **Measured: FabriChat.** `SCALE_STAND_INS=table`,
+      `compare/fabrichat/scale.ts runner room <n>`, the room of this branch, one
+      run of each cell, three timed sends each; before is note 1032's figures at
+      100 and 500 (`4df0c33bdf`, loads 21 to 26), and at 1,000 a run of
+      `4df0c33bdf` in a scratch worktree started beside the run after, with a
+      profile of the timed sends each. Times in milliseconds, the piece's own
+      time in brackets; "KB" is the size as JSON after the commit of each
+      document a send's commits changed.
+
+      | messages | when   | load    | ms per send (own)     | records | evaluations | element evaluations | documents | KB changed  |
+      | -------- | ------ | ------- | --------------------- | ------- | ----------- | ------------------- | --------- | ----------- |
+      | 100      | before | 21–23   | 252–265 (127–131)     | 172     | 59          | 31                  | 75–77     | 408–416     |
+      | 100      | after  | 4.6     | 154–178 (60–64)       | 300     | 54          | 31                  | 77–78     | 329–331     |
+      | 500      | before | 23–26   | 555–688 (277–352)     | 172     | 59          | 31                  | 74–77     | 1,278–1,287 |
+      | 500      | after  | 3.6–5.0 | 931–1,186 (460–489)   | 300     | 54          | 31                  | 76–78     | 480–482     |
+      | 1,000    | before | 4.1–7.4 | 1,246–1,291 (611–630) | 172     | 59          | 31                  | 74–75     | 2,371–2,381 |
+      | 1,000    | after  | 4.1–5.2 | 1,340–1,842 (637–736) | 300     | 54          | 31                  | 77–80     | 714–729     |
+
+      - _The tree._ The session instance of the room's tree, which held every
+        row of the main conversation (191 KB, 880 KB and 1.74 MB at 100, 500 and
+        1,000 before), is gone: the tree is in the result document of the space
+        (183 KB at every size, of which `$UI` 13 KB and `$VIEWS` 22 KB) and
+        holds a link of the scope `user` to the outcome of the `#profile` wish.
+        Traced at 10 messages with the first read of each evaluation that made
+        an entry of a scope (code kept out of the branch): the cone of the tree
+        is of no scope; the result of the room is of the scope `session` through
+        what the spread `...view` reads of the record's members (note 1031, read
+        2), which no longer reaches the tree; the rows of the main conversation
+        are row documents of the scope `user`, about 12 KB each at 100 messages
+        (839 documents of that scope hold 1.31 MB), and the rows' own
+        expressions that read a value of a scope are places per row (P454). Why
+        each row is of the scope `user` was not traced further than that its
+        cone uses an entry of that scope; note 1031 has the rows read the wish's
+        state through `authorProfile` (read 4), the work excluded from this
+        round.
+      - _What a send changes_ (`SCALE_CHANGES`, the third send): at 1,000
+        messages the argument with the stored messages (249 KB), the result of
+        the space (183 KB), a user instance of 17.7 KB, the document of the
+        basis (4.4 KB) and about 31 parts of the list of what the piece made (8
+        KB each); at 100, also three lists of 103 links (16 KB each) that are
+        written whole (P393), which at 500 and 1,000 are lists in chunks and do
+        not appear. What still grows with the room per send: the argument (26,
+        125 and 249 KB at 100, 500 and 1,000) and the parts of the basis.
+      - _Records and evaluations._ 300 records where 172, at every size: the
+        positions of the tree now have records of the result document of the
+        space; 54 evaluations where 59, and 31 evaluations of element bodies, at
+        every size.
+      - _The seeds._ 11.0 s at 100 (1.16 GB peak resident), 139 s at 500 (3.46
+        GB), 694 s at 1,000 (4.69 GB) after; at 1,000 before, started beside it,
+        530 s at 7.54 GB. The seed after is slower (note 1035, the store step).
+      - _The rows._ The dumps (`SCALE_DUMP`) after hold no error value and no
+        `is not a function`, and the reader's rights of every message read back
+        (103, 503, 1,003); the dump before at 1,000 holds no error value.
+      - _Phases per send at 1,000_ (`profile-phases.py`, the three timed sends
+        of each run; before 4.1 to 7.4, after 4.1 to 5.2), in milliseconds:
+
+        | phase                                     | before  | after   |
+        | ----------------------------------------- | ------- | ------- |
+        | all                                       | 1,268.5 | 1,549.2 |
+        | garbage collection                        | 110.7   | 180.5   |
+        | memory server: apply commit               | 122.0   | 44.0    |
+        | client: CFC preparation of a commit       | 141.0   | 122.9   |
+        | client: transaction commit (encode, send) | 124.3   | 96.4    |
+        | client: receive and decode                | 138.4   | 52.9    |
+        | executor: `#pullScoped`                   | 28.0    | 14.0    |
+        | executor: `#storeResult`                  | 89.6    | 404.2   |
+        | executor: `#reassemble`                   | 92.9    | 1.1     |
+        | executor: other of a derivation           | 322.2   | 150.0   |
+        | handler event                             | 29.2    | 85.6    |
+        | scheduler: resubscribe after a commit     | 13.5    | 8.6     |
+        | other                                     | 56.7    | 388.9   |
+
+        The four storage phases take 526 ms before and 316 after, with the
+        bytes. `#reassemble` outside the store step takes about 1 ms; inside it,
+        the probe of `#scopedRows` brings the rows of `messageRights` up to date
+        (64 ms, counted under `#storeResult`). `#storeResult` grew: the result,
+        now holding the tree, is placed again at each send, and for each
+        position of the tree whose record's inputs changed, the record is noted
+        again at every position its inputs reach (`#unchangedOutput` and
+        `#outputWrites` into `#noteRecord`, 290 ms of the 404); at 100 messages
+        it takes 29 ms. "Other" is the harness: `scale.ts` finds the stream of
+        each send with `Instance.streams()`, whose walk follows the tree, now of
+        the space, into every row (353 ms per send at 1,000); no runtime path
+        calls it. The piece's phases without "other" take 1,212 ms before and
+        1,160 ms after.
+
+1041. **Measured: Topics, the serving path, and the corpus.**
+      - _Topics, the arm `serving` on `filing-order`_, the boards of the
+        measurement branch copied into a scratch worktree at the round's last
+        code commit, one run each, loads 5.6 to 6.1. An edit of a title runs 1
+        derivation and 5 evaluations and gives 2 to 8 records at 1,000 and 2,000
+        topics (note 1033: 9); the second client reads it after 13.9 to 37 ms at
+        1,000 and 13.7 to 42 ms at 2,000 (note 1033: 26 to 81 and 32 to 87, at
+        34 to 41). A create runs 9 derivations with no refusal and gives 111 to
+        123 records at both sizes (note 1033: 12 to 13 derivations, 117 to 189
+        records); the second client reads it after 257 to 574 ms at 1,000 and
+        485 to 1,100 ms at 2,000. The first run at 1,000 went idle before the
+        load with 1.5 s of processor time, as note 931 records; it was stopped
+        and run again. A run of `4df0c33bdf` at 1,000 in the scratch worktree of
+        the before, at loads of 4.8 to 5.2 (its first run also went idle and was
+        run again): 9 records for an edit of a title, and a create of 12 to 13
+        derivations and 117 to 189 records, as note 1033; so this round gives
+        fewer records and derivations. Which change does was not traced; a pass
+        of a `filter` that changes no member no longer counting as a change
+        (P461) is the likely one.
+      - _`compare/serving-path.ts 1000`_: the piece is found current after the
+        takeover with no evaluation, 6 evaluations at the wake, 11 derivations,
+        no refusal, 22.9 ms of its own for its ten events and derivations (load
+        5.7 to 6.1; note 1033: 52.3 ms at 34 to 47).
+      - _The corpus,_ `compare/runner-corpus.ts` in its four modes, run side by
+        side once at the round's last code commit (loads 2.8 to 7.5), against
+        note 1033 (`4df0c33bdf`): started, every event handled, no commit
+        refused, equal to the executor in memory, and for the resumes, resumed,
+        found current, wrote no document.
+
+        | Mode                  | Note 1033                        | This round                       |
+        | --------------------- | -------------------------------- | -------------------------------- |
+        | runner                | 259, 216, 249, 231               | 259, 215, 249, 229               |
+        | serving               | 235, 201, 221, 211               | 235, 201, 221, 211               |
+        | after a resume        | 259, 216, 251, 228; 149, 121, 82 | 259, 215, 251, 226; 148, 121, 82 |
+        | serving with a resume | 235, 201, 221, 210; 81, 72, 0    | 235, 201, 221, 210; 81, 72, 0    |
+
+        - _Modules whose line changes._ `apps/agent/agent.tsx` on the runner
+          path and after a resume: equal before, now one difference, a date the
+          module formats, `11/25/2026` in the piece against `11/24/2026` in the
+          executor in memory; the runs crossed midnight UTC, so the two clocks
+          named different days, and nothing of this round is involved.
+          `apps/redactor/vault.tsx`: 3 of 4 events with 8 refusals on the runner
+          path and the whole resume's commit refused after a resume, where note
+          1033's run had 4 of 4 with 7 and a resume that went through; its line
+          varies between runs (note 1028). Under the serving loop, with and
+          without a resume, no line differs.
+          `examples/profile-group-chat/main.tsx` is handled and equal on the
+          runner path and after a resume, and skipped under the serving loop, as
+          in note 1033.
+1042. **Planned, not built.**
+      - _The position of a member of an assembly._ A member of the result of a
+        `filter`, a `sortBy` or a `flatMap` carries its position in the result
+        (`Element.index`), and each splice that puts in another number of
+        members than it takes out gives every member behind it a new object with
+        its new position: 750 members at 1,000 elements for an edit in the
+        middle of a `filter`. No reader of the members of an assembly reads that
+        position: `#table` numbers the members of an upstream again, and
+        `#reassemble`, `#storeUnit` and `#segment` read the members by their
+        place in the array. The plan is to keep no position in the members an
+        assembly holds, which changes the type the element table shares with
+        them, so it is a change of representation across every per-element
+        construct and is not built here. The element table of the construct over
+        the result keeps its positions, since a cone that reads the index of its
+        element depends on them, and its splice numbers again every element
+        behind it as well; bounding that needs positions that a splice does not
+        rewrite, an order-statistics structure, which is a decision of its own.
+      - _A `filter` over the rows of a `map`._ Its elements are the rows, values
+        the result holds as they are, and each kept row is a dependency of the
+        assembly (`given` in `assembled`) beyond the dependencies on the
+        predicate's entries, which `#reassemble` does not know, so a change of a
+        row forms it whole. The plan: `Rows` records the entry of each kept row
+        with its key, and `#reassemble` puts a changed row's new value at the
+        member's place, as it puts an entered member in; with that, an element
+        that is no reference need not form the assembly whole. No decision is
+        needed; not built, for time.
+      - _The rows of the main conversation are of the scope `user`,_ each a row
+        document of that scope of about 12 KB at 100 messages, through the reads
+        of the rows that follow `authorProfile` (note 1031, read 4): the work on
+        how handles follow links, excluded from this round.
+      - _The lists of links of the room's tree,_ three lists of 103 links
+        written whole at each send at 100 messages: below 128 rows a list is one
+        document (P393), so each send writes it whole. Figures at 1,000 in
+        note 1040.
+      - _The store step of a result that holds the tree_ (note 1040): the result
+        entry of the room is evaluated again at each send and placed again
+        whole, and each position whose record's inputs changed has its record
+        noted again at every position its inputs reach, which for the positions
+        of the tree that depend on the messages follows the room (29 ms at 100
+        messages, 404 ms at 1,000). Note 923 has `Instance.#noteRecord` as an
+        open cost; with the tree of the space it is the largest phase of the
+        executor in a send. The plan is note 923's: register a record by the
+        inputs it names and not by every position they reach, so that noting it
+        again costs what changed. Not built.
+      - _`Instance.streams()`_ walks the stored result and follows every link to
+        find the streams, which the FabriChat harness does at each send; with
+        the tree of the space the walk reaches every row. No runtime path calls
+        it; the harness could find the stream once. Not changed.
+
+1043. **Provisional decisions, and what was not verified.** P458: as note 1036.
+      P459: as note 1037. P460: as note 1038. P461: as note 1039. Not verified:
+      the stored labels of the positions this round changes (no test compares
+      labels; CFC questions below); FabriChat under the serving loop or with two
+      users; a resume of FabriChat; the row documents of the scope `user` past
+      the trace at 10 messages; why Topics gives fewer records and derivations
+      (note 1041); the times beyond one run of each cell; the before and after
+      at 1,000 started together, but the before finished its seed first, so
+      their timed sends ran at loads of 7.4 and 5.2.
+
+### CFC questions deferred, round twenty-three
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. P458: the document of the space that held what a body returned, named before
+   its value was found to be of a scope, keeps the value it held while the value
+   was of the space, with the label it was stored under; a reader that holds a
+   link to it reads that value. The write the round removes stored one user's
+   value there under the derivation of whoever read it, for every reader: an
+   under-label of that document for the others, now gone. A change that stores
+   less in a document of the space.
+2. P459, as question 3 of round twenty-two: the outcome that holds the error
+   state carries the label the request transaction's join gives it; a cone that
+   passes the result on by reference no longer joins the label of the state
+   document's `failed` member, as today's runtime joins nothing for a node that
+   holds a reference. A change that stores less label.
+3. P460: a tree that places `profile[UI]` holds a link and no longer joins the
+   label of the `wish`'s result at its other positions; the position of the link
+   has the template of the `identity` slot. A change that stores less label;
+   today's runtime stores the same.
+4. Note 1040: the room's tree is of the space while the result of the room is of
+   the scope `session` through the spread `...view`; the positions of the tree
+   no longer join the labels of the session's values that the tree holds by
+   reference (question 1 of round nineteen continued, for the room). A change
+   that stores less label.
+5. P461: no rule of a label changes; a `filter` over the rows of a `map`, which
+   stored `{ at: [] }` for an appended row, stores the row again, with the
+   record of the result at its position.
