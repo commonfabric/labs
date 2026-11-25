@@ -6691,7 +6691,11 @@ is relitigated.
   `patterns/examples/fair-share/main.tsx` and
   `patterns/apps/redactor/vault.tsx`. The
   coordinator recommended this form, and the owner agreed: "I agreed with
-  your suggestions". Not built.
+  your suggestions". Built in round twenty-six on that branch as P477 (the
+  record the change gave the array holding the row, its membership label),
+  with P476 (the marker's document is a store the piece owns, as the runner
+  enrolls a stream cell); classified as conforming implementation, with no
+  change of the specification (note 1083).
 
 - A spread of an object that a body builds, whose members the literal
   declares, is emitted as a pass: each member is placed at its position as
@@ -6706,10 +6710,9 @@ is relitigated.
   answers question 4 of round twenty-two (note 1031, read 2) on the same
   branch; it is what lets the room's rendered tree stay of the space where
   it spreads an object that holds a scoped value. The coordinator
-  recommended it, and the owner agreed in the same words as Z96. Not built.
-  Both rulings decide questions that Z88 deferred; when each is built, the
-  round checks it against `docs/development/cfc-spec-correspondence.md` and
-  says whether the specification needs a change.
+  recommended it, and the owner agreed in the same words as Z96. Built in
+  round twenty-six as P478, and classified as conforming implementation of
+  §3.4, with no change of the specification (note 1083).
 
 ## Provisional decisions awaiting the owner's ratification
 
