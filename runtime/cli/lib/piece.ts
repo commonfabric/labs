@@ -72,6 +72,7 @@ import {
   handlerVerbEvents,
   handlerVerbResults,
   type PieceCallableListing,
+  storedVerbEvents,
   verbsFromCompiledPattern,
 } from "@commonfabric/piece/verb-listing";
 import {
@@ -97,6 +98,7 @@ import {
   type NormalizedFullLink,
   parseExternalSchemaRef,
   pullFromServer,
+  readResultSchemaMeta,
   recomposeSchema,
   resolveLink,
   resolveLinkTracingDereferences,
@@ -3651,11 +3653,14 @@ async function resolveLinkedPiece(
   const position = parent.key(path[path.length - 1]);
   const resolved = await resolveThroughStoredLinks(position);
   const link = resolved.getAsNormalizedFullLink();
-  // A piece is the document its pattern identity is written on.
+  // A piece is the document its pattern identity is written on, or, for
+  // a piece with no pattern, as a compiled piece and an instance one makes,
+  // the document whose metadata links its argument.
   const piece = pieceId(resolved);
   if (
     link.path.length > 0 || piece === undefined ||
-    getPatternIdentityRef(resolved) === undefined
+    (getPatternIdentityRef(resolved) === undefined &&
+      getMetaLink(resolved, "argument") === undefined)
   ) {
     const ending = `\`cf piece call\` takes a piece, or a path that links ` +
       `to one.`;
@@ -3839,10 +3844,15 @@ async function resolveCallableOnPiece(
       ? undefined
       : Promise.resolve(discovery.compiled);
     const loadPattern = () => (patternOnce ??= piece.getPattern());
+    // A piece with no pattern, as a compiled piece, declares its verbs'
+    // events in the schema its result document carries.
+    const storedResult = async () =>
+      readResultSchemaMeta(await piece.result.getCell());
     return {
       ...resolved,
       declaredResult: () => declaredVerbResult(loadPattern, callableName),
-      declaredEvent: () => declaredVerbEventFor(loadPattern, callableName),
+      declaredEvent: () =>
+        declaredVerbEventFor(loadPattern, callableName, storedResult),
       declaredProse: () => declaredVerbProseFor(loadPattern, callableName),
     };
   }
@@ -4680,15 +4690,27 @@ async function declaredVerbProseFor(
  * This is the surface that keeps reference markers: the schema a dispatch
  * cell carries went through link sanitization, which strips every `asCell`
  * entry but `stream` — see `CallableResolution.declaredEvent` for the full
- * statement. A pattern that will not load costs the call its address
- * conversion, not the call.
+ * statement. A piece with no pattern, as a compiled piece, is read through
+ * the result schema its result document carries (`storedVerbEvents`). A
+ * pattern that will not load, of a piece whose result carries none, costs
+ * the call its address conversion, not the call.
  */
 async function declaredVerbEventFor(
   loadPattern: () => Promise<any>,
   callableName: string,
+  storedResult: () => Promise<JSONSchema | undefined>,
 ): Promise<JSONSchema | undefined> {
+  let pattern: unknown;
   try {
-    return handlerVerbEvents(await loadPattern()).get(callableName);
+    pattern = await loadPattern();
+  } catch {
+    pattern = undefined;
+  }
+  if (pattern !== undefined && pattern !== null) {
+    return handlerVerbEvents(pattern as never).get(callableName);
+  }
+  try {
+    return storedVerbEvents(await storedResult()).get(callableName);
   } catch {
     return undefined;
   }

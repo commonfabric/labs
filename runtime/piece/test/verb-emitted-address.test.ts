@@ -13,7 +13,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/runner";
 import { resolveEmittedAddressArguments } from "../src/verb-input.ts";
-import { handlerVerbEvents } from "../src/verb-listing.ts";
+import { handlerVerbEvents, storedVerbEvents } from "../src/verb-listing.ts";
 
 /** A real-shaped piece id, so the address parser judges the spelling and not
  * a malformed hash. */
@@ -451,6 +451,55 @@ describe("verb-emitted-address", () => {
     it("returns an empty map for a pattern with no result", () => {
       expect(handlerVerbEvents(null).size).toBe(0);
       expect(handlerVerbEvents({}).size).toBe(0);
+    });
+  });
+  describe("storedVerbEvents()", () => {
+    // The schema a compiled piece's result document carries, as the crate
+    // emits it: a verb's stream as a definition its field names, whose
+    // event declares a reference.
+    const resultSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        mention: { $ref: "#/$defs/t4" },
+        rename: {
+          asCell: ["stream"],
+          type: "object",
+          properties: { title: { type: "string" } },
+        },
+      },
+      $defs: {
+        t4: {
+          asCell: ["stream"],
+          type: "object",
+          properties: {
+            topic: {
+              asCell: ["cell"],
+              type: "object",
+              properties: { title: { type: "string" } },
+            },
+          },
+          required: ["topic"],
+        },
+      },
+    };
+
+    it("returns each stream's event, its own marker removed and the reference markers of its fields kept", () => {
+      const events = storedVerbEvents(resultSchema);
+
+      expect([...events.keys()].sort()).toEqual(["mention", "rename"]);
+      const mention = events.get("mention") as JSONSchema & object;
+      expect(mention.asCell).toBeUndefined();
+      expect(
+        (mention.properties as Record<string, { asCell?: unknown }>).topic
+          .asCell,
+      ).toEqual(["cell"]);
+      expect((events.get("rename") as JSONSchema & object).asCell)
+        .toBeUndefined();
+    });
+
+    it("returns no events for a result that carries no schema", () => {
+      expect(storedVerbEvents(undefined).size).toBe(0);
     });
   });
 });

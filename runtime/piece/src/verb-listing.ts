@@ -305,6 +305,42 @@ export function handlerVerbEvents(
 }
 
 /**
+ * The event schema of each stream a stored result schema declares, by the
+ * name of its result field: what `handlerVerbEvents` gives for a piece
+ * whose pattern is at hand, for a piece that has none, as a compiled
+ * piece, whose result document carries the schema of its result instead.
+ * A field is a stream where its schema, or the definition its `$ref`
+ * names, carries the `stream` marker; its event is that schema without the
+ * marker, self-contained as `handlerVerbEvents` gives it, `asCell` markers
+ * of its fields intact.
+ */
+export function storedVerbEvents(
+  resultSchema: JSONSchema | undefined,
+): Map<string, JSONSchema> {
+  const verbs = new Map<string, JSONSchema>();
+  if (!isSchemaObject(resultSchema)) return verbs;
+  const properties = resultSchema.properties;
+  if (!isObjectNotArray(properties)) return verbs;
+  for (const [name, field] of Object.entries(properties)) {
+    if (!isSchemaObject(field)) continue;
+    const resolved = typeof field.$ref === "string"
+      ? resolveCfcSchemaRefs(field, resultSchema)
+      : pruneCfcSchemaDefinitions(cfcSchemaWithInheritedDefs(
+        field as JSONSchema,
+        isObjectNotArray(resultSchema.$defs)
+          ? resultSchema.$defs as Record<string, JSONSchema>
+          : {},
+      ));
+    if (!isSchemaObject(resolved)) continue;
+    const marker = resolved.asCell;
+    if (!Array.isArray(marker) || !marker.includes("stream")) continue;
+    const { asCell: _stream, ...event } = resolved;
+    verbs.set(name, event as JSONSchema);
+  }
+  return verbs;
+}
+
+/**
  * Every verb a compiled pattern exposes, read from the pattern alone: its
  * declared result type, its result graph, and its declared argument type. No
  * cell is read, so a listing costs what loading the pattern costs, whatever
