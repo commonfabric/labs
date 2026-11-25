@@ -11,6 +11,7 @@ import {
 import type { Result, Unit } from "@commonfabric/memory/interface";
 import {
   resolveScopeKey,
+  type ScopeKey,
   type ScopeKeyIdentity,
   scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
@@ -41,12 +42,25 @@ const fromKey = (key: string): BaseMemoryAddress => {
   const separator = key.indexOf("\0");
   const scopeKey = key.slice(0, separator);
   const scope = scopeOfScopeKey(scopeKey);
+  // A key that names a session holds it after the id.
+  const end = key.indexOf("\0", separator + 1);
   return {
     ...(scope === "space" ? {} : { scope }),
-    id: key.slice(separator + 1) as BaseMemoryAddress["id"],
+    id: key.slice(
+      separator + 1,
+      end === -1 ? undefined : end,
+    ) as BaseMemoryAddress["id"],
     type: "application/json",
   };
 };
+
+/**
+ * Address a selector is tracked under: a document's, with the `session`
+ * instance its watch names where it names one (`ScopedWatchAddress`). Two
+ * watches of one document that name different sessions, or of which one names
+ * none, are tracked apart, so neither covers the other.
+ */
+export type TrackedAddress = BaseMemoryAddress & { sessionKey?: ScopeKey };
 
 // Only cache by identity against already-deep-frozen inputs. Mutable schemas
 // can be edited in place, and keying this cache by their identity would
@@ -104,15 +118,18 @@ export class SelectorTracker<T = Result<Unit, Error>> {
     this.#identity = identity;
   }
 
-  #toKey({ id, scope, scopeKey }: BaseMemoryAddress): string {
+  #toKey({ id, scope, scopeKey, sessionKey }: TrackedAddress): string {
     // An address that NAMES its instance (server-execution v2 stage A —
     // an instance-named load) keys by it; else the bound identity
     // resolves the scope name as before.
-    return `${scopeKey ?? resolveScopeKey(scope, this.#identity())}\0${id}`;
+    const key = `${
+      scopeKey ?? resolveScopeKey(scope, this.#identity())
+    }\0${id}`;
+    return sessionKey === undefined ? key : `${key}\0${sessionKey}`;
   }
 
   add(
-    address: BaseMemoryAddress,
+    address: TrackedAddress,
     selector: SchemaPathSelector,
     promise: Promise<T>,
   ) {
@@ -137,12 +154,12 @@ export class SelectorTracker<T = Result<Unit, Error>> {
     this.#selectorPromises.set(promiseKey, promise);
   }
 
-  has(address: BaseMemoryAddress): boolean {
+  has(address: TrackedAddress): boolean {
     return this.#refTracker.has(this.#toKey(address));
   }
 
   getSupersetSelector(
-    address: BaseMemoryAddress,
+    address: TrackedAddress,
     selector: SchemaPathSelector,
   ): [SchemaPathSelector?, Promise<T>?] {
     const selectorRefs = this.#refTracker.get(this.#toKey(address));
@@ -222,14 +239,14 @@ export class SelectorTracker<T = Result<Unit, Error>> {
     return noMatch;
   }
 
-  get(address: BaseMemoryAddress): IteratorObject<SchemaPathSelector> {
+  get(address: TrackedAddress): IteratorObject<SchemaPathSelector> {
     const selectorRefs = this.#refTracker.get(this.#toKey(address)) ?? [];
     return selectorRefs.values().map((selectorRef) =>
       this.#selectors.get(selectorRef)!
     );
   }
 
-  delete(address: BaseMemoryAddress, selector: SchemaPathSelector): void {
+  delete(address: TrackedAddress, selector: SchemaPathSelector): void {
     const selectorRef = selectorRefFor(selector);
     const key = this.#toKey(address);
     this.#selectorPromises.delete(`${key}?${selectorRef}`);

@@ -224,6 +224,63 @@ describe("SelectorTracker", () => {
 
       expect(existingSelector).toBeUndefined();
     });
+
+    it("returns no selector tracked for the same document under another session, or under none", () => {
+      const named = {
+        id: "of:session-selector-doc",
+        type: "application/json",
+        scope: "user",
+        scopeKey: "user:did%3Akey%3Aalice",
+      } as const;
+      const inSession = {
+        ...named,
+        sessionKey: "session:did%3Akey%3Aalice:s1",
+      } as const;
+      const { promise } = Promise.withResolvers<Result<Unit, Error>>();
+      const selector = {
+        path: [],
+        schema: { type: "object" },
+      } as const satisfies { path: string[]; schema: JSONSchema };
+
+      selectorTracker.add(inSession, selector, promise);
+
+      expect(selectorTracker.getSupersetSelector(inSession, selector)[0])
+        .toBeDefined();
+      expect(selectorTracker.getSupersetSelector(named, selector)[0])
+        .toBeUndefined();
+      expect(
+        selectorTracker.getSupersetSelector({
+          ...named,
+          sessionKey: "session:did%3Akey%3Aalice:s2",
+        }, selector)[0],
+      ).toBeUndefined();
+    });
+  });
+
+  describe("getAllSubscriptions", () => {
+    it("returns the document's id for a selector tracked under a session", () => {
+      const { promise } = Promise.withResolvers<Result<Unit, Error>>();
+
+      selectorTracker.add(
+        {
+          id: "of:session-selector-doc",
+          type: "application/json",
+          scope: "user",
+          scopeKey: "user:did%3Akey%3Aalice",
+          sessionKey: "session:did%3Akey%3Aalice:s1",
+        },
+        { path: [], schema: { type: "object" } },
+        promise,
+      );
+
+      expect(
+        selectorTracker.getAllSubscriptions().map(({ address }) => address),
+      ).toEqual([{
+        id: "of:session-selector-doc",
+        type: "application/json",
+        scope: "user",
+      }]);
+    });
   });
 
   describe("add", () => {

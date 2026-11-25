@@ -1871,9 +1871,9 @@ type AttributingPosition = {
  * Whether `context`'s traversal leaves a link of `scope` unfollowed: it
  * counts such links (`TraversalContext.onUnresolvedLinkScope`) and acts as a
  * principal with no session, which has no instance of a session-scoped
- * document. A memory server's walk of a root naming a `user` instance is
- * one. Every other traversal whose identity resolves no instance of a scope
- * fails where it builds the target's key.
+ * document. A memory server's walk of a root whose `entityScopeKeys` holds
+ * a `user` entry alone is one. Every other traversal whose identity resolves
+ * no instance of a scope fails where it builds the target's key.
  */
 function leavesLinkUnfollowed(
   context: TraversalContext,

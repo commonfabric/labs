@@ -1,0 +1,1 @@
+{"date": "2026-11-23", "from": {"k": "unit", "s": "memory", "n": "document-interests > resolves explicit instances before scope names and counts field watches"}, "to": {"k": "unit", "s": "memory", "n": "document-interests > counts a root by the scope of its document, whatever instances it names, and counts field watches"}}

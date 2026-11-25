@@ -1148,7 +1148,7 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
       /** The reading run's identity when it is not the manager's own
        * (server-execution v2 stage A — the runner's explicit-instance
        * read): the load NAMES that instance on the wire
-       * (`GraphQueryRoot.entityScopeKey`, lease-holder-only) and lands
+       * (`GraphQueryRoot.entityScopeKeys`, lease-holder-only) and lands
        * it in the replica under that instance's key. Absent (every
        * client, the OFF arm), the load resolves from the manager's own
        * session exactly as before. */
@@ -1241,10 +1241,19 @@ export interface IStorageProvider {
     /** The explicit scope INSTANCE to load (server-execution v2 stage A):
      * a serving runtime's per-instance read names an instance other than
      * the manager's own; the watch root then carries
-     * `entityScopeKey` (lease-holder-only on the wire) and the replica
+     * `entityScopeKeys` (lease-holder-only on the wire) and the replica
      * keys the arriving doc under that instance. Absent = the manager's
      * own instance, exactly as before. */
     instance?: ScopeKey,
+    /**
+     * The `session` instance of the reading run, for an instance-named load
+     * of a `user`-scoped document by a run that names a session. The watch
+     * root carries it as its `session` entry (protocol.md §2's read row), so
+     * a session-scoped link the memory server follows from the document
+     * resolves to it. The load is a watch of its own, apart from the same
+     * load for another session or for none.
+     */
+    session?: ScopeKey,
   ): Promise<Result<Unit, Error>>;
 
   /**

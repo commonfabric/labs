@@ -42,15 +42,18 @@ import {
 import type { MemorySpace, MIME, URI } from "../interface.ts";
 import { mapLinkSchemas } from "./schema-table-links.ts";
 import {
+  actingScopeKeyOf,
   canResolveScopeKey,
   type CellScope,
   type CommitClass,
+  entityScopeKeysProblem,
   type EntitySnapshot,
   getServerExecutionConfig,
   type GraphQuery,
   type GraphQueryRoot,
   identityOfScopeKey,
   isScopeKey,
+  namedRootInstance,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
@@ -179,6 +182,18 @@ export type SchemaRefScans = Map<
   QueryDocKey,
   { seq: number; refs: ReadonlySet<string> }
 >;
+
+/**
+ * Helper for the slowest-root record, which returns its `entityScopeKey`
+ * member: the instance `root` names for its own document, or no member where
+ * it names none.
+ */
+const slowestRootInstance = (
+  root: GraphQueryRoot,
+): { entityScopeKey?: ScopeKey } => {
+  const named = namedRootInstance(root);
+  return named === undefined ? {} : { entityScopeKey: named };
+};
 
 /**
  * The costliest single root of one query evaluation.
@@ -322,9 +337,7 @@ const chargeRootVisit = (
       stats.slowestRoot = {
         id: root.id,
         scope: root.scope ?? DEFAULT_SCOPE,
-        ...(root.entityScopeKey === undefined
-          ? {}
-          : { entityScopeKey: root.entityScopeKey }),
+        ...slowestRootInstance(root),
         path: root.selector.path.join("/"),
         ...(root.selector.schema === undefined ? {} : {
           schema: internSchemaAsTaggedHashString(root.selector.schema),
@@ -624,7 +637,7 @@ const evaluationQueryKey = (query: GraphQuery): string =>
       .map((root) => [
         root.id,
         root.scope ?? DEFAULT_SCOPE,
-        root.entityScopeKey ?? "",
+        namedRootInstance(root) ?? "",
         canonicalSelectorId(toDocumentSelector(root.selector)),
       ])
       .map((parts) => JSON.stringify(parts))
@@ -1170,10 +1183,22 @@ const rootDocKey = (
   space: string,
   root: GraphQuery["roots"][number],
   identity: ScopeKeyIdentity,
-): QueryDocKey =>
-  root.entityScopeKey !== undefined
-    ? `${space}/${root.entityScopeKey}/${root.id}`
+): QueryDocKey => {
+  const named = namedRootInstance(root);
+  return named !== undefined
+    ? `${space}/${named}/${root.id}`
     : toDocKey(space, root.id, root.scope ?? DEFAULT_SCOPE, identity);
+};
+
+/**
+ * Helper for the loads of a root's document, which returns the `scopeKey`
+ * member of its address: the instance the root names for it, or no member
+ * where it names none.
+ */
+const namedRootAddress = (root: GraphQueryRoot): { scopeKey?: ScopeKey } => {
+  const named = namedRootInstance(root);
+  return named === undefined ? {} : { scopeKey: named };
+};
 
 const entitiesFromTracker = (
   space: string,
@@ -2557,8 +2582,8 @@ export const syncCrossingsOf = (
  */
 export type GraphQueryPartition = {
   /**
-   * Scope instance whose identity walks the roots, or `undefined` for the
-   * querying session's own.
+   * Most specific scope instance of the identity that walks the roots, or
+   * `undefined` for the querying session's own.
    */
   instance: ScopeKey | undefined;
 
@@ -2571,50 +2596,47 @@ export type GraphQueryPartition = {
 
 /**
  * Helper for `partitionGraphQuery()`, which returns the scope instance whose
- * identity walks `root`: the one the root names (`entityScopeKey`), unless
- * that is `identity`'s own or names no identity, as the `space` instance
- * does.
+ * identity walks `root`: the most specific one its `entityScopeKeys` names
+ * (`actingScopeKeyOf()`), or `undefined` where the root carries none or the
+ * identity it names is `identity` itself.
  */
 const actingInstanceOf = (
   root: GraphQueryRoot,
   identity: ScopeKeyIdentity,
 ): ScopeKey | undefined => {
-  const named = root.entityScopeKey;
-  if (named === undefined || identityOfScopeKey(named) === undefined) {
-    return undefined;
-  }
-  const scope = scopeOfScopeKey(named);
-  return canResolveScopeKey(scope, identity) &&
-      resolveScopeKey(scope, identity) === named
+  const keys = root.entityScopeKeys;
+  if (keys === undefined) return undefined;
+  const acting = actingScopeKeyOf(keys);
+  const named = identityOfScopeKey(acting);
+  return named !== undefined && named.principal === identity.principal &&
+      named.sessionId === identity.sessionId
     ? undefined
-    : named;
+    : acting;
 };
 
 /**
- * Throws where `roots` holds one that names a scope instance of an identity
- * other than `identity`, the one a graph walks its roots under, or an
- * instance of a scope other than the one the root declares. Walked under
- * `identity`, either is recorded under another instance of the document as
- * well, which then counts as walked when it was not. `partitionGraphQuery()`
- * gives a root of the first kind a graph of its own.
+ * Throws where `roots` holds one whose `entityScopeKeys` is malformed
+ * (`entityScopeKeysProblem()`), or names the instances of an identity other
+ * than `identity`, the one a graph walks its roots under. Walked under
+ * `identity`, a root of the second kind is recorded under another instance
+ * of the document as well, which then counts as walked when it was not.
+ * `partitionGraphQuery()` gives such a root a graph of its own.
  */
 const assertRootsWalkedUnder = (
   roots: readonly GraphQueryRoot[],
   identity: ScopeKeyIdentity,
 ): void => {
   for (const root of roots) {
-    const named = root.entityScopeKey;
-    if (named === undefined) continue;
-    const declared = root.scope ?? DEFAULT_SCOPE;
-    if (scopeOfScopeKey(named) !== declared) {
+    if (root.entityScopeKeys === undefined) continue;
+    const problem = entityScopeKeysProblem(root);
+    if (problem !== undefined) {
       throw new Error(
-        `root \`${root.id}\` declares the \`${declared}\` scope and names ` +
-          `an instance of the \`${scopeOfScopeKey(named)}\` scope`,
+        `root \`${root.id}\` carries \`entityScopeKeys\`, and ${problem}`,
       );
     }
     if (actingInstanceOf(root, identity) !== undefined) {
       throw new Error(
-        `root \`${root.id}\` names a scope instance of another identity; ` +
+        `root \`${root.id}\` names the scope instances of another identity; ` +
           "split the query with `partitionGraphQuery()` and walk each part " +
           "under its identity",
       );
@@ -2624,14 +2646,14 @@ const assertRootsWalkedUnder = (
 
 /**
  * Splits `query` by the identity each of its roots is walked under, into at
- * least one partition. A root naming a scope instance (`entityScopeKey`,
- * protocol.md §2's read row) that is not `identity`'s own is walked under
- * the identity that instance belongs to, so a link followed from it resolves
- * to that identity's instances, as it does in a walk that identity's own
- * session runs. Every other root is walked under `identity`.
+ * least one partition. A root whose `entityScopeKeys` (protocol.md §2's read
+ * row) names the instances of an identity other than `identity` is walked
+ * under that identity, so a link followed from it resolves to the entry the
+ * root carries for the link's scope. Every other root is walked under
+ * `identity`.
  *
- * A `user` instance names a principal and no session, so the walk of a root
- * naming one follows no session-scoped link.
+ * A root carrying a `user` entry alone names a principal and no session, so
+ * its walk follows no session-scoped link.
  */
 export const partitionGraphQuery = (
   query: GraphQuery,
@@ -2803,9 +2825,7 @@ export const trackGraph = (
       const loaded = manager.load({
         id: root.id,
         scope: rootScope,
-        ...(root.entityScopeKey === undefined
-          ? {}
-          : { scopeKey: root.entityScopeKey }),
+        ...namedRootAddress(root),
         type: "application/json",
       });
       const rootKey = rootDocKey(space, root, identityOf(manager));
@@ -2815,9 +2835,7 @@ export const trackGraph = (
         address: {
           id: root.id,
           scope: rootScope,
-          ...(root.entityScopeKey === undefined
-            ? {}
-            : { scopeKey: root.entityScopeKey }),
+          ...namedRootAddress(root),
         },
         selector,
       });
@@ -2933,9 +2951,7 @@ export const extendTrackedGraph = (
         const address = {
           id: root.id,
           scope: rootScope,
-          ...(root.entityScopeKey === undefined
-            ? {}
-            : { scopeKey: root.entityScopeKey }),
+          ...namedRootAddress(root),
         };
         state.roots.set(referrer, { docKey: rootKey, address, selector });
         touched.add(rootKey);

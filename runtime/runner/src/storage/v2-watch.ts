@@ -48,6 +48,14 @@ type ScopedWatchAddress = {
   /** The explicit scope INSTANCE an instance-named load targets
    * (server-execution v2 stage A); absent = the session's own. */
   scopeKey?: ScopeKey;
+
+  /**
+   * The `session` instance the load names beside `scopeKey`, for a
+   * `user`-scoped document read by a run that names a session. It is part of
+   * the watch's identity: the same load for another session, or for none, is
+   * another watch.
+   */
+  sessionKey?: ScopeKey;
 };
 
 export const normalizeSyncSelector = (
@@ -253,6 +261,9 @@ export const compactWatchEntries = (
       path: [],
       scope: address.scope ?? "space",
       ...(address.scopeKey !== undefined ? { scopeKey: address.scopeKey } : {}),
+      ...(address.sessionKey !== undefined
+        ? { sessionKey: address.sessionKey }
+        : {}),
     };
     const [superset] = tracker.getSupersetSelector(
       baseAddress,
@@ -333,6 +344,7 @@ export const watchIdForEntry = (
     scope,
     selectorId,
     address.scopeKey,
+    address.sessionKey,
   ]);
   let id = watchIds.get(key);
   if (id === undefined) {
@@ -348,6 +360,11 @@ export const watchIdForEntry = (
         // hashed object when unnamed, so the OFF-arm id is byte-identical.
         ...(address.scopeKey !== undefined
           ? { scopeKey: address.scopeKey }
+          : {}),
+        // So is the session a load names beside it, and it is absent from
+        // the hashed object in the same way.
+        ...(address.sessionKey !== undefined
+          ? { sessionKey: address.sessionKey }
           : {}),
       })
     }`;

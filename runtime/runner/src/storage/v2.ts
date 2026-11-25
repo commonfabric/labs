@@ -56,6 +56,8 @@ import {
   type EntityDocument,
   type EntityIdListOptions,
   type EntityIdListResult,
+  type EntityScopeKeys,
+  entityScopeKeysOf,
   type EventAttentionResolveResult,
   type GenesisRoot,
   getCommitPreconditionsConfig,
@@ -4101,6 +4103,29 @@ export class StorageManager implements IStorageManager {
     return instance;
   }
 
+  /**
+   * The `session` instance an instance-named load of a `user`-scoped
+   * document names beside `instance` (protocol.md §2's read row): the reading
+   * run's own, where `identity` names a session, so that a session-scoped
+   * link the memory server follows from the document resolves to that
+   * session. Undefined for a load naming no instance, and for one naming a
+   * `session` instance, which is that entry itself.
+   */
+  #readerSessionKey(
+    scope: CellScope | undefined,
+    identity: ScopeKeyIdentity | undefined,
+    instance: ScopeKey | undefined,
+  ): ScopeKey | undefined {
+    if (instance === undefined || identity === undefined) return undefined;
+    if (
+      normalizeCellScope(scope) !== "user" ||
+      !canResolveScopeKey("session", identity)
+    ) {
+      return undefined;
+    }
+    return resolveScopeKey("session", identity);
+  }
+
   addCrossSpacePromise(promise: Promise<void>): void {
     this.#crossSpaceAdditions++;
     this.#crossSpacePromises.add(promise);
@@ -4426,6 +4451,11 @@ export class StorageManager implements IStorageManager {
     // (`#registerPendingLoad()`). Own-identity loads (every client, the
     // OFF arm) name nothing and take exactly the pre-stage-A path.
     const instance = this.#foreignInstanceKey(scope, options?.scopeKeyIdentity);
+    const session = this.#readerSessionKey(
+      scope,
+      options?.scopeKeyIdentity,
+      instance,
+    );
     const releaseLoad = this.#registerPendingLoad({
       space,
       scope: normalizeCellScope(scope),
@@ -4451,6 +4481,7 @@ export class StorageManager implements IStorageManager {
         },
         scope,
         instance,
+        session,
       );
       loadFailure = result.error;
       const schemaFailure = await this.#syncCfcSchemaDocument(
@@ -5283,7 +5314,11 @@ type RootWatches = {
   /** The address's doc key (`docKey()`). */
   key: string;
 
-  watches: Map<string, SchemaPathSelector>;
+  /**
+   * Each watch rooted at the document, by its id: the address it was asked
+   * under, which holds the session it names, and its selector.
+   */
+  watches: Map<string, [WatchAddress, SchemaPathSelector]>;
   pulledInPass: number;
 };
 
@@ -5294,6 +5329,9 @@ type ProviderSyncRequest = {
 
   /** The explicit instance an instance-named load targets (stage A). */
   instance?: ScopeKey;
+
+  /** The `session` instance the load names beside it. */
+  session?: ScopeKey;
 };
 
 type ProviderOperationSubscription = {
@@ -5338,14 +5376,15 @@ class Provider
 
   /**
    * Registered reads to replay when a provisional replica is replaced, keyed by
-   * document and then by the normalized selector. A normalized selector is
-   * either the shared rejecting selector or an interned canonical instance, and
-   * the entry holds it, so structurally equal selectors are the same object
-   * here and identity separates them exactly.
+   * document, then by the normalized selector, then by the `session` instance
+   * the read names, the empty string for one naming none. A normalized
+   * selector is either the shared rejecting selector or an interned canonical
+   * instance, and the entry holds it, so structurally equal selectors are the
+   * same object here and identity separates them exactly.
    */
   #syncRequests = new Map<
     string,
-    Map<SchemaPathSelector, ProviderSyncRequest>
+    Map<SchemaPathSelector, Map<string, ProviderSyncRequest>>
   >();
 
   #destroyed = false;
@@ -5428,6 +5467,7 @@ class Provider
     selector?: SchemaPathSelector,
     scope?: CellScope,
     instance?: ScopeKey,
+    session?: ScopeKey,
   ): Promise<Result<Unit, Error>> {
     // Externalization happens where requests enter, so request dedup, watch
     // ids, and session-resume replay all see one selector form.
@@ -5443,17 +5483,24 @@ class Provider
       requests = new Map();
       this.#syncRequests.set(key, requests);
     }
-    requests.set(normalizedSelector, {
+    let bySession = requests.get(normalizedSelector);
+    if (bySession === undefined) {
+      bySession = new Map();
+      requests.set(normalizedSelector, bySession);
+    }
+    bySession.set(session ?? "", {
       uri,
       selector: normalizedSelector,
       scope,
       ...(instance !== undefined ? { instance } : {}),
+      ...(session !== undefined ? { session } : {}),
     });
     return this.replica.sync(
       uri,
       normalizedSelector,
       scope,
       instance,
+      session,
     ) as Promise<
       Result<Unit, Error>
     >;
@@ -5500,8 +5547,9 @@ class Provider
     selector: SchemaPathSelector,
     scope?: CellScope,
     instance?: ScopeKey,
+    session?: ScopeKey,
   ): Promise<Result<Unit, PullError>> {
-    const result = await replica.sync(uri, selector, scope, instance);
+    const result = await replica.sync(uri, selector, scope, instance, session);
     if (result.error !== undefined || uri.startsWith("cid:")) {
       return result;
     }
@@ -5783,16 +5831,18 @@ class Provider
     for (const membership of this.#presenceMemberships) {
       membership.inner = undefined;
     }
-    previous.redirectOverlappingReadsTo((uri, selector, scope, instance) =>
-      this.#replaySync(replacement, uri, selector, scope, instance)
+    previous.redirectOverlappingReadsTo(
+      (uri, selector, scope, instance, session) =>
+        this.#replaySync(replacement, uri, selector, scope, instance, session),
     );
     previous.reset();
     previous.closeNow();
     const requests = [...this.#syncRequests.values()]
-      .flatMap((bySelector) => [...bySelector.values()]);
+      .flatMap((bySelector) => [...bySelector.values()])
+      .flatMap((bySession) => [...bySession.values()]);
     await Promise.all([
-      ...requests.map(({ uri, selector, scope, instance }) =>
-        this.#replaySync(replacement, uri, selector, scope, instance)
+      ...requests.map(({ uri, selector, scope, instance, session }) =>
+        this.#replaySync(replacement, uri, selector, scope, instance, session)
       ),
       ...[...this.#operationSubscriptions].map((subscription) =>
         this.#ensureOperationSubscription(subscription)
@@ -6054,6 +6104,12 @@ type WatchAddress = {
 
   /** The explicit instance an instance-named load targets (stage A). */
   scopeKey?: ScopeKey;
+
+  /**
+   * The `session` instance the load names beside it
+   * (`ScopedWatchAddress.sessionKey`).
+   */
+  sessionKey?: ScopeKey;
 };
 
 type SyncTask = {
@@ -6153,6 +6209,29 @@ type InFlightCommit = {
  * user-scoped read) keys by the scope NAME, exactly as before.
  */
 const docKey = (id: URI, instance: string): string => `${instance}\0${id}`;
+
+/**
+ * Helper for the watch a load sends, which returns the `entityScopeKeys`
+ * member of its root (protocol.md §2's read row): the scope instances of the
+ * identity `instance` belongs to, with `session` as its `session` entry
+ * where the load names one beside a `user` instance, or no member for a load
+ * that names no instance.
+ */
+const namedInstancesOf = (
+  instance: ScopeKey | undefined,
+  session: ScopeKey | undefined,
+): { entityScopeKeys?: EntityScopeKeys } => {
+  const identity = instance === undefined
+    ? undefined
+    : identityOfScopeKey(instance);
+  if (identity === undefined) return {};
+  const keys = entityScopeKeysOf(identity);
+  return {
+    entityScopeKeys: keys.session === undefined && session !== undefined
+      ? { ...keys, session }
+      : keys,
+  };
+};
 
 /** A local address the replica keys: the scope name plus, where the
  * caller knows it, the explicit instance key. */
@@ -6723,6 +6802,7 @@ export class SpaceReplica
       selector: SchemaPathSelector,
       scope?: CellScope,
       instance?: ScopeKey,
+      session?: ScopeKey,
     ) => Promise<Result<Unit, PullError>>)
     | undefined;
 
@@ -7005,6 +7085,7 @@ export class SpaceReplica
       selector: SchemaPathSelector,
       scope?: CellScope,
       instance?: ScopeKey,
+      session?: ScopeKey,
     ) => Promise<Result<Unit, PullError>>,
   ): void {
     this.#replacementRead = replacementRead;
@@ -7056,16 +7137,19 @@ export class SpaceReplica
     selector?: SchemaPathSelector,
     scope?: CellScope,
     instance?: ScopeKey,
+    session?: ScopeKey,
   ): Promise<Result<Unit, PullError>> {
     const replacementAtStart = this.#replacementRead;
     // An instance-named load (stage A) carries its instance on the pull
     // entry's address, so the watch root names it on the wire and the
-    // arriving doc keys under it; a plain load carries none.
+    // arriving doc keys under it; a plain load carries none. The session it
+    // names beside the instance rides with it.
     const address = {
       id: uri,
       type: DOCUMENT_MIME as MIME,
       scope,
       ...(instance !== undefined ? { scopeKey: instance } : {}),
+      ...(session !== undefined ? { sessionKey: session } : {}),
     };
     const result = await this.pull([[address, selector]]);
     const replacement = this.#replacementRead;
@@ -7075,6 +7159,7 @@ export class SpaceReplica
         normalizeSyncEntries([[address, selector]])[0][1],
         scope,
         instance,
+        session,
       );
     }
     return result;
@@ -7332,9 +7417,9 @@ export class SpaceReplica
         while (true) {
           const entries = new Map(this.#refusedPulls);
           for (const root of this.#rootWatches.values()) {
-            for (const selector of root.watches.values()) {
-              entries.set(watchIdForEntry(root.address, selector), [
-                root.address,
+            for (const [address, selector] of root.watches.values()) {
+              entries.set(watchIdForEntry(address, selector), [
+                address,
                 selector,
               ]);
             }
@@ -8901,6 +8986,8 @@ export class SpaceReplica
         // serialized; the PARTITION is unchanged: every keyless entry
         // still dedupes exactly as before).
         address.scopeKey ?? null,
+        // So is the session a load names beside it.
+        address.sessionKey ?? null,
       ]),
     );
     const existing = this.#syncTasks.get(key);
@@ -8927,6 +9014,9 @@ export class SpaceReplica
         scope: normalizeCellScope(address.scope),
         ...(address.scopeKey !== undefined
           ? { scopeKey: address.scopeKey }
+          : {}),
+        ...(address.sessionKey !== undefined
+          ? { sessionKey: address.sessionKey }
           : {}),
       };
       const [superset, supersetPromise] = this.#watchSelectorTracker
@@ -8970,6 +9060,9 @@ export class SpaceReplica
         ...(address.scopeKey !== undefined
           ? { scopeKey: address.scopeKey }
           : {}),
+        ...(address.sessionKey !== undefined
+          ? { sessionKey: address.sessionKey }
+          : {}),
       };
       // The tracker promise is what FUTURE pulls covered by these selectors
       // await: their data is available once THIS fetch lands, independent of
@@ -8981,7 +9074,7 @@ export class SpaceReplica
       );
       this.#rootWatchesOf(address).watches.set(
         watchIdForEntry(address, selector, ""),
-        selector,
+        [address, selector],
       );
     }
     this.#syncPromises.add(combinedPromise);
@@ -9010,6 +9103,9 @@ export class SpaceReplica
             scope: normalizeCellScope(address.scope),
             ...(address.scopeKey !== undefined
               ? { scopeKey: address.scopeKey }
+              : {}),
+            ...(address.sessionKey !== undefined
+              ? { sessionKey: address.sessionKey }
               : {}),
           };
           this.#watchSelectorTracker.delete(
@@ -9209,16 +9305,18 @@ export class SpaceReplica
       }
       released.push(root);
       this.#rootWatches.delete(root.key);
-      const baseAddress = {
-        id: root.address.id,
-        type: DOCUMENT_MIME,
-        scope: normalizeCellScope(root.address.scope),
-        ...(root.address.scopeKey !== undefined
-          ? { scopeKey: root.address.scopeKey }
-          : {}),
-      };
-      for (const [watchId, selector] of root.watches) {
-        this.#watchSelectorTracker.delete(baseAddress, selector);
+      for (const [watchId, [address, selector]] of root.watches) {
+        this.#watchSelectorTracker.delete({
+          id: address.id,
+          type: DOCUMENT_MIME,
+          scope: normalizeCellScope(address.scope),
+          ...(address.scopeKey !== undefined
+            ? { scopeKey: address.scopeKey }
+            : {}),
+          ...(address.sessionKey !== undefined
+            ? { sessionKey: address.sessionKey }
+            : {}),
+        }, selector);
         this.#refusedPulls.delete(watchId);
       }
     }
@@ -10056,9 +10154,7 @@ export class SpaceReplica
             // runtime's per-instance run). Own-identity loads name
             // nothing: byte-identical roots, the no-key admission fast
             // path.
-            ...(address.scopeKey !== undefined
-              ? { entityScopeKey: address.scopeKey }
-              : {}),
+            ...namedInstancesOf(address.scopeKey, address.sessionKey),
             selector,
           }],
         },

@@ -616,7 +616,7 @@ export class GraphQueryWalk {
    * The document records under `schemaTrackerKey` over the walk's identity
    * unless the caller passes `docKey`: a caller that named an explicit
    * scope INSTANCE (protocol.md §2's read row — a query root carrying
-   * `entityScopeKey`) records under THAT instance's key rather than one
+   * `entityScopeKeys`) records under THAT instance's key rather than one
    * resolved from the acting identity.
    *
    * The document's own record attributes to `referrer` through

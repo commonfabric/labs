@@ -1441,7 +1441,7 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   strips scope keys (pre-existing adjacencies, surfaced by the
   Phase-4 independent review's isolation trace): (i) the flag
   (`session-registry.ts` — set once when a session is admitted an
-  explicit `entity_scope_key` read, lease holders only) is never
+  `entityScopeKeys` read, lease holders only) is never
   retired, so a session that ONCE held the lease keeps its push
   applicable-set exemption — every instance's rows keep flowing to
   it — after the lease expires or hands over; (ii) the recovery

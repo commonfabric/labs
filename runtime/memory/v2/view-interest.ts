@@ -21,7 +21,7 @@ export function parseViewQuery(value: unknown): ViewQuery | null {
     if (
       !isPlainObject(root) || typeof root.id !== "string" ||
       root.id.length === 0 ||
-      root.entityScopeKey !== undefined ||
+      root.entityScopeKeys !== undefined ||
       (root.scope !== undefined && root.scope !== "space" &&
         root.scope !== "user" && root.scope !== "session") ||
       !isPlainObject(root.selector) || !Array.isArray(root.selector.path) ||

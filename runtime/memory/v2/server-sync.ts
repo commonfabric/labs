@@ -335,8 +335,8 @@ export type WatchGraphGroup = {
   identity: ScopeKeyIdentity;
 
   /**
-   * Scope instance that identity belongs to, or `undefined` where the roots
-   * are walked under the session's own.
+   * Most specific scope instance of that identity, or `undefined` where the
+   * roots are walked under the session's own.
    */
   instance: ScopeKey | undefined;
 
@@ -348,7 +348,7 @@ export type WatchGraphGroup = {
  * Groups the roots of the graph-query watches among `watches` into the graphs
  * a session of `identity` tracks them in, by graph key. A branch has one
  * graph for the roots walked under `identity`, keyed by the branch, and one
- * more for each scope instance of another identity that its roots name
+ * more for each other identity whose scope instances its roots name
  * (`partitionGraphQuery()`). The key of such a graph holds a NUL, which no
  * branch name does, so it is the key of no branch's own graph.
  */
@@ -404,12 +404,14 @@ const watchRootIdentity = (root: GraphQuery["roots"][number]): string =>
     root.selector.schema === undefined
       ? ""
       : internSchemaAsTaggedHashString(root.selector.schema),
-    // The explicit INSTANCE is query semantics like scope and path
-    // (protocol.md §2's read row): a changed `entityScopeKey` on the
+    // The instances a root names are query semantics like scope and path
+    // (protocol.md §2's read row): a changed `entityScopeKeys` on the
     // same watch id must compare as a CHANGED spec, or watch.add keeps
-    // silently tracking the old instance. `null` for the (universal)
+    // silently tracking the old instances. `null` for the (universal)
     // keyless case, so OFF-arm identities stay pairwise-identical.
-    root.entityScopeKey ?? null,
+    root.entityScopeKeys === undefined
+      ? null
+      : [root.entityScopeKeys.user, root.entityScopeKeys.session ?? null],
   ]);
 
 const watchQueryIdentity = (watch: WatchSpec): string =>

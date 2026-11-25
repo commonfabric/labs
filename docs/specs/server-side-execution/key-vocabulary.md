@@ -91,8 +91,8 @@ not coin flip:
 - **`scope_key` is now WIRE vocabulary, so it cannot stay
   engine-internal.** Under the model, server-driven commits carry
   explicit keys inside — addressing per scoped write, attribution per
-  action run (protocol.md §1/§7) — and a serving runtime's reads name
-  `entity_scope_key` on the wire (protocol.md §2). A format both
+  action run (protocol.md §1/§7) — and a serving runtime's reads carry
+  `entityScopeKeys` on the wire (protocol.md §2). A format both
   endpoints speak on the wire is protocol vocabulary by construction.
   Its home is the wire-shape module — `runtime/memory/v2.ts`, where
   `CellScope`, `SessionId`, and the other protocol types already live
@@ -179,11 +179,12 @@ resolving `scope` against its identity. The vocabulary:
   instance, id) — `shouldPullDoc(…, identity)`), the traversal's
   absent-target kick (`Runtime.ensureLinkedDocLoaded(link, space,
   identity)`), and the served event's presync/preflight as the
-  event's actor. The watch root carries `entityScopeKey` (protocol.md
+  event's actor. The watch root carries `entityScopeKeys` (protocol.md
   §2's read row — a serving runtime's session, exactly who issues one), the
   watch id and the selector tracker (`SelectorTracker.#toKey`,
   `watchIdForEntry`, the pull dedupe key, the provider's replay map)
-  key by the instance, and the pending-load ledger keys the address
+  key by the instance and by the session a load names beside it, and the
+  pending-load ledger keys the address
   with it (the event preflight's park cross-matches per instance).
 - **Wire** — `SessionSyncUpsert.scopeKey` / `SessionSyncRemove.scopeKey`
   / `EntitySnapshot.scopeKey` (`runtime/memory/v2.ts`), populated

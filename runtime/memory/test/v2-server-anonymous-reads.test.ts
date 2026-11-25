@@ -57,7 +57,7 @@ describe("Server", () => {
               {
                 id: "of:profile",
                 scope: "user",
-                entityScopeKey: "user:alice",
+                entityScopeKeys: { user: "user:alice" },
                 selector: { path: [], schema: false },
               },
               {
@@ -71,7 +71,7 @@ describe("Server", () => {
 
         expect(queried.error).toEqual({
           name: "ProtocolError",
-          message: "read naming an entity_scope_key rejected: the requester " +
+          message: "read carrying `entityScopeKeys` rejected: the requester " +
             "is not the deployment's service identity and does not serve " +
             "this space on this memory server (protocol.md §2's read row)",
         });

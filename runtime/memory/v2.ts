@@ -1969,19 +1969,129 @@ export type GraphQueryRoot = {
   scope?: CellScope;
 
   /**
-   * The explicit scope INSTANCE this read names (protocol.md §2's read
-   * row; the read half of §1's transaction identity model, ledger LD5).
-   * The ONE read-side addition to the wire: admissible only for a live
-   * lease holder on the co-hosted memory server — a non-holder naming one
-   * is REJECTED — and a read naming none resolves from the authenticated
-   * session as today (the shared `resolveScopeKey`). Exists because a
-   * SpaceServer reading under its service envelope would otherwise
-   * silently resolve `user:<serviceDID>` — an empty instance, not an
-   * error (the silent-empty-instance trap).
+   * The scope instances this read names (protocol.md §2's read row; the
+   * read half of §1's transaction identity model, ledger LD5): the root's
+   * document is read at the entry for its scope, and a scoped link the
+   * traversal follows resolves to the entry for the link's scope. The ONE
+   * read-side addition to the wire. The memory server honors it for the
+   * sessions that row lists and refuses the request of any other; a root
+   * carrying none resolves from the authenticated session (the shared
+   * `resolveScopeKey`). Exists because a SpaceServer reading under its
+   * service envelope would otherwise silently resolve `user:<serviceDID>`
+   * — an empty instance, not an error (the silent-empty-instance trap).
    */
-  entityScopeKey?: ScopeKey;
+  entityScopeKeys?: EntityScopeKeys;
 
   selector: SchemaPathSelector;
+};
+
+/**
+ * Scope instances a query root names for the traversal from it (protocol.md
+ * §2's read row), by scope: where the root's own document is read, and where
+ * each scoped link the traversal follows resolves to. A link whose scope has
+ * no entry is not followed.
+ */
+export type EntityScopeKeys = {
+  /** Instance a `user`-scoped document resolves to. */
+  user: ScopeKey;
+
+  /**
+   * Instance a `session`-scoped document resolves to, of the same principal
+   * as `user`. Without it the traversal follows no session-scoped link.
+   */
+  session?: ScopeKey;
+};
+
+/**
+ * Returns the scope instance `root` names for its own document, or
+ * `undefined` where it names none: a root carrying no `entityScopeKeys`, or
+ * one whose document is `space`-scoped.
+ */
+export const namedRootInstance = (
+  root: Pick<GraphQueryRoot, "scope" | "entityScopeKeys">,
+): ScopeKey | undefined => {
+  const keys = root.entityScopeKeys;
+  if (keys === undefined) return undefined;
+  switch (root.scope ?? "space") {
+    case "space":
+      return undefined;
+    case "user":
+      return keys.user;
+    case "session":
+      return keys.session;
+  }
+};
+
+/**
+ * Returns the most specific scope instance `keys` names: its `session`
+ * entry where it holds one, and its `user` entry otherwise. The identity
+ * that instance belongs to (`identityOfScopeKey()`) resolves each scope to
+ * the entry `keys` holds for it, and resolves no instance of a scope `keys`
+ * holds no entry for.
+ */
+export const actingScopeKeyOf = (keys: EntityScopeKeys): ScopeKey =>
+  keys.session ?? keys.user;
+
+/**
+ * Returns the `entityScopeKeys` naming `identity`'s instances: its `user`
+ * instance, and its `session` instance where it names a session. Throws
+ * where `identity` names no principal.
+ */
+export const entityScopeKeysOf = (
+  identity: ScopeKeyIdentity,
+): EntityScopeKeys => ({
+  user: resolveScopeKey("user", identity),
+  ...(identity.sessionId
+    ? { session: resolveScopeKey("session", identity) }
+    : {}),
+});
+
+/**
+ * Returns what is wrong with the `entityScopeKeys` `root` carries, as a
+ * clause for an error message, or `undefined` where it carries none or a
+ * well-formed one. A well-formed one is a plain object holding a canonical
+ * `user` scope key under `user`, at most one other entry, a canonical
+ * `session` scope key of the same principal under `session`, and the entry
+ * for the scope of the root's document. The value is read as it arrived
+ * from a decode, so nothing about its shape is assumed.
+ */
+export const entityScopeKeysProblem = (
+  root: { scope?: CellScope; entityScopeKeys?: unknown },
+): string | undefined => {
+  const keys = root.entityScopeKeys;
+  if (keys === undefined) return undefined;
+  if (!isPlainObject(keys)) return "it is not a record";
+  for (const name of Object.keys(keys)) {
+    if (name !== "user" && name !== "session") {
+      return `it holds an entry for \`${name}\``;
+    }
+  }
+  const { user, session } = keys;
+  if (
+    typeof user !== "string" || !isScopeKey(user) ||
+    scopeOfScopeKey(user) !== "user"
+  ) {
+    return "its `user` entry is not a canonical `user` scope key";
+  }
+  if (session !== undefined) {
+    if (
+      typeof session !== "string" || !isScopeKey(session) ||
+      scopeOfScopeKey(session) !== "session"
+    ) {
+      return "its `session` entry is not a canonical `session` scope key";
+    }
+    if (
+      identityOfScopeKey(session)?.principal !==
+        identityOfScopeKey(user)?.principal
+    ) {
+      return "its `user` and `session` entries name different principals";
+    }
+  }
+  if ((root.scope ?? "space") === "session" && session === undefined) {
+    return "it holds no `session` entry for the root's `session`-scoped " +
+      "document";
+  }
+  return undefined;
 };
 
 export type GraphQuery = {
@@ -2001,7 +2111,7 @@ export type EntitySnapshot = {
   /**
    * The scope INSTANCE this snapshot is of (server-execution v2 stage A,
    * OW17's wire leg): present ONLY in responses to a lease-holder session
-   * that named explicit instances (`GraphQueryRoot.entityScopeKey`), so
+   * that named explicit instances (`GraphQueryRoot.entityScopeKeys`), so
    * two instances of one (branch, id, scope) — which such a session may
    * legitimately hold at once — stay distinguishable. Every other
    * session's responses carry scope NAMES only and resolve instances from
@@ -2084,7 +2194,7 @@ export type SessionSyncUpsert = {
    * OW17's wire leg — the ONE write-side addition to the frame shape).
    * Populated ONLY on frames to a session whose lease-holder read
    * exemption is live (`SessionState.leaseHolderReads`, armed by an
-   * admitted `entityScopeKey` read — protocol.md §2's read row): that
+   * admitted `entityScopeKeys` read — protocol.md §2's read row): that
    * session legitimately receives EVERY instance it serves, including
    * two instances of one (branch, id, scope), which the scope NAME alone
    * cannot distinguish. Every other session's frames carry names only
