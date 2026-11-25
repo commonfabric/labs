@@ -3341,8 +3341,7 @@ export class CellImpl<T extends FabricValue>
         newValue,
         this.#frame?.cause,
         undefined,
-        // The cast is the event path's above (`TODO(danfuzz)`: constrain `T`).
-        frameAnchorIds(this.#frame, newValue as CellLinkInput),
+        frameAnchorIds(this.#frame, newValue),
       );
 
       // The value at `writeLink` is now the one supplied here, whatever the
@@ -6153,7 +6152,7 @@ function validateStaticData(value: unknown): void {
  */
 export function frameAnchorIds(
   frame: Frame | undefined,
-  written: CellLinkInput,
+  written: unknown,
   extending?: readonly unknown[],
 ): (() => string | number) | undefined {
   if (frame === undefined) return undefined;
@@ -6165,16 +6164,24 @@ export function frameAnchorIds(
   // Seeded from the write, every runtime running the node mints the same
   // documents for the same write (speculation.md §2), and a write of
   // anything else mints documents of its own. What is hashed is the write in
-  // the form it is stored in, cells as links and a `Date` as its instant, since
-  // `createRef` reads a raw `Date` as `{}`. It is hashed once, on the first
-  // element anchored.
+  // the form it is stored in: builder artifacts flattened as the write path
+  // flattens them (`diffAndUpdate()`), cells as links and a `Date` as its
+  // instant, since `createRef` reads a raw `Date` as `{}`. It is hashed once,
+  // on the first element anchored.
   let writeId: string | undefined;
   let count = 0;
   return () => {
     writeId ??= toURI(
       createRef(
         {
-          write: convertCellsToLinks(written),
+          // The flattened write is a `CellLinkInput` that the type of
+          // `flattenBuilderArtifacts()` cannot state; `convertCellsToLinks()`
+          // vets what it walks, and refuses what is not.
+          write: convertCellsToLinks(
+            flattenBuilderArtifacts(written, {
+              isLeaf: isCellResultForDereferencing,
+            }) as CellLinkInput,
+          ),
           ...(extending === undefined ? {} : { extending }),
         },
         frame.cause,

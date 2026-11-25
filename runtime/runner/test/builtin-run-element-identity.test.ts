@@ -24,7 +24,7 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 const signer = await Identity.fromPassphrase("builtin run element identity");
 const space = signer.did();
 
-type Seen = { word: string; at?: Date };
+type Seen = { word: string; at?: Date; piece?: unknown };
 
 /**
  * A builtin that keeps a list of words in a store of its own, and on each run
@@ -77,6 +77,11 @@ const BUILTINS = {
   // to hold that word alone.
   stamped_word: wordBuiltin((list, word) =>
     list.set([{ word: "stamp", at: new Date(Number(word)) }])
+  ),
+  // Every word with the piece that wrote it, in one object: rewrites the list
+  // to hold that word alone, the piece in its stored form.
+  word_with_piece: wordBuiltin((list, word) =>
+    list.set([{ word, piece: buildPiece("seen_words") }])
   ),
   // Every word with an echo of it each time it comes: rewrites the list with
   // both after the old ones, in one write.
@@ -248,6 +253,15 @@ describe("builtin-run-element-identity", () => {
     const seen = storeOf(result).key("seen").get()!;
     expect(seen.map((entry) => entry.word)).toEqual(["first", "first!"]);
     expect(new Set(elementIds(result)).size).toBe(2);
+  });
+
+  it("writes an object holding a pattern to a document of its own", async () => {
+    const runtime = openRuntime();
+    const { result } = await start(runtime, "first", "word_with_piece");
+
+    expect(storeOf(result).key("seen").get()!.map((entry) => entry.word))
+      .toEqual(["first"]);
+    expect(elementIds(result)).toHaveLength(1);
   });
 
   it("keeps an object an earlier run wrote when a later run writes one that differs only in a date", async () => {
