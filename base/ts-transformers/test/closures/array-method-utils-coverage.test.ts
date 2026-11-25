@@ -340,6 +340,30 @@ Deno.test("analyzeElementBinding reads a computed key nested in an array element
   assertEquals(template.argumentExpression.text, "1");
 });
 
+Deno.test("analyzeElementBinding reads a computed key nested in an array pattern under a rest element from the element the rest starts at", () => {
+  // A rest element at index 1 holds the items from index 1 on, so the first
+  // item of the array pattern nested in it is `element[1]`, and `chosen` is
+  // `element[1][k]`.
+  const { sourceFile, checker } = createProgram(
+    "declare const k: string;\n" +
+      "const f = ([first, ...[{ [k]: chosen }]]) => chosen;",
+  );
+  const analysis = analyzeElementBinding(
+    firstArrowParam(sourceFile),
+    new Map(),
+    testContext(checker),
+    new Set<string>(),
+    passthroughBindingId,
+  );
+  assertEquals(analysis.computedAliases.length, 1);
+  const [alias] = analysis.computedAliases;
+  assertEquals(alias.path, ["1"]);
+  const template = alias.baseTemplate;
+  assert(template && ts.isElementAccessExpression(template));
+  assert(ts.isNumericLiteral(template.argumentExpression));
+  assertEquals(template.argumentExpression.text, "1");
+});
+
 Deno.test("analyzeElementBinding drops nested object patterns that hold only a computed key inside an object", () => {
   // The inner `{ [k]: chosen }` yields no residual, so its walk returns
   // undefined and the enclosing object property is skipped entirely.

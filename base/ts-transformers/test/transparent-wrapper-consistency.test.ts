@@ -38,6 +38,35 @@ const TSX_SPELLINGS: Readonly<Record<string, (inner: string) => string>> = {
   "non-null": (inner) => `(${inner})!`,
 };
 
+/**
+ * The value each emitted `__cfLift_N(...)` call captures under `name`, queried
+ * from the parsed output rather than matched against printed text, per this
+ * directory's "assert on structure, not printed text" convention. One entry
+ * per lift that captures `name`.
+ */
+function liftCaptureValues(root: ts.SourceFile, name: string): ts.Expression[] {
+  const values: ts.Expression[] = [];
+  for (const call of callsMatching(root, /^__cfLift_\d+$/)) {
+    const captures = call.arguments[0];
+    if (!captures || !ts.isObjectLiteralExpression(captures)) continue;
+    for (const property of captures.properties) {
+      if (
+        ts.isShorthandPropertyAssignment(property) &&
+        property.name.text === name
+      ) {
+        values.push(property.name);
+      }
+      if (
+        ts.isPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) && property.name.text === name
+      ) {
+        values.push(property.initializer);
+      }
+    }
+  }
+  return values;
+}
+
 describe("transparent wrapper consistency", () => {
   describe("action() callback lowering", () => {
     // `action()` throws when it reaches the runtime — it exists only to be
@@ -239,34 +268,6 @@ describe("transparent wrapper consistency", () => {
       }));
     `;
 
-    /** The value each emitted lift captures under `obj`, queried from the
-     *  parsed output rather than matched against printed text, per this
-     *  directory's "assert on structure, not printed text" convention. Both
-     *  lifts in the source capture `obj` — the `a` projection for `x`, and
-     *  the value under test for `y` — so two entries come back. */
-    const objCaptureValues = (root: ts.SourceFile): ts.Expression[] => {
-      const values: ts.Expression[] = [];
-      for (const call of callsMatching(root, /^__cfLift_\d+$/)) {
-        const captures = call.arguments[0];
-        if (!captures || !ts.isObjectLiteralExpression(captures)) continue;
-        for (const property of captures.properties) {
-          if (
-            ts.isShorthandPropertyAssignment(property) &&
-            property.name.text === "obj"
-          ) {
-            values.push(property.name);
-          }
-          if (
-            ts.isPropertyAssignment(property) &&
-            ts.isIdentifier(property.name) && property.name.text === "obj"
-          ) {
-            values.push(property.initializer);
-          }
-        }
-      }
-      return values;
-    };
-
     for (const [name, receiver] of Object.entries(RECEIVERS)) {
       it(`captures only the field read behind a ${name} receiver`, async () => {
         const root = parseModule(
@@ -274,7 +275,7 @@ describe("transparent wrapper consistency", () => {
             types: COMMONFABRIC_TYPES,
           }),
         );
-        const values = objCaptureValues(root);
+        const values = liftCaptureValues(root, "obj");
 
         expect(values.length).toBeGreaterThan(0);
         // The bug shape: the whole object captured as a bare identifier.
@@ -289,12 +290,55 @@ describe("transparent wrapper consistency", () => {
         "/m.ts": source("(<S>obj)"),
       }, { types: COMMONFABRIC_TYPES });
       const root = parseModule(output["/m.ts"]!, ts.ScriptKind.TS);
-      const values = objCaptureValues(root);
+      const values = liftCaptureValues(root, "obj");
 
       expect(values.length).toBeGreaterThan(0);
       expect(values.some((value) => ts.isIdentifier(value))).toBe(false);
       expect(hasKeyPathRead(root, "b", "obj")).toBe(true);
     });
+  });
+
+  describe("method call captures", () => {
+    // A call through a wrapped callee, such as `(c.get)()`, is still a method
+    // call: the wrapper keeps the reference, so `get` runs with `c` as `this`.
+    // A lift whose body makes that call has to capture the receiver `c`, as it
+    // does for `c.get()`. Capturing the callee `c.get` instead hands the lift
+    // `c.key("get")`, which has no `get` method to call.
+
+    const CALLEES: Readonly<Record<string, string>> = {
+      bare: "c.get",
+      parenthesized: "(c.get)",
+      "non-null": "c.get!",
+      "as-cast": "(c.get as () => number)",
+      satisfies: "(c.get satisfies () => number)",
+    };
+
+    const source = (callee: string) =>
+      `      import { computed, ifElse, pattern, Writable } from "commonfabric";
+      export default pattern<{ c: Writable<number>; flag: boolean }>(
+        ({ c, flag }) => ({
+          inComputed: computed(() => ${callee}() + 1),
+          inIfElse: ifElse(flag, ${callee}(), 0),
+        }),
+      );
+    `;
+
+    for (const [name, callee] of Object.entries(CALLEES)) {
+      it(`captures the receiver of a ${name} \`.get\` callee`, async () => {
+        const root = parseModule(
+          await transformSource(source(callee), {
+            types: COMMONFABRIC_TYPES,
+          }),
+        );
+        const values = liftCaptureValues(root, "c");
+
+        expect(values.length).toBe(2);
+        expect(
+          values.every((value) => ts.isIdentifier(value) && value.text === "c"),
+        ).toBe(true);
+        expect(hasKeyPathRead(root, "get")).toBe(false);
+      });
+    }
   });
 
   describe("normalizeDataFlows()", () => {

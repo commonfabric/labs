@@ -12,7 +12,7 @@ import {
   classifyReactiveContext,
   type ReactiveContextLookup,
 } from "./reactive-context.ts";
-import { getExpressionText } from "./utils.ts";
+import { getExpressionText, isMethodCall } from "./utils.ts";
 
 export interface NormalizedDataFlow {
   readonly canonicalKey: string;
@@ -252,17 +252,11 @@ export function normalizeDataFlows(
 
       // Also handle property access when it's being called as a method
       // e.g., when we see state.user.name.toUpperCase (without the call),
-      // but it's the callee of a call expression
-      if (ts.isPropertyAccessExpression(current)) {
-        if (
-          current.parent &&
-          ts.isCallExpression(current.parent) &&
-          current.parent.expression === current
-        ) {
-          // This property is being called as a method
-          current = current.expression;
-          continue;
-        }
+      // but it's the callee of a call expression, or of one through a
+      // transparent wrapper such as `(state.user.name.toUpperCase)()`
+      if (ts.isPropertyAccessExpression(current) && isMethodCall(current)) {
+        current = current.expression;
+        continue;
       }
 
       // That's it! Keep all other meaningful distinctions:

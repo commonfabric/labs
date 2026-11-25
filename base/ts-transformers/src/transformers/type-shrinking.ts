@@ -32,7 +32,7 @@ import {
 } from "../ast/type-building.ts";
 import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
-import { uniquePaths } from "../utils/path-serialization.ts";
+import { encodePath, uniquePaths } from "../utils/path-serialization.ts";
 import type {
   CapabilityParamDefault,
   CapabilityParamSummary,
@@ -1495,7 +1495,7 @@ function getScopedCell(
  * A scope wrapper around a cell, taken apart: its name, its cell, the `null`
  * or `undefined` beside the cell inside it, and its type.
  */
-interface ScopedCellParts {
+export interface ScopedCellParts {
   readonly name: string;
   readonly cell: ts.TypeNode;
   readonly nullish: readonly ts.TypeNode[];
@@ -1534,14 +1534,14 @@ function scopedCellNode(
 }
 
 /**
- * Helper for `applyCellCapabilityPathsToTypeNode()`, which returns the parts
- * of a scope wrapper around a cell that `node` holds, as `scopedCellNode()`
- * does, or, for a print of one, its cell printed afresh from its type. The
+ * Returns the parts of a scope wrapper around a cell that `node` holds, as
+ * `scopedCellNode()` does, or, for a print of one, its cell printed afresh
+ * from its type. The
  * print of an `optional` property's type holds the `undefined` its
  * optionality adds, which the parts leave out, as the property is written
  * without it.
  */
-function scopedCellParts(
+export function scopedCellParts(
   node: ts.TypeNode,
   optional: boolean,
   checker: ts.TypeChecker,
@@ -1552,24 +1552,52 @@ function scopedCellParts(
 ): ScopedCellParts | undefined {
   const printedType = state?.printedFrom(node);
   if (!printedType) return scopedCellNode(node, checker, typeRegistry);
-  const scoped = getScopedCell(printedType, checker);
+  return scopedCellPartsOfType(
+    printedType,
+    optional,
+    checker,
+    sourceFile,
+    factory,
+    typeRegistry,
+    state,
+  );
+}
+
+/**
+ * Returns the parts of the scope wrapper around a cell that `type` is, with its
+ * cell and the `null` or `undefined` beside it printed from the type, or
+ * `undefined` for any other type. This reads a scoped cell no node writes the
+ * wrapper of: a print of one, or an alias such as
+ * `type MyState = PerUser<Writable<number>>`. An `optional` property's type
+ * holds the `undefined` its optionality adds, which the parts leave out.
+ */
+export function scopedCellPartsOfType(
+  type: ts.Type,
+  optional: boolean,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ScopedCellParts | undefined {
+  const scoped = getScopedCell(type, checker);
   if (!scoped) return undefined;
-  const print = (type: ts.Type) =>
+  const print = (printable: ts.Type) =>
     typeToTypeNodeWithRegistry(
-      type,
+      printable,
       { checker, factory, sourceFile, state },
       typeRegistry,
     );
   const nullish = optional
-    ? scoped.nullish.filter((type) =>
-      (type.flags & ts.TypeFlags.Undefined) === 0
+    ? scoped.nullish.filter((member) =>
+      (member.flags & ts.TypeFlags.Undefined) === 0
     )
     : scoped.nullish;
   return {
     name: scoped.name,
     cell: print(scoped.cell),
     nullish: nullish.map(print),
-    type: printedType,
+    type,
   };
 }
 
@@ -1580,7 +1608,7 @@ function scopedCellParts(
  * the scope from the wrapper's name, and reads the cell from `node`, keeping
  * any narrowing it carries.
  */
-function wrapScopedCell(
+export function wrapScopedCell(
   node: ts.TypeNode,
   scoped: ScopedCellParts,
   factory: ts.NodeFactory,
@@ -2548,9 +2576,22 @@ function getArrayElementTypeNode(
 }
 
 /**
+ * An array element `validateShrinkCoverage()` handed paths down to, with
+ * those paths encoded, so that an element leading back to an array already
+ * handed the same paths (`type A = A[][]`) is not descended into again.
+ */
+interface ElementDescent {
+  readonly type: ts.Type;
+  readonly paths: string;
+}
+
+/**
  * After shrinking, validates that the requested property paths were actually
  * materialized. Reports a diagnostic when the base type is too narrow or
  * `unknown`/`any` and property accesses cannot resolve.
+ *
+ * `descents` lists the array elements this validation has already handed
+ * paths down to, on the way to `baseType`.
  */
 export function validateShrinkCoverage(
   paramSummary: CapabilityParamSummary,
@@ -2561,6 +2602,7 @@ export function validateShrinkCoverage(
   context: TransformationContext,
   fnNode: ts.Node,
   checker: ts.TypeChecker,
+  descents: readonly ElementDescent[] = [],
 ): void {
   if (paths.length === 0 && !paramSummary.wildcard) return;
 
@@ -2632,22 +2674,34 @@ export function validateShrinkCoverage(
 
   // A path whose head the array type itself has, such as a member of an
   // object the array is intersected with, is checked against the array, and
-  // every other path against its element. An array whose element is the array
-  // itself, as `type R = R[]` declares, would hand its paths to its element
-  // without end, so they are checked against the array.
+  // every other path against its element. An element that leads back to the
+  // array, as in `type R = R[]` or `type A = A[][]`, would be handed the same
+  // paths without end, since a path whose head is no index reaches the element
+  // unchanged; where the element is the array, or was already handed these
+  // paths on the way here, they are checked against the array.
   const elementType = nonNullableBaseType &&
       isArrayShapeType(nonNullableBaseType, checker)
     ? getArrayElementType(nonNullableBaseType, checker)
     : nonNullableBaseType;
-  if (nonNullableBaseType && elementType !== nonNullableBaseType) {
-    const isArrayRootPath = (path: readonly string[]) =>
-      isArrayRootOnlyPath(path) ||
-      (path[0] !== undefined && !isNumericPathSegment(path[0]) &&
-        typeHasHead(nonNullableBaseType, path[0], checker));
+  const isArrayRootPath = (path: readonly string[]) =>
+    isArrayRootOnlyPath(path) ||
+    (path[0] !== undefined && !isNumericPathSegment(path[0]) &&
+      !!nonNullableBaseType &&
+      typeHasHead(nonNullableBaseType, path[0], checker));
+  const arrayItemPaths = getArrayItemPaths(
+    paths.filter((path) => !isArrayRootPath(path)),
+  );
+  const descent = elementType && {
+    type: elementType,
+    paths: arrayItemPaths.map(encodePath).sort().join("\n"),
+  };
+  if (
+    nonNullableBaseType && descent && elementType !== nonNullableBaseType &&
+    !descents.some((earlier) =>
+      earlier.type === descent.type && earlier.paths === descent.paths
+    )
+  ) {
     const arrayRootPaths = uniquePaths(paths.filter(isArrayRootPath));
-    const arrayItemPaths = getArrayItemPaths(
-      paths.filter((path) => !isArrayRootPath(path)),
-    );
 
     if (arrayItemPaths.length > 0) {
       const elementTypeNode = getArrayElementTypeNode(
@@ -2672,6 +2726,7 @@ export function validateShrinkCoverage(
         context,
         fnNode,
         checker,
+        [...descents, descent],
       );
     }
 

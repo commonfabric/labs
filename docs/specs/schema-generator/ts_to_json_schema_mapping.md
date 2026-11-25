@@ -325,7 +325,21 @@ other consumers read is untouched. A member a homomorphic mapped type such as
 `Pick`, `Omit`, `Partial` or `Readonly` makes keeps the declaration of the
 member it maps, and is read as that declaration reads it where the mapping
 leaves its value as declared: a named member type stays a `$ref`, and the
-`undefined` an optional member's `?` adds stays out of it. A property several
+`undefined` an optional member's `?` adds stays out of it. A mapped type whose
+template changes a member's type, as `{ [K in keyof T]: T[K] | string }` does
+to every member, keeps that declaration too, but it no longer says what the
+member's type is, so such a member is read as its type: a `Cell<number>`
+member widened by `| string` emits both arms in an `anyOf`. Each member is
+judged on its own, by whether its type is the type its declaration writes,
+give or take the `undefined` a `?` adds or a `-?` takes away: a conditional
+template that unwraps cell members leaves every other member read through its
+declaration, scope and default included, and a mapped type around another,
+as `Partial<Loose<T>>`, is judged by the type the outer one gives. A
+declaration written in type parameters is read under the type arguments the
+mapped type's source gives the type it is declared on, so `w: PerSession<T>`
+in `Readonly<Row<null>>` keeps its scope (`declarationDescribesMember()` in
+`type-utils.ts`;
+`test/object-formatter.test.ts`). A property several
 members of an intersection or a union declare has no one declaration to read
 it as, and is read as its type, the `undefined` its `?` adds left out.
 `Partial<Foo>` and `Required<Foo>` map

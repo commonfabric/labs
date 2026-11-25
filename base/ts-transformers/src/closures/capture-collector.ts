@@ -170,12 +170,27 @@ export class CaptureCollector {
       ts.forEachChild(node, visit);
     };
 
-    // Visit parameter initializers first
-    // Captures in default values (e.g. (a = captured) => ...) need to be detected
-    for (const param of func.parameters) {
-      if (param.initializer) {
-        visit(param.initializer);
+    // A parameter's defaults and the computed keys of its pattern are
+    // evaluated in the enclosing scope's terms, so a name either reads, as
+    // `captured` in `(a = captured) => ...` or `k` in `({ [k]: v }) => ...`,
+    // is a capture.
+    const visitBindingExpressions = (
+      binding: ts.ParameterDeclaration | ts.BindingElement,
+    ): void => {
+      if (
+        ts.isBindingElement(binding) && binding.propertyName &&
+        ts.isComputedPropertyName(binding.propertyName)
+      ) {
+        visit(binding.propertyName.expression);
       }
+      if (binding.initializer) visit(binding.initializer);
+      if (ts.isIdentifier(binding.name)) return;
+      for (const element of binding.name.elements) {
+        if (!ts.isOmittedExpression(element)) visitBindingExpressions(element);
+      }
+    };
+    for (const param of func.parameters) {
+      visitBindingExpressions(param);
     }
 
     if (func.body) {

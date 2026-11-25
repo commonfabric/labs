@@ -19,6 +19,7 @@ import type {
 } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import {
+  declarationDescribesMember,
   getPropertyNameText,
   instantiatedPropertyType,
   instantiatedValueType,
@@ -242,8 +243,11 @@ export class ObjectFormatter implements TypeFormatter {
         if (
           ts.isPropertySignature(propDecl) || ts.isPropertyDeclaration(propDecl)
         ) {
-          if (!propTypeNode && propDecl.type) {
-            propTypeNode = propDecl.type as ts.TypeNode;
+          if (
+            !propTypeNode && propDecl.type &&
+            declarationDescribesMember(prop, type, propDecl.type, checker)
+          ) {
+            propTypeNode = propDecl.type;
           }
         } else if (
           !propTypeNode &&

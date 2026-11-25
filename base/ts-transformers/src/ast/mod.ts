@@ -83,6 +83,7 @@ export {
   visitEachChildWithJsx,
 } from "./utils.ts";
 export {
+  cellPayloadType,
   ensureTypeNodeRegistered,
   getTypeFromTypeNodeWithFallback,
   inferContextualType,

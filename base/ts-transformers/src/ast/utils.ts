@@ -1,5 +1,7 @@
 import * as ts from "typescript";
 
+import { outermostTransparentWrapper } from "../utils/expression.ts";
+
 const ANY_OR_UNKNOWN = ts.TypeFlags.Any | ts.TypeFlags.Unknown;
 
 const nodeTextCache = new WeakMap<ts.Node, string>();
@@ -485,21 +487,26 @@ export function visitEachChildWithJsx(
 
 /**
  * Check if a property access expression is being invoked as a method call.
+ * A transparent wrapper around the callee keeps the reference, so the method
+ * still runs on the object: `(obj.method)()` and `obj.method!()` are method
+ * calls too.
  *
  * @example
  * ```typescript
  * // Returns true:
- * obj.method()  // node is obj.method
+ * obj.method()    // node is obj.method
+ * (obj.method)()  // node is obj.method
  *
  * // Returns false:
  * const x = obj.method  // node is obj.method (not being called)
  * ```
  */
 export function isMethodCall(node: ts.PropertyAccessExpression): boolean {
+  const callee = outermostTransparentWrapper(node);
   return !!(
-    node.parent &&
-    ts.isCallExpression(node.parent) &&
-    node.parent.expression === node
+    callee.parent &&
+    ts.isCallExpression(callee.parent) &&
+    callee.parent.expression === callee
   );
 }
 

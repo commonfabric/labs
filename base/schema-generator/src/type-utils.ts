@@ -96,6 +96,17 @@ function wrapperKindForName(name: string): NodeWrapperKind | undefined {
 export { getPropertyNameText };
 
 /**
+ * Whether `type` is the `any` the checker stands in for a type it cannot
+ * resolve, such as a name nothing declares, rather than an `any` written in
+ * the source. The checker tells them apart only by their intrinsic name,
+ * which is internal to TypeScript's `Type`.
+ */
+function isUnresolvedAny(type: ts.Type): boolean {
+  return (type.flags & ts.TypeFlags.Any) !== 0 &&
+    (type as { intrinsicName?: string }).intrinsicName !== "any";
+}
+
+/**
  * Resolves the type of `prop` as a member of `parentType`, preferring its
  * declared type where `parentType` adds no more than `undefined` to it.
  */
@@ -120,11 +131,12 @@ export function resolvePropertyType(
   // We'll use this to validate/override the declaration-based type if needed
   const propSymbol = checker.getPropertyOfType(parentType, prop.getName());
   const readFromParent = propSymbol && checker.getTypeOfSymbol(propSymbol);
-  // A read of `any` says nothing about the property.
-  const typeFromParent =
-    readFromParent && checker.typeToString(readFromParent) !== "any"
-      ? readFromParent
-      : undefined;
+  // The `any` the checker gives a type it cannot resolve says nothing about
+  // the property. An `any` written as the property's type, as a mapped type
+  // that maps its members to `any` writes it, does.
+  const typeFromParent = readFromParent && !isUnresolvedAny(readFromParent)
+    ? readFromParent
+    : undefined;
 
   // Try to get type from declaration
   const declTypeNode = decl && ts.isPropertySignature(decl)
@@ -233,6 +245,73 @@ export function resolvePropertyType(
 
   // Absolute last resort - return 'any' type
   return checker.getAnyType();
+}
+
+/**
+ * Whether `declTypeNode`, the type `prop`'s declaration writes, describes
+ * `prop` as a member of `type`. A mapped type keeps the declaration of each
+ * member it maps, the one an inner mapped type took over included, as in
+ * `Partial<Loose<T>>`, and its template can change the member's type:
+ * `T[K] | string` widens every member, and
+ * `T[K] extends Cell<infer U> ? U : T[K]` unwraps a cell member and leaves the
+ * others as they are. A member of a mapped type is described by its
+ * declaration where its type is the type the declaration writes, or differs
+ * from it only by the `undefined` that a `?` adds or a `-?` takes away. A
+ * declaration written in type parameters is read under the type arguments of
+ * the type it is declared on, as the mapped type's source gives them:
+ * `w: PerSession<T>` in `Readonly<Row<null>>` writes `PerSession<null>`. A
+ * member of any other type is described by its own declaration.
+ */
+export function declarationDescribesMember(
+  prop: ts.Symbol,
+  type: ts.Type,
+  declTypeNode: ts.TypeNode,
+  checker: ts.TypeChecker,
+): boolean {
+  if (!isMappedObjectType(type)) return true;
+  const memberType = checker.getTypeOfSymbol(prop);
+  if (
+    sameBesidesUndefined(memberType, checker.getTypeFromTypeNode(declTypeNode))
+  ) {
+    return true;
+  }
+  const instantiated = holdsTypeParameter(declTypeNode, checker)
+    ? declaredTypeInSource(prop, type, declTypeNode, checker)
+    : undefined;
+  return !!instantiated && sameBesidesUndefined(memberType, instantiated);
+}
+
+/** Whether `type` is a mapped object type. */
+function isMappedObjectType(type: ts.Type): boolean {
+  return (type.flags & ts.TypeFlags.Object) !== 0 &&
+    ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) !== 0;
+}
+
+/**
+ * The type `prop` has in the type a mapped `type` maps over, reached through
+ * the first type argument of each mapped type around it, where that type
+ * declares `prop` with the declaration `declTypeNode` belongs to. `undefined`
+ * where no such type is reached.
+ */
+function declaredTypeInSource(
+  prop: ts.Symbol,
+  type: ts.Type,
+  declTypeNode: ts.TypeNode,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  const seen = new Set<ts.Type>();
+  let source: ts.Type | undefined = type;
+  while (source && isMappedObjectType(source) && !seen.has(source)) {
+    seen.add(source);
+    source = source.aliasTypeArguments?.[0];
+  }
+  const sourceProp = source &&
+    checker.getPropertyOfType(source, prop.getName());
+  return sourceProp?.declarations?.includes(
+      declTypeNode.parent as ts.Declaration,
+    )
+    ? checker.getTypeOfSymbol(sourceProp)
+    : undefined;
 }
 
 /**
