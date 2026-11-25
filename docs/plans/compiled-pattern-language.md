@@ -6739,6 +6739,18 @@ is relitigated.
   1105, not pushed): the whole program passes the check with no stored
   schema changed, and an existing board updates to the new source.
 
+- The stream-events sidecar of server execution (`of:stream-events:`,
+  `STREAM_ENTRIES_DOC_PREFIX` in `runtime/memory/v2.ts`) is internal state of
+  the event queue: a write to it carries no label and is not measured for
+  writer fit, on the compiled path and on today's path (2026-11-25, Z99). The
+  owner's words: "i don't think that needs labels at all then. in fact i
+  think we should make a note to rewrite that to be a sqlite table instead.
+  it is purely internal state machine." It answers why a FabriChat send was
+  refused after round twenty-eight: the send handler's append of
+  `{ messageAct: true }` to the room's `tellJoined` stream was given the label
+  of what the handler read. Planned, not built: the sidecar becomes a table of
+  the memory server's store instead of documents.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
