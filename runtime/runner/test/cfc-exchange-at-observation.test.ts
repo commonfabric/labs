@@ -27,6 +27,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import { declaredOnwardRead } from "../src/storage/reactivity-log.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-exchange-observation");
 const space = signer.did();
@@ -263,8 +264,18 @@ const clausesOf = (runtime: Runtime, cause: string): unknown[] => {
     scope: "space",
     id: idOf(runtime, cause, tx),
     path: ["cfc"],
-  }) as { labelMap?: { entries?: LabelMapEntry[] } } | undefined;
-  return (cfc?.labelMap?.entries ?? [])
+  });
+  // A label held by reference names a `cid:` label document.
+  const labelDocument = (ref: string) =>
+    ref.startsWith("cid:")
+      ? tx.readOrThrow({
+        space,
+        scope: "space",
+        id: `cid:${ref.slice("cid:".length)}`,
+        path: [],
+      })
+      : undefined;
+  return storedLabelEntries<LabelMapEntry>(cfc, labelDocument)
     .filter((entry) => entry.origin === "derived" && entry.observes === "value")
     .flatMap((entry) => entry.label.confidentiality ?? []);
 };
