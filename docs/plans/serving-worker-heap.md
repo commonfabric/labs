@@ -188,9 +188,10 @@ Beyond these:
 - The release of a handler's result waits for the scheduler to be idle after
   the commit. While events keep arriving with no idle between them, the pieces
   every create in that run started stay running until the first idle, so a
-  burst of creates holds them all at once. The per-create figures above come
-  from creates sent one after another, which leave an idle between them, and
-  nothing has measured a burst.
+  burst of creates holds them all at once. The per-create figures above predate
+  the wait: they were taken while the release came at the commit itself.
+  Nothing has measured the release after idle, in a burst or one create at a
+  time.
 - A kept runtime (`parkedRuntimeRetentionMs`) holds whatever its tenure held.
 - Lower the heap limit once a day of real traffic shows what a worker needs.
 - Nothing here has run on rapids.
