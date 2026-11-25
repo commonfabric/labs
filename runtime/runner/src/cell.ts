@@ -3341,7 +3341,8 @@ export class CellImpl<T extends FabricValue>
         newValue,
         this.#frame?.cause,
         undefined,
-        frameAnchorIds(this.#frame, newValue),
+        // The cast is the event path's above (`TODO(danfuzz)`: constrain `T`).
+        frameAnchorIds(this.#frame, newValue as CellLinkInput),
       );
 
       // The value at `writeLink` is now the one supplied here, whatever the
@@ -6152,26 +6153,30 @@ function validateStaticData(value: unknown): void {
  */
 export function frameAnchorIds(
   frame: Frame | undefined,
-  written: unknown,
+  written: CellLinkInput,
   extending?: readonly unknown[],
 ): (() => string | number) | undefined {
   if (frame === undefined) return undefined;
   if (frame.builtinRun !== true) return () => frame.generatedIdCounter++;
   // Under a builtin's run the seeds come from the write: what it writes (with,
-  // for an append, the stored array it extends, whose elements are links to
-  // their documents) and a count from zero within it. A builtin's run restarts its frame's counter, and its stores
+  // for an append, the stored array it extends) and a count from zero within it. A builtin's run restarts its frame's counter, and its stores
   // are read back and written again by its later runs, so seeding from the
   // counter would hand a new element the id an earlier run gave another.
   // Seeded from the write, every runtime running the node mints the same
   // documents for the same write (speculation.md §2), and a write of
-  // anything else mints documents of its own. The written value is hashed
-  // once, on the first element anchored.
+  // anything else mints documents of its own. What is hashed is the write in
+  // the form it is stored in, cells as links and a `Date` as its instant, since
+  // `createRef` reads a raw `Date` as `{}`. It is hashed once, on the first
+  // element anchored.
   let writeId: string | undefined;
   let count = 0;
   return () => {
     writeId ??= toURI(
       createRef(
-        { write: written, ...(extending === undefined ? {} : { extending }) },
+        {
+          write: convertCellsToLinks(written),
+          ...(extending === undefined ? {} : { extending }),
+        },
         frame.cause,
       ),
     );

@@ -24,7 +24,7 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 const signer = await Identity.fromPassphrase("builtin run element identity");
 const space = signer.did();
 
-type Seen = { word: string };
+type Seen = { word: string; at?: Date };
 
 /**
  * A builtin that keeps a list of words in a store of its own, and on each run
@@ -73,6 +73,16 @@ const BUILTINS = {
   }),
   // Every word each time it comes: appends it.
   word_log: wordBuiltin((list, word) => list.push({ word })),
+  // Only the latest word, stamped with a time read from it: rewrites the list
+  // to hold that word alone.
+  stamped_word: wordBuiltin((list, word) =>
+    list.set([{ word: "stamp", at: new Date(Number(word)) }])
+  ),
+  // Every word with an echo of it each time it comes: rewrites the list with
+  // both after the old ones, in one write.
+  word_and_echo: wordBuiltin((list, word) =>
+    list.set([...(list.get() ?? []), { word }, { word: `${word}!` }])
+  ),
   // Every word twice each time it comes: appends it, and again.
   word_log_twice: wordBuiltin((list, word) => {
     list.push({ word });
@@ -229,6 +239,26 @@ describe("builtin-run-element-identity", () => {
     const seen = storeOf(result).key("seen").get()!;
     expect(seen.map((entry) => entry.word)).toEqual(["second", "second"]);
     expect(new Set(elementIds(result)).size).toBe(2);
+  });
+
+  it("writes two objects one write holds to documents of their own", async () => {
+    const runtime = openRuntime();
+    const { result } = await start(runtime, "first", "word_and_echo");
+
+    const seen = storeOf(result).key("seen").get()!;
+    expect(seen.map((entry) => entry.word)).toEqual(["first", "first!"]);
+    expect(new Set(elementIds(result)).size).toBe(2);
+  });
+
+  it("keeps an object an earlier run wrote when a later run writes one that differs only in a date", async () => {
+    const runtime = openRuntime();
+    const { argument, result } = await start(runtime, "1000", "stamped_word");
+    const [earlierId] = elementIds(result);
+
+    await setWord(runtime, argument, "999999999");
+
+    expect(elementIds(result)).toHaveLength(1);
+    expect(elementIds(result)[0]).not.toBe(earlierId);
   });
 
   it("appends two equal objects one run writes to documents of their own", async () => {

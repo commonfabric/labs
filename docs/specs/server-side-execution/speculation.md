@@ -142,10 +142,9 @@ currency. The existing overlay and retirement rules below still apply.
   identity, the cause the stores the builtin keeps derive from. An
   object a builtin's run writes as an element of an array becomes a
   document of its own whose id derives from that cause, from what the
-  write writes (with, for an append, the length of the array it
-  extends, whose elements are links to their documents), and from the
-  object's place among the objects that write
-  anchors. The client's run of a builtin and the served run of the same
+  write writes, in the form it is stored in (with, for an append, the
+  stored array it extends), and from the object's place among the
+  objects that write anchors. The client's run of a builtin and the served run of the same
   node therefore mint the same documents when they write the same value,
   and a later run that writes anything else mints documents of its own
   rather than reusing those of an earlier run, whose stores it reads
@@ -153,11 +152,14 @@ currency. The existing overlay and retirement rules below still apply.
   ids from a counter each runtime keeps for its whole life: a client
   running `generateObject` minted its `messages` elements under ids the
   served run never wrote, and the echo masked the served answer until
-  the client restarted (top/3639). Three writers still draw on that
-  counter, none of them a speculative run of a node: a builtin's setup,
-  which runs once as the node starts and commits as an authored act;
-  work a builtin does after its run returns, such as an effect's
-  answer, which only the serving runtime does; and the event handlers a
+  the client restarted (top/3639). Three writers still draw on a
+  counter rather than on what they write, none of them a speculative
+  run of a node: a builtin's setup, which runs once as the node starts
+  and commits as an authored act, on a frame of its own when the
+  builtin has an implementation identity and on the runtime's counter
+  otherwise; work a builtin does once its run has settled, such as an
+  effect's answer, which only the serving runtime does; and the event
+  handlers a
   builtin registers, whose writes are a handled event's echo and retire
   with its intent (§4 step 2) rather than on arrival. And convergence
   needs the two runs to write the same value: a client whose replica of
