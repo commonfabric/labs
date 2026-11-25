@@ -23,7 +23,8 @@ turn out to need no concept of their own.
 
 **Rule:** every term in this document names a spec section, a ruling, or an
 identifier that exists in the code. Anything that would need a new concept or
-rule is in the appendix of questions for Berni, not in the body.
+rule is in the appendix, which records a provisional answer to each such
+question for Berni to confirm.
 
 ## 1. The spec's surface, mapped onto the runtime
 
@@ -171,8 +172,10 @@ key, and a `nonReplayable` step is never retried automatically.
 **Diverges.** No path declares `idempotentCommit` or `nonReplayable`. "Send this
 message twice" cannot be expressed, and a click handler's gesture does not reach
 the commit of the fetch that a reactive node issues later. The spec concept
-exists; the runtime does not express it. How authority crosses that reactive hop
-is question 1 in the appendix.
+exists; the runtime does not express it. The provisional answer to how authority
+crosses that reactive hop is appendix question 1: reactive nodes stay `pure` or
+`readOnly`, and effects leave through a runtime outbox that carries the click's
+evidence.
 
 ## 2. Skills and MCP in these terms
 
@@ -209,16 +212,18 @@ name, and today it is the wrong one for third-party text (top/3606).
   labeled data. MCP annotations and skills' `allowed-tools` are free-form in
   this sense.
 - **Reviewed files:** "a declarative file checked in by someone you trust" is a
-  registry snapshot that the node context accepts. How acceptance is authorized
-  is question 3.
+  registry snapshot that the node context accepts. Each person accepts snapshots
+  in their profile (appendix question 3, provisional).
 - **Calls:** each call is `invokeTool`, and each external write is
   `commitEffect`.
 - **Responses:** responses enter through source entry, with `NetworkProvenance`.
 
 ### A stdio MCP server in a sandbox
 
-It is a node with a measured identity. Whether one process may serve many calls
-without its `pc` growing until nothing can be done is question 5.
+It is a node with a measured identity. One process may serve many calls. Its
+state is a store that holds the labels of what went into it, so its `pc` only
+grows, and restarting it from a clean image is the reset (appendix question 5,
+provisional).
 
 ### Unreviewed servers and skills
 
@@ -229,8 +234,8 @@ and the runtime assumes the worst:
 - the arguments are released to the server's origin as a sink;
 - the outputs carry only what source entry assigns.
 
-They remain usable under those assumptions. Whether bridges should also confine
-outputs to the owner is question 4.
+They remain usable under those assumptions. Their outputs are also confined to
+the person who imported them (appendix question 4, provisional).
 
 ### The rule for bridges
 
@@ -315,26 +320,120 @@ work under way, the item links to it.
   source-entry label or provenance. top/1892 already covers D1-A source entry
   and retiring `LlmDerived` (cleanups 3–4 above).
 
-## Appendix: questions for Berni
+## Appendix: provisional answers for Berni to confirm
 
-These would need a new rule or concept, so they are out of the body. They are
-meant to go to Berni as one package.
+Each of these questions needed a rule or concept the body could not supply. Alex
+answered them on 2026-11-25. Every answer is provisional: the plans build on it
+now, without waiting, and Berni confirms or corrects the whole package when he
+reviews it. Three turned out to be settled by existing semantics (questions 5, 6
+and 7), so for those the ask is only whether we read the spec correctly.
 
 1. **Authority across the reactive hop.** A click mints gesture evidence in a
-   handler, but the effect commits in a reactive node, in a later transaction.
-   How does the evidence reach `commitEffect`, and may a reactive node issue
-   anything but `pure` or `readOnly` steps?
+   handler, but an effect issued by a reactive node commits in a later
+   transaction.
+
+   _Provisional:_ reactive nodes issue only `pure` and `readOnly` steps. A
+   handler puts an effect into a runtime outbox, and the click's evidence is
+   attached when the request is made. The runtime sends it once, checks the
+   evidence at the sink, and writes the result back to a cell that the pattern
+   reads reactively. This is the same work as
+   [handler-callable egress](handler-callable-egress.md). A one-shot token
+   written to a cell was rejected: it turns authority into data, which can be
+   copied, leaked or replayed.
+
+   _For Berni:_ is the outbox the commit path?
 2. **References handed to outside holders.** Webhook ids, ingest-channel
    bearers, space invites, invocation sessions, and exporting the fabric over
-   MCP all do this. Should these be one concept, and what evidence does using
-   one mint? (Out of scope: user authority for actions started outside the
-   fabric. User integrity comes only from actions taken within it.)
+   MCP all do this.
+
+   _Provisional:_ these are the delegations and grants the spec already has (the
+   persisted grants of §13.4.3, built per
+   [persisted declassification](../specs/cfc-persisted-declassification.md)),
+   not a new concept. A grant is issued by an action inside the fabric, is
+   scoped, expires and can be revoked. Using one evidences only that grant,
+   never its issuer's own integrity. Effects that outlast their call (question
+   6) are grants too, so a person has one list of what acts for them. This is
+   not urgent: nothing in the skills and MCP plan needs it. (Out of scope: user
+   authority for actions started outside the fabric. User integrity comes only
+   from actions taken within it.)
+
+   _For Berni:_ does a bearer reference held outside the fabric fit that model?
 3. **Accepting a registry snapshot.** Who may accept one into a node context,
    and can a reviewed descriptor file be the subject of a trust statement
    (§4.8.2)? This is also cfs#11124's open question.
+
+   _Provisional:_ each person accepts snapshots once, in their profile. The
+   default set comes pre-accepted. Adding another repository is a potentially
+   dangerous action, and the UI treats it as one. A call is trusted when the
+   person whose authority it runs under has accepted the snapshot, so in a
+   shared space each person's calls use that person's accepted sets. A trust
+   statement names a reviewed descriptor file by its content hash, so a changed
+   file is no longer trusted. The same acceptance covers reviewed declassifying
+   filters and pattern-declared policies: it is the verification mechanism that
+   top/3599 says comes later.
+
+   _For Berni:_ confirm.
 4. **Owner confinement.** Should outputs of unreviewed bridges be confined to
    the owner by default, through a policy record (§5)?
+
+   _Provisional:_ yes. An unreviewed bridge's outputs carry `User(importer)`.
+   The importer releases them the way top/3599 lays out for any owner's data: a
+   handler attached to a trusted gesture reclassifies `User(A)` to
+   `anyOf(User(A), PolicyOf<rules>)`. Review can set a different default. Most
+   tools people use are expected to be reviewed, so this default mostly applies
+   to drafts and niche servers.
+
+   _For Berni:_ confirm.
 5. **Long-lived sandbox sessions.** Under what rule may a session be
    re-baselined, so its `pc` does not grow without bound?
+
+   _Provisional, settled by existing semantics:_ under none. A session's state
+   is a store that holds the labels of what went into it, its `pc` only grows,
+   and restarting it from a clean image is the reset.
+
+   _For Berni:_ confirm the reading.
 6. **Commits with unknown outcome, and effects that outlast the call.**
    cfs#11124 raises both, and both are general to `commitEffect`.
+
+   _Provisional:_ the first is settled by §6.5.2 and §7.5.1. An intent is
+   consumed only on commit, and a timeout is a non-commit outcome. Retries are
+   bounded by `exp`, a policy-set attempt limit and re-authorization, and they
+   carry the intent's idempotency key. Our policy: an unreviewed tool gets one
+   attempt, because nothing says its server honors the key. A reviewed tool
+   whose descriptor says its server does gets retries with the key. Effects that
+   outlast the call are grants (question 2).
+
+   _For Berni:_ confirm the reading.
+7. **Unreviewed sandboxed runs.** When may a sandboxed run of an unreviewed
+   script count as an ordinary untrusted transition rather than a side effect?
+
+   _Provisional, settled by existing semantics:_ no special rule is needed. The
+   sandbox mediates every channel out of it, as any other node's I/O is
+   mediated:
+   - network traffic is a `fetch` sink, checked against the run's `pc`;
+   - a mounted file read carries the label of the object behind it, and a write
+     back is an ordinary labeled write;
+   - state kept between calls is a store (question 5).
+
+   The run's `pc` is coarse: once it reads a secret, everything it sends
+   afterwards carries that label. That is ordinary process-level taint. A
+   measured rootfs matters only for outputs that claim the script's integrity,
+   and unreviewed outputs claim none. Until every channel is mediated, the
+   interim is to switch channels off: no network, a fresh session and no fabric
+   mount.
+
+   _For Berni:_ confirm.
+8. **Audience from a field the server returns.** May a reviewed configuration
+   assign a result's audience from a field the server returns?
+
+   _Provisional:_ yes, by extending §5.6.3 from authorship claims to access
+   claims. Trusting a connector includes trusting that it reports access lists
+   on its side faithfully. The principals it mints, such as a `did:mailto:` for
+   each recipient of an email, carry the integrity of a trusted connector, and
+   downstream code may rely on them. The trust comes from the person accepting
+   the connector's repository (question 3). A prerequisite is binding a person's
+   DID to the `did:mailto:` principals that a connector mints; until that
+   exists, `audienceFrom` stays Loom host policy.
+
+   _For Berni:_ does §5.6.3 extend to confidentiality claims, and is accepting a
+   reviewed set a sufficient `TrustedProvider`?

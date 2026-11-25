@@ -6,7 +6,8 @@ called _primitives_ below. Every term here is defined in one of three places:
 primitives, the CFC specification, or cfs#11124, merged as
 [`docs/development/proposals/mcp-bridge.md`](https://github.com/commonfabric/cfs/blob/main/docs/development/proposals/mcp-bridge.md)
 in the cfs repository. Where this proposal would need a rule that none of those
-has, the rule goes into the questions for Berni and not into the design.
+has, the rule goes into the primitives appendix with a provisional answer, and
+not into the design.
 
 ## Why
 
@@ -102,8 +103,11 @@ A reviewed set lives wherever connectors live. Today that is Loom's repository,
 and later it will be a repository of its own. A fabric starts with the default
 set, and a person can add sets from other GitHub organizations they trust. In
 spec terms, a set's reviewed entries are the descriptors of a registry snapshot,
-and adding a set is accepting that snapshot. Who may accept one is question 3. A
-person's own unreviewed draft stays in their own space, and it is never a set.
+and adding a set is accepting that snapshot. Each person accepts sets once, in
+their profile, and the default set comes pre-accepted. Adding another set is a
+potentially dangerous action, and the UI treats it as one. A call is trusted
+when the person whose authority it runs under has accepted the set (question 3).
+A person's own unreviewed draft stays in their own space, and it is never a set.
 
 ### Unreviewed tools are usable, under worst-case assumptions
 
@@ -117,7 +121,12 @@ patterns can call it:
   that has read private data cannot send that data there unless the labels allow
   it. This is cfs#11124's "a query is a release", stated as the ordinary sink
   rule.
-- **Its outputs get what source entry assigns,** and nothing more.
+- **Its outputs get what source entry assigns, and they are confined to the
+  person who imported the tool.** The importer releases them with the same
+  gesture-bound reclassification any owner uses for their own data (question 4).
+- **A call whose outcome is unknown is not retried.** An unreviewed tool gets
+  one attempt, because nothing says its server honors an idempotency key
+  (question 6).
 
 Review then adds trust, not permission. A reviewed `read` is treated as a read:
 it needs no per-call authority, and agents call it freely. A reviewed tool also
@@ -168,7 +177,9 @@ adapters into those descriptors.
 **Fields that stay Loom host policy until Berni rules on cfs#11124's
 correspondence table:**
 
-- `labels.audienceFrom` and `authorFrom`, which declassify (question 8);
+- `labels.audienceFrom` and `authorFrom`, which declassify. Provisionally, a
+  trusted connector's access claims may set the audience, once a person's DID is
+  bound to the principals the connector mints (question 8);
 - argument roles, `effects`, `commit` and `perIntent`;
 - `origin` and `oauthIssuer`, `egress`, `budget`, `retention`, `actsAs`,
   `effectsBy` and `preview`;
@@ -198,7 +209,9 @@ Each step is the long-term mechanism in a smaller form.
    descriptors, and each handler fetches the server's endpoint. Two things come
    first:
    - [handler-callable egress](handler-callable-egress.md), because today a
-     handler cannot issue a request and await its result;
+     handler cannot issue a request and await its result. Its form is the
+     runtime outbox of question 1, which carries a click's evidence to the
+     effect;
    - source entry for fetched responses (primitives cleanup 4, top/1892), so
      that what a server returns arrives labeled and is never left unlabeled.
 
@@ -209,14 +222,18 @@ Each step is the long-term mechanism in a smaller form.
 3. **The translator, and accepted sets.** It reads the connectors repository's
    reviewed adapters into a snapshot that the fabric accepts. Reviewed reads
    become free for agents.
-4. **`cf import skill`** builds the same wrapper for a skill. Its scripts run
-   through cleanup 10. Skill scripts and stdio MCP servers then reach patterns.
+4. **`cf import skill`** builds the same wrapper for a skill. Its scripts run in
+   the sandbox, with each channel out of it either mediated like any other sink
+   or switched off (question 7). Skill scripts and stdio MCP servers then reach
+   patterns.
 
 **Later:**
 
 - stdio servers that need keys;
-- long-lived stdio sessions (question 5);
-- MCP writes with `IntentOnce` and unknown outcomes (question 6);
+- long-lived stdio sessions, whose taint only grows until a restart (question
+  5);
+- MCP writes with `IntentOnce`, retried only with an idempotency key that a
+  reviewed descriptor vouches for (question 6);
 - reads that fill cells on a schedule (cfs#11124 level 2).
 
 ## Until hardening lands
@@ -224,17 +241,19 @@ Each step is the long-term mechanism in a smaller form.
 These are gaps in the runtime, not in the design. Each one is filed, and each
 has an interim limit that lifts when the gap closes.
 
-| Gap                                                                                                                                               | Interim limit                                                                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| H9 / CT-2175: side effects are admitted on run-level direct-command authority. top/3606: skill text in a delegated child inherits that authority. | A run that holds unreviewed prose runs side effects only when the person starts them. |
-| `IntentOnce` is unbuilt.                                                                                                                          | Per-call authority means the person confirms each call.                               |
-| Registry snapshots, `ToolDescriptorBound` and the sink check against them are unbuilt (primitives cleanups 5 and 6).                              | No reviewed sets: every imported tool runs as unreviewed.                             |
-| Authority-only request fields are declared in policy templates but not enforced, and nothing mints `AuthorizedRequest`.                           | The bridge stores no tokens; servers that need one wait.                              |
-| `fetch*` assigns no source-entry labels (primitives cleanup 4, top/1892).                                                                         | `cf import mcp` waits for it.                                                         |
-| top/3597: `llmDialog` writes fail open, and `agent()`'s `call_verb` fails closed.                                                                 | Agents reach wrapper verbs only through cf-harness.                                   |
-| top/3595: tools that take a URL do not check the context label. top/3594: DNS egress.                                                             | Runs that hold unreviewed prose do not get `web_fetch`.                               |
-| Sandbox: egress by default, sessions persist between calls, no measured rootfs, host execution target.                                            | Unreviewed scripts run only in a fresh sandbox, never on the host.                    |
-| A reactive `fetch` is deduplicated by `inputHash`, and authority does not cross the reactive hop (primitives 1.7, question 1).                    | Wrapper handlers call tools only from events, never from reactive recompute.          |
+| Gap                                                                                                                                                                  | Interim limit                                                                                     |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| H9 / CT-2175: side effects are admitted on run-level direct-command authority. top/3606: skill text in a delegated child inherits that authority.                    | A run that holds unreviewed prose runs side effects only when the person starts them.             |
+| `IntentOnce` is unbuilt.                                                                                                                                             | Per-call authority means the person confirms each call.                                           |
+| Registry snapshots, `ToolDescriptorBound` and the sink check against them are unbuilt (primitives cleanups 5 and 6).                                                 | No reviewed sets: every imported tool runs as unreviewed.                                         |
+| Authority-only request fields are declared in policy templates but not enforced, and nothing mints `AuthorizedRequest`.                                              | The bridge stores no tokens; servers that need one wait.                                          |
+| `fetch*` assigns no source-entry labels (primitives cleanup 4, top/1892).                                                                                            | `cf import mcp` waits for it.                                                                     |
+| top/3597: `llmDialog` writes fail open, and `agent()`'s `call_verb` fails closed.                                                                                    | Agents reach wrapper verbs only through cf-harness.                                               |
+| top/3595: tools that take a URL do not check the context label. top/3594: DNS egress.                                                                                | Runs that hold unreviewed prose do not get `web_fetch`.                                           |
+| Sandbox: not every channel out is mediated. Egress is on by default, DNS is exempt (top/3594), sessions persist between calls, and there is a host execution target. | Unreviewed scripts run in a fresh sandbox with no network and no fabric mount, never on the host. |
+| The gesture-bound reclassification of a person's own `User(A)` data is unbuilt (top/3599).                                                                           | Unreviewed outputs stay with the importer and cannot be shared.                                   |
+| Nothing binds a person's DID to the `did:mailto:` principals a connector mints.                                                                                      | `audienceFrom` stays Loom host policy.                                                            |
+| A reactive `fetch` is deduplicated by `inputHash`, and authority does not cross the reactive hop (primitives 1.7). The outbox of question 1 is unbuilt.              | Wrapper handlers call tools only from events, never from reactive recompute.                      |
 
 ## Decisions
 
@@ -250,19 +269,16 @@ has an interim limit that lifts when the gap closes.
 5. **Unreviewed tools.** They are usable under worst-case assumptions. Review
    unlocks trust, not use.
 
+Alex answered the open questions on 2026-11-25. The answers are provisional, and
+this plan builds on them without waiting. They are in the
+[primitives appendix](spec-surface-alignment.md#appendix-provisional-answers-for-berni-to-confirm),
+and the question numbers in this document refer to it.
+
 ## For Berni
 
-These join the primitives appendix as one package:
-
-- **Question 3, who accepts a snapshot:** this gates reviewed sets.
-- **Question 4, owner confinement:** this gates unreviewed outputs.
-- **Question 5, long-lived sessions:** this gates stdio MCP beyond one process
-  per run.
-- **Question 6, unknown outcomes and standing effects:** this gates MCP writes.
-- **New, question 7: when may an unreviewed sandboxed run count as an ordinary
-  untrusted transition rather than a side effect?** This would cover a run with
-  no network, a fresh session, no fabric mount and a measured rootfs. What must
-  the run record show?
-- **New, question 8: may a reviewed configuration assign a row's audience from a
-  field the server returns?** If so, under which ruling: D7, or an `AuthoredBy`
-  trust policy?
+The primitives appendix is the whole package: eight provisional answers, each
+with what it asks of him. Three are settled by existing semantics and need only
+a check of our reading (questions 5, 6 and 7). Two ask for something new:
+whether the outbox is the commit path (question 1), and whether §5.6.3 extends
+to confidentiality claims (question 8). Nothing in this plan waits for his
+answers.
