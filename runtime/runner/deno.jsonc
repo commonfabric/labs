@@ -68,6 +68,7 @@
     "./scope": "./src/scope.ts",
     "./component-read-contract": "./src/component-read-contract.ts",
     "./telemetry-otel-bridge": "./src/telemetry-otel-bridge.ts",
+    "./storage/array-edit-script": "./src/storage/array-edit-script.ts",
     "./storage/write-stack-trace": "./src/storage/write-stack-trace.ts",
     "./traverse": "./src/traverse.ts",
     "./graph-query": "./src/graph-query.ts",

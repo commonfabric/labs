@@ -15,8 +15,11 @@ on:
       # The packages the dashboard and `test-support` import.
       - "base/bytes/**"
       - "base/collections/**"
+      - "base/github-webhooks/**"
       - "base/js-values/**"
       - "base/text/**"
+      - "runtime/runner/deno.jsonc"
+      - "runtime/runner/src/storage/array-edit-script.ts"
       - "scripts/ci-gantt.ts"
       - "deno.jsonc"
       - "deno.lock"
