@@ -66,6 +66,7 @@ import { makeLanguage } from "./make/language.ts";
 import { dockerfileLanguage } from "./dockerfile/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
 import { gitAttributesLanguage } from "./gitattributes/language.ts";
+import { linkerScriptLanguage } from "./linker-script/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
 import { orgLanguage } from "./org/language.ts";
 import { directiveLanguage } from "./directive/language.ts";
@@ -556,6 +557,7 @@ function allLanguages(): readonly Language[] {
     gitConfigLanguage,
     proguardLanguage,
     gitAttributesLanguage,
+    linkerScriptLanguage,
     xmlLanguage,
     orgLanguage,
     directiveLanguage,

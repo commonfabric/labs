@@ -504,8 +504,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "swift",
     // A Swift `let` declaration of one name is also a Rust one, and Rust
-    // colors the name it binds as Swift does.
-    highlightingPeers: ["rust", "c"],
+    // colors the name it binds as Swift does. A linker script reads
+    // `package = Package(…)` after the name before it as a symbol
+    // assignment, and colors the symbol as Swift colors the binding.
+    highlightingPeers: ["rust", "c", "linker-script"],
     surveyRepository: "gvisor",
     surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
     surveyPath: "tools/cfc-sandbox/Package.swift",
@@ -1299,6 +1301,50 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "*", className: "regex" },
     afterEvidence: { text: "*", className: "regex" },
     incompleteEvidence: { text: "*", className: "regex" },
+  },
+  {
+    languageId: "linker-script",
+    surveyRepository: "gvisor",
+    surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
+    surveyPath: "vdso/vdso_amd64.lds",
+    before: new URL("./linker-script-gvisor-vdso/before.lds", import.meta.url),
+    after: new URL("./linker-script-gvisor-vdso/after.lds", import.meta.url),
+    incomplete: new URL(
+      "./linker-script-gvisor-vdso/incomplete.lds",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "vdso/vdso_amd64.lds",
+        "vdso/vdso_arm64.lds",
+        "pkg/sentry/platform/systrap/sysmsg/pie.lds.S",
+        "arch/x86/kernel/vmlinux.lds.S",
+        "bl31/bl31.ld.S",
+        "firmware/link.ld",
+      ],
+      aliases: ["linker-script", "ld", "lds", "linkerscript"],
+    },
+    beforeEvidence: { text: ".gnu.hash", className: "interfaceName" },
+    afterEvidence: { text: ".dynstr", className: "interfaceName" },
+    incompleteEvidence: { text: ".gnu.hash", className: "interfaceName" },
+  },
+  {
+    languageId: "linker-script",
+    surveyRepository: "gvisor",
+    surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
+    surveyPath: "pkg/sentry/platform/systrap/sysmsg/pie.lds.S",
+    before: new URL(
+      "./linker-script-gvisor-sysmsg/before.lds.S",
+      import.meta.url,
+    ),
+    after: new URL("./linker-script-gvisor-sysmsg/after.lds.S", import.meta.url),
+    incomplete: new URL(
+      "./linker-script-gvisor-sysmsg/incomplete.lds.S",
+      import.meta.url,
+    ),
+    beforeEvidence: { text: ".crblob", className: "interfaceName" },
+    afterEvidence: { text: ".crblob", className: "interfaceName" },
+    incompleteEvidence: { text: ".crblob", className: "interfaceName" },
   },
   {
     languageId: "xml",
