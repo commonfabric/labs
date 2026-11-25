@@ -4,7 +4,6 @@
  * job does not run -- a comment, a conditional step -- has to fail too.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -14,6 +13,7 @@ import {
   stepWords,
 } from "./check-bench-workflow.ts";
 import { CALIBRATION_FILE } from "../dashboard/bench-report.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Helper for the tests below, which builds a workflow around its steps. */
 const workflowWith = (steps: string[]): string =>

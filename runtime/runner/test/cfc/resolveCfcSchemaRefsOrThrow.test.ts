@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { resolveCfcSchemaRefsOrThrow } from "../../src/cfc/schema-refs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("resolveCfcSchemaRefsOrThrow()", () => {
   it("returns the definition a reference names in its document", () => {

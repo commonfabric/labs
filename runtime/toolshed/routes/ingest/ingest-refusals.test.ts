@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -8,6 +7,12 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { linkRefPayloadToString } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   cellTargetOf,
   ClaimStoreFullError,

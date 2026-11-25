@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { changes, history } from "./events.ts";
 import type { Topic, TopicComment } from "./mirror.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A Topic with every field defaulted except those given. */
 function topic(fields: Partial<Topic>): Topic {

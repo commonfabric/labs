@@ -1,7 +1,12 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 import type { RepoSyncPlan } from "../src/repo-sync.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const root = fromFileUrl(new URL("../../../", import.meta.url));
 const entry = fromFileUrl(new URL("../sync-plan.ts", import.meta.url));

@@ -12,10 +12,10 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { EditBuffer } from "../lib/view/editbuffer.ts";
 import { LineHistory, recall } from "../lib/shuttle/history.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Helper for the cases below, which is a traversal over `lines`. */
 function recorded(...lines: readonly string[]): LineHistory {

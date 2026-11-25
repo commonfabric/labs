@@ -1,14 +1,14 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import {
   DenoProcessRunner,
   ProcessTimeoutError,
 } from "../src/sandbox/process-runner.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("DenoProcessRunner surfaces killed timeout exits as ProcessTimeoutError", async () => {
+test("DenoProcessRunner surfaces killed timeout exits as ProcessTimeoutError", async () => {
   const runner = new DenoProcessRunner();
 
   await assertRejects(
@@ -23,7 +23,7 @@ Deno.test("DenoProcessRunner surfaces killed timeout exits as ProcessTimeoutErro
   );
 });
 
-Deno.test("DenoProcessRunner surfaces a timeout as ProcessTimeoutError where the process stopped exits 0", async () => {
+test("DenoProcessRunner surfaces a timeout as ProcessTimeoutError where the process stopped exits 0", async () => {
   const runner = new DenoProcessRunner();
 
   // A shell that answers SIGTERM by exiting 0, as pasta does; what it waits
@@ -43,7 +43,7 @@ Deno.test("DenoProcessRunner surfaces a timeout as ProcessTimeoutError where the
   );
 });
 
-Deno.test({
+test({
   name: "DenoProcessRunner clears inherited env when requested",
   permissions: { env: true, run: true },
   async fn() {
@@ -73,7 +73,7 @@ Deno.test({
   },
 });
 
-Deno.test("DenoProcessRunner stops a process its signal aborts, and throws the signal's reason once it has ended, whatever status it ends with", async () => {
+test("DenoProcessRunner stops a process its signal aborts, and throws the signal's reason once it has ended, whatever status it ends with", async () => {
   const runner = new DenoProcessRunner();
 
   for (
@@ -96,7 +96,7 @@ Deno.test("DenoProcessRunner stops a process its signal aborts, and throws the s
   }
 });
 
-Deno.test("DenoProcessRunner throws the reason of a signal that stopped the process before its timeout came due, however long the process takes to end", async () => {
+test("DenoProcessRunner throws the reason of a signal that stopped the process before its timeout came due, however long the process takes to end", async () => {
   const runner = new DenoProcessRunner();
   const dir = await Deno.makeTempDir();
   const ready = join(dir, "ready");
@@ -124,7 +124,7 @@ Deno.test("DenoProcessRunner throws the reason of a signal that stopped the proc
   }
 });
 
-Deno.test("DenoProcessRunner throws the reason of a signal that stopped a process its input was still being written to", async () => {
+test("DenoProcessRunner throws the reason of a signal that stopped a process its input was still being written to", async () => {
   const runner = new DenoProcessRunner();
   const stop = new AbortController();
 
@@ -141,7 +141,7 @@ Deno.test("DenoProcessRunner throws the reason of a signal that stopped a proces
   await assertRejects(() => running, Error, "stopped by its caller");
 });
 
-Deno.test("DenoProcessRunner throws the write's failure when a process ends without reading its input", async () => {
+test("DenoProcessRunner throws the write's failure when a process ends without reading its input", async () => {
   const runner = new DenoProcessRunner();
 
   // More input than a pipe holds, to a process that exits at once: the
@@ -155,7 +155,7 @@ Deno.test("DenoProcessRunner throws the write's failure when a process ends with
   );
 });
 
-Deno.test("DenoProcessRunner refuses, running nothing, a run whose signal has already aborted", async () => {
+test("DenoProcessRunner refuses, running nothing, a run whose signal has already aborted", async () => {
   const runner = new DenoProcessRunner();
   const stop = new AbortController();
   stop.abort();

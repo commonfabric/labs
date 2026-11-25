@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { SpaceOfLinkFunction } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceOf, spaceOfLink } from "../../src/builder/space-access.ts";

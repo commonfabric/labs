@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { hashOf, isDeepFrozen } from "@commonfabric/data-model";
 import { getFrozenObjectHashCacheHitsForTestingOnly } from "@commonfabric/data-model/for-testing-only";
@@ -7,6 +6,12 @@ import { Identity } from "@commonfabric/identity";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { getTimingStatsBreakdown } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { preparedDigestFor } from "../../src/cfc/canonical.ts";
 import {

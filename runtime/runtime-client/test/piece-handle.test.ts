@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CellScope } from "@commonfabric/api";
 import type { DID } from "@commonfabric/identity";
 import { NAME } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { $onCellUpdate } from "@/cell-handle.ts";
 import { PieceHandle } from "@/piece-handle.ts";

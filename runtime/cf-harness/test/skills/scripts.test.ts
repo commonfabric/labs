@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   allowedSkillScriptKey,
@@ -9,6 +8,7 @@ import {
   parseAllowedSkillScriptSpec,
   uniqueAllowedSkillScripts,
 } from "../../src/skills/scripts.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SHA = "dd93980e2f9a1d4c4d50a6e1a3cbb6e2b7a91f3c";
 const PIN = `zubair-trabzada/ai-finance-claude/finance-budget@${SHA}`;

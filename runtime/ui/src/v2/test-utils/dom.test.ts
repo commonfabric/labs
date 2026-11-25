@@ -2,9 +2,9 @@
 import { internalsOf, mount, settle, window } from "./dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { ContextConsumer, createContext } from "@lit/context";
 import { html, LitElement } from "lit";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const greetingContext = createContext<string>("dom-test-greeting");
 

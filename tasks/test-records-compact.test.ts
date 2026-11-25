@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -26,6 +25,7 @@ import {
   type RunContext,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 const DAY = "2026/08/11";

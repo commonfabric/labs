@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { emittedSchemas, parseModule } from "./transformed-ast.ts";
 import { transformFiles } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The schemas the transformed module of `source` emits, its input type-checked. */
 const schemasOf = async (

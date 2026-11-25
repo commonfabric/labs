@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
@@ -8,6 +7,7 @@ import { publisherRunning } from "../test-selection-activity.ts";
 import { makeTestFlakes } from "../tiles/test-flakes.ts";
 import { makeTestSelection } from "../tiles/test-selection.ts";
 import type { Ctx } from "../types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function context(token = "test-token"): Ctx {
   return {

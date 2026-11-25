@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { internSchema } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { droppedStoredClaim } from "../../src/cfc/claim-preservation.ts";

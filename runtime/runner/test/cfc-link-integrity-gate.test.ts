@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { Runtime } from "../src/runtime.ts";

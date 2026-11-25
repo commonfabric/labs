@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { getEventTargetDataset } from "../src/main/event-provenance.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** An event target carrying `dataset`, as an element does. */
 const withDataset = (dataset: unknown): EventTarget =>

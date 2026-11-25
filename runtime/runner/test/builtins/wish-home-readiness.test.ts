@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
@@ -14,6 +13,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";

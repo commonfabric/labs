@@ -2,8 +2,8 @@ import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { GithubFabricTarget } from "../src/fabric.ts";
 import {
   githubFabricCellId,

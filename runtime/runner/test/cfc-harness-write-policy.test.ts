@@ -1,7 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { evaluateHarnessWriteFileAuthorization } from "../src/cfc/mod.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("evaluateHarnessWriteFileAuthorization warns in observe mode without direct-command authorization", () => {
+test("evaluateHarnessWriteFileAuthorization warns in observe mode without direct-command authorization", () => {
   assertEquals(
     evaluateHarnessWriteFileAuthorization({
       enforcementMode: "observe",
@@ -17,7 +18,7 @@ Deno.test("evaluateHarnessWriteFileAuthorization warns in observe mode without d
   );
 });
 
-Deno.test("evaluateHarnessWriteFileAuthorization denies in enforce-explicit mode without direct-command authorization", () => {
+test("evaluateHarnessWriteFileAuthorization denies in enforce-explicit mode without direct-command authorization", () => {
   assertEquals(
     evaluateHarnessWriteFileAuthorization({
       enforcementMode: "enforce-explicit",
@@ -33,7 +34,7 @@ Deno.test("evaluateHarnessWriteFileAuthorization denies in enforce-explicit mode
   );
 });
 
-Deno.test("evaluateHarnessWriteFileAuthorization allows direct-command writes in strict modes", () => {
+test("evaluateHarnessWriteFileAuthorization allows direct-command writes in strict modes", () => {
   assertEquals(
     evaluateHarnessWriteFileAuthorization({
       enforcementMode: "enforce-strict",

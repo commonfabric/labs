@@ -7,11 +7,11 @@
  * they were.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
 import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";

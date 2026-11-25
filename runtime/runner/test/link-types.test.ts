@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   assertStoredValuePath,
@@ -8,6 +7,7 @@ import {
   parseScopedIdSegment,
   type PrimitiveCellLink,
 } from "../src/link-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("link-types", () => {
   describe("isNormalizedLink()", () => {

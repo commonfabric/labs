@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isDeepFrozen } from "@commonfabric/data-model";
 
@@ -6,6 +5,7 @@ import {
   instancePartialCauseForTestingOnly,
   patternLiteralForTestingOnly,
 } from "@commonfabric/runner/for-testing-only";
+import { describe, it } from "@commonfabric/test-support/test";
 import { instanceNameOfPartialCause } from "../src/builder/instance-name.ts";
 import type { Pattern } from "../src/builder/types.ts";
 

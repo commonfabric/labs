@@ -1,6 +1,7 @@
 import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
 
 import type { DID } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import { type CFPieceMenu, openPieceMenu } from "./index.ts";
 
@@ -56,7 +57,7 @@ function entry(menu: CFPieceMenu, testId: string): HTMLButtonElement {
   return element;
 }
 
-Deno.test("the menu opens at the click when it fits there", async () => {
+test("the menu opens at the click when it fits there", async () => {
   const { menu, box, text } = await openAt(40, 40);
   try {
     assert(text.includes(SPACE), `the menu should name ${SPACE}`);
@@ -68,7 +69,7 @@ Deno.test("the menu opens at the click when it fits there", async () => {
   }
 });
 
-Deno.test("a corner click pulls the whole menu back into view", async () => {
+test("a corner click pulls the whole menu back into view", async () => {
   // The menu is placed from its own measured box, so a corner click brings its
   // far edges to rest exactly on the margin whatever size its content gives
   // it.
@@ -88,7 +89,7 @@ Deno.test("a corner click pulls the whole menu back into view", async () => {
   }
 });
 
-Deno.test("an entry needing a piece reads as unavailable", async () => {
+test("an entry needing a piece reads as unavailable", async () => {
   // A space-only menu carries both kinds at once — every piece entry
   // disabled, the space entry live — so one opening shows what separates
   // them on screen.

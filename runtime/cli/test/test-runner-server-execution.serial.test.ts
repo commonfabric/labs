@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -6,6 +5,7 @@ import { getServerExecutionConfig } from "@commonfabric/memory/v2";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { type ActiveLogLevel, getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 import { withEnv } from "./utils.ts";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 

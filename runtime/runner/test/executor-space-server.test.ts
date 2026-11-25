@@ -16,7 +16,6 @@
 //   re-created #pendingEffectsByWave entry (the leak pin), no inline
 //   flush firing network work for a contribution that never committed.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
@@ -37,6 +36,13 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { COMPONENT_READ_CONTRACT_VERSION } from "../src/component-read-contract.ts";
 import type { Action } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -71,6 +77,11 @@ import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitEach } from "./support/serving-waits.ts";
 import { sessionDemandOf } from "./support/session-demand.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+
+// This file runs on the real clock because it drives a real SpaceServer
+// directly under the same real-time policies as a live ExecutorHost: the flush
+// deadline.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("space-server test space");
 const space = spaceSigner.did() as MemorySpace;

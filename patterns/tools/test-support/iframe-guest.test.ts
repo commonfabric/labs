@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
 import { Window } from "happy-dom";
 import type { BridgeCell, BridgeMethod } from "@commonfabric/iframe-sandbox";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   ManualFrames,
   MemoryCell,

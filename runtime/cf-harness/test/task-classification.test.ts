@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessPatternRef } from "../src/contracts/pattern-refs.ts";
 import {
@@ -13,6 +12,7 @@ import {
   HARNESS_TASK_TAGS,
   type HarnessTaskTag,
 } from "../src/task-classification.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const cell = (name: string) => ({
   name,

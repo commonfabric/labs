@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts, { type DiagnosticMessageChain } from "typescript";
 import {
@@ -9,6 +8,7 @@ import {
   formatTransformerDiagnostic,
 } from "../typescript/diagnostics/errors.ts";
 import { Checker } from "../typescript/diagnostics/mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // errors.ts keeps a local mirror of `ts.flattenDiagnosticMessageText` so the
 // module stays free of typescript value imports (it is boot-eager in the

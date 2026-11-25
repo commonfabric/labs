@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { sqliteQuery } from "../src/builtins/sqlite-builtins.ts";
 import type { Cell } from "../src/cell.ts";

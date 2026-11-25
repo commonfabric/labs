@@ -3,7 +3,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   applyMovingAverageFilter,
   convertToWav,
@@ -14,6 +13,12 @@ import {
   resampleWithAntiAliasing,
 } from "./audio-conversion.ts";
 import { StandInAudioContext } from "../test-utils/audio-context.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The PCM samples of a WAV file `createWavFile()` wrote. */
 function samplesOf(wav: ArrayBuffer): number[] {

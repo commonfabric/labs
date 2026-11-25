@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
@@ -7,6 +6,12 @@ import {
   relateShasIn,
   resolveCliVersion,
 } from "../lib/build-info.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("cli-version-resolution", () => {
   let tempDir: string;

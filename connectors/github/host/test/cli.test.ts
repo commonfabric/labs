@@ -3,6 +3,7 @@ import { join } from "@std/path";
 import type { GithubClient } from "@commonfabric/github-connector/client";
 import type { GithubFabricTarget } from "@commonfabric/github-connector/fabric";
 import type { GithubPullRequestCollection } from "@commonfabric/github-connector/types";
+import { test } from "@commonfabric/test-support/test";
 import {
   defaultGithubHostCliDependencies,
   type GithubHostCliDependencies,
@@ -152,7 +153,7 @@ function harness(options: {
   };
 }
 
-Deno.test("GitHub CLI help exits without opening the host", async () => {
+test("GitHub CLI help exits without opening the host", async () => {
   const logs: string[] = [];
   const { dependencies } = harness({ logs });
   dependencies.openFabric = () => {
@@ -163,7 +164,7 @@ Deno.test("GitHub CLI help exits without opening the host", async () => {
   assertEquals(logs.some((line) => line.includes("github-host")), true);
 });
 
-Deno.test("GitHub CLI once mode collects and cleans up", async () => {
+test("GitHub CLI once mode collects and cleans up", async () => {
   const { directory, path } = await writeConfig();
   const events: string[] = [];
   const logs: string[] = [];
@@ -203,7 +204,7 @@ Deno.test("GitHub CLI once mode collects and cleans up", async () => {
   }
 });
 
-Deno.test("GitHub CLI returns failure when initial collection fails", async () => {
+test("GitHub CLI returns failure when initial collection fails", async () => {
   const { directory, path } = await writeConfig();
   const errors: string[] = [];
   const events: string[] = [];
@@ -221,7 +222,7 @@ Deno.test("GitHub CLI returns failure when initial collection fails", async () =
   }
 });
 
-Deno.test("GitHub CLI schedules collections and drains on SIGTERM", async () => {
+test("GitHub CLI schedules collections and drains on SIGTERM", async () => {
   const { directory, path } = await writeConfig(1234);
   const logs: string[] = [];
   const listeners = new Map<Deno.Signal, () => void>();
@@ -269,7 +270,7 @@ Deno.test("GitHub CLI schedules collections and drains on SIGTERM", async () => 
   }
 });
 
-Deno.test("GitHub CLI reports setup and cleanup failures", async () => {
+test("GitHub CLI reports setup and cleanup failures", async () => {
   const errors: string[] = [];
   const { dependencies } = harness({ errors });
   dependencies.openFabric = () => Promise.reject("fabric unavailable");
@@ -307,7 +308,7 @@ Deno.test("GitHub CLI reports setup and cleanup failures", async () => {
   }
 });
 
-Deno.test("the default GitHub client posts to the configured endpoint with its token", async () => {
+test("the default GitHub client posts to the configured endpoint with its token", async () => {
   const requests: Array<{ url: string; authorization: string | null }> = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (input, init) => {
@@ -336,7 +337,7 @@ Deno.test("the default GitHub client posts to the configured endpoint with its t
   }]);
 });
 
-Deno.test("the default GitHub schedule repeats until it is cancelled", async () => {
+test("the default GitHub schedule repeats until it is cancelled", async () => {
   // The test's resource sanitizer fails the test if the interval outlives
   // the cancellation.
   const twoTicks = Promise.withResolvers<void>();

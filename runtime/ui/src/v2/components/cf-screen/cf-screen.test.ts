@@ -12,9 +12,9 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { footerFades } from "./cf-screen.ts";
 import { CFScreen } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A stand-in for a slotted element, carrying the two things the decision reads.

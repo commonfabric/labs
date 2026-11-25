@@ -19,6 +19,7 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { JSONSchema } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 import {
   encodeMemoryBoundary,
   type EntityDocument,
@@ -175,7 +176,7 @@ const authInvocation = (sessionOpen: SessionOpenAuthMetadata) => ({
   challenge: sessionOpen.challenge.value,
 });
 
-Deno.test("sync schema table experiment captures repeated schema savings", () => {
+test("sync schema table experiment captures repeated schema savings", () => {
   const sync = repeatedSchemaSync();
   const message = syncEffect(sync);
   const bytes = encodedBytes(message);
@@ -202,7 +203,7 @@ Deno.test("sync schema table experiment captures repeated schema savings", () =>
   );
 });
 
-Deno.test("sync schema table reports each repeated schema once", () => {
+test("sync schema table reports each repeated schema once", () => {
   const observed: JSONSchema[] = [];
 
   compressSessionSyncSchemas(repeatedSchemaSync(2), (schema) => {
@@ -212,7 +213,7 @@ Deno.test("sync schema table reports each repeated schema once", () => {
   assertEquals(observed, [internSchema(largeSchema(), true).schema]);
 });
 
-Deno.test("sync schema table preserves own __proto__ fields", () => {
+test("sync schema table preserves own __proto__ fields", () => {
   const value = JSON.parse(
     '{"__proto__":{"safe":true}}',
   ) as MutableFabricPlainObjectLayer;
@@ -245,7 +246,7 @@ Deno.test("sync schema table preserves own __proto__ fields", () => {
   assertEquals(compressedValue.__proto__, { safe: true });
 });
 
-Deno.test("sync schema table leaves legacy alias schemas inline", () => {
+test("sync schema table leaves legacy alias schemas inline", () => {
   // The mapper no longer treats `$alias.schema` as a schema position:
   // `$alias` records are Pattern-binding vocabulary, not links, and their
   // schema field is binding metadata that travels inline. The alias record
@@ -347,7 +348,7 @@ Deno.test("sync schema table leaves legacy alias schemas inline", () => {
   ]);
 });
 
-Deno.test("sync schema table survives malformed link envelope payloads", () => {
+test("sync schema table survives malformed link envelope payloads", () => {
   // Stored data can carry an envelope-shaped record whose payload is not a
   // record at all — cell-rep recognizes the envelope shape only. Compression
   // and expansion must treat these as ordinary data, not throw mid-sync (a
@@ -404,7 +405,7 @@ Deno.test("sync schema table survives malformed link envelope payloads", () => {
   );
 });
 
-Deno.test("sync schema table expansion rejects refs at uninterpreted positions", () => {
+test("sync schema table expansion rejects refs at uninterpreted positions", () => {
   // An older server may still intern legacy `$alias` schema positions.
   // This expander no longer interprets them; delivering the surviving ref
   // string as data would silently corrupt the doc, so expansion fails
@@ -443,7 +444,7 @@ Deno.test("sync schema table expansion rejects refs at uninterpreted positions",
   );
 });
 
-Deno.test("sync schema table interns only strict link envelopes", () => {
+test("sync schema table interns only strict link envelopes", () => {
   // Link recognition goes through the cell-rep link API, which defines a
   // legacy link as the single-key `{ "/": { "link@1": ... } }` envelope. An
   // envelope with sibling keys is NOT a link: its inner "schema" is inert
@@ -522,7 +523,7 @@ Deno.test("sync schema table interns only strict link envelopes", () => {
   );
 });
 
-Deno.test("sync schema table ignores inherited fields while finding schema refs", () => {
+test("sync schema table ignores inherited fields while finding schema refs", () => {
   const inherited = {
     hidden: {
       $alias: {
@@ -536,7 +537,7 @@ Deno.test("sync schema table ignores inherited fields while finding schema refs"
   assertEquals(findSyncSchemaRef(payload), undefined);
 });
 
-Deno.test("sync schema table leaves syncs without compressible schemas unchanged", () => {
+test("sync schema table leaves syncs without compressible schemas unchanged", () => {
   const sync: SessionSync = {
     type: "sync",
     fromSeq: 0,
@@ -577,7 +578,7 @@ Deno.test("sync schema table leaves syncs without compressible schemas unchanged
   assertStrictEquals(expandSessionSyncSchemas(emptyTableSync), emptyTableSync);
 });
 
-Deno.test("sync schema table expands unused tables and rejects bad refs", () => {
+test("sync schema table expands unused tables and rejects bad refs", () => {
   const schema: JSONSchema = { type: "string" };
   const schemaHash = internSchema(schema, true).taggedHashString;
   const syncWithUnusedTable: SchemaTableSessionSync = {
@@ -692,7 +693,7 @@ Deno.test("sync schema table expands unused tables and rejects bad refs", () => 
   );
 });
 
-Deno.test("sync schema table rejects refs without a populated table", () => {
+test("sync schema table rejects refs without a populated table", () => {
   const compressed = compressSessionSyncSchemas(
     repeatedSchemaSync(1),
   ) as SchemaTableSessionSync;
@@ -710,7 +711,7 @@ Deno.test("sync schema table rejects refs without a populated table", () => {
   );
 });
 
-Deno.test("sync schema table validates dangling refs without recursive traversal", () => {
+test("sync schema table validates dangling refs without recursive traversal", () => {
   const danglingRef = "schema-ref@2:sha256:missing";
   let deeplyNested: FabricValue = {
     $alias: {
@@ -749,7 +750,7 @@ Deno.test("sync schema table validates dangling refs without recursive traversal
   );
 });
 
-Deno.test("server schema table helpers ignore non-sync messages", () => {
+test("server schema table helpers ignore non-sync messages", () => {
   const hello = {
     type: "hello.ok",
     protocol: MEMORY_PROTOCOL,
@@ -798,7 +799,7 @@ Deno.test("server schema table helpers ignore non-sync messages", () => {
   );
 });
 
-Deno.test("server schema table helpers expand response sync payloads", () => {
+test("server schema table helpers expand response sync payloads", () => {
   const sync = repeatedSchemaSync(1);
   const response = {
     type: "response",
@@ -815,7 +816,7 @@ Deno.test("server schema table helpers expand response sync payloads", () => {
   assertEquals(expanded.ok?.sync, sync);
 });
 
-Deno.test("memory server negotiates schema-table v2 sync frames per connection", async () => {
+test("memory server negotiates schema-table v2 sync frames per connection", async () => {
   const flags = getMemoryProtocolFlags();
   const run = async (
     mode: "v2" | "legacy" | "off",
@@ -908,7 +909,7 @@ Deno.test("memory server negotiates schema-table v2 sync frames per connection",
   assertEquals(await run("off"), undefined);
 });
 
-Deno.test("findSyncSchemaRef ignores inherited object properties", () => {
+test("findSyncSchemaRef ignores inherited object properties", () => {
   // The traversal must only follow own properties: an enumerable INHERITED
   // key carrying a link-payload shape must not surface as a reserved
   // reference. Built on a custom prototype so the test never touches
@@ -929,7 +930,7 @@ Deno.test("findSyncSchemaRef ignores inherited object properties", () => {
   );
 });
 
-Deno.test("sync schema table compression preserves own __proto__ keys", () => {
+test("sync schema table compression preserves own __proto__ keys", () => {
   const schema: JSONSchema = { type: "object" };
   const canonical = internSchema(schema, true);
   const linkWithSchema = {
@@ -982,7 +983,7 @@ Deno.test("sync schema table compression preserves own __proto__ keys", () => {
   );
 });
 
-Deno.test("findSyncSchemaRef traverses arrays and containsSyncSchemaRefString scans leaves", () => {
+test("findSyncSchemaRef traverses arrays and containsSyncSchemaRefString scans leaves", () => {
   assertEquals(
     findSyncSchemaRef([
       "plain",
@@ -1015,7 +1016,7 @@ Deno.test("findSyncSchemaRef traverses arrays and containsSyncSchemaRefString sc
   );
 });
 
-Deno.test("schema table and reserved-ref detection handle modern cell-rep links", () => {
+test("schema table and reserved-ref detection handle modern cell-rep links", () => {
   // Under modernCellRep, links are FabricLink instances rather than plain
   // envelopes; recognition must go through the cell-rep chokepoint or every
   // link becomes an opaque leaf and both interning and hardening no-op.
@@ -1084,7 +1085,7 @@ Deno.test("schema table and reserved-ref detection handle modern cell-rep links"
   }
 });
 
-Deno.test("schema subtrees are opaque: nested link shapes inside schemas are data", () => {
+test("schema subtrees are opaque: nested link shapes inside schemas are data", () => {
   // A schema whose `default` embeds a link-shaped structure with a reserved
   // ref string: the whole schema is one position. Compression swallows it
   // wholesale, expansion restores it byte-identically without interpreting
@@ -1136,7 +1137,7 @@ Deno.test("schema subtrees are opaque: nested link shapes inside schemas are dat
   assertEquals(expanded, sync);
 });
 
-Deno.test("validator covers mapper schema positions plus legacy aliases", () => {
+test("validator covers mapper schema positions plus legacy aliases", () => {
   // Drift guard: findSyncSchemaRef is iterative (stack-safe) while
   // mapLinkSchemas is recursive. The validator must see every position the
   // mapper interprets — equal on link positions — plus exactly one extra
@@ -1295,7 +1296,7 @@ Deno.test("validator covers mapper schema positions plus legacy aliases", () => 
   }
 });
 
-Deno.test("encodeMemoryBoundary embeds reserved prefixes verbatim", () => {
+test("encodeMemoryBoundary embeds reserved prefixes verbatim", () => {
   // Pins the property the substring gates depend on (see the note on
   // encodeMemoryBoundary): strings serialize byte-verbatim, so a payload's
   // text contains a reserved prefix iff some string value carries it.
@@ -1317,7 +1318,7 @@ Deno.test("encodeMemoryBoundary embeds reserved prefixes verbatim", () => {
   assert(!withoutRefs.includes("schema-cas@1:"));
 });
 
-Deno.test("sync schema table leaves schema-document references inline", () => {
+test("sync schema table leaves schema-document references inline", () => {
   // A reference-only schema position — `{ "$ref": "cid:…" }` pointing at a
   // content-addressed schema document — is already smaller than a table
   // ref, so compression leaves it in place. A sibling inline schema in the
@@ -1382,7 +1383,7 @@ Deno.test("sync schema table leaves schema-document references inline", () => {
   assertEquals(expandSessionSyncSchemas(compressed), sync);
 });
 
-Deno.test("stored-document validation ignores schema-document references", () => {
+test("stored-document validation ignores schema-document references", () => {
   // The engine's stored-document gate refuses reserved TRANSPORT prefixes in
   // schema positions; an object-valued `cid:` reference is the STORAGE form
   // and passes. This pins the boundary between the two.
@@ -1422,7 +1423,7 @@ Deno.test("stored-document validation ignores schema-document references", () =>
   assertEquals(containsSyncSchemaRefString(linkWithTransportRef), true);
 });
 
-Deno.test("sync schema table compresses boolean link schemas", () => {
+test("sync schema table compresses boolean link schemas", () => {
   // The schema-document carve-out asks its ref-only question of every
   // compressible schema, booleans included; a boolean is not a ref-only
   // position, so it compresses like any other schema and round-trips.
@@ -1469,7 +1470,7 @@ Deno.test("sync schema table compresses boolean link schemas", () => {
   );
 });
 
-Deno.test("sync schema table interns a crossing's schema and expands it again", () => {
+test("sync schema table interns a crossing's schema and expands it again", () => {
   const schema: JSONSchema = {
     type: "object",
     properties: { name: { type: "string" } },
@@ -1513,7 +1514,7 @@ Deno.test("sync schema table interns a crossing's schema and expands it again", 
   assertEquals(expandSessionSyncSchemas(compressed), sync);
 });
 
-Deno.test("sync schema table refuses a crossing's table reference with no table to resolve it", () => {
+test("sync schema table refuses a crossing's table reference with no table to resolve it", () => {
   const sync: SessionSync = {
     type: "sync",
     fromSeq: 0,

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   link,
@@ -12,6 +11,7 @@ import {
   type TaskRow,
   words,
 } from "../lib/view/tasklog.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const URL = "https://github.com/octo/repo/pull/7";
 

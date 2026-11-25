@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { parseCellPath } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("parseCellPath", () => {
   it("should parse simple string paths", () => {

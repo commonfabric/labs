@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { type Stub, stub } from "@std/testing/mock";
 import {
   advanceCurrencyCursor,
@@ -23,6 +22,12 @@ import {
   storeCurrencyRecords,
 } from "../v2/currency-index.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   applyCommit,
   applyWaveCommit,

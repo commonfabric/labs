@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { guestDocument } from "../src/guest-document.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("guest-document", () => {
   describe("guestDocument()", () => {

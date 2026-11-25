@@ -5,7 +5,6 @@
 
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
@@ -18,6 +17,7 @@ import { TransformationContext } from "../src/core/mod.ts";
 import { createReactiveWrapperForExpression } from "../src/transformers/expression-rewrite/rewrite-helpers.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { batchTypeCheckFixtures } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ROUTER_FIXTURE = `import {
   Default,

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -9,6 +8,12 @@ import {
   repositoryRelativePath,
   repositoryRoot,
 } from "./paths.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("paths", () => {
   let outside: string;

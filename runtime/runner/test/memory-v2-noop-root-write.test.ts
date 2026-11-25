@@ -1,10 +1,11 @@
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
 
-Deno.test("memory v2 treats an identical root write as a no-op", async () => {
+test("memory v2 treats an identical root write as a no-op", async () => {
   const signer = await Identity.fromPassphrase("memory-v2-noop-root-write");
   const storage = StorageManager.emulate({
     as: signer,
@@ -55,7 +56,7 @@ Deno.test("memory v2 treats an identical root write as a no-op", async () => {
   await storage.close();
 });
 
-Deno.test("memory v2 no-op commits do not reopen storage for an empty native commit", async () => {
+test("memory v2 no-op commits do not reopen storage for an empty native commit", async () => {
   const signer = await Identity.fromPassphrase("memory-v2-noop-commit-open");
   const storage = StorageManager.emulate({
     as: signer,
@@ -97,7 +98,7 @@ Deno.test("memory v2 no-op commits do not reopen storage for an empty native com
   }
 });
 
-Deno.test("memory v2 no-op commits skip stale-read validation when there are no effective operations", async () => {
+test("memory v2 no-op commits skip stale-read validation when there are no effective operations", async () => {
   const signer = await Identity.fromPassphrase("memory-v2-noop-stale-read");
   const storage = StorageManager.emulate({
     as: signer,
@@ -138,7 +139,7 @@ Deno.test("memory v2 no-op commits skip stale-read validation when there are no 
   }
 });
 
-Deno.test("memory v2 treats an identical nested write as a no-op", async () => {
+test("memory v2 treats an identical nested write as a no-op", async () => {
   const signer = await Identity.fromPassphrase("memory-v2-noop-nested-write");
   const storage = StorageManager.emulate({
     as: signer,

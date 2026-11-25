@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import { getMetaLink } from "../src/link-utils.ts";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";

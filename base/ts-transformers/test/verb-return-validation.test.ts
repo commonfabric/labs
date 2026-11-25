@@ -12,10 +12,10 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function undeclaredReturnErrors(
   diagnostics: readonly TransformationDiagnostic[],
@@ -40,7 +40,7 @@ async function errorsIn(patternBody: string) {
   return undeclaredReturnErrors(diagnostics);
 }
 
-Deno.test("explicit return under a void-declared action errors", async () => {
+test("explicit return under a void-declared action errors", async () => {
   const errors = await errorsIn(`
     const verb = action((id: string) => {
       return { picked: id };
@@ -51,7 +51,7 @@ Deno.test("explicit return under a void-declared action errors", async () => {
   assertStringIncludes(errors[0].message, "nothing tells a caller");
 });
 
-Deno.test("a declared result makes the same body legal", async () => {
+test("a declared result makes the same body legal", async () => {
   const errors = await errorsIn(`
     const verb = action<string, { picked: string }>((id) => {
       return { picked: id };
@@ -60,7 +60,7 @@ Deno.test("a declared result makes the same body legal", async () => {
   assertEquals(errors.length, 0);
 });
 
-Deno.test("an explicit void declaration still counts as value-less", async () => {
+test("an explicit void declaration still counts as value-less", async () => {
   const errors = await errorsIn(`
     const verb = action<string, void>((id) => {
       return { picked: id };
@@ -69,7 +69,7 @@ Deno.test("an explicit void declaration still counts as value-less", async () =>
   assertEquals(errors.length, 1);
 });
 
-Deno.test("concise arrow completion values stay silently absorbed", async () => {
+test("concise arrow completion values stay silently absorbed", async () => {
   // `Cell.set` returns the cell; nobody wrote a verb result here. This is the
   // recorded no-inference decision, and it must never trip the guard.
   const errors = await errorsIn(`
@@ -78,7 +78,7 @@ Deno.test("concise arrow completion values stay silently absorbed", async () => 
   assertEquals(errors.length, 0);
 });
 
-Deno.test("bare return and `return undefined` are control flow", async () => {
+test("bare return and `return undefined` are control flow", async () => {
   const errors = await errorsIn(`
     const verb = action((id: string) => {
       if (id.length === 0) return;
@@ -89,7 +89,7 @@ Deno.test("bare return and `return undefined` are control flow", async () => {
   assertEquals(errors.length, 0);
 });
 
-Deno.test("returns inside nested functions belong to their own callers", async () => {
+test("returns inside nested functions belong to their own callers", async () => {
   const errors = await errorsIn(`
     const verb = action((id: string) => {
       const label = [id].map((part) => {
@@ -101,7 +101,7 @@ Deno.test("returns inside nested functions belong to their own callers", async (
   assertEquals(errors.length, 0);
 });
 
-Deno.test("each offending return is reported", async () => {
+test("each offending return is reported", async () => {
   const errors = await errorsIn(`
     const verb = action((id: string) => {
       if (id.length === 0) {
@@ -113,7 +113,7 @@ Deno.test("each offending return is reported", async () => {
   assertEquals(errors.length, 2);
 });
 
-Deno.test("explicit return under a void-declared handler errors, on every call form", async () => {
+test("explicit return under a void-declared handler errors, on every call form", async () => {
   const typed = await errorsIn(`
     const verb = handler((id: string, _state: { note: string }) => {
       return { picked: id };
@@ -134,7 +134,7 @@ Deno.test("explicit return under a void-declared handler errors, on every call f
   assertEquals(schemas.length, 1);
 });
 
-Deno.test("calls and identifiers are the launch idiom, not a dropped result", async () => {
+test("calls and identifiers are the launch idiom, not a dropped result", async () => {
   // Returning navigateTo(...), a freshly created piece, or any other call /
   // identifier is consumed by the runtime's reactive branch with or without
   // a declared result — real patterns (notebook's create-and-return actions)
@@ -156,7 +156,7 @@ Deno.test("calls and identifiers are the launch idiom, not a dropped result", as
   assertEquals(navigate.length, 0);
 });
 
-Deno.test("plain-shaped returns error: templates and concatenation", async () => {
+test("plain-shaped returns error: templates and concatenation", async () => {
   const template = await errorsIn(`
     const verb = action((id: string) => {
       return \`picked-\${id}\`;
@@ -172,7 +172,7 @@ Deno.test("plain-shaped returns error: templates and concatenation", async () =>
   assertEquals(concat.length, 1);
 });
 
-Deno.test("signed numeric literals are plain-shaped", async () => {
+test("signed numeric literals are plain-shaped", async () => {
   const negative = await errorsIn(`
     const verb = action((id: string) => {
       if (id.length === 0) {
@@ -192,7 +192,7 @@ Deno.test("signed numeric literals are plain-shaped", async () => {
   assertEquals(negatedRead.length, 0);
 });
 
-Deno.test("an any-assertion opts the return out (fail-open)", async () => {
+test("an any-assertion opts the return out (fail-open)", async () => {
   const errors = await errorsIn(`
     const verb = action((id: string) => {
       return { picked: id } as any;
@@ -201,7 +201,7 @@ Deno.test("an any-assertion opts the return out (fail-open)", async () => {
   assertEquals(errors.length, 0);
 });
 
-Deno.test("verbs authored inline in JSX attributes are judged too", async () => {
+test("verbs authored inline in JSX attributes are judged too", async () => {
   // The stock ts.visitEachChild skips JsxExpression.expression (the repo's
   // documented visitor trap); the JSX-aware visitor keeps the guard honest
   // for verbs written directly in attributes.
@@ -230,7 +230,7 @@ Deno.test("verbs authored inline in JSX attributes are judged too", async () => 
   assertEquals(undeclaredReturnErrors(diagnostics).length, 1);
 });
 
-Deno.test("a handler declaring its result is legal", async () => {
+test("a handler declaring its result is legal", async () => {
   const errors = await errorsIn(`
     const verb = handler<string, { note: string }, { picked: string }>(
       (id, _state) => {

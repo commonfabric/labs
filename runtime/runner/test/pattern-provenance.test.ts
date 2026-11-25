@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isPattern } from "../src/builder/types.ts";
@@ -7,6 +6,7 @@ import {
   isTrustedPattern,
 } from "../src/builder/pattern-metadata.ts";
 import { freezeVerifiedPlainData } from "../src/sandbox/plain-data.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("pattern provenance brand", () => {
   // `isPattern` is a purely structural check, so an attacker can forge the

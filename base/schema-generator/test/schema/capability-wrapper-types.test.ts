@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
@@ -7,6 +6,7 @@ import {
   createTestProgram,
   getTypeFromCode,
 } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function findInterfaceMemberTypeNode(
   sourceFile: ts.SourceFile,

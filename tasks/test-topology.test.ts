@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import * as path from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   capabilitiesBySuite,
   claimsFor,
@@ -14,6 +13,7 @@ import {
   parseSkipList,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { CAPABILITIES } from "./ci-capabilities.ts";
 import { commandsWrittenIn } from "./check-test-shuffle.ts";
 import { collectMeasuredSetDebt } from "./coverage-metrics.ts";

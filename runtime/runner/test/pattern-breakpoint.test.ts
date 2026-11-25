@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { patternBreakpoint } from "../src/pattern-breakpoint.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("patternBreakpoint", () => {
   // patternBreakpoint stands in for `fn(argument)` when a debugger breakpoint

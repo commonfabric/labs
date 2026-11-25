@@ -47,12 +47,17 @@
 // issued its writes can leave the origin empty. The in-flight sibling and
 // the never-persisting index-served flow are exactly those suppliers.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { getLogger, type LogMessage } from "@commonfabric/logger";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";

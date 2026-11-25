@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { MemorySpace } from "../interface.ts";
 import type { HelloOkMessage, Operation, ServerMessage } from "../v2.ts";

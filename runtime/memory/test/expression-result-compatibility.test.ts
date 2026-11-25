@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   decodeMemoryBoundary,
@@ -17,6 +16,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-expression-result-compatibility";
 

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   assertLivenessEquivalence,
@@ -14,6 +13,7 @@ import {
 } from "../../src/scheduler/dependency-graph.ts";
 import { NodeRegistry } from "../../src/scheduler/node-record.ts";
 import type { Action } from "../../src/scheduler/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A liveness graph with a materializer set a test can toggle, the way the

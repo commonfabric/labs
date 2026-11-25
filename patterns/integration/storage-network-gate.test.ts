@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { StorageNetworkGate } from "./storage-network-gate.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("storage network gate", () => {
   it("forwards HTTP requests with the target host and original body", async () => {

@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { deepFreeze, hashStringOf } from "@";
 import { getContainersHashedForTestingOnly } from "@/for-testing-only.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("getContainersHashed()", () => {
   it("counts each array and plain object a hash feeds, and none a cached hash serves", () => {

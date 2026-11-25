@@ -1,9 +1,9 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import { decomposeSchema } from "../src/schema-decompose.ts";
 import {

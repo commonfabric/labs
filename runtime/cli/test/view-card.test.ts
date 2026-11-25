@@ -4,6 +4,7 @@ import { cpLen } from "../lib/view/ansi.ts";
 import { buildPeekCard } from "../lib/view/card.ts";
 import { findDependencies } from "../lib/view/references.ts";
 import type { Document } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function cardFor(doc: Document, label: string) {
   const node = doc.flatStructure.find((n) => n.label === label)!;
@@ -11,7 +12,7 @@ function cardFor(doc: Document, label: string) {
   return { node, card, text: card.info.map((l) => l.text).join("\n") };
 }
 
-Deno.test("card: lift shows contract, schema summary, outline and call site", () => {
+test("card: lift shows contract, schema summary, outline and call site", () => {
   const doc = parseDocument(SAMPLE);
   const { card, text } = cardFor(doc, "lift __cfLift_1");
   assert(card.title.includes("lift __cfLift_1"));
@@ -30,7 +31,7 @@ Deno.test("card: lift shows contract, schema summary, outline and call site", ()
   assert(text.includes("__cfLift_1({"), "shows the call-site context");
 });
 
-Deno.test("card: origin line names transformer-generated nodes only", () => {
+test("card: origin line names transformer-generated nodes only", () => {
   const doc = parseDocument(SAMPLE);
   // A synthetic helper matches the transformer's vocabulary: it is named.
   const lift = cardFor(doc, "lift __cfLift_1").text;
@@ -44,7 +45,7 @@ Deno.test("card: origin line names transformer-generated nodes only", () => {
   );
 });
 
-Deno.test("card: functions and closures show a type signature when annotated", () => {
+test("card: functions and closures show a type signature when annotated", () => {
   const doc = parseDocument(`// transformed: /app.ts
 function __cfHardenFn(fn: Function): void {
     return;
@@ -68,7 +69,7 @@ const untyped = (a, b) => a + b;`);
   assert(untyped.includes("params"), "still shows parameter names");
 });
 
-Deno.test("card: pattern shows captures→returns and dependencies", () => {
+test("card: pattern shows captures→returns and dependencies", () => {
   const doc = parseDocument(SAMPLE);
   const { text } = cardFor(doc, "pattern myPattern");
   assert(text.includes("{ input }"), "captures");
@@ -77,20 +78,20 @@ Deno.test("card: pattern shows captures→returns and dependencies", () => {
   assert(text.includes("__cfLift_1"), "names the dependency");
 });
 
-Deno.test("card: interface shows its members", () => {
+test("card: interface shows its members", () => {
   const doc = parseDocument(SAMPLE);
   const { text } = cardFor(doc, "interface Bar");
   assert(text.includes("MEMBERS") || text.includes("INTERFACE"));
   assert(text.includes("x") && text.includes("number"));
 });
 
-Deno.test("card: breadcrumb shows the enclosing path", () => {
+test("card: breadcrumb shows the enclosing path", () => {
   const doc = parseDocument(SAMPLE);
   const { text } = cardFor(doc, "lift __cfLift_1");
   assert(text.includes("path"), "has a breadcrumb line");
 });
 
-Deno.test("card: source is the verbatim node lines", () => {
+test("card: source is the verbatim node lines", () => {
   const doc = parseDocument(SAMPLE);
   const { node, card } = cardFor(doc, "pattern myPattern");
   const expected = doc.lines.slice(node.startLine, node.endLine + 1);
@@ -101,7 +102,7 @@ Deno.test("card: source is the verbatim node lines", () => {
   );
 });
 
-Deno.test("card: info lines measure non-BMP glyphs as one display column", () => {
+test("card: info lines measure non-BMP glyphs as one display column", () => {
   // The kind glyph `𝑻` is a surrogate pair: its span must advance one column
   // so later spans on the line stay aligned with the cell renderer.
   const doc = parseDocument(SAMPLE);
@@ -119,7 +120,7 @@ Deno.test("card: info lines measure non-BMP glyphs as one display column", () =>
   }
 });
 
-Deno.test("card: every info line reconstructs from its spans", () => {
+test("card: every info line reconstructs from its spans", () => {
   const doc = parseDocument(SAMPLE);
   const { card } = cardFor(doc, "lift __cfLift_1");
   for (const line of card.info) {
@@ -127,7 +128,7 @@ Deno.test("card: every info line reconstructs from its spans", () => {
   }
 });
 
-Deno.test("card: targets reference real card lines and destinations", () => {
+test("card: targets reference real card lines and destinations", () => {
   const doc = parseDocument(SAMPLE);
   const { card } = cardFor(doc, "lift __cfLift_1");
   assert(card.targets.length > 0, "lift card has selectable targets");
@@ -145,7 +146,7 @@ Deno.test("card: targets reference real card lines and destinations", () => {
   );
 });
 
-Deno.test("card: dependency targets carry a definition offset", () => {
+test("card: dependency targets carry a definition offset", () => {
   const doc = parseDocument(SAMPLE);
   const { card } = cardFor(doc, "pattern myPattern");
   const dep = card.targets.find((t) => t.defOffset !== undefined);
@@ -178,7 +179,7 @@ export const test = pattern((__cf_pattern_input) => {
     return { contacts: r.key("contacts") };
 }, { type: "object" } as const satisfies __cfHelpers.JSONSchema, { type: "object" } as const satisfies __cfHelpers.JSONSchema);`;
 
-Deno.test("card: schemas render as TypeScript-like types", () => {
+test("card: schemas render as TypeScript-like types", () => {
   const doc = parseDocument(NESTED);
   const lift = doc.flatStructure.find((n) =>
     n.kind === "builder" && n.name === "__cfLift_1"
@@ -208,7 +209,7 @@ export const test = pattern((__cf_pattern_input) => {
     return { ok: page.key("pending") };
 }, { type: "object" } as const satisfies __cfHelpers.JSONSchema, { type: "object" } as const satisfies __cfHelpers.JSONSchema);`;
 
-Deno.test("card: a builder call without schemas shows type args and arg keys", () => {
+test("card: a builder call without schemas shows type args and arg keys", () => {
   const doc = parseDocument(FETCH);
   const fd = doc.flatStructure.find((n) => n.label === "fetchJson")!;
   assert(fd, "found the fetchJson node");
@@ -229,7 +230,7 @@ Deno.test("card: a builder call without schemas shows type args and arg keys", (
   assert(text.includes("args  { url }"), "shows the argument keys");
 });
 
-Deno.test("card: dependencies stay within the node's own span", () => {
+test("card: dependencies stay within the node's own span", () => {
   const doc = parseDocument(FETCH);
   const fd = doc.flatStructure.find((n) => n.label === "fetchJson")!;
   const deps = findDependencies(doc, fd);
@@ -239,14 +240,14 @@ Deno.test("card: dependencies stay within the node's own span", () => {
   assert(!deps.some((d) => d.name === "page"), "page is not a dependency");
 });
 
-Deno.test("card: a lift with schemas does not also show redundant type args", () => {
+test("card: a lift with schemas does not also show redundant type args", () => {
   const doc = parseDocument(SAMPLE);
   const { text } = cardFor(doc, "lift __cfLift_1");
   assert(text.toLowerCase().includes("input"), "still shows input schema");
   assert(!text.includes("type args"), "no redundant type-args line");
 });
 
-Deno.test("card: a call site borrows its declaration's contract", () => {
+test("card: a call site borrows its declaration's contract", () => {
   const doc = parseDocument(NESTED);
   // the call-site `__cfLift_1({...})` node has no schemas of its own
   const callSite = doc.flatStructure.find((n) =>

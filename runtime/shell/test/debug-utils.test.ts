@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { type Stub, stub } from "@std/testing/mock";
 
 import {
@@ -14,6 +13,12 @@ import {
   type WriteStackTraceMatcher,
 } from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   clearRuntimeDebugGlobals,

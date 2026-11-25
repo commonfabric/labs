@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { type Operation, type PatchOp, toDocumentPath } from "../../v2.ts";
 import {
@@ -12,6 +11,12 @@ import {
   selectDocHead,
   selectSessionOverwritePathsSince,
 } from "../../v2/engine.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("selectSessionOverwritePathsSince()", () => {
   // Every case asks about one session — `session` opened by `principal` — on

@@ -12,6 +12,7 @@ import {
   getStaticDefaultTypeNode,
   toStringPath,
 } from "../src/transformers/destructuring-lowering.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;
@@ -135,7 +136,7 @@ function assertSingleNumericProp(
   assertEquals(member.type.literal.text, value);
 }
 
-Deno.test("getStaticDefaultTypeNode lowers a bare bigint literal to its literal type", () => {
+test("getStaticDefaultTypeNode lowers a bare bigint literal to its literal type", () => {
   const { sourceFile, checker } = createProgram("const big = 7n;");
   const context = testContext(checker);
 
@@ -147,7 +148,7 @@ Deno.test("getStaticDefaultTypeNode lowers a bare bigint literal to its literal 
   assertEquals(printType(typeNode, sourceFile), "7n");
 });
 
-Deno.test("getStaticDefaultTypeNode bails on an array whose element is non-static", () => {
+test("getStaticDefaultTypeNode bails on an array whose element is non-static", () => {
   // A bare identifier element has no static literal form, so the whole array
   // default is rejected (returns undefined).
   const { sourceFile, checker } = createProgram(
@@ -164,7 +165,7 @@ Deno.test("getStaticDefaultTypeNode bails on an array whose element is non-stati
   );
 });
 
-Deno.test("getStaticDefaultTypeNode rejects an object literal with a non-assignment property", () => {
+test("getStaticDefaultTypeNode rejects an object literal with a non-assignment property", () => {
   // A shorthand property assignment is not a PropertyAssignment, so the object
   // default cannot be lowered.
   const { sourceFile, checker } = createProgram(
@@ -181,7 +182,7 @@ Deno.test("getStaticDefaultTypeNode rejects an object literal with a non-assignm
   );
 });
 
-Deno.test("getStaticDefaultTypeNode lowers a numeric object key and rejects a computed key", () => {
+test("getStaticDefaultTypeNode lowers a numeric object key and rejects a computed key", () => {
   const { sourceFile, checker } = createProgram(
     "const numericKey = { 3: 1 };\n" +
       "const computedKey = { [Symbol.iterator]: 4 };\n",
@@ -206,7 +207,7 @@ Deno.test("getStaticDefaultTypeNode lowers a numeric object key and rejects a co
   );
 });
 
-Deno.test("getStaticDefaultTypeNode lowers a no-substitution-template object key", () => {
+test("getStaticDefaultTypeNode lowers a no-substitution-template object key", () => {
   // A template-literal property name is not producible from object-literal
   // source syntax, so synthesize the object literal and drive the branch that
   // treats a no-substitution template key as a string key.
@@ -226,7 +227,7 @@ Deno.test("getStaticDefaultTypeNode lowers a no-substitution-template object key
   assertSingleNumericProp(typeNode, "tpl", "2");
 });
 
-Deno.test("getStaticDefaultTypeNode rejects an object whose property value is non-static", () => {
+test("getStaticDefaultTypeNode rejects an object whose property value is non-static", () => {
   const { sourceFile, checker } = createProgram(
     "declare const dyn: number; const obj = { count: dyn };",
   );
@@ -241,7 +242,7 @@ Deno.test("getStaticDefaultTypeNode rejects an object whose property value is no
   );
 });
 
-Deno.test("collectDestructureBindings records a plain identifier binding at its path", () => {
+test("collectDestructureBindings records a plain identifier binding at its path", () => {
   const { checker } = createProgram("declare const x: number;");
   const context = testContext(checker);
   const bindings: DestructureBinding[] = [];
@@ -264,7 +265,7 @@ Deno.test("collectDestructureBindings records a plain identifier binding at its 
   assertEquals(unsupported.length, 0);
 });
 
-Deno.test("collectDestructureBindings uses the shorthand identifier as the key", () => {
+test("collectDestructureBindings uses the shorthand identifier as the key", () => {
   const { sourceFile, checker } = createProgram(
     "declare const input: any; const { plain } = input;",
   );
@@ -292,7 +293,7 @@ Deno.test("collectDestructureBindings uses the shorthand identifier as the key",
   assertEquals(toStringPath(bindings[0]!.path), ["root", "plain"]);
 });
 
-Deno.test("collectDestructureBindings reports an unsupported property-name kind", () => {
+test("collectDestructureBindings reports an unsupported property-name kind", () => {
   // Only a private-identifier property name can slip past the identifier /
   // string / numeric / computed branches, and that form is not producible from
   // destructuring source, so synthesize the binding element.
@@ -328,7 +329,7 @@ Deno.test("collectDestructureBindings reports an unsupported property-name kind"
   );
 });
 
-Deno.test("collectDestructureBindings rejects a non-static default on an array element", () => {
+test("collectDestructureBindings rejects a non-static default on an array element", () => {
   const { sourceFile, checker } = createProgram(
     "declare const fallback: number; declare const input: any;\n" +
       "const [first = fallback] = input;",
@@ -361,7 +362,7 @@ Deno.test("collectDestructureBindings rejects a non-static default on an array e
   assertEquals(bindings.length, 0);
 });
 
-Deno.test("collectDestructureBindings rejects an array default under a dynamic parent path", () => {
+test("collectDestructureBindings rejects an array default under a dynamic parent path", () => {
   const { sourceFile, checker } = createProgram(
     "declare const input: any; const [first = 5] = input;",
   );
@@ -394,7 +395,7 @@ Deno.test("collectDestructureBindings rejects an array default under a dynamic p
   );
 });
 
-Deno.test("collectDestructureBindings rejects an object element without a key and a non-identifier name", () => {
+test("collectDestructureBindings rejects an object element without a key and a non-identifier name", () => {
   // Object destructuring source syntax cannot express an element that has no
   // property name yet binds a nested pattern, so synthesize that binding
   // element to reach the branch that reports it as unsupported.
@@ -437,7 +438,7 @@ Deno.test("collectDestructureBindings rejects an object element without a key an
   );
 });
 
-Deno.test("collectDestructureBindings rejects an unsupported computed key that is not a fabric key", () => {
+test("collectDestructureBindings rejects an unsupported computed key that is not a fabric key", () => {
   // A computed key expression that neither resolves to a fabric key nor to a
   // static/known key is unsupported.
   const { sourceFile, checker } = createProgram(
@@ -471,7 +472,7 @@ Deno.test("collectDestructureBindings rejects an unsupported computed key that i
   );
 });
 
-Deno.test("collectDestructureBindings rejects a default on a dynamic object key", () => {
+test("collectDestructureBindings rejects a default on a dynamic object key", () => {
   // A computed key that stays a dynamic expression cannot carry a default,
   // because the default path would contain a non-string segment.
   const { sourceFile, checker } = createProgram(
@@ -505,7 +506,7 @@ Deno.test("collectDestructureBindings rejects a default on a dynamic object key"
   );
 });
 
-Deno.test("collectDestructureBindings emits a direct SELF key expression for a simple binding", () => {
+test("collectDestructureBindings emits a direct SELF key expression for a simple binding", () => {
   const { sourceFile, checker } = createProgram(
     "declare const input: any; declare const __cfHelpers: any;\n" +
       "const { [__cfHelpers.SELF]: selfValue } = input;",
@@ -540,7 +541,7 @@ Deno.test("collectDestructureBindings emits a direct SELF key expression for a s
   );
 });
 
-Deno.test("collectDestructureBindings rejects nested destructuring under a SELF key", () => {
+test("collectDestructureBindings rejects nested destructuring under a SELF key", () => {
   const { sourceFile, checker } = createProgram(
     "declare const input: any; declare const __cfHelpers: any;\n" +
       "const { [__cfHelpers.SELF]: { inner } } = input;",

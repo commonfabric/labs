@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   isAllowedTsLibHelperDeclaration,
   normalizeExact,
 } from "../src/sandbox/tslib-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const IMPORT_DEFAULT =
   `var __importDefault = (this && this.__importDefault) || function (mod) {

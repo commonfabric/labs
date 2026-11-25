@@ -6,10 +6,10 @@
  * as one that never crossed it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { IndexTrackingStack } from "../src/index-tracking-stack.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The marks the class arranges itself around, which a test has to straddle.

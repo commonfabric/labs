@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, type FabricValue } from "@commonfabric/data-model";
 import { encodePointer } from "@commonfabric/memory/v2/path";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { buildReactivityPathsForChanges } from "../../src/storage/v2-transaction.ts";
 import { seededRandom, shuffled } from "../combine-order.ts";

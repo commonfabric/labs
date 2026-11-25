@@ -8,7 +8,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -29,6 +28,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const owner = await Identity.fromPassphrase("fabrifile-store");
 // A member of the store's space, who may write in it but does not own it.

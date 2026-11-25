@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -11,6 +10,7 @@ import {
   parseModule,
 } from "../transformed-ast.ts";
 import { transformSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("jsx-expression-site-router", () => {
   it("leaves a non-reactive ternary over a whole-branch function as authored", async () => {

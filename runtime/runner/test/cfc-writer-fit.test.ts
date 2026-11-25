@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,

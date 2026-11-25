@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { CFAspectRatio } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** The bottom padding of `element`'s container, which sets its height. */
 const paddingOf = (element: CFAspectRatio): string =>

@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import type { Document } from "../lib/view/model.ts";
 import { findMatches } from "../lib/view/actions.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** A document whose lines are exactly `texts`, with no spans/structure. Enough
  * for `findMatches`, which only reads each line's `text`. */
@@ -14,7 +15,7 @@ function linesDoc(...texts: string[]): Document {
   };
 }
 
-Deno.test(
+test(
   "findMatches: case-sensitive columns map non-BMP characters to one column (line 88)",
   () => {
     // An upper-case letter in the query forces the case-sensitive path, which
@@ -45,7 +46,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "findMatches: case-insensitive fold maps offsets back to original columns (line 79)",
   () => {
     // A lower-case query takes the folded haystack path, whose colOf maps each

@@ -14,12 +14,12 @@
  * `lift(...)` call, and it is that emitted schema the runtime reads by.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { callSchemas, parseModule } from "../transformed-ast.ts";
 import { transformSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The input schema emitted for a `lift` reading `{ index }`, where `body` is

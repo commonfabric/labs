@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -48,6 +47,7 @@ import {
   namesInstancesByDefault,
 } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 import { createTransactionCommitReceipt } from "../../runtime/runner/src/storage/commit-receipt.ts";
 import { interceptTransaction } from "../../runtime/runner/test/support/intercept-transaction.ts";

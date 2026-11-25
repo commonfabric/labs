@@ -4,7 +4,6 @@
  * mock Responses, and the injected `fetch` wrapper.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fetchInputUrl,
@@ -13,6 +12,7 @@ import {
   matchFetchMock,
   readFetchMocks,
 } from "../lib/fetch-mock.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("readFetchMocks", () => {
   it("returns valid entries from a module's fetchMocks export", () => {

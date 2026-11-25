@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { publishShellApp } from "../src/globals.ts";
 import type { ShellApp } from "../src/lib/app-state.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("globals", () => {
   describe("publishShellApp()", () => {

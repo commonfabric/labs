@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { readPatternTestList } from "../integration.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import { loadPatternSuites } from "./patterns.ts";

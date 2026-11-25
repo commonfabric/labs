@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import { hasValueAtPath, readValueAtPath } from "../src/storage/v2-path.ts";
 
 describe("memory v2 path helpers", () => {

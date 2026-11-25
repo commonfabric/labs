@@ -11,8 +11,9 @@ import {
   THIS_POLICY,
   v,
 } from "@commonfabric/api/cfc-authoring";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("CFC exchange-rule authoring helpers produce inert declaration data", () => {
+test("CFC exchange-rule authoring helpers produce inert declaration data", () => {
   const principal = v("principal");
   const role = v("role");
   const requiredRole = cfcPattern.hasRole(
@@ -49,7 +50,7 @@ Deno.test("CFC exchange-rule authoring helpers produce inert declaration data", 
   assertNotStrictEquals(rules, [rule]);
 });
 
-Deno.test("CFC exchange-rule declarations are deeply frozen", () => {
+test("CFC exchange-rule declarations are deeply frozen", () => {
   const rule = exchangeRule({
     appliesTo: THIS_POLICY,
     guard: { policyState: [{ enabled: true }] },
@@ -70,6 +71,6 @@ Deno.test("CFC exchange-rule declarations are deeply frozen", () => {
   }, TypeError);
 });
 
-Deno.test("CFC pattern variables require a non-empty identifier", () => {
+test("CFC pattern variables require a non-empty identifier", () => {
   assertThrows(() => v(""), TypeError, "non-empty");
 });

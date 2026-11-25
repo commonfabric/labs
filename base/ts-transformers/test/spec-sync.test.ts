@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { assertEquals } from "@std/assert";
 
 import { CFC_TRANSFORMER_STAGE_NAMES } from "../src/cf-pipeline.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The current-behavior spec (descriptive: code wins on conflict) restates a
 // small number of enumerable facts whose canonical source is a constant in

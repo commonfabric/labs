@@ -4,6 +4,7 @@
 import { expect } from "@std/expect";
 
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
+import { test } from "@commonfabric/test-support/test";
 
 import { isNativeEd25519Supported } from "../src/ed25519/utils.ts";
 import { Identity } from "../src/identity.ts";
@@ -12,7 +13,7 @@ import {
   realmValueFromKeyPair,
 } from "../src/key-pair-transport.ts";
 
-Deno.test("keyPairFromRealmValue() returns a key pair holding material that signs as the encoded one", async () => {
+test("keyPairFromRealmValue() returns a key pair holding material that signs as the encoded one", async () => {
   const identity = await Identity.generate({ implementation: "noble" });
 
   const decoded = keyPairFromRealmValue(
@@ -24,7 +25,7 @@ Deno.test("keyPairFromRealmValue() returns a key pair holding material that sign
   expect((await Identity.fromKeyPair(decoded)).did()).toBe(identity.did());
 });
 
-Deno.test("keyPairFromRealmValue() returns a key pair holding the encoded handles", async () => {
+test("keyPairFromRealmValue() returns a key pair holding the encoded handles", async () => {
   if (!await isNativeEd25519Supported()) return;
   const identity = await Identity.generate({ implementation: "webcrypto" });
 
@@ -37,7 +38,7 @@ Deno.test("keyPairFromRealmValue() returns a key pair holding the encoded handle
   expect((await Identity.fromKeyPair(decoded)).did()).toBe(identity.did());
 });
 
-Deno.test("keyPairFromRealmValue() throws, naming the carrier, for an encoding of something else", () => {
+test("keyPairFromRealmValue() throws, naming the carrier, for an encoding of something else", () => {
   expect(() =>
     keyPairFromRealmValue(realmFromFabricValue("not a key"), "The message")
   ).toThrow("The message is not a key pair.");

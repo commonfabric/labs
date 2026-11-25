@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
@@ -10,6 +9,12 @@ import {
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {

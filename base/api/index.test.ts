@@ -12,8 +12,9 @@ import {
   type FabricBytes,
   type FetchBinaryResult,
 } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("api module loads and re-exports the CFC canonical alias names", () => {
+test("api module loads and re-exports the CFC canonical alias names", () => {
   expect(Array.isArray(CFC_CANONICAL_ALIAS_NAMES)).toBe(true);
   expect(CFC_CANONICAL_ALIAS_NAMES.length).toBeGreaterThan(0);
   for (const name of CFC_CANONICAL_ALIAS_NAMES) {
@@ -21,7 +22,7 @@ Deno.test("api module loads and re-exports the CFC canonical alias names", () =>
   }
 });
 
-Deno.test("FetchBinaryResult describes bytes plus a media type", () => {
+test("FetchBinaryResult describes bytes plus a media type", () => {
   // Type-level pin for the fetchBinary result shape: a FabricBytes buffer and a
   // media-type string. Constructed structurally so the assertion runs without a
   // real FabricBytes instance (the constructor lives in the runtime, not here).

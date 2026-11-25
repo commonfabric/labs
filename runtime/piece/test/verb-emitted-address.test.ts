@@ -9,9 +9,9 @@
  * pattern through `cf piece call` against the same gate.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { resolveEmittedAddressArguments } from "../src/verb-input.ts";
 import { handlerVerbEvents } from "../src/verb-listing.ts";
 

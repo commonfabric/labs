@@ -20,13 +20,13 @@
  * object lists them in.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   getEventType,
   setPropDefault,
   styleObjectToCssString,
 } from "../src/render-utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("render-utils", () => {
   describe("getEventType", () => {

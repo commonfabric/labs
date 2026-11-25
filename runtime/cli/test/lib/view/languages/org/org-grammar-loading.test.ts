@@ -5,12 +5,12 @@
  * leave this file's evidence unable to fail.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { finishGrammarLoads } from "../../../../../lib/view/languages/language.ts";
 import { buildPreparedView } from "../../../../../lib/view/mod.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Every class the colored lines give to an exact fragment. */
 function classesOf(lines: readonly Line[], text: string): TokenClass[] {

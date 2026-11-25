@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { hollowedMarkerPrefixOf } from "../v2/compact.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("hollowedMarkerPrefixOf()", () => {
   it("returns the text up to and including the name of the `bytes` member", () => {

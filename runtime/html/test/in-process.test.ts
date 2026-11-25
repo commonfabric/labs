@@ -12,6 +12,7 @@ import { assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 import { renderInProcess } from "../src/in-process.ts";
 import { MockDoc } from "../src/mock-doc.ts";
 
@@ -38,7 +39,7 @@ function makeContainer() {
   };
 }
 
-Deno.test("in-process render - piece UI to HTML", async (t) => {
+test("in-process render - piece UI to HTML", async (t) => {
   const runtime = makeRuntime();
   try {
     await t.step("renders nested elements, props and text", async () => {
@@ -194,7 +195,7 @@ Deno.test("in-process render - piece UI to HTML", async (t) => {
   }
 });
 
-Deno.test("in-process render - delivers events", async (t) => {
+test("in-process render - delivers events", async (t) => {
   const runtime = makeRuntime();
   try {
     /**
@@ -250,7 +251,7 @@ Deno.test("in-process render - delivers events", async (t) => {
   }
 });
 
-Deno.test("in-process render - reports a bound prop without a runtime client", async (t) => {
+test("in-process render - reports a bound prop without a runtime client", async (t) => {
   const runtime = makeRuntime();
   try {
     await t.step("a $value binding names its cell", async () => {

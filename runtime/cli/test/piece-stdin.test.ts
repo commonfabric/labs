@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { drainStdin } from "../commands/piece.ts";
 import { readTerminalLine, type TerminalStreams } from "../lib/piece.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A terminal whose input arrives in `chunks`, recording what was written. */
 function terminal(chunks: string[]): TerminalStreams & { written: string[] } {

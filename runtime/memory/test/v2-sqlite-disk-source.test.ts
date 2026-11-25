@@ -10,7 +10,6 @@
 // docs/specs/sqlite-builtin/plans/on-disk-source.md. Writes/reactivity for
 // on-disk sources are deferred (Q12/Q13/Q14).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -23,6 +22,12 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 function seedDiskDb(path: string): void {
   const seed = new Database(path);

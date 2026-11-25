@@ -6,7 +6,6 @@
  * thing the gate exists to stop.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
@@ -19,6 +18,7 @@ import {
   staleRecords,
   writtenCommands,
 } from "./check-test-shuffle.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const SHUFFLE = "--shuffle=$(deno task -q test-seed)";
 

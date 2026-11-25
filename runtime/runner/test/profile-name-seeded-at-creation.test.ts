@@ -8,11 +8,16 @@
  * in storage before anything opens the profile.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";

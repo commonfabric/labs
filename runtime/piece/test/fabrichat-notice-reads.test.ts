@@ -7,14 +7,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  it,
-} from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
@@ -27,6 +19,14 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { adoptCatalogRoomsOf } from "../src/ops/adopt-catalog-rooms.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 

@@ -3,8 +3,9 @@ import {
   configuredStorePath,
   resolveSpaceStoreUrl,
 } from "../v2/storage-path.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("resolveSpaceStoreUrl uses a dedicated engine subdirectory in directory mode", () => {
+test("resolveSpaceStoreUrl uses a dedicated engine subdirectory in directory mode", () => {
   const root = new URL("file:///tmp/cf-memory/");
   const subject = "did:key:z6Mkk-test" as const;
 
@@ -14,7 +15,7 @@ Deno.test("resolveSpaceStoreUrl uses a dedicated engine subdirectory in director
   );
 });
 
-Deno.test("resolveSpaceStoreUrl uses a sibling engine directory in single-file mode", () => {
+test("resolveSpaceStoreUrl uses a sibling engine directory in single-file mode", () => {
   const file = new URL("file:///tmp/cf-memory/space.sqlite");
   const subject = "did:key:z6Mkk-test" as const;
 
@@ -28,7 +29,7 @@ Deno.test("resolveSpaceStoreUrl uses a sibling engine directory in single-file m
   );
 });
 
-Deno.test("resolveSpaceStoreUrl rejects traversal-like subjects", () => {
+test("resolveSpaceStoreUrl rejects traversal-like subjects", () => {
   const root = new URL("file:///tmp/cf-memory/");
 
   assertThrows(
@@ -48,7 +49,7 @@ Deno.test("resolveSpaceStoreUrl rejects traversal-like subjects", () => {
   );
 });
 
-Deno.test("resolveSpaceStoreUrl rejects malformed unicode subjects with validation error", () => {
+test("resolveSpaceStoreUrl rejects malformed unicode subjects with validation error", () => {
   const root = new URL("file:///tmp/cf-memory/");
 
   assertThrows(
@@ -58,7 +59,7 @@ Deno.test("resolveSpaceStoreUrl rejects malformed unicode subjects with validati
   );
 });
 
-Deno.test("configuredStorePath reads a store location in either form", () => {
+test("configuredStorePath reads a store location in either form", () => {
   // The form a server's own configuration uses. The path comes back as the URL
   // spells it, so the trailing separator the default carries survives.
   assertEquals(

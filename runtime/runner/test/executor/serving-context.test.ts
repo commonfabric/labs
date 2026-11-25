@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import * as MemoryClient from "@commonfabric/memory/v2/client";
+import { describe, it } from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import {
   inServingContext,

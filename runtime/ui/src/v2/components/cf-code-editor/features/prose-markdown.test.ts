@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { EditorState } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
@@ -6,6 +5,7 @@ import { GFM } from "@lezer/markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { Decoration } from "@codemirror/view";
 import { buildProseDecorations } from "./prose-markdown.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 //
 // Helpers

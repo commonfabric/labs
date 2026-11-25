@@ -22,7 +22,6 @@
  * a `ProblematicValue` rather than an exception.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy, stub } from "@std/testing/mock";
 
@@ -64,6 +63,7 @@ import {
 } from "@/fabric-primitives";
 import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
 import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Shared test `LiveEnvironment`: `getCell()` always throws (no test

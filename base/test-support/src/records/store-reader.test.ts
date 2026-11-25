@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -8,6 +7,7 @@ import {
   readObject,
 } from "./store-reader.ts";
 import { buildObjectBody, type RunContext, type TestRecord } from "./schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const RECORD: TestRecord = {
   line: "record",

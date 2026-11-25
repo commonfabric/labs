@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { defer } from "@commonfabric/async/defer";
@@ -17,6 +16,12 @@ import {
   TestStorageManager,
 } from "./memory-v2-test-utils.ts";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("runner-document-release");

@@ -13,13 +13,18 @@
 // sqlite-read-clearance-multi-runtime.test.ts.
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { match, principal } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";

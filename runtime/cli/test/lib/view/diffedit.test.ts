@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseDiff } from "../../../lib/view/diff.ts";
 import {
@@ -9,6 +8,7 @@ import {
 } from "../../../lib/view/diffdoc.ts";
 import { diffSource } from "../../../lib/view/diffedit.ts";
 import type { Document } from "../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A diff of a Markdown file, which is colored from the whole file. */
 const OPENED = [

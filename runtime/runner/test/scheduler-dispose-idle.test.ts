@@ -14,10 +14,10 @@
  * docs/development/waiting-in-tests.md tells you not to add.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runningClock } from "@commonfabric/test-support/fake-clock";
 import { Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";

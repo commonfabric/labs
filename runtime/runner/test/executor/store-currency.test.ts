@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   type CurrencyBatch,
   type CurrencyRecord,
@@ -13,6 +12,12 @@ import {
   type Engine,
   open,
 } from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { HostMemoryServer } from "../../src/executor/host-memory-server.ts";
 import {
   emptyServingLoopStats,

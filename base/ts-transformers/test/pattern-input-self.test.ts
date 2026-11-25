@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -12,6 +11,7 @@ import {
   patternSchemas,
 } from "./transformed-ast.ts";
 import { validateSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PRELUDE = `
   import {

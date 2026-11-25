@@ -5,6 +5,7 @@ import {
   performanceViewNav,
   progressPanel,
 } from "./performance-views.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const state = {
   repo: "cfs" as const,
@@ -13,7 +14,7 @@ const state = {
   stat: "p99",
 };
 
-Deno.test("performance view URLs share one canonical route and translate sort modes", () => {
+test("performance view URLs share one canonical route and translate sort modes", () => {
   assertEquals(
     performanceViewHref("runtime", state),
     "/bench?view=runtime&amp;repo=cfs&amp;days=14&amp;sort=file&amp;stat=p99",
@@ -28,7 +29,7 @@ Deno.test("performance view URLs share one canonical route and translate sort mo
   );
 });
 
-Deno.test("performance view navigation marks one stable-size selector active", () => {
+test("performance view navigation marks one stable-size selector active", () => {
   const html = performanceViewNav("ci", state);
 
   assertStringIncludes(html, ">Runtime benchmarks</a>");
@@ -39,7 +40,7 @@ Deno.test("performance view navigation marks one stable-size selector active", (
   assertStringIncludes(html, ">CI run Gantt</a>");
 });
 
-Deno.test("performance progress panel says what the page's script says about a collection under way", () => {
+test("performance progress panel says what the page's script says about a collection under way", () => {
   const collection = (
     phase: CollectionProgress["phase"],
     totalRuns = 9,

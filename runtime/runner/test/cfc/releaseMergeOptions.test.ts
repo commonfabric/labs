@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { releaseMergeOptions } from "../../src/cfc/prepare.ts";
 import { Runtime } from "../../src/runtime.ts";

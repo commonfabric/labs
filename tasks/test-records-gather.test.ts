@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -20,6 +19,12 @@ import {
   type ResultLine,
   ResultsWriter,
 } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Writes `lines` into the spool `dir`, as one test file's module does. */
 function writeResults(

@@ -23,6 +23,7 @@ import {
   getPatternToolHoistablePatternCall,
 } from "../../src/ast/call-kind.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // Harness A: a bare source-file-only program (no lib, no module resolution).
 // Mirrors the setup in call-kind.test.ts for cases that need only structural
@@ -169,7 +170,7 @@ function findFirstIdentifier(
   return found;
 }
 
-Deno.test("getPatternToolHoistablePatternCall lifts the bare pattern call out of a patternTool call", () => {
+test("getPatternToolHoistablePatternCall lifts the bare pattern call out of a patternTool call", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { patternTool, pattern } from "commonfabric";
     const value = patternTool(pattern(() => 1), { p: 1 });
@@ -180,7 +181,7 @@ Deno.test("getPatternToolHoistablePatternCall lifts the bare pattern call out of
   assertEquals(hoistable?.getText(), "pattern(() => 1)");
 });
 
-Deno.test("getPatternToolHoistablePatternCall returns undefined when patternTool has no arguments", () => {
+test("getPatternToolHoistablePatternCall returns undefined when patternTool has no arguments", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { patternTool } from "commonfabric";
     const value = patternTool();
@@ -192,7 +193,7 @@ Deno.test("getPatternToolHoistablePatternCall returns undefined when patternTool
   assertEquals(getPatternToolHoistablePatternCall(call, checker), undefined);
 });
 
-Deno.test("getPatternToolHoistablePatternCall ignores calls that are not patternTool", () => {
+test("getPatternToolHoistablePatternCall ignores calls that are not patternTool", () => {
   const { sourceFile, checker } = createProgram(`
     declare function plain(body: () => number, params?: unknown): number;
     const value = plain(() => 1, { p: 1 });
@@ -202,7 +203,7 @@ Deno.test("getPatternToolHoistablePatternCall ignores calls that are not pattern
   assertEquals(getPatternToolHoistablePatternCall(call, checker), undefined);
 });
 
-Deno.test("getLiftAppliedInputAndCallback returns undefined when the applied lift call has no input argument", () => {
+test("getLiftAppliedInputAndCallback returns undefined when the applied lift call has no input argument", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { lift } from "commonfabric";
     const value = lift((v: number) => v + 1)();
@@ -215,7 +216,7 @@ Deno.test("getLiftAppliedInputAndCallback returns undefined when the applied lif
   assertEquals(getLiftAppliedInputAndCallback(call, checker), undefined);
 });
 
-Deno.test("getCapabilitySummaryCallbackArgument reads the callback off a lift-applied call", () => {
+test("getCapabilitySummaryCallbackArgument reads the callback off a lift-applied call", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { lift } from "commonfabric";
     const value = lift((v: number) => v + 1)(3);
@@ -228,7 +229,7 @@ Deno.test("getCapabilitySummaryCallbackArgument reads the callback off a lift-ap
   assertEquals(callback.parameters[0]?.name.getText(), "v");
 });
 
-Deno.test("isReactiveOriginExpression is false for a non-call, non-new expression", () => {
+test("isReactiveOriginExpression is false for a non-call, non-new expression", () => {
   const { sourceFile, checker } = createProgram(`
     const value = 1 + 2;
   `);
@@ -237,7 +238,7 @@ Deno.test("isReactiveOriginExpression is false for a non-call, non-new expressio
   assertEquals(isReactiveOriginExpression(expression, checker), false);
 });
 
-Deno.test("isReactiveOriginExpression follows a new expression to a cell factory", () => {
+test("isReactiveOriginExpression follows a new expression to a cell factory", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Writable } from "commonfabric";
     const value = new Writable(1);
@@ -252,7 +253,7 @@ Deno.test("isReactiveOriginExpression follows a new expression to a cell factory
   assertEquals(isReactiveOriginExpression(expression, checker), true);
 });
 
-Deno.test("classifyWildcardTraversalCall recognizes Object.keys by syntax when the symbol is unresolved", () => {
+test("classifyWildcardTraversalCall recognizes Object.keys by syntax when the symbol is unresolved", () => {
   const { sourceFile, checker } = createProgram(`
     declare const Object: any;
     const value = Object.keys({ a: 1 });
@@ -267,7 +268,7 @@ Deno.test("classifyWildcardTraversalCall recognizes Object.keys by syntax when t
   );
 });
 
-Deno.test("classifyWildcardTraversalCall recognizes JSON.stringify by syntax when the symbol is unresolved", () => {
+test("classifyWildcardTraversalCall recognizes JSON.stringify by syntax when the symbol is unresolved", () => {
   const { sourceFile, checker } = createProgram(`
     declare const JSON: any;
     const value = JSON.stringify({ a: 1 });
@@ -277,7 +278,7 @@ Deno.test("classifyWildcardTraversalCall recognizes JSON.stringify by syntax whe
   assertEquals(classifyWildcardTraversalCall(call, checker), "json-stringify");
 });
 
-Deno.test("classifyWildcardTraversalCall resolves Object.keys through its ObjectConstructor declaration", () => {
+test("classifyWildcardTraversalCall resolves Object.keys through its ObjectConstructor declaration", () => {
   const { sourceFile, checker } = createProgram(`
     interface ObjectConstructor {
       keys(o: object): string[];
@@ -295,7 +296,7 @@ Deno.test("classifyWildcardTraversalCall resolves Object.keys through its Object
   );
 });
 
-Deno.test("classifyWildcardTraversalCall resolves JSON.stringify through its JSON declaration", () => {
+test("classifyWildcardTraversalCall resolves JSON.stringify through its JSON declaration", () => {
   const { sourceFile, checker } = createProgram(`
     interface JSON {
       stringify(value: unknown): string;
@@ -308,7 +309,7 @@ Deno.test("classifyWildcardTraversalCall resolves JSON.stringify through its JSO
   assertEquals(classifyWildcardTraversalCall(call, checker), "json-stringify");
 });
 
-Deno.test("getPatternBuilderCallbackArgument unwraps a function-hardening wrapper around the pattern callback", () => {
+test("getPatternBuilderCallbackArgument unwraps a function-hardening wrapper around the pattern callback", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { pattern } from "commonfabric";
     declare function __cfHardenFn0<T>(fn: T): T;
@@ -323,7 +324,7 @@ Deno.test("getPatternBuilderCallbackArgument unwraps a function-hardening wrappe
   assertEquals(callback.parameters[0]?.name.getText(), "input");
 });
 
-Deno.test("getPatternBuilderCallbackArgument follows an identifier bound to the callback arrow", () => {
+test("getPatternBuilderCallbackArgument follows an identifier bound to the callback arrow", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { pattern } from "commonfabric";
     const body = (input: unknown) => input;
@@ -338,7 +339,7 @@ Deno.test("getPatternBuilderCallbackArgument follows an identifier bound to the 
   assertEquals(callback.parameters[0]?.name.getText(), "input");
 });
 
-Deno.test("getPatternBuilderCallbackArgument stops on a cyclic callback identifier binding", () => {
+test("getPatternBuilderCallbackArgument stops on a cyclic callback identifier binding", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { pattern } from "commonfabric";
     const cyclicA: any = (cyclicB as any);
@@ -352,7 +353,7 @@ Deno.test("getPatternBuilderCallbackArgument stops on a cyclic callback identifi
   assertEquals(getPatternBuilderCallbackArgument(call, checker), undefined);
 });
 
-Deno.test("classifyArrayMethodResultSinkCall recognizes .join by syntax when the join symbol is unresolved", () => {
+test("classifyArrayMethodResultSinkCall recognizes .join by syntax when the join symbol is unresolved", () => {
   const { sourceFile, checker } = createProgram(`
     interface Array<T> {
       map<U>(cb: (v: T) => U): U[];
@@ -370,7 +371,7 @@ Deno.test("classifyArrayMethodResultSinkCall recognizes .join by syntax when the
   });
 });
 
-Deno.test("classifyArrayMethodResultSinkCall resolves .join through its Array declaration", () => {
+test("classifyArrayMethodResultSinkCall resolves .join through its Array declaration", () => {
   const { sourceFile, checker } = createProgram(`
     interface Array<T> {
       map<U>(cb: (v: T) => U): U[];
@@ -387,7 +388,7 @@ Deno.test("classifyArrayMethodResultSinkCall resolves .join through its Array de
   });
 });
 
-Deno.test("classifyArrayMethodResultSinkCall rejects a non-join member that resolves to an Array declaration", () => {
+test("classifyArrayMethodResultSinkCall rejects a non-join member that resolves to an Array declaration", () => {
   const { sourceFile, checker } = createProgram(`
     interface Array<T> {
       map<U>(cb: (v: T) => U): U[];
@@ -402,7 +403,7 @@ Deno.test("classifyArrayMethodResultSinkCall rejects a non-join member that reso
   assertEquals(classifyArrayMethodResultSinkCall(call, checker), undefined);
 });
 
-Deno.test("detectCallKind classifies imported runtime calls with their export names", () => {
+test("detectCallKind classifies imported runtime calls with their export names", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { str, llm } from "commonfabric";
     const strValue = str(\`x\`);
@@ -429,7 +430,7 @@ Deno.test("detectCallKind classifies imported runtime calls with their export na
   );
 });
 
-Deno.test("detectCallKind classifies ifElse, when, unless, wish, and generate calls from commonfabric", () => {
+test("detectCallKind classifies ifElse, when, unless, wish, and generate calls from commonfabric", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import {
       ifElse, when, unless, wish, generateText, generateObject, patternTool,
@@ -473,7 +474,7 @@ Deno.test("detectCallKind classifies ifElse, when, unless, wish, and generate ca
   );
 });
 
-Deno.test("detectCallKind resolves the cell factory imported from commonfabric", () => {
+test("detectCallKind resolves the cell factory imported from commonfabric", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { cell } from "commonfabric";
     const value = cell(1);
@@ -488,7 +489,7 @@ Deno.test("detectCallKind resolves the cell factory imported from commonfabric",
   );
 });
 
-Deno.test("detectNewExpressionKind reads a cell factory through a perSpace scoped constructor access", () => {
+test("detectNewExpressionKind reads a cell factory through a perSpace scoped constructor access", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Writable } from "commonfabric";
     const value = new Writable.perSpace(1);
@@ -504,7 +505,7 @@ Deno.test("detectNewExpressionKind reads a cell factory through a perSpace scope
   );
 });
 
-Deno.test("detectCallKind classifies Cell.of static factory and Cell.for through their declarations", () => {
+test("detectCallKind classifies Cell.of static factory and Cell.for through their declarations", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Cell } from "commonfabric";
     declare const C: typeof Cell;
@@ -522,7 +523,7 @@ Deno.test("detectCallKind classifies Cell.of static factory and Cell.for through
   assertEquals(forKind?.kind, "cell-for");
 });
 
-Deno.test("detectCallKind follows a const alias of an ambient builder", () => {
+test("detectCallKind follows a const alias of an ambient builder", () => {
   const { sourceFile, checker } = createProgram(`
     declare function pattern<T>(cb: () => T): T;
     const aliased = pattern;
@@ -540,7 +541,7 @@ Deno.test("detectCallKind follows a const alias of an ambient builder", () => {
   );
 });
 
-Deno.test("detectCallKind resolves a namespace-member builder to its commonfabric declaration", () => {
+test("detectCallKind resolves a namespace-member builder to its commonfabric declaration", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import * as CF from "commonfabric";
     const value = CF.pattern(() => 1);
@@ -558,7 +559,7 @@ Deno.test("detectCallKind resolves a namespace-member builder to its commonfabri
   );
 });
 
-Deno.test("detectCallKind recognizes a synthetic __cfHelpers builder call by callee syntax", () => {
+test("detectCallKind recognizes a synthetic __cfHelpers builder call by callee syntax", () => {
   const { sourceFile, checker } = createProgram(`
     declare const __cfHelpers: any;
     const value = __cfHelpers.pattern(() => 1);
@@ -575,7 +576,7 @@ Deno.test("detectCallKind recognizes a synthetic __cfHelpers builder call by cal
   );
 });
 
-Deno.test("detectCallKind recognizes a bare unresolved builder identifier by name", () => {
+test("detectCallKind recognizes a bare unresolved builder identifier by name", () => {
   const { sourceFile, checker } = createProgram(`
     // @ts-expect-error intentionally unresolved
     const value = pattern(() => 1);
@@ -592,7 +593,7 @@ Deno.test("detectCallKind recognizes a bare unresolved builder identifier by nam
   );
 });
 
-Deno.test("detectCallKind recognizes synthetic __cfHelpers runtime and cell-factory calls without a callee symbol", () => {
+test("detectCallKind recognizes synthetic __cfHelpers runtime and cell-factory calls without a callee symbol", () => {
   const { sourceFile, checker } = createProgram(`
     declare const __cfHelpers: any;
     const strValue = __cfHelpers.str(\`x\`);
@@ -650,7 +651,7 @@ Deno.test("detectCallKind recognizes synthetic __cfHelpers runtime and cell-fact
   );
 });
 
-Deno.test("isSimpleReactiveAccessExpression walks property and element access down to a reactive cell root", () => {
+test("isSimpleReactiveAccessExpression walks property and element access down to a reactive cell root", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Cell } from "commonfabric";
     declare const root: Cell<{ items: number[] }>;
@@ -668,7 +669,7 @@ Deno.test("isSimpleReactiveAccessExpression walks property and element access do
   assertEquals(isSimpleReactiveAccessExpression(plain, checker), false);
 });
 
-Deno.test("classifyArrayCallbackContainerCall downgrades a reactive .map consumed by a following element access", () => {
+test("classifyArrayCallbackContainerCall downgrades a reactive .map consumed by a following element access", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Cell } from "commonfabric";
     declare const items: Cell<number[]>;
@@ -694,7 +695,7 @@ Deno.test("classifyArrayCallbackContainerCall downgrades a reactive .map consume
   assertEquals(isConsumedByTerminalChainCall(mapCall), true);
 });
 
-Deno.test("classifyArrayCallbackContainerCall keeps a reactive .map reactive when it is not consumed by a chain", () => {
+test("classifyArrayCallbackContainerCall keeps a reactive .map reactive when it is not consumed by a chain", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Cell } from "commonfabric";
     declare const items: Cell<number[]>;
@@ -713,7 +714,7 @@ Deno.test("classifyArrayCallbackContainerCall keeps a reactive .map reactive whe
   assertEquals(isConsumedByTerminalChainCall(call), false);
 });
 
-Deno.test("isConsumedByTerminalChainCall reports true when the call result is itself invoked", () => {
+test("isConsumedByTerminalChainCall reports true when the call result is itself invoked", () => {
   const { sourceFile } = createProgram(`
     declare const make: () => (() => number);
     const value = make()();
@@ -729,7 +730,7 @@ Deno.test("isConsumedByTerminalChainCall reports true when the call result is it
   assertEquals(isConsumedByTerminalChainCall(inner), true);
 });
 
-Deno.test("hasReactiveCollectionProvenance treats a builder callback parameter as a reactive collection root", () => {
+test("hasReactiveCollectionProvenance treats a builder callback parameter as a reactive collection root", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { computed } from "commonfabric";
     const value = computed((rows: number[]) => rows.map((n: number) => n + 1));
@@ -745,7 +746,7 @@ Deno.test("hasReactiveCollectionProvenance treats a builder callback parameter a
   );
 });
 
-Deno.test("isReactiveValueExpression follows a variable initialized by a reactive-origin call", () => {
+test("isReactiveValueExpression follows a variable initialized by a reactive-origin call", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { computed } from "commonfabric";
     const derived = computed(() => 1);
@@ -758,7 +759,7 @@ Deno.test("isReactiveValueExpression follows a variable initialized by a reactiv
   assertEquals(isReactiveValueExpression(ident, checker), true);
 });
 
-Deno.test("detectCallKind ignores a non-const let binding of a builder", () => {
+test("detectCallKind ignores a non-const let binding of a builder", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { pattern } from "commonfabric";
     let aliased = pattern;
@@ -771,7 +772,7 @@ Deno.test("detectCallKind ignores a non-const let binding of a builder", () => {
   assertEquals(detectCallKind(call, checker), undefined);
 });
 
-Deno.test("detectNewExpressionKind follows a const alias chain to a commonfabric cell constructor", () => {
+test("detectNewExpressionKind follows a const alias chain to a commonfabric cell constructor", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Writable } from "commonfabric";
     const First = Writable;
@@ -791,7 +792,7 @@ Deno.test("detectNewExpressionKind follows a const alias chain to a commonfabric
   );
 });
 
-Deno.test("detectNewExpressionKind returns undefined for a new expression with an unresolved callee", () => {
+test("detectNewExpressionKind returns undefined for a new expression with an unresolved callee", () => {
   const { sourceFile, checker } = createProgram(`
     // @ts-expect-error intentionally unresolved
     const value = new Unknown(1);
@@ -806,7 +807,7 @@ Deno.test("detectNewExpressionKind returns undefined for a new expression with a
   assertEquals(detectNewExpressionKind(expression, checker), undefined);
 });
 
-Deno.test("detectNewExpressionKind resolves a namespace-member cell constructor through its declaration", () => {
+test("detectNewExpressionKind resolves a namespace-member cell constructor through its declaration", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import * as CF from "commonfabric";
     const value = new CF.Writable(1);
@@ -824,7 +825,7 @@ Deno.test("detectNewExpressionKind resolves a namespace-member cell constructor 
   );
 });
 
-Deno.test("detectNewExpressionKind returns undefined for a new expression with a non-identifier callee", () => {
+test("detectNewExpressionKind returns undefined for a new expression with a non-identifier callee", () => {
   const { sourceFile, checker } = createProgram(`
     declare const ctors: any;
     const value = new ctors[0](1);
@@ -839,7 +840,7 @@ Deno.test("detectNewExpressionKind returns undefined for a new expression with a
   assertEquals(detectNewExpressionKind(expression, checker), undefined);
 });
 
-Deno.test("detectCallKind returns a non-builder call kind through a const alias initializer", () => {
+test("detectCallKind returns a non-builder call kind through a const alias initializer", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { ifElse } from "commonfabric";
     const chosen = ifElse;
@@ -852,7 +853,7 @@ Deno.test("detectCallKind returns a non-builder call kind through a const alias 
   assertEquals(detectCallKind(call, checker)?.kind, "ifElse");
 });
 
-Deno.test("detectCallKind returns undefined when a const alias initializer resolves to no kind", () => {
+test("detectCallKind returns undefined when a const alias initializer resolves to no kind", () => {
   const { sourceFile, checker } = createProgram(`
     declare function plain(): number;
     const alias = plain;
@@ -865,7 +866,7 @@ Deno.test("detectCallKind returns undefined when a const alias initializer resol
   assertEquals(detectCallKind(call, checker), undefined);
 });
 
-Deno.test("isReactiveValueSymbol treats a reactive array-method callback parameter as reactive", () => {
+test("isReactiveValueSymbol treats a reactive array-method callback parameter as reactive", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Cell } from "commonfabric";
     declare const items: Cell<{ n: number }[]>;
@@ -881,7 +882,7 @@ Deno.test("isReactiveValueSymbol treats a reactive array-method callback paramet
   );
 });
 
-Deno.test("isReactiveValueExpression follows a variable bound to a lowered reactive array-method call", () => {
+test("isReactiveValueExpression follows a variable bound to a lowered reactive array-method call", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { Cell } from "commonfabric";
     declare const items: Cell<number[]>;
@@ -895,7 +896,7 @@ Deno.test("isReactiveValueExpression follows a variable bound to a lowered react
   assertEquals(isReactiveValueExpression(ident, checker), true);
 });
 
-Deno.test("hasReactiveCollectionProvenance restricts implicit reactive parameters to the given scope", () => {
+test("hasReactiveCollectionProvenance restricts implicit reactive parameters to the given scope", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { computed } from "commonfabric";
     const outer = computed((rows: number[]) => {

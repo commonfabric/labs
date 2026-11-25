@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type {
   HarnessAssistantTranscriptMessage,
@@ -19,6 +18,12 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A workspace whose commands complete without starting a sandbox process. */
 class FakeSandboxRuntime implements SandboxRuntime {

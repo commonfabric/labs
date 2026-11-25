@@ -5,11 +5,11 @@
 // These tests pin that maps differing only in a `FabricBytes` value are
 // unequal, and equal-content ones equal.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { mapsEqual } from "../src/scheduler/topology.ts";
 
 describe("mapsEqual", () => {

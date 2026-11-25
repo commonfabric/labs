@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   consoleRunHandles,
@@ -18,6 +17,7 @@ import {
   type HarnessCellLabels,
 } from "../../src/contracts/cell-labels.ts";
 import { consoleCellLabelIndex } from "../../console/cell-labels.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const call = (
   id: string,

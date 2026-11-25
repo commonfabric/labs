@@ -5,7 +5,6 @@
  * module injected, so no disk import runs in a unit test.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -18,6 +17,12 @@ import {
   programEntryIdentity,
   resolveLocalSourceProgram,
 } from "@commonfabric/piece/ops/bulk-local";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { type RepairRunRequest, runRepair, zeroRowFixer } from "../lib/bulk.ts";
 import { resetUnreportedRunGuardsForTest } from "../lib/unreported-run.ts";

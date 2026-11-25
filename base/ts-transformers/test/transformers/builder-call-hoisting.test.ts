@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import { validateSource } from "../utils.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { calleeName, parseModule } from "../transformed-ast.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The callee names of the calls that initialize the module-scope `__cfLift_N`

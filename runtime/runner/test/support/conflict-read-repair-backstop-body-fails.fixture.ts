@@ -9,8 +9,9 @@
 
 import { expect } from "@std/expect";
 import { rideReadRepairBackstop } from "./conflict-read-repair-backstop-scenario.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("a body that rides the backstop and also fails its assertion", async () => {
+test("a body that rides the backstop and also fails its assertion", async () => {
   await rideReadRepairBackstop();
   expect(true, "the body's own assertion, deliberately failing").toBe(false);
 });

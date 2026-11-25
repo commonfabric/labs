@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { pressKey } from "@commonfabric/deno-web-test/commands";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   createMockCellHandle,
@@ -26,7 +27,7 @@ for (
     },
   ]
 ) {
-  Deno.test(`cf-checkbox synchronizes accessible state when its bound cell ${description}`, async () => {
+  test(`cf-checkbox synchronizes accessible state when its bound cell ${description}`, async () => {
     const cell = createMockCellHandle<boolean>(initial);
     const element = document.createElement("cf-checkbox") as CFCheckbox;
     element.checked = cell;
@@ -56,7 +57,7 @@ for (
   });
 }
 
-Deno.test("cf-checkbox preserves mixed and disabled states across bound cell updates", async () => {
+test("cf-checkbox preserves mixed and disabled states across bound cell updates", async () => {
   const cell = createMockCellHandle(false);
   const element = document.createElement("cf-checkbox") as CFCheckbox;
   element.checked = cell;
@@ -100,14 +101,14 @@ function mounted(
   return betweenButtons(control);
 }
 
-Deno.test("Tab reaches the checkbox, and focus rests on the checkbox itself", async () => {
+test("Tab reaches the checkbox, and focus rests on the checkbox itself", async () => {
   using page = await mounted();
   await pressKey("Tab");
   expect(document.activeElement).toBe(page.control);
   expect(page.control.shadowRoot?.activeElement).toBeNull();
 });
 
-Deno.test("the focused checkbox shows a focus ring", async () => {
+test("the focused checkbox shows a focus ring", async () => {
   using page = await mounted();
   const box = page.control.shadowRoot?.querySelector(".checkbox");
   if (!box) throw new Error("the checkbox did not render");
@@ -118,7 +119,7 @@ Deno.test("the focused checkbox shows a focus ring", async () => {
   expect(getComputedStyle(box).boxShadow).toContain("0px 0px 0px 4px");
 });
 
-Deno.test("Space toggles the focused checkbox, and Enter does not", async () => {
+test("Space toggles the focused checkbox, and Enter does not", async () => {
   using page = await mounted();
   const cell = createMockCellHandle(false);
   page.control.checked = cell;
@@ -135,7 +136,7 @@ Deno.test("Space toggles the focused checkbox, and Enter does not", async () => 
   expect(written()).toEqual([true, false]);
 });
 
-Deno.test("Tab passes over a disabled checkbox, and Space leaves it alone", async () => {
+test("Tab passes over a disabled checkbox, and Space leaves it alone", async () => {
   using page = await mounted({ disabled: true });
   const cell = createMockCellHandle(false);
   page.control.checked = cell;
@@ -185,7 +186,7 @@ const CHECKED = {
   boxIndeterminate: false,
 };
 
-Deno.test("Space toggles an unbound checkbox, and Enter does not", async () => {
+test("Space toggles an unbound checkbox, and Enter does not", async () => {
   using page = await mounted();
   const changes = changesOf(page.control);
   await pressKey("Tab");
@@ -203,7 +204,7 @@ Deno.test("Space toggles an unbound checkbox, and Enter does not", async () => {
   ]);
 });
 
-Deno.test("a click toggles an unbound checkbox", async () => {
+test("a click toggles an unbound checkbox", async () => {
   using page = await mounted();
   const changes = changesOf(page.control);
   page.control.click();
@@ -216,7 +217,7 @@ Deno.test("a click toggles an unbound checkbox", async () => {
   ]);
 });
 
-Deno.test("two clicks in one task leave an unbound checkbox unchecked", async () => {
+test("two clicks in one task leave an unbound checkbox unchecked", async () => {
   using page = await mounted();
   const changes = changesOf(page.control);
   page.control.click();
@@ -228,7 +229,7 @@ Deno.test("two clicks in one task leave an unbound checkbox unchecked", async ()
   ]);
 });
 
-Deno.test("a click on an indeterminate checkbox bound to a cell reports it settled", async () => {
+test("a click on an indeterminate checkbox bound to a cell reports it settled", async () => {
   using page = await mounted();
   const cell = createMockCellHandle(false);
   page.control.checked = cell;
@@ -242,7 +243,7 @@ Deno.test("a click on an indeterminate checkbox bound to a cell reports it settl
   expect(changes.every((change) => !change.indeterminate)).toBe(true);
 });
 
-Deno.test("a click on an indeterminate unbound checkbox checks it", async () => {
+test("a click on an indeterminate unbound checkbox checks it", async () => {
   using page = await mounted();
   page.control.indeterminate = true;
   expect((await shown(page.control)).ariaChecked).toBe("mixed");
@@ -253,7 +254,7 @@ Deno.test("a click on an indeterminate unbound checkbox checks it", async () => 
   expect(changes).toEqual([{ checked: true, indeterminate: false }]);
 });
 
-Deno.test("a disabled unbound checkbox ignores clicks and Space", async () => {
+test("a disabled unbound checkbox ignores clicks and Space", async () => {
   using page = await mounted({ disabled: true });
   const changes = changesOf(page.control);
   page.control.click();

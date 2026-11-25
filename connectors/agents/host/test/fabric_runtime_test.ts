@@ -4,7 +4,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import type { CollectedSource } from "@commonfabric/agents-connector/reconcile";
@@ -15,6 +14,12 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { openAgentFabricRuntime } from "../src/fabric-runtime.ts";
 

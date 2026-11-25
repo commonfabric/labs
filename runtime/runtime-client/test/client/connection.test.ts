@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
@@ -14,6 +13,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { type DID, Identity } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { AUTHOR_CLAIM_SCHEMA, observeAuthorship } from "@/authorship.ts";
 import { CellHandle } from "@/cell-handle.ts";

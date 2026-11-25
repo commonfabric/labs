@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { CSI, stripAnsi } from "@commonfabric/cli/view/ansi";
 import { urlToAppView } from "@commonfabric/navigation";
 import { taggedHashStringOf } from "@commonfabric/data-model";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   BOARD,

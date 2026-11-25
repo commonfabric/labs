@@ -1,10 +1,3 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  it,
-} from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy, stub } from "@std/testing/mock";
 import { fromFileUrl, toFileUrl } from "@std/path";
@@ -15,6 +8,13 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { Server } from "@commonfabric/memory/v2/server";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import env from "@/env.ts";
 import { identity } from "@/lib/identity.ts";
 import {

@@ -1,5 +1,4 @@
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -17,6 +16,12 @@ import {
   specsDirectory,
 } from "./cfc-spec-snapshot.ts";
 import type { Git } from "./repository-files.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPECS_COMMIT = "9e751d583760fe44780aad2f4b138edb2667fa1a";
 

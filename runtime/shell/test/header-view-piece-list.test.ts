@@ -12,13 +12,13 @@
  * show, and Escape closes it unless another component already handled the key.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { TaskStatus } from "@lit/task";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
 import type { AppView } from "@commonfabric/navigation";
 import { CellReadRefusedError } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { XHeaderView as HeaderViewClass } from "../src/views/HeaderView.ts";
 import { templateMarkup } from "./lit-template-markup.ts";

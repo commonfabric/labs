@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { decodeMemoryBoundary } from "@commonfabric/memory/v2";
@@ -11,6 +10,7 @@ import {
 } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";

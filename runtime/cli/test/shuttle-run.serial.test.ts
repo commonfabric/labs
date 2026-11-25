@@ -14,11 +14,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { PiecesController } from "@commonfabric/piece/ops";
 import { ConsoleMethod } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { ConnectionOutput, SpaceConfig } from "../lib/piece.ts";
 import type { PromptTerminal } from "../lib/shuttle/prompt.ts";

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import {
@@ -7,6 +6,7 @@ import {
   type DeploymentForShell,
   type DeploymentMetaContent,
 } from "@commonfabric/runner/deployment-meta";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   deploymentFromPage,

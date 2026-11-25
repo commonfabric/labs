@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { context } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
@@ -10,6 +9,7 @@ import {
 import { APICallError, type LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { GOOGLE_SEARCH_NATIVE_MODEL_TOOL } from "@commonfabric/llm/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { ResponseCache } from "./llm.handlers.ts";
 import { createLLMRouter } from "./llm.router.ts";

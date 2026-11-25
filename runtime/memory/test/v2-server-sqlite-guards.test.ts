@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { dirname, fromFileUrl, join, toFileUrl } from "@std/path";
 
 import type { Operation, SqliteDbRef } from "../v2.ts";
@@ -18,6 +17,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-memory-v2-sqlite-guards-space";
 

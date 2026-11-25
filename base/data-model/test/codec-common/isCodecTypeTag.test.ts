@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   CODEC_TYPE_TAGS,
   isCodecTypeTag,
 } from "@/codec-common";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isCodecTypeTag", () => {
   it("returns `true` for every tag in `CODEC_TYPE_TAGS`", () => {

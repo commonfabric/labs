@@ -7,7 +7,6 @@
 // schema-`default` processing; the dispatch-path primitive cases double as
 // regression coverage for the value-type dispatch's leaf arm.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -21,6 +20,12 @@ import type {
   URI,
 } from "@commonfabric/memory/interface";
 import type { SchemaPathSelector } from "@commonfabric/api";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { Runtime } from "../src/runtime.ts";
 import { processDefaultValue } from "../src/schema.ts";

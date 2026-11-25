@@ -19,10 +19,10 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   MultiRuntimeHarness,

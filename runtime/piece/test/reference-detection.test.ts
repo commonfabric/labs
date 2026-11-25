@@ -1,9 +1,9 @@
 import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * These tests focus on the core functionality used by our piece reference detection

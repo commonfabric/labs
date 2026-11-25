@@ -6,6 +6,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { type PatchOp, toDocumentPath } from "@commonfabric/memory/v2";
+import { test } from "@commonfabric/test-support/test";
 
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -44,7 +45,7 @@ const captureNativeDrafts = () => {
   return { storage, drafts };
 };
 
-Deno.test("memory v2 transactions use the native commit hook when available", async () => {
+test("memory v2 transactions use the native commit hook when available", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -82,7 +83,7 @@ Deno.test("memory v2 transactions use the native commit hook when available", as
   }
 });
 
-Deno.test("memory v2 native commits require explicit full-document roots", async () => {
+test("memory v2 native commits require explicit full-document roots", async () => {
   const storage = StorageManager.emulate({
     as: signer,
   });
@@ -114,7 +115,7 @@ Deno.test("memory v2 native commits require explicit full-document roots", async
   }
 });
 
-Deno.test("memory v2 transactions emit patch drafts for safe object-path writes", async () => {
+test("memory v2 transactions emit patch drafts for safe object-path writes", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -161,7 +162,7 @@ Deno.test("memory v2 transactions emit patch drafts for safe object-path writes"
   }
 });
 
-Deno.test("memory v2 transactions emit set drafts for leaf writes into new documents", async () => {
+test("memory v2 transactions emit set drafts for leaf writes into new documents", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -195,7 +196,7 @@ Deno.test("memory v2 transactions emit set drafts for leaf writes into new docum
   }
 });
 
-Deno.test("memory v2 transactions emit add and remove patch drafts for safe object-path writes", async () => {
+test("memory v2 transactions emit add and remove patch drafts for safe object-path writes", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -273,7 +274,7 @@ Deno.test("memory v2 transactions emit add and remove patch drafts for safe obje
   }
 });
 
-Deno.test("memory v2 transactions emit index patch drafts for dense array element writes", async () => {
+test("memory v2 transactions emit index patch drafts for dense array element writes", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -320,7 +321,7 @@ Deno.test("memory v2 transactions emit index patch drafts for dense array elemen
   }
 });
 
-Deno.test("memory v2 transactions emit splice patch drafts for dense array append writes", async () => {
+test("memory v2 transactions emit splice patch drafts for dense array append writes", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -369,7 +370,7 @@ Deno.test("memory v2 transactions emit splice patch drafts for dense array appen
   }
 });
 
-Deno.test("memory v2 transactions drop same-tx add-then-remove paths from patch drafts", async () => {
+test("memory v2 transactions drop same-tx add-then-remove paths from patch drafts", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -443,7 +444,7 @@ Deno.test("memory v2 transactions drop same-tx add-then-remove paths from patch 
   }
 });
 
-Deno.test("memory v2 transactions elide transient nested patches from composed handler drafts", async () => {
+test("memory v2 transactions elide transient nested patches from composed handler drafts", async () => {
   const { storage, drafts } = captureNativeDrafts();
   const runtimeErrors: Error[] = [];
   const runtime = new Runtime({
@@ -538,7 +539,7 @@ Deno.test("memory v2 transactions elide transient nested patches from composed h
   }
 });
 
-Deno.test("memory v2 transactions preserve the original previousValue across repeated primitive path writes", async () => {
+test("memory v2 transactions preserve the original previousValue across repeated primitive path writes", async () => {
   const { storage } = captureNativeDrafts();
 
   try {
@@ -585,7 +586,7 @@ Deno.test("memory v2 transactions preserve the original previousValue across rep
   }
 });
 
-Deno.test("memory v2 writeBatch keeps fine-grained patches and original previous values for same-document writes", async () => {
+test("memory v2 writeBatch keeps fine-grained patches and original previous values for same-document writes", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -688,7 +689,7 @@ Deno.test("memory v2 writeBatch keeps fine-grained patches and original previous
   }
 });
 
-Deno.test("memory v2 transactions emit splice patch drafts for dense array length writes", async () => {
+test("memory v2 transactions emit splice patch drafts for dense array length writes", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -737,7 +738,7 @@ Deno.test("memory v2 transactions emit splice patch drafts for dense array lengt
   }
 });
 
-Deno.test("memory v2 writeBatch combines dense array element and length writes into index and splice patches", async () => {
+test("memory v2 writeBatch combines dense array element and length writes into index and splice patches", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -804,7 +805,7 @@ Deno.test("memory v2 writeBatch combines dense array element and length writes i
   }
 });
 
-Deno.test("memory v2 array splice drafts elide descendant patches for newly added tail entries", async () => {
+test("memory v2 array splice drafts elide descendant patches for newly added tail entries", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -938,7 +939,7 @@ Deno.test("memory v2 array splice drafts elide descendant patches for newly adde
   }
 });
 
-Deno.test("memory v2 transactions fall back to array replacement when filling sparse holes", async () => {
+test("memory v2 transactions fall back to array replacement when filling sparse holes", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -989,7 +990,7 @@ Deno.test("memory v2 transactions fall back to array replacement when filling sp
   }
 });
 
-Deno.test("memory v2 transactions collapse overlapping object-path writes into a parent patch draft", async () => {
+test("memory v2 transactions collapse overlapping object-path writes into a parent patch draft", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -1043,7 +1044,7 @@ Deno.test("memory v2 transactions collapse overlapping object-path writes into a
   }
 });
 
-Deno.test("memory v2 transactions keep materialized-parent writes as fine-grained patch drafts", async () => {
+test("memory v2 transactions keep materialized-parent writes as fine-grained patch drafts", async () => {
   const { storage, drafts } = captureNativeDrafts();
 
   try {
@@ -1111,7 +1112,7 @@ Deno.test("memory v2 transactions keep materialized-parent writes as fine-graine
   }
 });
 
-Deno.test("v2 patch generator never emits indexed-array add/remove/move (leaf-only matcher invariant)", async () => {
+test("v2 patch generator never emits indexed-array add/remove/move (leaf-only matcher invariant)", async () => {
   // The commit-conflict matcher (memory/v2/engine.ts patchOverlapsRead) and the
   // scheduler reader-dirty index (schedulerTouchedLeafPathsForPatch) are both
   // LEAF-ONLY. That is sound only if array element insert/remove/reorder reaches
@@ -1262,7 +1263,7 @@ Deno.test("v2 patch generator never emits indexed-array add/remove/move (leaf-on
   }
 });
 
-Deno.test("assertNoIndexedArrayStructuralOps rejects indexed-array structural ops and allows the rest", () => {
+test("assertNoIndexedArrayStructuralOps rejects indexed-array structural ops and allows the rest", () => {
   // The guard is handed patches written by hand, with the documents they
   // would have been diffed between. What a pointer's last segment names is
   // decided by those documents: `arr` holds an array in both, `obj` a plain

@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Source } from "@commonfabric/js-compiler";
 import {
   CompilerError,
   TransformerError,
 } from "@commonfabric/js-compiler/errors";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   isDeterministicCompileFailure,

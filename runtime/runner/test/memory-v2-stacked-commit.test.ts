@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 import { NullLiveEnvironment } from "@commonfabric/data-model/codec-common";
@@ -40,6 +39,8 @@ import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { maxOf } from "@commonfabric/collections/math";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { applyPatch } from "../../memory/v2/patch.ts";
 import {

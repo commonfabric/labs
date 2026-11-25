@@ -1,6 +1,5 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { sgr, stripAnsi, term } from "../lib/view/ansi.ts";
 import type { EditableSource } from "../lib/view/editsource.ts";
@@ -45,6 +44,7 @@ import {
   pullRequestPayload,
   relayFrame,
 } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The question that asks `origin`'s server which branch is its default. */
 const ASK_ORIGIN_DEFAULT = "ls-remote --symref origin HEAD";

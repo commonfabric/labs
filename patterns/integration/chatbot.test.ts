@@ -6,10 +6,15 @@ import {
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForDisabled } from "./cfc-browser-helpers.ts";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { TEST_LLM } from "./flags.ts";
 import {
   initializePiecesController,

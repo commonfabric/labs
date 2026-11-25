@@ -1,6 +1,11 @@
 import { FabricDurationNsec } from "@commonfabric/data-model/fabric-primitives";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import {

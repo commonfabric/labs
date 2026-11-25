@@ -3,13 +3,18 @@
  * to reach the run that comes after a navigation has already happened.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { stub } from "@std/testing/mock";
 import { navigateTo } from "../../src/builtins/navigate-to.ts";
 import { setNavigateEventContext } from "../../src/builtins/navigate-context.ts";

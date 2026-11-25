@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { getPatternEnvironment } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 
 function restoreLocation(descriptor: PropertyDescriptor | undefined): void {
   if (descriptor) {
@@ -9,7 +10,7 @@ function restoreLocation(descriptor: PropertyDescriptor | undefined): void {
   }
 }
 
-Deno.test("getPatternEnvironment uses the current global location origin", () => {
+test("getPatternEnvironment uses the current global location origin", () => {
   const originalLocation = Object.getOwnPropertyDescriptor(
     globalThis,
     "location",
@@ -30,7 +31,7 @@ Deno.test("getPatternEnvironment uses the current global location origin", () =>
   }
 });
 
-Deno.test("getPatternEnvironment uses localhost when no global location exists", () => {
+test("getPatternEnvironment uses localhost when no global location exists", () => {
   const originalLocation = Object.getOwnPropertyDescriptor(
     globalThis,
     "location",

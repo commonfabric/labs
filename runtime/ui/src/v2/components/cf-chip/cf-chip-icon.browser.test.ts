@@ -8,6 +8,7 @@
 import { expect } from "@std/expect";
 
 import { CFChip } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Mounts a chip in the page, removed again on disposal. */
 async function mounted(
@@ -57,18 +58,18 @@ function expectBeforeLabel(chip: CFChip, element: HTMLElement): void {
 for (const interactive of [false, true]) {
   const kind = interactive ? "an interactive chip" : "a chip";
 
-  Deno.test(`${kind} without an icon starts its label with no gap`, async () => {
+  test(`${kind} without an icon starts its label with no gap`, async () => {
     using chip = await mounted({ interactive });
     expect(labelInset(chip)).toBeCloseTo(0);
   });
 
-  Deno.test(`${kind} with an icon shows it before the label`, async () => {
+  test(`${kind} with an icon shows it before the label`, async () => {
     const slotted = icon();
     using chip = await mounted({ icon: slotted, interactive });
     expectBeforeLabel(chip, slotted);
   });
 
-  Deno.test(`${kind} makes room for an icon added later, and gives it back once removed`, async () => {
+  test(`${kind} makes room for an icon added later, and gives it back once removed`, async () => {
     using chip = await mounted({ interactive });
     const added = icon();
     chip.append(added);

@@ -2,9 +2,9 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFCheckbox } from "../cf-checkbox/index.ts";
 import { CFCard } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A card holding `children`, mounted in the document. */
 function card(

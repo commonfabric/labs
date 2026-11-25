@@ -1,7 +1,6 @@
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { HarnessBrowserAccessLease } from "../../src/contracts/browser-access.ts";
 import { createHarnessCfcInvocationContext } from "../../src/contracts/cfc-invocation-context.ts";
@@ -34,6 +33,12 @@ import {
 } from "../../src/tools/run-skill-script.ts";
 import type { HarnessToolContext } from "../../src/tools/types.ts";
 import { readsDespiteMode } from "../support/reads-despite-mode.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SKILL = "demo";
 const SANDBOX_SKILLS_ROOT = "/workspace/skills";

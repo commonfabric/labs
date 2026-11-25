@@ -4,7 +4,6 @@
 // exercised — no live server needed. `main.parse` re-throws action errors, so
 // error paths are asserted with assertRejects.
 
-import { afterAll, afterEach, beforeAll, describe, it } from "@std/testing/bdd";
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
@@ -13,6 +12,13 @@ import { Identity } from "@commonfabric/identity";
 import { defaultCacheDir } from "@commonfabric/state-inspector";
 import type { FabricValue } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { inspect } from "../commands/inspect.ts";
 
 const DUMP_BASE = "/api/storage/memory/dump";

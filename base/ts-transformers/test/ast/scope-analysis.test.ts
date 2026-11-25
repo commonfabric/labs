@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { isFunctionDeclaration } from "../../src/ast/scope-analysis.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function declarationsOf(source: string) {
   const fileName = "/scope.ts";

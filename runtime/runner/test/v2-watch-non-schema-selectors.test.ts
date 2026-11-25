@@ -9,10 +9,10 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema, SchemaPathSelector } from "@commonfabric/api";
 import type { MIME, URI } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { normalizeSyncSelector } from "../src/storage/v2-watch.ts";
 import { watchIdForEntry } from "../src/storage/v2.ts";

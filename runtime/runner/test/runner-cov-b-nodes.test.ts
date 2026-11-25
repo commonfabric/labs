@@ -4,11 +4,16 @@
  * event with a field named `preventDefault`.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Pattern } from "../src/builder/types.ts";
 import { getDerivedInternalCell } from "../src/link-utils.ts";

@@ -5,11 +5,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CfcProjectionAnnotator } from "./annotations.ts";
 import { FsTree } from "./tree.ts";
 import type { JsonType } from "./types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const decoder = new TextDecoder();
 

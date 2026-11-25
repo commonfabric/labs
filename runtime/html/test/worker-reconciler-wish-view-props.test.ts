@@ -4,6 +4,8 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime, UI } from "@commonfabric/runner";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import type { JSONSchema } from "../../runner/src/builder/types.ts";
 import { vnodeSchema } from "../../runner/src/schemas.ts";
@@ -12,7 +14,7 @@ import { createTrustedBuilder } from "../../runner/test/support/trusted-builder.
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 
-Deno.test("worker reconciler over the props of the view a wish shows", async (t) => {
+test("worker reconciler over the props of the view a wish shows", async (t) => {
   // A wish holds the view it shows as an opaque handle, and the reconciler
   // reads an object or array prop under the schema `true`, which takes its
   // shape from the references it crosses. The values below are the ones that
@@ -148,7 +150,7 @@ Deno.test("worker reconciler over the props of the view a wish shows", async (t)
     );
     expect((await wisherTx.commit().settled).error).toBeUndefined();
     await wisher.pull();
-    await t.settle();
+    await clock.settle();
 
     const mounts: Array<[string, Cell<unknown>]> = [
       ["mounted alone", wisher.key("found").key(UI)],
@@ -165,7 +167,7 @@ Deno.test("worker reconciler over the props of the view a wish shows", async (t)
             },
           }).mount(view.asSchema(rendererVDOMSchema));
           try {
-            await t.settle();
+            await clock.settle();
 
             expect(propsSetOn(ops, "cf-root")).toEqual({
               config: { mode: "dark", nested: { depth: 2 } },

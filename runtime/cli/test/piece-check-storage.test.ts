@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -9,6 +8,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { setCompileCacheRuntimeVersionForTesting } from "../../runner/src/compilation-cache/cell-cache.ts";
 import { checkPiecePattern } from "../lib/piece.ts";

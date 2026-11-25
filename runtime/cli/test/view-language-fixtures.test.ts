@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type DiffLine,
@@ -29,6 +28,7 @@ import {
   type HighlightEvidence,
   VIEW_LANGUAGE_FIXTURES,
 } from "./fixtures/view-language/corpus.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Every fixture is parsed through its language's synchronous entry points,
 // which show plain text until the language's parser has loaded.

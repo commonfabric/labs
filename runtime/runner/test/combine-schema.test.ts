@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { deepFreeze } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 import { combineSchema, combineSchemaForLink } from "../src/traverse.ts";
 import {
   resetReaderSchemaPrecedenceConfig,

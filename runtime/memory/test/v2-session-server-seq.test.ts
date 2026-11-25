@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { connect, loopback, type SpaceSession } from "../v2/client.ts";
@@ -8,6 +7,12 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 type Client = Awaited<ReturnType<typeof connect>>;
 

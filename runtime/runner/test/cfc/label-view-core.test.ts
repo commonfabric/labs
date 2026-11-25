@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { isOrClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type CfcLabelView,

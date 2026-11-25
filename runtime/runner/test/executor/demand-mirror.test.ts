@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type {
   DemandedInstanceRow,
   SessionDemand,
 } from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { DemandMirror } from "../../src/executor/demand-mirror.ts";
 

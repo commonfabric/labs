@@ -1,8 +1,13 @@
 /** Reopens a durable store after stopping a real harness run mid-request. */
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { HARNESS_CHAT_INTERRUPTED_TURN_NOTICE } from "@commonfabric/cf-harness/interactive-chat-service";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { LocalJobLane } from "../../src/local-jobs/lane.ts";
 import {

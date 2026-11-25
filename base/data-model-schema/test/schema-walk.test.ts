@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getLogger } from "@commonfabric/logger";
 
@@ -22,6 +21,7 @@ import {
   UNUSED_SINGLE_SUBSCHEMA_KEYS,
   walkSchema,
 } from "@commonfabric/data-model-schema/schema-walk";
+import { describe, it } from "@commonfabric/test-support/test";
 
 interface Edge {
   schema: JSONSchema;

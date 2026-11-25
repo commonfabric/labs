@@ -22,7 +22,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   addMockObjectResponse,
@@ -49,6 +48,12 @@ import {
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

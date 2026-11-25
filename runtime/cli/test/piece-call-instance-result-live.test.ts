@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { type MemorySpace, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { CallableResolution } from "../lib/callable.ts";
 import { executeResolvedCallable } from "../lib/callable.ts";
 import { sendThroughStandIn } from "./utils.ts";

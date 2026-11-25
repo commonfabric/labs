@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import {
@@ -9,6 +8,7 @@ import {
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   addressesToPathByEntity,

@@ -5,7 +5,6 @@
  * answers the requests the script makes.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   CI_HISTORY_PAGE,
@@ -27,6 +26,7 @@ import {
   RUNTIME_HISTORY_PAGE,
 } from "../tiles/benchmark.ts";
 import { SERVING_VERSION, VERSION_HEADER } from "../version.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ANOTHER_VERSION = `${SERVING_VERSION}-next`;
 

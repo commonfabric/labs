@@ -4,11 +4,11 @@
  * for the lines in view and draws it at the right of the screen.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it } from "@commonfabric/test-support/test";
 import { term } from "../lib/view/ansi.ts";
 import { visibleWidth } from "../lib/view/width.ts";
 import {

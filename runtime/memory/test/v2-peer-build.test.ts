@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import {
   getGlobalLogFloor,
   getLogger,
   setGlobalLogFloor,
 } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 import { connect, loopback } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {

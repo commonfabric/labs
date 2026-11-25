@@ -1,11 +1,16 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { runningClock } from "@commonfabric/test-support/fake-clock";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";

@@ -13,8 +13,9 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { argv, cf } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("cf view re-throws a missing-file read error (not a ViewError)", async () => {
+test("cf view re-throws a missing-file read error (not a ViewError)", async () => {
   const missing = `${Deno.makeTempDirSync()}/does-not-exist-xyz123.ts`;
   const { code, stderr } = await cf(argv`view --plain ${missing}`);
   // The catch block's `throw error;` propagates the NotFound; the CLI exits 1.
@@ -26,7 +27,7 @@ Deno.test("cf view re-throws a missing-file read error (not a ViewError)", async
   assert(notFound?.includes(missing), text);
 });
 
-Deno.test("cf view re-throws when the file argument is a directory", async () => {
+test("cf view re-throws when the file argument is a directory", async () => {
   const dir = Deno.makeTempDirSync();
   try {
     // Reading a directory as text fails with a non-ViewError, taking the same

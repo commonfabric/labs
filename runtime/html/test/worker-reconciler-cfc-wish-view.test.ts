@@ -5,6 +5,8 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime, UI } from "@commonfabric/runner";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { buildCfcPolicyArtifactManifest } from "../../runner/src/cfc/policy.ts";
 import type { JSONSchema } from "../../runner/src/builder/types.ts";
@@ -29,7 +31,7 @@ import type {
 // reaches the emitted operations; mounted with no ceiling, it does, which is
 // what makes the search of the operations a search for a leak.
 
-Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) => {
+test("worker reconciler CFC ceiling over the view a wish shows", async (t) => {
   const owner = await Identity.fromPassphrase("wish view ceiling owner");
   const patternSpace = (await Identity.fromPassphrase(
     "wish view ceiling pattern space",
@@ -92,7 +94,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
       },
       ...options,
     }).mount(tree);
-    await t.settle();
+    await clock.settle();
     return { emitted: () => JSON.stringify(ops), cancel };
   };
 
@@ -107,7 +109,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
     const piece = runtime.run(tx, piecePattern, argument, resultCell);
     expect((await tx.commit().settled).error).toBeUndefined();
     await piece.pull();
-    await t.settle();
+    await clock.settle();
     return piece.withTx(undefined);
   };
 

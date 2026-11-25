@@ -13,6 +13,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseDocument, SAMPLE } from "./view-helpers.ts";
 import { Session } from "../lib/view/session.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function press(s: Session, ...names: string[]): void {
   for (const name of names) {
@@ -51,7 +52,7 @@ function focusLastTarget(s: Session): number {
 // findTargetIndex start-offset-only fallback (436, 437, 439).
 //
 
-Deno.test("gate: following the last card reference (a dependency, no end offset) matches by start offset", () => {
+test("gate: following the last card reference (a dependency, no end offset) matches by start offset", () => {
   // The pattern's card lists a dependency on `__cfLift_1` whose target carries
   // a definition start offset but no end offset (the dependency is found
   // syntactically, with no semantic service to pin the exact range). Following
@@ -95,7 +96,7 @@ Deno.test("gate: following the last card reference (a dependency, no end offset)
   );
 });
 
-Deno.test("gate: Enter on the dependency reference opens the start-matched node's card", () => {
+test("gate: Enter on the dependency reference opens the start-matched node's card", () => {
   // A second, independent route to the same fallback: opening (Enter) the
   // focused dependency reference resolves its node through `resolveTargetNode`,
   // which shares `findTargetIndex`, and opens that node's card in place.
@@ -124,7 +125,7 @@ Deno.test("gate: Enter on the dependency reference opens the start-matched node'
 // jumpToTarget nodeAtLine fallback (446).
 //
 
-Deno.test("gate: revealing the last lift reference (a use, no offset) resolves via nodeAtLine", () => {
+test("gate: revealing the last lift reference (a use, no offset) resolves via nodeAtLine", () => {
   // The lift's card ends with a plain "use" reference that carries a
   // destination line but no definition offset at all. `findTargetIndex` returns
   // -1 for it, so `jumpToTarget` falls back to `nodeAtLine` on the destination
@@ -153,7 +154,7 @@ Deno.test("gate: revealing the last lift reference (a use, no offset) resolves v
   );
 });
 
-Deno.test("gate: Enter on the offset-less use reference resolves a node via nodeAtLine", () => {
+test("gate: Enter on the offset-less use reference resolves a node via nodeAtLine", () => {
   // Opening (Enter) the offset-less use reference resolves a node through
   // `resolveTargetNode`/`nodeAtLine` and opens its card, the complementary
   // route.

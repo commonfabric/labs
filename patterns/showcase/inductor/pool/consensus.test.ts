@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { checkRule, MAX_RULES } from "../shared/rule-grammar.ts";
@@ -22,6 +21,7 @@ import {
   thresholdFor,
   thresholdOffset,
 } from "./consensus.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const hex = (bytes: number[]) =>
   bytes.map((b) => b.toString(16).padStart(2, "0")).join("");

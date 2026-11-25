@@ -4,6 +4,8 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { resetCfcDenialAnnouncements } from "@commonfabric/runner/cfc";
 import { getLogger } from "@commonfabric/logger";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -19,7 +21,7 @@ import type { VDomOp } from "../src/vdom-ops.ts";
 // a label this viewer was not cleared to see, and both the emitted operations
 // and the worker console belong to the page the gate scrubbed.
 
-Deno.test("worker reconciler CFC denials", async (t) => {
+test("worker reconciler CFC denials", async (t) => {
   const signer = await Identity.fromPassphrase(
     "worker reconciler cfc denials",
   );
@@ -131,7 +133,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
           ? { renderConfidentialityCeiling: { atoms: [] } }
           : {}),
       }).mount(tree);
-      await t.settle();
+      await clock.settle();
       await options.after?.();
     } finally {
       cancel();
@@ -242,7 +244,7 @@ Deno.test("worker reconciler CFC denials", async (t) => {
           after: async () => {
             for (let update = 0; update < 10; update++) {
               await writeSecret(`Referral: revision ${update}`);
-              await t.settle();
+              await clock.settle();
             }
           },
         });

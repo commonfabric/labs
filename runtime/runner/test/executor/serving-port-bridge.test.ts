@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
@@ -9,6 +8,12 @@ import type {
   Server,
   SessionLifecycleEvent,
 } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import {
   ServingPlane,

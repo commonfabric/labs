@@ -13,6 +13,8 @@ import {
 } from "@commonfabric/runner";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -44,7 +46,7 @@ import type { WorkerReconcilerOptions } from "../src/worker/types.ts";
 // reconciler as the worker builds one for a mount, under the shell's default
 // display ceiling for the viewer.
 
-Deno.test("worker reconciler CFC decisions over a cf-cell-link's binding", async (t) => {
+test("worker reconciler CFC decisions over a cf-cell-link's binding", async (t) => {
   const owner = await Identity.fromPassphrase("cell link owner");
   const other = await Identity.fromPassphrase("cell link other member");
   const storageManager = StorageManager.emulate({ as: owner });
@@ -177,7 +179,7 @@ Deno.test("worker reconciler CFC decisions over a cf-cell-link's binding", async
     }).mount(
       getCell(runtime, createCellRef(page)).asSchema(rendererVDOMSchema),
     );
-    await t.settle();
+    await clock.settle();
     cancel();
     return {
       bindings:

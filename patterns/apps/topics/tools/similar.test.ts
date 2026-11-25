@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { Topic } from "./mirror.ts";
 import { similarTopics } from "./similar.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A Topic numbered `number`, with `comments` from one author. */
 function topicOf(

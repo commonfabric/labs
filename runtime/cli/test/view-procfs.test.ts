@@ -1,9 +1,9 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { realFileGateway } from "../lib/view/filegateway.ts";
 import { loadViewInput } from "../lib/view/loadinput.ts";

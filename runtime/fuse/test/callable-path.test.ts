@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseMountedCallablePath } from "../callable-path.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("parseMountedCallablePath()", () => {
   it("returns `null` for a path that is empty or only slashes", () => {

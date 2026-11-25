@@ -3,11 +3,11 @@
 // to. The runtime answers that per space, so the endpoint is the runtime's
 // own and no host has to set a process-wide default for its calls to work.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { runtimePresets } from "../src/runtime-presets.ts";
 import type { RuntimeOptions } from "../src/runtime.ts";
 import { Runtime, signer, StorageManager } from "./engine-test-support.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const space = signer.did();
 const elsewhere = "did:key:z6MkElsewhereSpaceForTheLLMEndpointTest";

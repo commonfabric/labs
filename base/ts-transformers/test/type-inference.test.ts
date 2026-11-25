@@ -26,6 +26,7 @@ import {
   unwrapOpaqueLikeType,
   widenLiteralType,
 } from "../src/ast/type-inference.ts";
+import { test } from "@commonfabric/test-support/test";
 
 interface ProgramParts {
   sourceFile: ts.SourceFile;
@@ -161,7 +162,7 @@ function objectMemberNames(printed: string): Set<string> {
   return names;
 }
 
-Deno.test("type inference helpers classify special types and widen literals", () => {
+test("type inference helpers classify special types and widen literals", () => {
   const { sourceFile, checker } = createProgram(`
     type Generic<T> = T;
     type AnyAlias = any;
@@ -215,7 +216,7 @@ Deno.test("type inference helpers classify special types and widen literals", ()
   assertEquals(widenLiteralType(objectType, checker), objectType);
 });
 
-Deno.test("type inference helpers infer parameters, returns, and contextual types", () => {
+test("type inference helpers infer parameters, returns, and contextual types", () => {
   const { sourceFile, checker } = createProgram(`
     const typed = (value: { title: string }) => value.title;
     const contextual: (value: { count: number }) => number = (value) => value.count;
@@ -288,7 +289,7 @@ Deno.test("type inference helpers infer parameters, returns, and contextual type
   );
 });
 
-Deno.test("type inference helpers register synthetic type nodes", () => {
+test("type inference helpers register synthetic type nodes", () => {
   const { sourceFile, checker } = createProgram(`
     type Name = string;
     type Count = number;
@@ -381,7 +382,7 @@ Deno.test("type inference helpers register synthetic type nodes", () => {
   assertEquals(registry.get(secondCall), checker.getStringType());
 });
 
-Deno.test("type inference helpers detect collections and array element types", () => {
+test("type inference helpers detect collections and array element types", () => {
   const { sourceFile, checker } = createProgram(`
     type ArrayContainer = Array<string[]>;
     const numbers = [1, 2, 3];
@@ -459,7 +460,7 @@ Deno.test("type inference helpers detect collections and array element types", (
   );
 });
 
-Deno.test("type inference helpers convert and unwrap types conservatively", () => {
+test("type inference helpers convert and unwrap types conservatively", () => {
   const { sourceFile, checker } = createProgram(`
     type Box<T> = { value: T };
     type NameBox = Box<string>;

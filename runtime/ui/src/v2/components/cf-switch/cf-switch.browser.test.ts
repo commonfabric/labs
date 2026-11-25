@@ -6,6 +6,7 @@
 
 import { expect } from "@std/expect";
 import { pressKey } from "@commonfabric/deno-web-test/commands";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   createMockCellHandle,
@@ -26,14 +27,14 @@ function mounted(
   return betweenButtons(control);
 }
 
-Deno.test("Tab reaches the switch, and focus rests on the switch itself", async () => {
+test("Tab reaches the switch, and focus rests on the switch itself", async () => {
   using page = await mounted();
   await pressKey("Tab");
   expect(document.activeElement).toBe(page.control);
   expect(page.control.shadowRoot?.activeElement).toBeNull();
 });
 
-Deno.test("the focused switch shows a focus ring", async () => {
+test("the focused switch shows a focus ring", async () => {
   using page = await mounted();
   const track = page.control.shadowRoot?.querySelector(".switch");
   if (!track) throw new Error("the switch did not render");
@@ -44,7 +45,7 @@ Deno.test("the focused switch shows a focus ring", async () => {
   expect(getComputedStyle(track).boxShadow).toContain("0px 0px 0px 4px");
 });
 
-Deno.test("Space and Enter toggle the focused switch", async () => {
+test("Space and Enter toggle the focused switch", async () => {
   using page = await mounted();
   await pressKey("Tab");
   await pressKey(" ");
@@ -57,7 +58,7 @@ Deno.test("Space and Enter toggle the focused switch", async () => {
   expect(page.control.getAttribute("aria-checked")).toBe("false");
 });
 
-Deno.test("Tab passes over a disabled switch, and Space leaves it alone", async () => {
+test("Tab passes over a disabled switch, and Space leaves it alone", async () => {
   using page = await mounted({ disabled: true });
   const cell = createMockCellHandle(false);
   page.control.checked = cell;

@@ -8,7 +8,6 @@
  * toolshed would make the suite a test of the network.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -22,6 +21,7 @@ import {
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { harnessFabricSessionPosture } from "../../src/cfc-posture.ts";
 import type { HarnessRunState } from "../../src/run-state.ts";

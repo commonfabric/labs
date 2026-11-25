@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { NAME } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 import { MentionableSchema } from "./mentionable.ts";
 
 describe("mentionable", () => {

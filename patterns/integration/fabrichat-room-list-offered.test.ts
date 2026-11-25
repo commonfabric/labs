@@ -9,11 +9,16 @@
  * clients the `fabrichat-room-list-*` files share.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
 import type { Cell } from "@commonfabric/runner";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { closeMember, openMember } from "./fabrichat-room-fixture.ts";
 import {
   adoptedRooms,

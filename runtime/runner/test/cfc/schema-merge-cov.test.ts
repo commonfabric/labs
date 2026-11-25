@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { mergeCfcSchemaEnvelopes } from "../../src/cfc/schema-merge.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const writer = (moduleIdentity: string) => ({
   __ctWriterIdentityOf: {

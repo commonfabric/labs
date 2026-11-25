@@ -1,6 +1,5 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   cloneIfNecessary,
@@ -17,6 +16,7 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeTrustedMemoryBoundary,

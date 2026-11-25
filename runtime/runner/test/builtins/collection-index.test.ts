@@ -1,8 +1,8 @@
 import { cloneWithoutValueAtPath } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { createNodeFactory } from "../../src/builder/module.ts";
 import { SpaceReplica } from "../../src/storage/v2.ts";

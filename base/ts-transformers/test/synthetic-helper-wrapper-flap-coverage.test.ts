@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import ts from "typescript";
 import { StaticCache } from "@commonfabric/static";
+import { test } from "@commonfabric/test-support/test";
 
 import { TransformationContext } from "../src/core/context.ts";
 import { transformCfDirective } from "../src/mod.ts";
@@ -102,7 +103,7 @@ function syntheticHelperCall(name: string): ts.CallExpression {
   );
 }
 
-Deno.test("a detached synthetic helper wrapper is not classified as inside an array-method callback", () => {
+test("a detached synthetic helper wrapper is not classified as inside an array-method callback", () => {
   // A factory-built node carries a negative position (synthetic) and no parent.
   const wrapper = syntheticHelperCall("ifElse");
   assertEquals(wrapper.pos < 0, true);
@@ -118,7 +119,7 @@ Deno.test("a detached synthetic helper wrapper is not classified as inside an ar
   assertEquals(result, false);
 });
 
-Deno.test("a non-helper synthetic call is rejected before the ancestor walk", () => {
+test("a non-helper synthetic call is rejected before the ancestor walk", () => {
   // A `__cfHelpers.notAHelper(...)` call is not a recognized reactive-helper
   // wrapper, so the classifier declines up front rather than walking ancestors.
   const notAWrapper = syntheticHelperCall("notAHelper");

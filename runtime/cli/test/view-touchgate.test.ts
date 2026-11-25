@@ -1,6 +1,5 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type CreateRequest,
@@ -23,6 +22,7 @@ import {
   type ToolRunner,
   touchGate,
 } from "../lib/view/touchgate.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const fixtures = new URL("./fixtures/touch-gate/", import.meta.url);
 const SERVER_PEM = Deno.readTextFileSync(new URL("server.crt", fixtures));

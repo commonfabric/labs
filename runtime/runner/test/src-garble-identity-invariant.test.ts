@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -84,7 +85,7 @@ const DISTINCT_SYMBOLS_PROGRAM: RuntimeProgram = {
   }],
 };
 
-Deno.test(
+test(
   "sidecar-backed debug sources do not replace content-addressed scheduler identity",
   async () => {
     const identities = await runAndCollect(
@@ -121,7 +122,7 @@ const MULTI_INSTANCE_PROGRAM: RuntimeProgram = {
   }],
 };
 
-Deno.test(
+test(
   "two instances of one lift retain distinct source-independent IDs",
   async () => {
     const identities = await runAndCollect(

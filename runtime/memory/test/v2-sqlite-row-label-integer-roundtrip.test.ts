@@ -16,7 +16,6 @@
 
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   columnOriginAvailable,
   columnOriginUnavailableReason,
@@ -35,6 +34,7 @@ import {
   whenMatches,
 } from "../v2/sqlite/row-label.ts";
 import { table } from "../v2/sqlite/schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The labeled read path resolves column origins over FFI, so a labeled query
 // cannot run at all without it (production binds it once before issuing one).

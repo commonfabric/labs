@@ -5,7 +5,6 @@
  * the range it is given, and what a grammar shows before it has loaded.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
 
@@ -25,6 +24,7 @@ import {
 } from "../../../../../lib/view/languages/treesitter/adapter.ts";
 import { pythonGrammar } from "../../../../../lib/view/languages/python/python.ts";
 import type { Line } from "../../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 await prepareGrammar(pythonGrammar);
 

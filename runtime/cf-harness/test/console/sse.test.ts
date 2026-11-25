@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   chatEventFrame,
@@ -12,6 +11,7 @@ import {
   createHarnessChatEventEnvelope,
   type HarnessChatEventEnvelope,
 } from "../../src/contracts/interactive-chat.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const envelope = (sequence: number): HarnessChatEventEnvelope =>
   createHarnessChatEventEnvelope({

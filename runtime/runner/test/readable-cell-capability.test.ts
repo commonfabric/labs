@@ -3,10 +3,11 @@ import { Identity } from "@commonfabric/identity";
 import type { CellKind, JSONSchema } from "@commonfabric/api";
 import { isReadableCell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("readable cell capability test");
 
-Deno.test("isReadableCell follows the runtime cell capability", async () => {
+test("isReadableCell follows the runtime cell capability", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL("https://example.com"),

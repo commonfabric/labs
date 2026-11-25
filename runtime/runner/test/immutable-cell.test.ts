@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema, JSONValue } from "@commonfabric/api";
 import {
@@ -13,6 +12,7 @@ import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { valueFromDataUri } from "@commonfabric/data-model/codec-data-uri";
 
 import { internSchema } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   bindImmutableCells,

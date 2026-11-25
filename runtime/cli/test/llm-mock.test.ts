@@ -5,13 +5,13 @@
  * runner reports.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type LLMGenerateObjectRequest,
   type LLMRequest,
   setLLMResponder,
 } from "@commonfabric/llm";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   answerForwardedLLMRequest,
   type LLMForwardedRequest,

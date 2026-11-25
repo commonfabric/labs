@@ -51,7 +51,6 @@
 //     (RED on the pre-fix code: W frozen below the folded seq). The
 //     consume is gated on `contentContributionCount === 0`.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -80,7 +79,21 @@ import {
 } from "./support/serving-waits.ts";
 import { waitOnDelivery } from "./support/wait-on-delivery.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up. Some of its tests assert that nothing
+// further commits over real elapsed time.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("settle advance space");
 const space = spaceSigner.did() as MemorySpace;

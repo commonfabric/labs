@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { darwinLibfusePaths, LINUX_LIBFUSE_PATHS } from "../library-paths.ts";
 import darwinPlatform, {
@@ -16,6 +15,12 @@ import {
   getPlatform,
   readCString,
 } from "../platform.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A pointer standing for the native object named `id`. */
 function pointer(id: number): Deno.PointerObject {

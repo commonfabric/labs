@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ConsoleFlowView,
@@ -10,6 +9,7 @@ import type {
   ConsoleFlowNode,
 } from "../../../console/flow.ts";
 import { handlerOn, templateText } from "./lit-template.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The view, rendered on demand rather than into a DOM. */
 class TestConsoleFlowView extends ConsoleFlowView {

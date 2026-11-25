@@ -2,7 +2,6 @@
 // graph reaches @commonfabric/ui, whose components extend a bare HTMLElement as
 // they load, so it can only load once the test has installed one.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Task } from "@lit/task";
 import type { ReactiveController } from "lit";
@@ -13,6 +12,7 @@ import {
   RuntimeErrorCode,
 } from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Install the browser globals Lit reads and return a restoration function. */
 function installBrowserGlobals(

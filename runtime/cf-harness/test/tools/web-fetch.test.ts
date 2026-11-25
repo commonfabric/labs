@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import { createHarnessCfcInvocationContext } from "../../src/contracts/cfc-invocation-context.ts";
@@ -34,6 +33,7 @@ import {
   TEST_TLS_COMMON_NAME_ONLY,
   TEST_TLS_SERVER,
 } from "../support/web-fetch-network.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const FETCHED_AT = "2026-05-01T17:54:00.000Z";
 

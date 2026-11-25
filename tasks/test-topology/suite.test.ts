@@ -1,10 +1,10 @@
 import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   parseSkipList,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   coverageMemberDirectory,
   denoTestCommand,

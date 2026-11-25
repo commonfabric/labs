@@ -1,12 +1,17 @@
 /** Keeps targeted input reads inside the projection chosen by their parents. */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { type JSONSchema, Runtime } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PieceController } from "../../src/ops/piece-controller.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";

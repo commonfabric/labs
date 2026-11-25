@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -11,6 +10,7 @@ import {
   writtenAhead,
 } from "./selection.ts";
 import { sampleManifest } from "./selection-testing.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEST = { k: "unit", s: "memory", n: "space > writes" };
 const CALIBRATION = {

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { NodeRegistry } from "../../src/scheduler/node-record.ts";
 import type { Action } from "../../src/scheduler/types.ts";
@@ -7,6 +6,7 @@ import {
   type PullSchedulingState,
   seedScanNodes,
 } from "../../src/scheduler/work-oracle.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Pull-scheduling state whose `pending` holds one effect, `effect`, and
  * whose gates hold nothing back. */

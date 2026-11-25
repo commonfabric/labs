@@ -16,7 +16,6 @@
 //   root fire); a handler's cascade send during the echo commits
 //   NOTHING (the server's authoritative run owns the durable cascade).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
@@ -50,6 +49,13 @@ import {
 import { ArrivalLog } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,
   testPrincipalSessionOpenAuthFactory,
@@ -58,6 +64,12 @@ import {
   flushMicrotasks,
   scriptedIntentManager,
 } from "./speculation-intent-test-utils.ts";
+
+// This file runs on the real clock because it drives a live memory server and
+// waits on transport edges with bounded timeouts; its retry path's catch-up
+// rides those edges, not logical time, and auto-advance would fire the retry
+// backoff as fast as it arms.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("event append space");
 const space = spaceSigner.did() as MemorySpace;

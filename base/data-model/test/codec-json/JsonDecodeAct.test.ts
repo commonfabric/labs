@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isDeepFrozen } from "@/deep-freeze.ts";
@@ -7,6 +6,7 @@ import { JsonCodecEngine } from "@/codec-json";
 import { JsonDecodeAct } from "@/codec-json/JsonDecodeAct.ts";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
 import { createDefaultJsonRegistry } from "@/codecs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("JsonDecodeAct", () => {
   // The walk reuses parsed subtrees that need no translation, and rebuilds

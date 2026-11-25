@@ -9,10 +9,11 @@ import {
   encodeDagCbor,
   isDagCborMap,
 } from "../src/dag-cbor.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 
-Deno.test("encodeDagCbor() encodes an integer in its shortest form at each width", () => {
+test("encodeDagCbor() encodes an integer in its shortest form at each width", () => {
   expect(encodeDagCbor(0)).toEqual(bytes(0x00));
   expect(encodeDagCbor(23)).toEqual(bytes(0x17));
   expect(encodeDagCbor(24)).toEqual(bytes(0x18, 0x18));
@@ -24,14 +25,14 @@ Deno.test("encodeDagCbor() encodes an integer in its shortest form at each width
   );
 });
 
-Deno.test("encodeDagCbor() encodes `null`, text, bytes, and an empty array", () => {
+test("encodeDagCbor() encodes `null`, text, bytes, and an empty array", () => {
   expect(encodeDagCbor(null)).toEqual(bytes(0xf6));
   expect(encodeDagCbor("ab")).toEqual(bytes(0x62, 0x61, 0x62));
   expect(encodeDagCbor(bytes(1, 2))).toEqual(bytes(0x42, 1, 2));
   expect(encodeDagCbor([])).toEqual(bytes(0x80));
 });
 
-Deno.test("encodeDagCbor() orders map keys by length and then bytewise", () => {
+test("encodeDagCbor() orders map keys by length and then bytewise", () => {
   const encoded = encodeDagCbor({ nonce: 1, b: 2, a: 3 });
   expect(encoded).toEqual(
     bytes(
@@ -53,18 +54,18 @@ Deno.test("encodeDagCbor() orders map keys by length and then bytewise", () => {
   );
 });
 
-Deno.test("encodeDagCbor() throws for a negative or fractional number", () => {
+test("encodeDagCbor() throws for a negative or fractional number", () => {
   expect(() => encodeDagCbor(-1)).toThrow(DagCborError);
   expect(() => encodeDagCbor(1.5)).toThrow(DagCborError);
 });
 
-Deno.test("encodeDagCbor() throws for a value nested too deep", () => {
+test("encodeDagCbor() throws for a value nested too deep", () => {
   let value: unknown[] = [];
   for (let i = 0; i < 10; i++) value = [value];
   expect(() => encodeDagCbor(value as never)).toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() returns the value whose encoding it is given", () => {
+test("decodeDagCbor() returns the value whose encoding it is given", () => {
   const value = {
     h: bytes(0x34, 0x01),
     tag: { exp: null, n: 300, pol: [], s: "did:key:z" },
@@ -72,23 +73,23 @@ Deno.test("decodeDagCbor() returns the value whose encoding it is given", () => 
   expect(decodeDagCbor(encodeDagCbor(value))).toEqual(value);
 });
 
-Deno.test("decodeDagCbor() throws for an integer not in its shortest form", () => {
+test("decodeDagCbor() throws for an integer not in its shortest form", () => {
   expect(() => decodeDagCbor(bytes(0x18, 0x05))).toThrow(DagCborError);
   expect(() => decodeDagCbor(bytes(0x19, 0x00, 0xff))).toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() throws for an indefinite-length item", () => {
+test("decodeDagCbor() throws for an indefinite-length item", () => {
   expect(() => decodeDagCbor(bytes(0x9f, 0xff))).toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() throws for a tag, a float, a negative integer, or another simple value", () => {
+test("decodeDagCbor() throws for a tag, a float, a negative integer, or another simple value", () => {
   expect(() => decodeDagCbor(bytes(0xd8, 0x2a, 0x00))).toThrow(DagCborError);
   expect(() => decodeDagCbor(bytes(0xf9, 0x3c, 0x00))).toThrow(DagCborError);
   expect(() => decodeDagCbor(bytes(0x20))).toThrow(DagCborError);
   expect(() => decodeDagCbor(bytes(0xf4))).toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() throws for map keys out of canonical order or repeated", () => {
+test("decodeDagCbor() throws for map keys out of canonical order or repeated", () => {
   // {"b": 1, "a": 2}: "b" sorts after "a".
   expect(() => decodeDagCbor(bytes(0xa2, 0x61, 0x62, 1, 0x61, 0x61, 2)))
     .toThrow(DagCborError);
@@ -96,27 +97,27 @@ Deno.test("decodeDagCbor() throws for map keys out of canonical order or repeate
     .toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() throws for a map key that is not text", () => {
+test("decodeDagCbor() throws for a map key that is not text", () => {
   expect(() => decodeDagCbor(bytes(0xa1, 0x01, 0x01))).toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() throws for text that is not UTF-8", () => {
+test("decodeDagCbor() throws for text that is not UTF-8", () => {
   expect(() => decodeDagCbor(bytes(0x61, 0xff))).toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() throws for truncated input and for trailing bytes", () => {
+test("decodeDagCbor() throws for truncated input and for trailing bytes", () => {
   expect(() => decodeDagCbor(bytes(0x42, 0x01))).toThrow(DagCborError);
   expect(() => decodeDagCbor(bytes(0x00, 0x00))).toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() throws for input that ends inside a head's argument", () => {
+test("decodeDagCbor() throws for input that ends inside a head's argument", () => {
   expect(() => decodeDagCbor(bytes())).toThrow("unexpected end of input");
   expect(() => decodeDagCbor(bytes(0x19, 0x01))).toThrow(
     "unexpected end of input",
   );
 });
 
-Deno.test("decodeDagCbor() throws for reserved additional information", () => {
+test("decodeDagCbor() throws for reserved additional information", () => {
   for (const initial of [0x1c, 0x1d, 0x1e]) {
     expect(() => decodeDagCbor(bytes(initial))).toThrow(
       `reserved additional information ${initial & 0x1f}`,
@@ -124,7 +125,7 @@ Deno.test("decodeDagCbor() throws for reserved additional information", () => {
   }
 });
 
-Deno.test("decodeDagCbor() throws for an integer past the safe range, and returns the largest safe one", () => {
+test("decodeDagCbor() throws for an integer past the safe range, and returns the largest safe one", () => {
   expect(() => decodeDagCbor(bytes(0x1b, 0x00, 0x20, 0, 0, 0, 0, 0, 0)))
     .toThrow("integer argument exceeds safe range");
   expect(
@@ -132,7 +133,7 @@ Deno.test("decodeDagCbor() throws for an integer past the safe range, and return
   ).toBe(Number.MAX_SAFE_INTEGER);
 });
 
-Deno.test("decodeDagCbor() throws for a value nested too deep, and returns one nested to the limit", () => {
+test("decodeDagCbor() throws for a value nested too deep, and returns one nested to the limit", () => {
   // Each 0x81 opens a one-element array around what follows.
   const nested = (depth: number) =>
     new Uint8Array([...new Array(depth).fill(0x81), 0x80]);
@@ -141,7 +142,7 @@ Deno.test("decodeDagCbor() throws for a value nested too deep, and returns one n
   expect(decodeDagCbor(nested(8))).toEqual([[[[[[[[[]]]]]]]]]);
 });
 
-Deno.test("encodeDagCbor() encodes a plain object with Object.prototype or null as its prototype, and throws for any other object", () => {
+test("encodeDagCbor() encodes a plain object with Object.prototype or null as its prototype, and throws for any other object", () => {
   const plain = encodeDagCbor({ a: 1 });
   const bare = Object.create(null) as { [key: string]: number };
   bare.a = 1;
@@ -154,7 +155,7 @@ Deno.test("encodeDagCbor() encodes a plain object with Object.prototype or null 
   expect(() => encodeDagCbor(new Map() as never)).toThrow(DagCborError);
 });
 
-Deno.test("decodeDagCbor() returns `__proto__` as an own key rather than setting the prototype", () => {
+test("decodeDagCbor() returns `__proto__` as an own key rather than setting the prototype", () => {
   // {"__proto__": {"x": 1}}
   const decoded = decodeDagCbor(
     encodeDagCbor({ ["__proto__"]: { x: 1 } }),
@@ -165,11 +166,11 @@ Deno.test("decodeDagCbor() returns `__proto__` as an own key rather than setting
   expect((decoded as { x?: unknown }).x).toBeUndefined();
 });
 
-Deno.test("decodeDagCbor() keeps a leading U+FEFF in text", () => {
+test("decodeDagCbor() keeps a leading U+FEFF in text", () => {
   expect(decodeDagCbor(encodeDagCbor("\ufeffa"))).toBe("\ufeffa");
 });
 
-Deno.test("isDagCborMap() returns `true` for a map and `false` for every other kind of value", () => {
+test("isDagCborMap() returns `true` for a map and `false` for every other kind of value", () => {
   expect(isDagCborMap({})).toBe(true);
   expect(isDagCborMap(null)).toBe(false);
   expect(isDagCborMap([])).toBe(false);

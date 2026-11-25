@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { taggedHashStringOf } from "@commonfabric/data-model";
@@ -16,6 +15,7 @@ import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
 import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { FabricValue, JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { prepareStatusAtSettlement } from "./prepare-status-at-settlement.ts";

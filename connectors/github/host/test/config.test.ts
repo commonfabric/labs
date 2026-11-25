@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   DEFAULT_GITHUB_COLLECTION_INTERVAL_MS,
   GITHUB_HOST_CONFIG_SCHEMA,
   loadGithubHostConfig,
   parseGithubHostConfig,
 } from "../src/config.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("config", () => {
   describe("parseGithubHostConfig()", () => {

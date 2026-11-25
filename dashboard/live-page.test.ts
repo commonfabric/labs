@@ -4,7 +4,6 @@
  * are rendered at all.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -18,6 +17,7 @@ import { LIVE_PAGE_UPDATE } from "./live-page-client.ts";
 import { faviconHref } from "./favicon.ts";
 import type { Route } from "./types.ts";
 import { SERVING_VERSION } from "./version.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const decoder = new TextDecoder();
 

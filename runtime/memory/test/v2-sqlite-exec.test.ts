@@ -1,13 +1,18 @@
 // Engine-side execution against a real @db/sqlite database: guarded query/write
 // and additive DDL. Proves the SQL half of Phase 1/2 without the websocket.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { GuardError } from "../v2/sqlite/guard.ts";
 import { cfLink, table } from "../v2/sqlite/schema.ts";
 import { ensureTables, runQuery, runWrite } from "../v2/sqlite/exec.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("engine-side exec", () => {
   let db: Database;

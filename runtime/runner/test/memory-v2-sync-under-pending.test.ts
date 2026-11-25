@@ -10,6 +10,7 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
 import type {
   IStorageProvider,
   StorageNotification,
@@ -208,7 +209,7 @@ const notificationCarriesField = (
       after.value[key] === expected;
   });
 
-Deno.test("memory v2 SpaceReplica rebases a pending blind write over a server sync arriving before its confirmation", async () => {
+test("memory v2 SpaceReplica rebases a pending blind write over a server sync arriving before its confirmation", async () => {
   // LAYER: this pins the worker-side SpaceReplica against the client↔server
   // WIRE protocol (the scripted transport plays the server). It does NOT touch
   // the main-thread↔worker IPC hop — the CellSet/CellUpdate echo ordering on

@@ -18,7 +18,6 @@
 // single-StorageManager emulate() setup would mask it).
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { SqliteTableSchemas } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -26,6 +25,12 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createCell } from "../src/cell.ts";
 import { isSigilLink } from "../src/link-utils.ts";

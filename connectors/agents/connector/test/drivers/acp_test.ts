@@ -13,6 +13,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { AcpDriver, type AcpTransport } from "../../src/drivers/acp.ts";
 import type { AgentDriver } from "../../src/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function fakeTransport(
   overrides: Partial<AcpTransport> = {},
@@ -108,7 +109,7 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
 `;
 
-Deno.test("ACP driver enumerates and loads persisted sessions", async () => {
+test("ACP driver enumerates and loads persisted sessions", async () => {
   const calls: string[] = [];
   let notify: ((notification: SessionNotification) => void) | undefined;
   const transport: AcpTransport = {
@@ -194,7 +195,7 @@ Deno.test("ACP driver enumerates and loads persisted sessions", async () => {
   await driver.stop();
 });
 
-Deno.test("ACP controls are discovered and enforced per session", async () => {
+test("ACP controls are discovered and enforced per session", async () => {
   const modeCalls: SetSessionModeRequest[] = [];
   const configCalls: SetSessionConfigOptionRequest[] = [];
   let firstLoads = 0;
@@ -309,7 +310,7 @@ Deno.test("ACP controls are discovered and enforced per session", async () => {
   assertEquals(driver.source.capabilities.setMode, false);
 });
 
-Deno.test("ACP startup stops transports missing required capabilities", async () => {
+test("ACP startup stops transports missing required capabilities", async () => {
   for (
     const agentCapabilities of [
       { loadSession: true },
@@ -342,7 +343,7 @@ Deno.test("ACP startup stops transports missing required capabilities", async ()
   }
 });
 
-Deno.test("ACP driver stops an adapter blocked during initialization", async () => {
+test("ACP driver stops an adapter blocked during initialization", async () => {
   const initializationStarted = Promise.withResolvers<void>();
   const initialization = Promise.withResolvers<InitializeResponse>();
   let observedSignal: AbortSignal | undefined;
@@ -386,7 +387,7 @@ Deno.test("ACP driver stops an adapter blocked during initialization", async () 
   assertEquals(stopCount, 1);
 });
 
-Deno.test("ACP driver serializes overlapping loads of the same session", async () => {
+test("ACP driver serializes overlapping loads of the same session", async () => {
   let notify: ((notification: SessionNotification) => void) | undefined;
   const firstLoadStarted = Promise.withResolvers<void>();
   const releaseFirstLoad = Promise.withResolvers<void>();
@@ -502,7 +503,7 @@ Deno.test("ACP driver serializes overlapping loads of the same session", async (
   await driver.stop();
 });
 
-Deno.test("ACP driver normalizes updates and prunes stale controls", async () => {
+test("ACP driver normalizes updates and prunes stale controls", async () => {
   let notify: ((notification: SessionNotification) => void) | undefined;
   let inventory: ListSessionsResponse["sessions"] = [{
     sessionId: "stale",
@@ -587,7 +588,7 @@ Deno.test("ACP driver normalizes updates and prunes stale controls", async () =>
   );
 });
 
-Deno.test("ACP prompt admission covers resumed and uncertain outcomes", async () => {
+test("ACP prompt admission covers resumed and uncertain outcomes", async () => {
   const promptStarted = Promise.withResolvers<void>();
   const promptResult = Promise.withResolvers<PromptResponse>();
   let promptCalls = 0;
@@ -659,7 +660,7 @@ Deno.test("ACP prompt admission covers resumed and uncertain outcomes", async ()
   assertEquals(resumeCalls, 2);
 });
 
-Deno.test("ACP select controls accept only advertised values", async () => {
+test("ACP select controls accept only advertised values", async () => {
   const configCalls: SetSessionConfigOptionRequest[] = [];
   const transport = fakeTransport({
     listSessions: () =>
@@ -771,7 +772,7 @@ Deno.test("ACP select controls accept only advertised values", async () => {
   }]);
 });
 
-Deno.test("default ACP transport rejects invalid startup order", async () => {
+test("default ACP transport rejects invalid startup order", async () => {
   const driver = new AcpDriver({
     id: "acp:default",
     driver: "acp",
@@ -798,7 +799,7 @@ Deno.test("default ACP transport rejects invalid startup order", async () => {
   );
 });
 
-Deno.test("default ACP transport serves a complete process session", async () => {
+test("default ACP transport serves a complete process session", async () => {
   const directory = await Deno.makeTempDir();
   const server = `${directory}/fake-acp`;
   await Deno.writeTextFile(server, PROCESS_ACP_SERVER);

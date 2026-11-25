@@ -9,6 +9,7 @@ import {
   type ResultLine,
 } from "@commonfabric/test-support/records";
 import { shuffledPaths } from "@commonfabric/test-support/shuffle";
+import { test } from "@commonfabric/test-support/test";
 import {
   ALL_PACKAGES,
   chooseGeneratedPortOffset,
@@ -33,7 +34,7 @@ import {
 import { PATTERN_TREES } from "./pattern-files.ts";
 import type { RunRecording } from "./test-records.ts";
 
-Deno.test("selectPatternTestFiles returns the files slash-separated and sorted", () => {
+test("selectPatternTestFiles returns the files slash-separated and sorted", () => {
   assertEquals(
     selectPatternTestFiles([
       "patterns\\system\\notes\\note.test.tsx",
@@ -46,7 +47,7 @@ Deno.test("selectPatternTestFiles returns the files slash-separated and sorted",
   );
 });
 
-Deno.test("readPatternTestList reads the path on each line that has one", () => {
+test("readPatternTestList reads the path on each line that has one", () => {
   assertEquals(
     readPatternTestList(
       "patterns/showcase/dice/dice.test.tsx\n\n  patterns/chat.test.tsx\n",
@@ -55,7 +56,7 @@ Deno.test("readPatternTestList reads the path on each line that has one", () => 
   );
 });
 
-Deno.test("selectIntegrationTestFiles keeps .test.ts files matching the filter", () => {
+test("selectIntegrationTestFiles keeps .test.ts files matching the filter", () => {
   const files = [
     "home-profile.test.ts",
     "counter.test.ts",
@@ -68,14 +69,14 @@ Deno.test("selectIntegrationTestFiles keeps .test.ts files matching the filter",
   ]);
 });
 
-Deno.test("selectIntegrationTestFiles matches a single file by name", () => {
+test("selectIntegrationTestFiles matches a single file by name", () => {
   const files = ["home-profile.test.ts", "counter.test.ts"];
   assertEquals(selectIntegrationTestFiles(files, "home-profile"), [
     "home-profile.test.ts",
   ]);
 });
 
-Deno.test("selectIntegrationTestFiles prefers an exact filename match", () => {
+test("selectIntegrationTestFiles prefers an exact filename match", () => {
   const files = ["counter.test.ts", "nested-counter.test.ts"];
   assertEquals(selectIntegrationTestFiles(files, "counter"), [
     "counter.test.ts",
@@ -85,14 +86,14 @@ Deno.test("selectIntegrationTestFiles prefers an exact filename match", () => {
   ]);
 });
 
-Deno.test("selectIntegrationTestFiles returns empty when nothing matches", () => {
+test("selectIntegrationTestFiles returns empty when nothing matches", () => {
   assertEquals(
     selectIntegrationTestFiles(["counter.test.ts"], "nonexistent"),
     [],
   );
 });
 
-Deno.test("selectIntegrationTestFiles ignores non-test files containing the filter", () => {
+test("selectIntegrationTestFiles ignores non-test files containing the filter", () => {
   assertEquals(
     selectIntegrationTestFiles(
       ["home.ts", "home.test.ts", "home.test.tsx", "home.txt"],
@@ -102,27 +103,27 @@ Deno.test("selectIntegrationTestFiles ignores non-test files containing the filt
   );
 });
 
-Deno.test("selectIntegrationTestFiles sorts the results", () => {
+test("selectIntegrationTestFiles sorts the results", () => {
   assertEquals(
     selectIntegrationTestFiles(["b.test.ts", "a.test.ts"], ".test.ts"),
     ["a.test.ts", "b.test.ts"],
   );
 });
 
-Deno.test("integrationTestDir points generated-patterns at its patterns subdir", () => {
+test("integrationTestDir points generated-patterns at its patterns subdir", () => {
   assertEquals(
     integrationTestDir("generated-patterns"),
     "integration/patterns",
   );
 });
 
-Deno.test("integrationTestDir defaults to the integration directory", () => {
+test("integrationTestDir defaults to the integration directory", () => {
   assertEquals(integrationTestDir("patterns"), "integration");
   assertEquals(integrationTestDir("runner"), "integration");
   assertEquals(integrationTestDir("shell"), "integration");
 });
 
-Deno.test("findIntegrationTestFiles reads one level deep and filters by name", async () => {
+test("findIntegrationTestFiles reads one level deep and filters by name", async () => {
   const dir = await Deno.makeTempDir();
   try {
     await Deno.writeTextFile(`${dir}/home-profile.test.ts`, "");
@@ -145,7 +146,7 @@ Deno.test("findIntegrationTestFiles reads one level deep and filters by name", a
   }
 });
 
-Deno.test("findIntegrationTestFiles returns empty for a missing directory", async () => {
+test("findIntegrationTestFiles returns empty for a missing directory", async () => {
   const dir = await Deno.makeTempDir();
   try {
     assertEquals(await findIntegrationTestFiles(`${dir}/missing`, "home"), []);
@@ -154,7 +155,7 @@ Deno.test("findIntegrationTestFiles returns empty for a missing directory", asyn
   }
 });
 
-Deno.test("findIntegrationTestFiles rethrows errors other than a missing directory", async () => {
+test("findIntegrationTestFiles rethrows errors other than a missing directory", async () => {
   const file = await Deno.makeTempFile();
   try {
     // Reading a file as a directory raises NotADirectory, not NotFound.
@@ -164,7 +165,7 @@ Deno.test("findIntegrationTestFiles rethrows errors other than a missing directo
   }
 });
 
-Deno.test("filteredTestCommand passes files as explicit paths under relDir", () => {
+test("filteredTestCommand passes files as explicit paths under relDir", () => {
   assertEquals(
     filteredTestCommand(
       "runner",
@@ -184,7 +185,7 @@ Deno.test("filteredTestCommand passes files as explicit paths under relDir", () 
   );
 });
 
-Deno.test("filteredTestCommand adds patterns memory and leak flags", () => {
+test("filteredTestCommand adds patterns memory and leak flags", () => {
   assertEquals(
     filteredTestCommand(
       "patterns",
@@ -205,7 +206,7 @@ Deno.test("filteredTestCommand adds patterns memory and leak flags", () => {
   );
 });
 
-Deno.test("filteredTestCommand uses the generated-patterns subdir and flags", () => {
+test("filteredTestCommand uses the generated-patterns subdir and flags", () => {
   assertEquals(
     filteredTestCommand(
       "generated-patterns",
@@ -226,7 +227,7 @@ Deno.test("filteredTestCommand uses the generated-patterns subdir and flags", ()
   );
 });
 
-Deno.test("runFilteredIntegration fails without running when no file matches", async () => {
+test("runFilteredIntegration fails without running when no file matches", async () => {
   const pkgDir = await Deno.makeTempDir();
   try {
     await Deno.mkdir(`${pkgDir}/integration`);
@@ -250,7 +251,7 @@ Deno.test("runFilteredIntegration fails without running when no file matches", a
   }
 });
 
-Deno.test("runFilteredIntegration runs deno test with the matching explicit paths", async () => {
+test("runFilteredIntegration runs deno test with the matching explicit paths", async () => {
   const pkgDir = await Deno.makeTempDir();
   try {
     await Deno.mkdir(`${pkgDir}/integration`);
@@ -285,7 +286,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
   }
 });
 
-Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () => {
+test("runFilteredIntegration uses the generated-patterns subdir", async () => {
   const pkgDir = await Deno.makeTempDir();
   try {
     await Deno.mkdir(`${pkgDir}/integration/patterns`, { recursive: true });
@@ -464,7 +465,7 @@ function runPackage(
   });
 }
 
-Deno.test("runPackageIntegration returns false when a filtered run matches nothing", async () => {
+test("runPackageIntegration returns false when a filtered run matches nothing", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
     await Deno.mkdir(`${rootDir}/runtime/runner/integration`);
@@ -483,7 +484,7 @@ Deno.test("runPackageIntegration returns false when a filtered run matches nothi
   }
 });
 
-Deno.test("runPackageIntegration runs a matching filtered test with the run's seed", async () => {
+test("runPackageIntegration runs a matching filtered test with the run's seed", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
     await Deno.mkdir(`${rootDir}/runtime/runner/integration`);
@@ -551,7 +552,7 @@ const COUNTER_RESULTS = [
   counterResult("resets", { outcome: "fail", failure: "Error: still 3" }),
 ];
 
-Deno.test("runPackageIntegration reads each test, and how to rerun a failing one, from the results its tests wrote", async () => {
+test("runPackageIntegration reads each test, and how to rerun a failing one, from the results its tests wrote", async () => {
   const rootDir = await makeRoot(["runner"]);
   const spool = await Deno.makeTempDir();
   try {
@@ -593,7 +594,7 @@ Deno.test("runPackageIntegration reads each test, and how to rerun a failing one
   }
 });
 
-Deno.test("runPackageIntegration has the package's tests write into the run's spool", async () => {
+test("runPackageIntegration has the package's tests write into the run's spool", async () => {
   const rootDir = await makeRoot(["runner"]);
   const spool = await Deno.makeTempDir();
   try {
@@ -610,7 +611,7 @@ Deno.test("runPackageIntegration has the package's tests write into the run's sp
   }
 });
 
-Deno.test("runPackageIntegration has the package's tests write into its scratch directory where the run has no spool", async () => {
+test("runPackageIntegration has the package's tests write into its scratch directory where the run has no spool", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
     const fake = reportingHost(COUNTER_RESULTS);
@@ -627,7 +628,7 @@ Deno.test("runPackageIntegration has the package's tests write into its scratch 
   }
 });
 
-Deno.test("runPackageIntegration does not read results an earlier package left in the run's spool", async () => {
+test("runPackageIntegration does not read results an earlier package left in the run's spool", async () => {
   const rootDir = await makeRoot(["runner"]);
   const spool = await Deno.makeTempDir();
   try {
@@ -650,7 +651,7 @@ Deno.test("runPackageIntegration does not read results an earlier package left i
   }
 });
 
-Deno.test("runPackageIntegration runs the CLI suite's script against the server", async () => {
+test("runPackageIntegration runs the CLI suite's script against the server", async () => {
   const rootDir = await makeRoot(["cli"]);
   try {
     const fake = fakeHost();
@@ -673,7 +674,7 @@ Deno.test("runPackageIntegration runs the CLI suite's script against the server"
   }
 });
 
-Deno.test("runPackageIntegration runs the FUSE suite from the CLI package, probing deep entities only when asked", async () => {
+test("runPackageIntegration runs the FUSE suite from the CLI package, probing deep entities only when asked", async () => {
   const rootDir = await makeRoot(["cli"]);
   try {
     const probes: (string | undefined)[] = [];
@@ -695,7 +696,7 @@ Deno.test("runPackageIntegration runs the FUSE suite from the CLI package, probi
   }
 });
 
-Deno.test("runPackageIntegration runs the reload suite headless from the patterns package unless told otherwise", async () => {
+test("runPackageIntegration runs the reload suite headless from the patterns package unless told otherwise", async () => {
   const rootDir = await makeRoot(["patterns"]);
   try {
     const seen: Record<string, string | undefined>[] = [];
@@ -722,7 +723,7 @@ Deno.test("runPackageIntegration runs the reload suite headless from the pattern
   }
 });
 
-Deno.test("runPackageIntegration runs a package without a server with server execution off and no API URL", async () => {
+test("runPackageIntegration runs a package without a server with server execution off and no API URL", async () => {
   const rootDir = await makeRoot(["generated-patterns"]);
   try {
     const fake = fakeHost();
@@ -764,7 +765,7 @@ function patternHost(env: Record<string, string> = {}): FakeHost {
   });
 }
 
-Deno.test("runPackageIntegration runs each pattern test the filter matches, and reports a failing one's output", async () => {
+test("runPackageIntegration runs each pattern test the filter matches, and reports a failing one's output", async () => {
   const rootDir = await makePatternRoot();
   const spool = await Deno.makeTempDir();
   try {
@@ -816,7 +817,7 @@ Deno.test("runPackageIntegration runs each pattern test the filter matches, and 
   }
 });
 
-Deno.test("runPackageIntegration runs the pattern tests a list names through the cf binary named", async () => {
+test("runPackageIntegration runs the pattern tests a list names through the cf binary named", async () => {
   const rootDir = await makePatternRoot();
   try {
     const fake = patternHost({ CF_BINARY: "/bin/cf" });
@@ -838,7 +839,7 @@ Deno.test("runPackageIntegration runs the pattern tests a list names through the
   }
 });
 
-Deno.test("runPackageIntegration precompiles the pattern tests where there is a cache file to fill", async () => {
+test("runPackageIntegration precompiles the pattern tests where there is a cache file to fill", async () => {
   const rootDir = await makePatternRoot();
   try {
     const fake = patternHost({
@@ -859,7 +860,7 @@ Deno.test("runPackageIntegration precompiles the pattern tests where there is a 
   }
 });
 
-Deno.test("runPackageIntegration runs pattern test files one at a time, in the seed's order", async () => {
+test("runPackageIntegration runs pattern test files one at a time, in the seed's order", async () => {
   const rootDir = await makeRoot([]);
   const files = Array.from(
     { length: 6 },
@@ -890,7 +891,7 @@ Deno.test("runPackageIntegration runs pattern test files one at a time, in the s
   }
 });
 
-Deno.test("runPackageIntegration counts a pattern test whose run cannot spawn as failed", async () => {
+test("runPackageIntegration counts a pattern test whose run cannot spawn as failed", async () => {
   const rootDir = await makePatternRoot();
   try {
     const fake = fakeHost({
@@ -911,7 +912,7 @@ Deno.test("runPackageIntegration counts a pattern test whose run cannot spawn as
   }
 });
 
-Deno.test("integrationRerun names the test file where it is known", () => {
+test("integrationRerun names the test file where it is known", () => {
   assertEquals(
     integrationRerun(
       "patterns",
@@ -934,7 +935,7 @@ Deno.test("integrationRerun names the test file where it is known", () => {
   );
 });
 
-Deno.test("startServers returns when the startup script completes", async () => {
+test("startServers returns when the startup script completes", async () => {
   using time = new FakeTime();
   let ran = false;
   let settled = false;
@@ -957,7 +958,7 @@ Deno.test("startServers returns when the startup script completes", async () => 
   assertEquals(await completion, 0);
 });
 
-Deno.test("startServers returns the startup script failure", async () => {
+test("startServers returns the startup script failure", async () => {
   const failureCode = 42;
   const code = await startServers(
     17,
@@ -990,7 +991,7 @@ function generatedPortOffsets(): number[] {
 // and every server-to-server proxy hop fails.
 //
 
-Deno.test("no generated port offset lands a server on a blocked port", () => {
+test("no generated port offset lands a server on a blocked port", () => {
   const blocked = new Set(ports.blockedPorts);
   const offenders: string[] = [];
   for (const offset of generatedPortOffsets()) {
@@ -1003,13 +1004,13 @@ Deno.test("no generated port offset lands a server on a blocked port", () => {
   assertEquals(offenders, []);
 });
 
-Deno.test("generated port offsets span the documented range", () => {
+test("generated port offsets span the documented range", () => {
   const offsets = generatedPortOffsets();
   assertEquals(offsets[0], GENERATED_PORT_OFFSET_RANGE.first);
   assertEquals(offsets[offsets.length - 1], GENERATED_PORT_OFFSET_RANGE.last);
 });
 
-Deno.test("every recorded blocked port is one fetch refuses", async () => {
+test("every recorded blocked port is one fetch refuses", async () => {
   // Keeps the recorded list honest against the runtime that enforces it. A
   // blocked port is rejected before any connection is opened, so pointing these
   // probes at a host that cannot resolve reaches no network service: the
@@ -1062,7 +1063,7 @@ async function precompileCapturing(
   return { argvs, logged };
 }
 
-Deno.test("precompilePatternTests cuts the shard into runs of neighbors that share a root", async () => {
+test("precompilePatternTests cuts the shard into runs of neighbors that share a root", async () => {
   const { argvs } = await precompileCapturing(() =>
     Promise.resolve({ success: true, code: 0 })
   );
@@ -1092,7 +1093,7 @@ Deno.test("precompilePatternTests cuts the shard into runs of neighbors that sha
   }
 });
 
-Deno.test("precompilePatternTests prints a failed group's output and goes on to the rest", async () => {
+test("precompilePatternTests prints a failed group's output and goes on to the rest", async () => {
   let calls = 0;
   const { argvs, logged } = await precompileCapturing(() => {
     calls++;
@@ -1116,7 +1117,7 @@ Deno.test("precompilePatternTests prints a failed group's output and goes on to 
   );
 });
 
-Deno.test("precompilePatternTests treats a run that cannot spawn as that group's failure", async () => {
+test("precompilePatternTests treats a run that cannot spawn as that group's failure", async () => {
   let calls = 0;
   const { argvs, logged } = await precompileCapturing(() => {
     calls++;
@@ -1132,7 +1133,7 @@ Deno.test("precompilePatternTests treats a run that cannot spawn as that group's
   assertEquals(logged.includes("   Error: no such binary"), true);
 });
 
-Deno.test("runCommand captures what a command prints, with the environment it is given", async () => {
+test("runCommand captures what a command prints, with the environment it is given", async () => {
   const result = await runCommand([
     Deno.execPath(),
     "eval",
@@ -1146,7 +1147,7 @@ Deno.test("runCommand captures what a command prints, with the environment it is
   });
 });
 
-Deno.test("runCommand captures nothing from a command that prints to this process's output", async () => {
+test("runCommand captures nothing from a command that prints to this process's output", async () => {
   const result = await runCommand([Deno.execPath(), "eval", ""], {
     inheritStdio: true,
   });
@@ -1172,7 +1173,7 @@ function serverScripts(ran: readonly Ran[]): string[] {
   );
 }
 
-Deno.test("runIntegration prints its usage for --help and runs nothing", async () => {
+test("runIntegration prints its usage for --help and runs nothing", async () => {
   const fake = fakeHost();
   const { result, lines } = await capturing(() =>
     runIntegration(["--help"], fake.host)
@@ -1186,7 +1187,7 @@ Deno.test("runIntegration prints its usage for --help and runs nothing", async (
   expect(fake.finished).toEqual([]);
 });
 
-Deno.test("runIntegration refuses a port offset that is not a non-negative integer", async () => {
+test("runIntegration refuses a port offset that is not a non-negative integer", async () => {
   for (
     const [args, env, error] of [
       [["--port-offset=x"], {}, `Invalid port offset from --port-offset: "x"`],
@@ -1204,7 +1205,7 @@ Deno.test("runIntegration refuses a port offset that is not a non-negative integ
   }
 });
 
-Deno.test("runIntegration refuses an unknown package and names the known ones", async () => {
+test("runIntegration refuses an unknown package and names the known ones", async () => {
   const fake = fakeHost();
   const { result, lines } = await capturing(() =>
     runIntegration(["no-such-package"], fake.host)
@@ -1218,7 +1219,7 @@ Deno.test("runIntegration refuses an unknown package and names the known ones", 
   expect(fake.finished).toEqual([{ mode: "off" }]);
 });
 
-Deno.test("runIntegration reuses an explicit port offset and leaves its servers running", async () => {
+test("runIntegration reuses an explicit port offset and leaves its servers running", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
     const fake = fakeHost({ cwd: rootDir, env: { PORT_OFFSET: " " } });
@@ -1245,7 +1246,7 @@ Deno.test("runIntegration reuses an explicit port offset and leaves its servers 
   }
 });
 
-Deno.test("runIntegration runs no test when the servers on an offset from the environment do not start", async () => {
+test("runIntegration runs no test when the servers on an offset from the environment do not start", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
     const fake = fakeHost({
@@ -1270,7 +1271,7 @@ Deno.test("runIntegration runs no test when the servers on an offset from the en
   }
 });
 
-Deno.test("runIntegration moves a generated offset on after a port collision, and stops its servers after a failing package", async () => {
+test("runIntegration moves a generated offset on after a port collision, and stops its servers after a failing package", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
     const draws = [0, 0.5];
@@ -1317,7 +1318,7 @@ Deno.test("runIntegration moves a generated offset on after a port collision, an
   }
 });
 
-Deno.test("runIntegration stops at a startup failure other than a port collision", async () => {
+test("runIntegration stops at a startup failure other than a port collision", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
     const offset = chooseGeneratedPortOffset(() => 0);
@@ -1344,7 +1345,7 @@ Deno.test("runIntegration stops at a startup failure other than a port collision
   }
 });
 
-Deno.test("runIntegration stops its servers from an interrupt that arrives mid-run", async () => {
+test("runIntegration stops its servers from an interrupt that arrives mid-run", async () => {
   const rootDir = await makeRoot(["runner"]);
   try {
     const offset = chooseGeneratedPortOffset(() => 0);
@@ -1371,7 +1372,7 @@ Deno.test("runIntegration stops its servers from an interrupt that arrives mid-r
   }
 });
 
-Deno.test("runIntegration fails a run whose selection names no pattern test, and says so last", async () => {
+test("runIntegration fails a run whose selection names no pattern test, and says so last", async () => {
   const rootDir = await makeRoot([]);
   try {
     const fake = fakeHost({ cwd: rootDir });
@@ -1393,7 +1394,7 @@ Deno.test("runIntegration fails a run whose selection names no pattern test, and
   }
 });
 
-Deno.test("runIntegration runs the pattern tests a --files list names", async () => {
+test("runIntegration runs the pattern tests a --files list names", async () => {
   const rootDir = await makePatternRoot();
   try {
     await Deno.writeTextFile(`${rootDir}/list`, `${OTHER_PATTERN}\n`);
@@ -1408,7 +1409,7 @@ Deno.test("runIntegration runs the pattern tests a --files list names", async ()
   }
 });
 
-Deno.test("runIntegration reports a run that stops on an error, and still finishes recording", async () => {
+test("runIntegration reports a run that stops on an error, and still finishes recording", async () => {
   // No package directory is named `generated-patterns` in an empty root.
   const rootDir = await makeRoot([]);
   try {
@@ -1429,7 +1430,7 @@ Deno.test("runIntegration reports a run that stops on an error, and still finish
   }
 });
 
-Deno.test("runIntegration summarizes a package from the results its tests wrote, and removes the scratch directory it gave them", async () => {
+test("runIntegration summarizes a package from the results its tests wrote, and removes the scratch directory it gave them", async () => {
   const rootDir = await makeRoot(["generated-patterns"]);
   try {
     const spools: string[] = [];
@@ -1463,7 +1464,7 @@ Deno.test("runIntegration summarizes a package from the results its tests wrote,
   }
 });
 
-Deno.test("runIntegration fails, saying why, when the --files list cannot be read", async () => {
+test("runIntegration fails, saying why, when the --files list cannot be read", async () => {
   const fake = fakeHost();
   const { result, lines } = await capturing(() =>
     runIntegration(["--files=/no/such/list"], fake.host)
@@ -1473,7 +1474,7 @@ Deno.test("runIntegration fails, saying why, when the --files list cannot be rea
   expect(fake.finished).toEqual([{ mode: "off" }]);
 });
 
-Deno.test("runIntegration reads a relative --files list in its working directory", async () => {
+test("runIntegration reads a relative --files list in its working directory", async () => {
   const rootDir = await makePatternRoot();
   try {
     await Deno.writeTextFile(`${rootDir}/list`, `${OTHER_PATTERN}\n`);
@@ -1516,7 +1517,7 @@ function ownedRecording(dir: string): RunRecording {
   };
 }
 
-Deno.test("runIntegration points its children at the spool of a recording it owns", async () => {
+test("runIntegration points its children at the spool of a recording it owns", async () => {
   const rootDir = await makeRoot(["generated-patterns"]);
   const spool = await Deno.makeTempDir();
   try {
@@ -1531,7 +1532,7 @@ Deno.test("runIntegration points its children at the spool of a recording it own
   }
 });
 
-Deno.test("runIntegration leaves the spool of an enclosing run in place", async () => {
+test("runIntegration leaves the spool of an enclosing run in place", async () => {
   const rootDir = await makeRoot(["generated-patterns"]);
   const spool = await Deno.makeTempDir();
   try {
@@ -1548,7 +1549,7 @@ Deno.test("runIntegration leaves the spool of an enclosing run in place", async 
   }
 });
 
-Deno.test("runPackageIntegration records what the package's tests wrote where the run owns its spool", async () => {
+test("runPackageIntegration records what the package's tests wrote where the run owns its spool", async () => {
   // A run that owns its spool ships it, and a spool ships only records, so the
   // results become records there under the package's scope. A run that joined
   // another's spool leaves them for that run.

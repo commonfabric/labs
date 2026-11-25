@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue, PrimitiveValueTag } from "@";
@@ -24,6 +23,7 @@ import {
   replace,
   replaceEntry,
 } from "./Recorder.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Runs a fresh visit of `value` with `vis`. */
 function visit(value: unknown, vis: ValueVisitor<unknown, unknown>): unknown {

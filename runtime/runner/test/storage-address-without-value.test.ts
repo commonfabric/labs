@@ -6,7 +6,6 @@
 // out of a replica so a later write shows up as a change, claiming an absent
 // address during transaction consistency checking, and attesting one.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import * as Differential from "../src/storage/differential.ts";
@@ -17,6 +16,7 @@ import type {
   ISpaceReplica,
   State,
 } from "../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TYPE = "application/json" as const;
 const ENTITY = "of:address-without-value" as const;

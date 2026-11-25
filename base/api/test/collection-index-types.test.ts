@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   Cell,
@@ -9,6 +8,7 @@ import type {
   GroupIndex,
   KeyIndex,
 } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Checks lookup cardinality, key domains, and the handle's read-only surface. */
 function checkIndexTypes(

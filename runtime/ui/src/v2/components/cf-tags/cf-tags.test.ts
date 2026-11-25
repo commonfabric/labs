@@ -2,9 +2,9 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFTags } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Tags mounted with `properties`, and the tags each `cf-change` carries. */
 async function tagsWith(properties: Partial<CFTags> = {}) {

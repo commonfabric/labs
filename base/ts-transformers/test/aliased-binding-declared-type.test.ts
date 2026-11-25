@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
@@ -12,6 +11,7 @@ import {
   patternSchemas,
 } from "./transformed-ast.ts";
 import { transformFiles, transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const IMPORTS =
   `import { action, computed, pattern, Writable, type Default, type PerUser } from "commonfabric";

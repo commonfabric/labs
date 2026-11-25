@@ -5,11 +5,16 @@
  * attach operation-watch fields when no document was upserted.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import {
   refreshTrackedGraph,

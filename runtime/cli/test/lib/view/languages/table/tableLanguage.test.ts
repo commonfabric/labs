@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -11,6 +10,7 @@ import {
   tsvLanguage,
 } from "../../../../../lib/view/languages/table/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The source each colored line reconstructs. */
 function verbatim(lines: readonly Line[]): string {

@@ -10,9 +10,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { backtickQuote } from "@commonfabric/text/markdown";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { cloneIfNecessary, hashOf } from "@";
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-common";

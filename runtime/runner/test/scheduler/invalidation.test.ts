@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import {
@@ -24,6 +23,7 @@ import type {
   IMemorySpaceAddress,
   IStorageTransaction,
 } from "../../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEST_IDENTITY = {
   principal: "did:test:invalidation",

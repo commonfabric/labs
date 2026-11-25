@@ -9,6 +9,7 @@ import { expect } from "@std/expect";
 
 import { Identity } from "../src/identity.ts";
 import { PassKey, type PassKeyHost } from "../src/pass-key.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** What the stand-in authenticator hands back: a credential, or nothing. */
 type Answer = { id: string; prf?: AuthenticationExtensionsPRFOutputs } | null;
@@ -43,7 +44,7 @@ function hostAnswering(answer: Answer) {
 
 const SEED = new Uint8Array(32).map((_, i) => i);
 
-Deno.test("PassKey.create() asks for a discoverable key with PRF for the host's relying party", async () => {
+test("PassKey.create() asks for a discoverable key with PRF for the host's relying party", async () => {
   const { host, created } = hostAnswering({
     id: "cred-1",
     prf: { enabled: true },
@@ -62,7 +63,7 @@ Deno.test("PassKey.create() asks for a discoverable key with PRF for the host's 
   );
 });
 
-Deno.test("PassKey.create() throws when no credential is made, or one is made without PRF", async () => {
+test("PassKey.create() throws when no credential is made, or one is made without PRF", async () => {
   await expect(PassKey.create("ada", "Ada", hostAnswering(null).host))
     .rejects.toThrow("Could not create passkey");
   await expect(
@@ -77,7 +78,7 @@ Deno.test("PassKey.create() throws when no credential is made, or one is made wi
   ).rejects.toThrow("prf extension not supported");
 });
 
-Deno.test("PassKey.createRootKey() throws for a passkey that was just created", async () => {
+test("PassKey.createRootKey() throws for a passkey that was just created", async () => {
   // Creation reports PRF as enabled but carries no PRF output.
   const { host } = hostAnswering({ id: "cred-1", prf: { enabled: true } });
   const passKey = await PassKey.create("ada", "Ada", host);
@@ -85,7 +86,7 @@ Deno.test("PassKey.createRootKey() throws for a passkey that was just created", 
   await expect(passKey.createRootKey()).rejects.toThrow("No PRF found");
 });
 
-Deno.test("PassKey.get() asks the host's relying party for a credential with PRF, as the options say", async () => {
+test("PassKey.get() asks the host's relying party for a credential with PRF, as the options say", async () => {
   const { host, got } = hostAnswering({
     id: "cred-2",
     prf: { results: { first: SEED.buffer } },
@@ -114,7 +115,7 @@ Deno.test("PassKey.get() asks the host's relying party for a credential with PRF
   expect(got[1]?.publicKey?.allowCredentials).toEqual([]);
 });
 
-Deno.test("PassKey.get() throws when no credential is found, or one is found without PRF output", async () => {
+test("PassKey.get() throws when no credential is found, or one is found without PRF output", async () => {
   await expect(PassKey.get({}, hostAnswering(null).host)).rejects.toThrow(
     "Could not create credentials",
   );
@@ -123,7 +124,7 @@ Deno.test("PassKey.get() throws when no credential is found, or one is found wit
   ).rejects.toThrow("prf extension not supported");
 });
 
-Deno.test("PassKey.createRootKey() returns the identity whose seed is the PRF output", async () => {
+test("PassKey.createRootKey() returns the identity whose seed is the PRF output", async () => {
   const expected = (await Identity.fromRaw(SEED)).did();
   // The output as an `ArrayBuffer`, and as a view into a larger buffer.
   const padded = new Uint8Array(40);

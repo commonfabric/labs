@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { FabricPlainObject } from "@commonfabric/api";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { connect, loopback } from "../v2/client.ts";
 import { ROUTED_PART_BYTES, ROUTED_QUEUE_LIMIT } from "../v2/routed-limits.ts";
 import {

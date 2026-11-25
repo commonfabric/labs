@@ -9,7 +9,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
@@ -17,6 +16,12 @@ import { lift } from "../src/builder/module.ts";
 import { pattern, popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { type Frame, NAME } from "../src/builder/types.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { getMetaLink } from "../src/link-utils.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";

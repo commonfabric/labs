@@ -8,7 +8,6 @@
 // `assertExists` stays where `expect()` has no equal: it asserts neither
 // `null` nor `undefined` in one call, and narrows the value's type for the
 // lines that follow. `toBeDefined()` does neither.
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assertExists } from "@std/assert";
 import { expect } from "@std/expect";
 
@@ -16,6 +15,12 @@ import { $conn, type CellRef } from "@commonfabric/runtime-client";
 import { getLogger } from "@commonfabric/logger";
 import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { DomApplicator } from "../src/main/applicator.ts";
 import type { DomEventMessage } from "../src/main/events.ts";

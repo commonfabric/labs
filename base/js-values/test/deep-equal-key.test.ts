@@ -12,9 +12,9 @@
  * and a null-prototype object against a plain one.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { deepEqual, deepEqualKey } from "@commonfabric/js-values/deep-equal";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Named so a failure says which pair of values broke the property. */
 const CORPUS: [string, unknown][] = [

@@ -2,10 +2,12 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { renderInProcess } from "../src/in-process.ts";
 import { MockDoc } from "../src/mock-doc.ts";
 
-Deno.test("in-process render empties a list when debounce expires during continuation", async (t) => {
+test("in-process render empties a list when debounce expires during continuation", async () => {
   const signer = await Identity.fromPassphrase("in-process-debounce");
   const space = signer.did();
   const storageManager = StorageManager.emulate({ as: signer });
@@ -105,7 +107,7 @@ Deno.test("in-process render empties a list when debounce expires during continu
 
     // Drain the wake the continuation scheduled. Calling `runtime.idle()`
     // here could itself discover and revive the stranded sink.
-    await t.settle();
+    await clock.settle();
     render.flush();
     expect(container.getElementsByTagName("i").length).toBe(0);
     expect(sink.status).toBe("clean");

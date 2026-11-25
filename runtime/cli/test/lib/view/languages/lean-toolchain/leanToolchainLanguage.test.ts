@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { languageForFile } from "../../../../../lib/view/languages/language.ts";
 import { leanToolchainLanguage } from "../../../../../lib/view/languages/lean-toolchain/language.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Each colored span of `source`, as its text and class. */
 function spans(source: string): [string, string][] {

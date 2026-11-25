@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   Cell,
@@ -10,6 +9,7 @@ import type {
   Writable,
   WriteonlyCell,
 } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The assertions in this file are made when it is type-checked, not when it
 // runs. Each carrier below is a function that is never called: an assignment

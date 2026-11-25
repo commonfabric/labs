@@ -12,6 +12,7 @@ import type { CFKeybind } from "./index.ts";
 // The entrypoints register cf-keybind and cf-input in the browser.
 import "./index.ts";
 import "../cf-input/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** A connected `cf-keybind` for ArrowRight that counts its matches. */
 function arrowRightBinding() {
@@ -61,7 +62,7 @@ function editableInShadow(kind: string): HTMLElement {
 }
 
 for (const kind of ["contenteditable", "input", "textarea", "select"]) {
-  Deno.test(`cf-keybind ignores a key typed into a ${kind} inside shadow roots`, () => {
+  test(`cf-keybind ignores a key typed into a ${kind} inside shadow roots`, () => {
     const view = arrowRightBinding();
     const editable = editableInShadow(kind);
     const tree = nestedInShadow(editable);
@@ -75,7 +76,7 @@ for (const kind of ["contenteditable", "input", "textarea", "select"]) {
   });
 }
 
-Deno.test("cf-keybind fires for a key on a non-editable element inside shadow roots", () => {
+test("cf-keybind fires for a key on a non-editable element inside shadow roots", () => {
   const view = arrowRightBinding();
   const plain = document.createElement("div");
   const tree = nestedInShadow(plain);
@@ -88,7 +89,7 @@ Deno.test("cf-keybind fires for a key on a non-editable element inside shadow ro
   }
 });
 
-Deno.test("cf-keybind fires for a key on a plain element in the document", () => {
+test("cf-keybind fires for a key on a plain element in the document", () => {
   const view = arrowRightBinding();
   const plain = document.createElement("div");
   document.body.append(plain);
@@ -101,7 +102,7 @@ Deno.test("cf-keybind fires for a key on a plain element in the document", () =>
   }
 });
 
-Deno.test("cf-keybind ignores a key typed into an input in the document", () => {
+test("cf-keybind ignores a key typed into an input in the document", () => {
   const view = arrowRightBinding();
   const input = document.createElement("input");
   document.body.append(input);
@@ -114,7 +115,7 @@ Deno.test("cf-keybind ignores a key typed into an input in the document", () => 
   }
 });
 
-Deno.test("cf-keybind with ignore-editable off fires inside a shadow-rooted editor", () => {
+test("cf-keybind with ignore-editable off fires inside a shadow-rooted editor", () => {
   const view = arrowRightBinding();
   view.binding.ignoreEditable = false;
   const editable = editableInShadow("contenteditable");
@@ -128,7 +129,7 @@ Deno.test("cf-keybind with ignore-editable off fires inside a shadow-rooted edit
   }
 });
 
-Deno.test("cf-keybind ignores a key typed into a cf-input", async () => {
+test("cf-keybind ignores a key typed into a cf-input", async () => {
   const view = arrowRightBinding();
   const field = document.createElement("cf-input") as LitElement;
   document.body.append(field);
@@ -144,7 +145,7 @@ Deno.test("cf-keybind ignores a key typed into a cf-input", async () => {
   }
 });
 
-Deno.test("cf-keybind fires for a key on a non-editable island inside an editor", () => {
+test("cf-keybind fires for a key on a non-editable island inside an editor", () => {
   const view = arrowRightBinding();
   const island = document.createElement("button");
   const wrapper = document.createElement("span");

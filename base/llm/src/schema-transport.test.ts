@@ -13,12 +13,13 @@
 import { assertEquals, assertThrows } from "@std/assert";
 
 import { assertJsonTransportSafe } from "./schema-transport.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("assertJsonTransportSafe: returns for a safe value", () => {
+test("assertJsonTransportSafe: returns for a safe value", () => {
   assertJsonTransportSafe({ type: "number", default: -1 }, "schema");
 });
 
-Deno.test("assertJsonTransportSafe: throws, naming label, pointer, and reason", () => {
+test("assertJsonTransportSafe: throws, naming label, pointer, and reason", () => {
   const err = assertThrows(
     () =>
       assertJsonTransportSafe(
@@ -32,7 +33,7 @@ Deno.test("assertJsonTransportSafe: throws, naming label, pointer, and reason", 
   assertEquals(err.message.includes("NaN"), true);
 });
 
-Deno.test("assertJsonTransportSafe: lists every offender", () => {
+test("assertJsonTransportSafe: lists every offender", () => {
   const err = assertThrows(
     () =>
       assertJsonTransportSafe(

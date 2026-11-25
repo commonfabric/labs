@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
@@ -6,6 +5,13 @@ import { scopeOfScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { ExecutorHost } from "../../src/executor/host.ts";
 import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";

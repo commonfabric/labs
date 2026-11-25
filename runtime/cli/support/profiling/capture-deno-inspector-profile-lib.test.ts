@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import {
@@ -21,6 +20,7 @@ import {
   waitForWebSocketOpen,
   writeProfileCaptureFiles,
 } from "./capture-deno-inspector-profile-lib.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function createState(): ProfileCaptureState {
   return {

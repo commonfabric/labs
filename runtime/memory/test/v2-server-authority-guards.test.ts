@@ -7,11 +7,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { type Delegation, issueDelegation } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { SpaceInviteError } from "../space-invites.ts";
 import {

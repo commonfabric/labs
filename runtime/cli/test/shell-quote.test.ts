@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { shellQuote, shellWord } from "../lib/shell-quote.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("shell-quote", () => {
   describe("shellQuote()", () => {

@@ -1,8 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { AliasResolver } from "@commonfabric/test-support/records";
+import { afterEach, beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 
 import {
   collectDay,
@@ -72,7 +72,7 @@ const FORK_PASS = JSON.stringify({
   durationMs: 50,
 });
 
-Deno.test("collectDay aggregates runs, failures, and durations per identity", async () => {
+test("collectDay aggregates runs, failures, and durations per identity", async () => {
   const aggregates = await collectDay("2026/08/16", {
     fetchImpl: storeFetch([PASS, FAIL, "not a record"]),
   });
@@ -88,7 +88,7 @@ Deno.test("collectDay aggregates runs, failures, and durations per identity", as
   assertEquals(isDayAggregate(aggregates[0]), true);
 });
 
-Deno.test("collectDay reads durations from passing records alone", async () => {
+test("collectDay reads durations from passing records alone", async () => {
   // A failure ended by a wait's safety net reports that net's bound, so a
   // duration read from one describes the net rather than the test. Two
   // passing runs of different lengths follow it, so the total is a sum
@@ -121,7 +121,7 @@ Deno.test("collectDay reads durations from passing records alone", async () => {
   }]);
 });
 
-Deno.test("collectDay separates variant records from default history", async () => {
+test("collectDay separates variant records from default history", async () => {
   const variant = JSON.stringify({
     line: "record",
     test: {
@@ -145,7 +145,7 @@ Deno.test("collectDay separates variant records from default history", async () 
   }]);
 });
 
-Deno.test("collectDay counts nothing for a lane measuring itself", async () => {
+test("collectDay counts nothing for a lane measuring itself", async () => {
   // A lane writes what its setup and each of its batches cost through the
   // record machinery every test uses, so those arrive beside the tests they
   // were recorded with. A batch carries the duration of everything it ran.
@@ -164,7 +164,7 @@ Deno.test("collectDay counts nothing for a lane measuring itself", async () => {
   ]);
 });
 
-Deno.test("collectDay counts a fork run's report", async () => {
+test("collectDay counts a fork run's report", async () => {
   // A body holding two reports, one from this repository and one from a fork.
   // See `docs/specs/test-records.md`, "Trust boundaries for consumers", for
   // what the store's member gate leaves the fork flag meaning. The fork
@@ -235,7 +235,7 @@ Deno.test("collectDay counts a fork run's report", async () => {
   }]);
 });
 
-Deno.test("collectDay resolves identities through the alias file", async () => {
+test("collectDay resolves identities through the alias file", async () => {
   const aliases = new AliasResolver([{
     date: "2026-08-17",
     from: { k: "unit", s: "bakery", n: "glaze" },
@@ -248,7 +248,7 @@ Deno.test("collectDay resolves identities through the alias file", async () => {
   assertEquals(aggregates[0]?.key, '["unit","bakery","glaze > sets"]');
 });
 
-Deno.test("collectDay asks the alias file nothing about a lane measurement", async () => {
+test("collectDay asks the alias file nothing about a lane measurement", async () => {
   // What a record is, is read from the identity the lane wrote, so the
   // alias file cannot turn a lane's overhead into a test's history.
 
@@ -269,7 +269,7 @@ Deno.test("collectDay asks the alias file nothing about a lane measurement", asy
   assertEquals(aggregates, []);
 });
 
-Deno.test("isDayAggregate rejects inconsistent aggregates", () => {
+test("isDayAggregate rejects inconsistent aggregates", () => {
   const sound: DayAggregate = {
     key: '["unit","bakery","glaze"]',
     day: "2026/08/16",
@@ -299,7 +299,7 @@ Deno.test("isDayAggregate rejects inconsistent aggregates", () => {
   );
 });
 
-Deno.test("the store refreshes missing days, persists, and reloads", async () => {
+test("the store refreshes missing days, persists, and reloads", async () => {
   const directory = await Deno.makeTempDir({ prefix: "test-records-history-" });
   try {
     const file = join(directory, "history.json");
@@ -327,7 +327,7 @@ Deno.test("the store refreshes missing days, persists, and reloads", async () =>
   }
 });
 
-Deno.test("the store discards a cache written under the old rule", async () => {
+test("the store discards a cache written under the old rule", async () => {
   // Version 1 held durations summed over every record, so its figures
   // mean something else and the window is refetched rather than read.
 
@@ -359,7 +359,7 @@ Deno.test("the store discards a cache written under the old rule", async () => {
   }
 });
 
-Deno.test("the store ignores an invalid cache file", async () => {
+test("the store ignores an invalid cache file", async () => {
   const directory = await Deno.makeTempDir({ prefix: "test-records-history-" });
   try {
     const file = join(directory, "history.json");
@@ -372,7 +372,7 @@ Deno.test("the store ignores an invalid cache file", async () => {
   }
 });
 
-Deno.test("the store ignores a cache whose day keys disagree", async () => {
+test("the store ignores a cache whose day keys disagree", async () => {
   const directory = await Deno.makeTempDir({ prefix: "test-records-history-" });
   try {
     const file = join(directory, "history.json");
@@ -401,7 +401,7 @@ Deno.test("the store ignores a cache whose day keys disagree", async () => {
   }
 });
 
-Deno.test("refresh prunes days that fell out of the window and survives a failing day", async () => {
+test("refresh prunes days that fell out of the window and survives a failing day", async () => {
   const directory = await Deno.makeTempDir({ prefix: "test-records-history-" });
   try {
     const file = join(directory, "history.json");
@@ -429,7 +429,7 @@ Deno.test("refresh prunes days that fell out of the window and survives a failin
   }
 });
 
-Deno.test("series returns an empty shape for an unknown identity", async () => {
+test("series returns an empty shape for an unknown identity", async () => {
   const directory = await Deno.makeTempDir({ prefix: "test-records-history-" });
   try {
     const store = new TestRecordsHistoryStore(join(directory, "h.json"));
@@ -443,7 +443,7 @@ Deno.test("series returns an empty shape for an unknown identity", async () => {
   }
 });
 
-Deno.test("series keeps a pass rate for a day with no passing run", async () => {
+test("series keeps a pass rate for a day with no passing run", async () => {
   const directory = await Deno.makeTempDir({ prefix: "test-records-history-" });
   try {
     const store = new TestRecordsHistoryStore(join(directory, "history.json"));

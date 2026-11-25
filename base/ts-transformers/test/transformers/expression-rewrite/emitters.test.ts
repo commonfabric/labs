@@ -3,13 +3,13 @@
  * expression emitter handles, through the whole pipeline, and inspects what
  * the emitter left at the site and what it lifted.
  */
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "../../commonfabric-test-types.ts";
 import { callsNamed, collect, parseModule } from "../../transformed-ast.ts";
 import { transformSource } from "../../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A pattern whose render body holds `jsx`, importing `imports` as well. */
 function patternRendering(jsx: string, imports: readonly string[] = []) {

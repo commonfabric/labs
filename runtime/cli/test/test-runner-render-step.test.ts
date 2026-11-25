@@ -2,12 +2,12 @@
  * Contract tests for explicit, per-step VDOM materialization in `cf test`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { runTests } from "../lib/test-runner.ts";
 import { argv, cf, checkStderr } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/render-step");
 const SUBJECT = join(FIXTURES, "subject.tsx").replaceAll("\\", "/");

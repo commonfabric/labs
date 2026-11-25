@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import ts from "typescript";
@@ -9,6 +8,7 @@ import {
   unwrapExpression,
   unwrapTransparentWrapperOnce,
 } from "../../src/utils/expression.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const numberType = () =>
   ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);

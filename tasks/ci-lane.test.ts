@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { dirname, fromFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { shuffleNotice } from "@commonfabric/test-support/shuffle";
@@ -13,6 +12,7 @@ import {
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { maxOf } from "@commonfabric/collections/math";
 import {
   type Capability,

@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const NO_WS: DiffWorkspace = { resolve: () => null, read: () => null };
 
@@ -9,7 +10,7 @@ const NO_WS: DiffWorkspace = { resolve: () => null, read: () => null };
 // a deleted Markdown file keeps Markdown highlighting
 //
 
-Deno.test("buildDiffDocument: a deleted Markdown file (new path /dev/null) highlights as Markdown", () => {
+test("buildDiffDocument: a deleted Markdown file (new path /dev/null) highlights as Markdown", () => {
   // A plain `diff -u doc.md /dev/null` has no `diff --git` line, so the new
   // path is /dev/null (absent) while the old path is the .md file. The markdown
   // flag must fall back to the old path; otherwise the removed heading reads as
@@ -61,7 +62,7 @@ Deno.test("buildDiffDocument: a deleted Markdown file (new path /dev/null) highl
 // a deleted non-Markdown file is unaffected by the fallback
 //
 
-Deno.test("buildDiffDocument: a deleted .ts file (new path /dev/null) stays TypeScript", () => {
+test("buildDiffDocument: a deleted .ts file (new path /dev/null) stays TypeScript", () => {
   // The old-path fallback must not turn a deleted TypeScript file into
   // Markdown: isMarkdownPath of the .ts old path is false.
   const diff = `--- m.ts\t2026-06-30 14:00:10
@@ -95,7 +96,7 @@ Deno.test("buildDiffDocument: a deleted .ts file (new path /dev/null) stays Type
 // only files with hunks are read from the workspace
 //
 
-Deno.test("buildDiffDocument: a file section without hunks is not read from the workspace", () => {
+test("buildDiffDocument: a file section without hunks is not read from the workspace", () => {
   // A pure rename is a file section with headers and no hunks. None of the
   // renamed file's content is displayed, edited, or expanded. A file whose
   // name does not settle its language would otherwise be read to detect one.

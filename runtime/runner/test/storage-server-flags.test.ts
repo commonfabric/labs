@@ -7,10 +7,15 @@
  * served the space and ensured its root had one been opened.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { ExecutorHost } from "../src/executor/host.ts";
 import {

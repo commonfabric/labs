@@ -1,4 +1,3 @@
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join, resolve, toFileUrl } from "@std/path";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
@@ -11,6 +10,7 @@ import { urlToAppView } from "@commonfabric/navigation";
 import { pieceUrl } from "../../src/piece-url.ts";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 import {
   answerWhenReady,
   closeConsole,

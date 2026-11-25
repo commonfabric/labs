@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { connect, loopback } from "../v2/client.ts";
@@ -8,6 +7,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("v2-restore-completion", () => {
   it("keeps restoration pending across a failed attempt until a successful restore", async () => {

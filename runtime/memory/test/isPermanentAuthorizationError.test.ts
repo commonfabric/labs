@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isPermanentAuthorizationError } from "../v2/client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** An error named `name`, carrying `fields` besides. */
 function named(name: string, fields: Record<string, unknown> = {}): Error {

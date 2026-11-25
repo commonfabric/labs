@@ -2,9 +2,14 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { CFImageInput, type ImageData } from "./index.ts";
 
 /** A 1x1 PNG, which `createImageBitmap()` decodes. */

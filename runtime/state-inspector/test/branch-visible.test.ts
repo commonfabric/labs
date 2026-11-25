@@ -14,7 +14,6 @@
  * here holds that line so it reads as a decision rather than an oversight.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -26,6 +25,7 @@ import { analyzeSpaceSignals } from "../grouping.ts";
 import { spaceParticipants, valueAsIdentity } from "../scopes.ts";
 import { convergenceExact, convergenceScanExact } from "../multispace.ts";
 import { owningLink, reconstructDocument } from "../reconstruct.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (

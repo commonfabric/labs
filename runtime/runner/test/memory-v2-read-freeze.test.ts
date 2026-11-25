@@ -6,13 +6,14 @@ import {
   assertThrows,
 } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
 const signer = await Identity.fromPassphrase("memory-v2-read-freeze");
 const space = signer.did();
 const type = "application/json" as const;
 
-Deno.test("memory v2 raw reads freeze the returned subtree without exposing mutable state", async () => {
+test("memory v2 raw reads freeze the returned subtree without exposing mutable state", async () => {
   const storage = StorageManager.emulate({
     as: signer,
   });
@@ -65,7 +66,7 @@ Deno.test("memory v2 raw reads freeze the returned subtree without exposing muta
   }
 });
 
-Deno.test("memory v2 raw reads reuse frozen snapshots until the document changes", async () => {
+test("memory v2 raw reads reuse frozen snapshots until the document changes", async () => {
   const storage = StorageManager.emulate({
     as: signer,
   });
@@ -143,7 +144,7 @@ Deno.test("memory v2 raw reads reuse frozen snapshots until the document changes
   }
 });
 
-Deno.test("memory v2 read cache: sibling-path snapshot survives write, ancestor and written-subtree snapshots get rebuilt", async () => {
+test("memory v2 read cache: sibling-path snapshot survives write, ancestor and written-subtree snapshots get rebuilt", async () => {
   const storage = StorageManager.emulate({ as: signer });
 
   try {
@@ -226,7 +227,7 @@ Deno.test("memory v2 read cache: sibling-path snapshot survives write, ancestor 
   }
 });
 
-Deno.test("memory v2 read cache: array `.length` reads invalidate when an index extends the array", async () => {
+test("memory v2 read cache: array `.length` reads invalidate when an index extends the array", async () => {
   // Regression for the `<parent>/length` sibling case: writing to
   // `/items/1` increases the array's length from 1 to 2. The synthetic
   // `/items/length` pointer is not on the chain of `/items/1` by path-string
@@ -268,7 +269,7 @@ Deno.test("memory v2 read cache: array `.length` reads invalidate when an index 
   }
 });
 
-Deno.test("memory v2 raw reads keep prior frozen snapshots stable after sibling writes", async () => {
+test("memory v2 raw reads keep prior frozen snapshots stable after sibling writes", async () => {
   const storage = StorageManager.emulate({
     as: signer,
   });

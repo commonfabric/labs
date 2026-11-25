@@ -8,9 +8,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { RECORD_LABEL_WIDTH, renderRecord } from "../lib/shuttle/record.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("record", () => {
   describe("RECORD_LABEL_WIDTH", () => {

@@ -8,10 +8,10 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { realFileGateway } from "../lib/view/filegateway.ts";
 import { MAX_BINARY_VIEW_BYTES } from "../lib/view/languages/binary/binary.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 // These cases color Python through its synchronous entry points, which show
 // plain text until its parser has loaded.
@@ -37,12 +37,12 @@ function removeIfPresent(path: string): void {
   }
 }
 
-Deno.test("realFileGateway.cwd: returns Deno's working directory", () => {
+test("realFileGateway.cwd: returns Deno's working directory", () => {
   const gw = realFileGateway();
   assertEquals(gw.cwd(), Deno.cwd());
 });
 
-Deno.test("realFileGateway.cwd: falls back to '.' when Deno.cwd throws", () => {
+test("realFileGateway.cwd: falls back to '.' when Deno.cwd throws", () => {
   // The gateway calls Deno.cwd() at invocation time. Swapping it for a throwing
   // stub drives the catch arm, which yields the relative "." as a last resort.
   const gw = realFileGateway();
@@ -57,7 +57,7 @@ Deno.test("realFileGateway.cwd: falls back to '.' when Deno.cwd throws", () => {
   }
 });
 
-Deno.test("realFileGateway.list: reads a directory's entries with isDir flags", async () => {
+test("realFileGateway.list: reads a directory's entries with isDir flags", async () => {
   await withTempDir((dir) => {
     Deno.mkdirSync(join(dir, "sub"));
     Deno.writeTextFileSync(join(dir, "a.ts"), "const a = 1;\n");
@@ -71,13 +71,13 @@ Deno.test("realFileGateway.list: reads a directory's entries with isDir flags", 
   });
 });
 
-Deno.test("realFileGateway.list: returns null when the directory cannot be read", () => {
+test("realFileGateway.list: returns null when the directory cannot be read", () => {
   const gw = realFileGateway();
   const missing = join(Deno.cwd(), "definitely-not-a-real-dir-xyz-12345");
   assertEquals(gw.list(missing), null);
 });
 
-Deno.test("realFileGateway.list: a symlink to a directory is reported as a dir", async () => {
+test("realFileGateway.list: a symlink to a directory is reported as a dir", async () => {
   await withTempDir((dir) => {
     Deno.mkdirSync(join(dir, "realdir"));
     Deno.symlinkSync(join(dir, "realdir"), join(dir, "dirlink"));
@@ -94,7 +94,7 @@ Deno.test("realFileGateway.list: a symlink to a directory is reported as a dir",
   });
 });
 
-Deno.test("realFileGateway.list: a symlink to a file is not a dir", async () => {
+test("realFileGateway.list: a symlink to a file is not a dir", async () => {
   await withTempDir((dir) => {
     Deno.writeTextFileSync(join(dir, "target.ts"), "const x = 1;\n");
     Deno.symlinkSync(join(dir, "target.ts"), join(dir, "filelink"));
@@ -111,7 +111,7 @@ Deno.test("realFileGateway.list: a symlink to a file is not a dir", async () => 
   });
 });
 
-Deno.test("realFileGateway.list: a broken symlink is not a dir", async () => {
+test("realFileGateway.list: a broken symlink is not a dir", async () => {
   await withTempDir((dir) => {
     // Point at a path that does not exist so statSync throws and the
     // isDir helper's catch arm returns false.
@@ -129,7 +129,7 @@ Deno.test("realFileGateway.list: a broken symlink is not a dir", async () => {
   });
 });
 
-Deno.test("realFileGateway.open: reads a file into an editable source and its text", async () => {
+test("realFileGateway.open: reads a file into an editable source and its text", async () => {
   await withTempDir((dir) => {
     const path = join(dir, "doc.ts");
     const contents = "export const greeting = 'hi';\n";
@@ -145,7 +145,7 @@ Deno.test("realFileGateway.open: reads a file into an editable source and its te
   });
 });
 
-Deno.test("realFileGateway.open: keeps shebang selection in the editable source", async () => {
+test("realFileGateway.open: keeps shebang selection in the editable source", async () => {
   await withTempDir((dir) => {
     const path = join(dir, "greet");
     const contents = "#!/usr/bin/env python3\ndef greet():\n    return 'hi'\n";
@@ -432,24 +432,24 @@ describe("realFileGateway.open() buffered input", () => {
   });
 });
 
-Deno.test("realFileGateway.open: returns null when the file cannot be read", () => {
+test("realFileGateway.open: returns null when the file cannot be read", () => {
   const gw = realFileGateway();
   const missing = join(Deno.cwd(), "definitely-not-a-real-file-xyz-12345.ts");
   assertEquals(gw.open(missing), null);
 });
 
-Deno.test("realFileGateway.join: joins and normalizes a directory and segment", () => {
+test("realFileGateway.join: joins and normalizes a directory and segment", () => {
   const gw = realFileGateway();
   assertEquals(gw.join("/work", "a.ts"), join("/work", "a.ts"));
   assertEquals(gw.join("/work/sub", ".."), join("/work/sub", ".."));
 });
 
-Deno.test("realFileGateway.parent: returns the parent directory", () => {
+test("realFileGateway.parent: returns the parent directory", () => {
   const gw = realFileGateway();
   assertEquals(gw.parent("/work/sub/a.ts"), "/work/sub");
 });
 
-Deno.test("realFileGateway.base: returns the final path segment", () => {
+test("realFileGateway.base: returns the final path segment", () => {
   const gw = realFileGateway();
   assertEquals(gw.base("/work/sub/a.ts"), "a.ts");
 });

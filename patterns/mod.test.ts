@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("mod", () => {
   it("throws on import, since the package holds patterns rather than a module API", async () => {

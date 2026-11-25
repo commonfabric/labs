@@ -12,9 +12,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   connect as connectClient,

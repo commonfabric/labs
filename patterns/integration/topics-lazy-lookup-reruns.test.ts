@@ -9,7 +9,6 @@
  */
 
 import { expect } from "@std/expect";
-import { beforeAll, describe, it } from "@std/testing/bdd";
 
 import {
   type CaseMeasurement,
@@ -22,6 +21,7 @@ import {
   measureTopicsFixture,
   topicIndicesOf,
 } from "./topics-headless-fixture.ts";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The cases, at a size where a lookup that re-runs per topic is unmistakable

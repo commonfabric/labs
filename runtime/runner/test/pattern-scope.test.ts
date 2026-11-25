@@ -6,6 +6,8 @@ import {
   setServerExecutionConfig,
 } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { Runtime } from "../src/runtime.ts";
 import {
   getMetaLink,
@@ -39,7 +41,7 @@ const allocatedSpace = async (
   return record.get()?.did;
 };
 
-Deno.test("Cell.key keeps base scope; schema carries the scope", async () => {
+test("Cell.key keeps base scope; schema carries the scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -97,7 +99,7 @@ Deno.test("Cell.key keeps base scope; schema carries the scope", async () => {
   }
 });
 
-Deno.test("handler bindings preserve scoped cells selected from pattern input schema", async () => {
+test("handler bindings preserve scoped cells selected from pattern input schema", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -232,7 +234,7 @@ Deno.test("handler bindings preserve scoped cells selected from pattern input sc
   }
 });
 
-Deno.test("per-user pointer can create and update a space-scoped profile cell", async () => {
+test("per-user pointer can create and update a space-scoped profile cell", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -458,7 +460,7 @@ Deno.test("per-user pointer can create and update a space-scoped profile cell", 
   }
 });
 
-Deno.test("pattern factory .asScope() sets child pattern result scope", async () => {
+test("pattern factory .asScope() sets child pattern result scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -500,7 +502,7 @@ Deno.test("pattern factory .asScope() sets child pattern result scope", async ()
   }
 });
 
-Deno.test("pattern factory .inSpace() routes child pattern result to DID space", async () => {
+test("pattern factory .inSpace() routes child pattern result to DID space", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -542,7 +544,7 @@ Deno.test("pattern factory .inSpace() routes child pattern result to DID space",
   }
 });
 
-Deno.test("pattern factory .inSpace() resolves named spaces during action postRun", async () => {
+test("pattern factory .inSpace() resolves named spaces during action postRun", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -598,7 +600,7 @@ Deno.test("pattern factory .inSpace() resolves named spaces during action postRu
   }
 });
 
-Deno.test("pattern factory .inSpace() handler side effect can write linked child across spaces", async () => {
+test("pattern factory .inSpace() handler side effect can write linked child across spaces", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -676,7 +678,7 @@ Deno.test("pattern factory .inSpace() handler side effect can write linked child
   }
 });
 
-Deno.test("pattern factory .inSpace() resolves named handler children to DIDs", async () => {
+test("pattern factory .inSpace() resolves named handler children to DIDs", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -763,7 +765,7 @@ Deno.test("pattern factory .inSpace() resolves named handler children to DIDs", 
   }
 });
 
-Deno.test("pattern factory .inSpace() rewrites named child links through writeonly bindings", async () => {
+test("pattern factory .inSpace() rewrites named child links through writeonly bindings", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -856,7 +858,7 @@ Deno.test("pattern factory .inSpace() rewrites named child links through writeon
   }
 });
 
-Deno.test("pattern factory .inSpace() with a cell uses that cell's space", async () => {
+test("pattern factory .inSpace() with a cell uses that cell's space", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -907,7 +909,7 @@ Deno.test("pattern factory .inSpace() with a cell uses that cell's space", async
   }
 });
 
-Deno.test("pattern factory .inSpace() without a space creates a fresh DID space during action postRun", async () => {
+test("pattern factory .inSpace() without a space creates a fresh DID space during action postRun", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -958,7 +960,7 @@ Deno.test("pattern factory .inSpace() without a space creates a fresh DID space 
   }
 });
 
-Deno.test("pattern result schema scope overrides factory .asScope()", async () => {
+test("pattern result schema scope overrides factory .asScope()", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1005,7 +1007,7 @@ Deno.test("pattern result schema scope overrides factory .asScope()", async () =
   }
 });
 
-Deno.test("runtime rejects inherit scope on full normalized links", async () => {
+test("runtime rejects inherit scope on full normalized links", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1035,7 +1037,7 @@ Deno.test("runtime rejects inherit scope on full normalized links", async () => 
   }
 });
 
-Deno.test("cross-space scoped links preserve target space and resolved scope", async () => {
+test("cross-space scoped links preserve target space and resolved scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1086,7 +1088,7 @@ Deno.test("cross-space scoped links preserve target space and resolved scope", a
   }
 });
 
-Deno.test("key() does not stamp the asCell entry scope onto the container link", async () => {
+test("key() does not stamp the asCell entry scope onto the container link", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1139,7 +1141,7 @@ Deno.test("key() does not stamp the asCell entry scope onto the container link",
   }
 });
 
-Deno.test("lift can read session-scoped cell passed from pattern input", async () => {
+test("lift can read session-scoped cell passed from pattern input", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1236,7 +1238,7 @@ Deno.test("lift can read session-scoped cell passed from pattern input", async (
   }
 });
 
-Deno.test("broad computed output links to narrower scoped result", async () => {
+test("broad computed output links to narrower scoped result", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1295,7 +1297,7 @@ Deno.test("broad computed output links to narrower scoped result", async () => {
   }
 });
 
-Deno.test("opaque JS action result uses narrowest effective output scope", async () => {
+test("opaque JS action result uses narrowest effective output scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1372,7 +1374,7 @@ Deno.test("opaque JS action result uses narrowest effective output scope", async
   }
 });
 
-Deno.test("opaque JS action result schema scope participates in effective output scope", async () => {
+test("opaque JS action result schema scope participates in effective output scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1431,7 +1433,7 @@ Deno.test("opaque JS action result schema scope participates in effective output
   }
 });
 
-Deno.test("map keeps outer list scope and narrows per-element result cells", async () => {
+test("map keeps outer list scope and narrows per-element result cells", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1504,7 +1506,7 @@ Deno.test("map keeps outer list scope and narrows per-element result cells", asy
   }
 });
 
-Deno.test("map updates when derived list is narrowed by session input", async () => {
+test("map updates when derived list is narrowed by session input", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1635,7 +1637,7 @@ Deno.test("map updates when derived list is narrowed by session input", async ()
   }
 });
 
-Deno.test("map materializes initially populated list selected by session input", async () => {
+test("map materializes initially populated list selected by session input", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1721,7 +1723,7 @@ Deno.test("map materializes initially populated list selected by session input",
   }
 });
 
-Deno.test("ifElse selected branch materializes map over session-derived list", async () => {
+test("ifElse selected branch materializes map over session-derived list", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1815,7 +1817,7 @@ Deno.test("ifElse selected branch materializes map over session-derived list", a
   }
 });
 
-Deno.test("ifElse selected VNode branch materializes map over session-derived list", async () => {
+test("ifElse selected VNode branch materializes map over session-derived list", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -1926,7 +1928,7 @@ Deno.test("ifElse selected VNode branch materializes map over session-derived li
   }
 });
 
-Deno.test("map materializes list through session boxed space-scoped reference", async () => {
+test("map materializes list through session boxed space-scoped reference", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2086,7 +2088,7 @@ Deno.test("map materializes list through session boxed space-scoped reference", 
   }
 });
 
-Deno.test("filter narrows output list when scoped element controls cardinality", async () => {
+test("filter narrows output list when scoped element controls cardinality", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2149,7 +2151,7 @@ Deno.test("filter narrows output list when scoped element controls cardinality",
   }
 });
 
-Deno.test("flatMap narrows output list when scoped element controls cardinality", async () => {
+test("flatMap narrows output list when scoped element controls cardinality", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2212,7 +2214,7 @@ Deno.test("flatMap narrows output list when scoped element controls cardinality"
   }
 });
 
-Deno.test("ifElse output follows condition scope", async () => {
+test("ifElse output follows condition scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2265,7 +2267,7 @@ Deno.test("ifElse output follows condition scope", async () => {
   }
 });
 
-Deno.test("session scoped derived chains update when broad inputs change", async () => {
+test("session scoped derived chains update when broad inputs change", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2427,7 +2429,7 @@ Deno.test("session scoped derived chains update when broad inputs change", async
   }
 });
 
-Deno.test("when keeps condition scope while selecting narrower value link", async () => {
+test("when keeps condition scope while selecting narrower value link", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2484,7 +2486,7 @@ Deno.test("when keeps condition scope while selecting narrower value link", asyn
   }
 });
 
-Deno.test("fetchJson state cells use narrowest input scope", async () => {
+test("fetchJson state cells use narrowest input scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2536,7 +2538,7 @@ Deno.test("fetchJson state cells use narrowest input scope", async () => {
   }
 });
 
-Deno.test("generateText result cell uses narrowest input scope", async () => {
+test("generateText result cell uses narrowest input scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2588,7 +2590,7 @@ Deno.test("generateText result cell uses narrowest input scope", async () => {
   }
 });
 
-Deno.test("llmDialog result cell uses narrowest input scope", async () => {
+test("llmDialog result cell uses narrowest input scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2641,7 +2643,7 @@ Deno.test("llmDialog result cell uses narrowest input scope", async () => {
   }
 });
 
-Deno.test("wish current-space output follows query input scope", async () => {
+test("wish current-space output follows query input scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2700,7 +2702,7 @@ Deno.test("wish current-space output follows query input scope", async () => {
   }
 });
 
-Deno.test("wish home-space output is at least user scoped", async () => {
+test("wish home-space output is at least user scoped", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2763,7 +2765,7 @@ Deno.test("wish home-space output is at least user scoped", async () => {
   }
 });
 
-Deno.test("wish result schema scope overrides query-derived scope", async () => {
+test("wish result schema scope overrides query-derived scope", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2829,7 +2831,7 @@ Deno.test("wish result schema scope overrides query-derived scope", async () => 
   }
 });
 
-Deno.test("scoped asCell property with no value gets an eager base-scope redirect", async () => {
+test("scoped asCell property with no value gets an eager base-scope redirect", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -2927,7 +2929,7 @@ Deno.test("scoped asCell property with no value gets an eager base-scope redirec
   }
 });
 
-Deno.test("schema-less write AT a scoped slot follows the stored redirect", async () => {
+test("schema-less write AT a scoped slot follows the stored redirect", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -3005,7 +3007,7 @@ Deno.test("schema-less write AT a scoped slot follows the stored redirect", asyn
   }
 });
 
-Deno.test("sub-pattern binding alias carries the parent slot's declared scope on its serialized schema", async () => {
+test("sub-pattern binding alias carries the parent slot's declared scope on its serialized schema", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -3131,7 +3133,7 @@ Deno.test("sub-pattern binding alias carries the parent slot's declared scope on
 });
 
 for (const recordScope of ["space", "user"] as const) {
-  Deno.test(`child reads a ${recordScope}-scoped cell passed into a value-scoped argument slot`, async () => {
+  test(`child reads a ${recordScope}-scoped cell passed into a value-scoped argument slot`, async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -3223,7 +3225,7 @@ for (const recordScope of ["space", "user"] as const) {
   });
 }
 
-Deno.test("child reads a plain value passed into a value-scoped argument slot from the scoped instance", async () => {
+test("child reads a plain value passed into a value-scoped argument slot from the scoped instance", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -3304,7 +3306,7 @@ Deno.test("child reads a plain value passed into a value-scoped argument slot fr
   }
 });
 
-Deno.test("a write through a value-scoped slot's handle lands in the passed cell's own instance", async () => {
+test("a write through a value-scoped slot's handle lands in the passed cell's own instance", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -3385,7 +3387,7 @@ for (
     ["user-capped handle", "session", "missing"],
   ] as const
 ) {
-  Deno.test(`a nested binding below a ${slotSpelling} slot reads a ${recordScope}-scoped cell passed into it as ${expected}`, async () => {
+  test(`a nested binding below a ${slotSpelling} slot reads a ${recordScope}-scoped cell passed into it as ${expected}`, async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -3460,7 +3462,7 @@ for (
   });
 }
 
-Deno.test("a handle-scoped argument slot does not follow a narrower cell passed into it", async () => {
+test("a handle-scoped argument slot does not follow a narrower cell passed into it", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -3522,7 +3524,7 @@ Deno.test("a handle-scoped argument slot does not follow a narrower cell passed 
 
 for (const serverExecution of [false, true]) {
   for (const passed of ["a plain value", "a space-scoped cell"] as const) {
-    Deno.test(
+    test(
       `a session-scoped argument slot reads ${passed} passed into it${
         serverExecution ? " with server execution" : ""
       }`,
@@ -3608,7 +3610,7 @@ for (const serverExecution of [false, true]) {
   }
 }
 
-Deno.test("a user-capped child slot does not follow a session cell relayed through a parent slot", async () => {
+test("a user-capped child slot does not follow a session cell relayed through a parent slot", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),

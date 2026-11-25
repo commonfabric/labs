@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, beforeEach, describe, it } from "@std/testing/bdd";
 import { context, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -22,6 +21,12 @@ import {
   type DIDKey,
   issueDelegation,
 } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { Server } from "../v2/server.ts";
 import type { SessionDescriptor, SessionOpenResult } from "../v2.ts";

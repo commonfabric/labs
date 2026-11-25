@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { aclDocId } from "../acl.ts";
 import {
@@ -19,6 +18,7 @@ import {
   TEST_SESSION_OPEN_PRINCIPAL,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("v2-session-open-lifecycle", () => {
   it("answers an open still on its way to the engine when the server closes with an error, and leaves the store empty", async () => {

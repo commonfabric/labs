@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { defer } from "@commonfabric/async/defer";
 import {
   holdWorkerLifetimeLock,
   terminateWorker,
 } from "@commonfabric/platform/worker-lifetime";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Starts the fixture worker, and returns it with its lifetime lock's name. */
 async function startWorker(): Promise<

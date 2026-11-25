@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFToggle } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A toggle mounted with `properties`, and every `cf-change` it fires. */
 async function toggleWith(properties: Partial<CFToggle> = {}) {

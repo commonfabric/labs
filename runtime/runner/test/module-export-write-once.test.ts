@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   populateModuleExports,
 } from "../src/sandbox/module-record-compiler.ts";
 import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const noRequire = (s: string): Record<string, unknown> => {
   throw new Error(`unexpected require(${s})`);

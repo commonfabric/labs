@@ -5,6 +5,7 @@ import ts from "typescript";
 import { CommonFabricTransformerPipeline } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { batchTypeCheckFixtures } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * CT-1868 lineage regression — the hermetic, tracked form of the transform-time
@@ -293,7 +294,7 @@ const LIFT_MARKERS = [
   'items[count] + "!"', // ORIGIN-G (pattern-body initializer)
 ];
 
-Deno.test(
+test(
   "CT-1868: builder lineage recovers authored positions at the hoisting stage",
   async () => {
     const { transformed, original } = await transformFixtureToAst();

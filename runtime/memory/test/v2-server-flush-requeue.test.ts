@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import type { FabricPlainObject } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type {
   SessionEffectMessage,

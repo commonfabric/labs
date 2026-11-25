@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { cfcAtom } from "@commonfabric/api/cfc";
@@ -8,6 +7,12 @@ import {
   clearMockResponses,
   enableMockMode,
 } from "@commonfabric/llm/client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";

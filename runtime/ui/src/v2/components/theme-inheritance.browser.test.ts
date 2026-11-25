@@ -14,6 +14,7 @@ import "../index.ts";
 import { CFThemeProvider } from "./cf-theme/index.ts";
 import { CFToolsChip } from "./cf-tools-chip/index.ts";
 import { type CFTheme, mergeWithDefaultTheme } from "./theme-context.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** The widgets that read the theme tokens in their own styles. */
 const WIDGETS = [
@@ -65,7 +66,7 @@ async function mountIn<T extends HTMLElement>(
 }
 
 for (const tag of WIDGETS) {
-  Deno.test(`${tag} draws the theme tokens a host sets on an ancestor`, async () => {
+  test(`${tag} draws the theme tokens a host sets on an ancestor`, async () => {
     const host = themedHost();
     try {
       const widget = await mountIn(host, tag);
@@ -78,7 +79,7 @@ for (const tag of WIDGETS) {
   });
 }
 
-Deno.test("a widget draws the theme of the cf-theme around it", async () => {
+test("a widget draws the theme of the cf-theme around it", async () => {
   const provider = new CFThemeProvider();
   provider.theme = { fontFamily: HOST_FONT };
   document.body.append(provider);
@@ -92,7 +93,7 @@ Deno.test("a widget draws the theme of the cf-theme around it", async () => {
   }
 });
 
-Deno.test("a theme given to a widget directly is drawn over the host's, and withdrawing it restores the host's", async () => {
+test("a theme given to a widget directly is drawn over the host's, and withdrawing it restores the host's", async () => {
   const host = themedHost();
   try {
     const button = await mountIn<
@@ -117,7 +118,7 @@ Deno.test("a theme given to a widget directly is drawn over the host's, and with
   }
 });
 
-Deno.test("withdrawing a direct theme leaves the styles the author set on the widget", async () => {
+test("withdrawing a direct theme leaves the styles the author set on the widget", async () => {
   const host = themedHost();
   try {
     const button = await mountIn<
@@ -144,7 +145,7 @@ Deno.test("withdrawing a direct theme leaves the styles the author set on the wi
   }
 });
 
-Deno.test("the tools chip's overlay on the document body carries the host's tokens", async () => {
+test("the tools chip's overlay on the document body carries the host's tokens", async () => {
   const host = themedHost();
   try {
     const chip = await mountIn<CFToolsChip>(host, "cf-tools-chip");
@@ -161,7 +162,7 @@ Deno.test("the tools chip's overlay on the document body carries the host's toke
   }
 });
 
-Deno.test("the tools chip's open overlay follows a change to the cf-theme around it", async () => {
+test("the tools chip's open overlay follows a change to the cf-theme around it", async () => {
   const provider = new CFThemeProvider();
   provider.theme = { fontFamily: HOST_FONT };
   document.body.append(provider);
@@ -183,7 +184,7 @@ Deno.test("the tools chip's open overlay follows a change to the cf-theme around
   }
 });
 
-Deno.test("the tools chip's open overlay follows a theme preference change", async () => {
+test("the tools chip's open overlay follows a theme preference change", async () => {
   const host = themedHost();
   try {
     const chip = await mountIn<CFToolsChip>(host, "cf-tools-chip");
@@ -200,7 +201,7 @@ Deno.test("the tools chip's open overlay follows a theme preference change", asy
   }
 });
 
-Deno.test("a partial theme given to the chat tints the ambient one", async () => {
+test("a partial theme given to the chat tints the ambient one", async () => {
   const provider = new CFThemeProvider();
   provider.theme = { fontFamily: HOST_FONT };
   document.body.append(provider);
@@ -219,7 +220,7 @@ Deno.test("a partial theme given to the chat tints the ambient one", async () =>
   }
 });
 
-Deno.test("the chat's spacing tokens give way to a host's", async () => {
+test("the chat's spacing tokens give way to a host's", async () => {
   const host = themedHost();
   host.style.setProperty("--cf-theme-spacing-message-bottom", "33px");
   try {
@@ -235,7 +236,7 @@ Deno.test("the chat's spacing tokens give way to a host's", async () => {
   }
 });
 
-Deno.test("the chat sets its spacing tokens when no host has any", async () => {
+test("the chat sets its spacing tokens when no host has any", async () => {
   const chat = await mountIn(document.body, "cf-chat");
   try {
     expect(chat.style.getPropertyValue("--cf-theme-spacing-message-bottom"))
@@ -245,7 +246,7 @@ Deno.test("the chat sets its spacing tokens when no host has any", async () => {
   }
 });
 
-Deno.test("a primary button with no theme anywhere above it still draws its fill", async () => {
+test("a primary button with no theme anywhere above it still draws its fill", async () => {
   const button = await mountIn(document.body, "cf-button");
   try {
     const inner = button.shadowRoot?.querySelector(".button");
@@ -259,7 +260,7 @@ Deno.test("a primary button with no theme anywhere above it still draws its fill
 });
 
 for (const tag of ["cf-checkbox", "cf-radio"]) {
-  Deno.test(`${tag} draws its box in the host's theme colors`, async () => {
+  test(`${tag} draws its box in the host's theme colors`, async () => {
     const host = themedHost();
     host.style.setProperty("--cf-theme-color-primary", "rgb(1, 2, 3)");
     host.style.setProperty("--cf-theme-color-surface", "rgb(4, 5, 6)");

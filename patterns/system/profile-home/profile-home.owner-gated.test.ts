@@ -1,5 +1,5 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Host-embedding contract seam 7 (docs/features/host-embedding.md §7): pinning
 // an element to a profile is authorized by OWNERSHIP, not by a trusted-UI

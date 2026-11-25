@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import type { HarnessTranscriptMessage } from "@commonfabric/cf-harness/contracts/transcript";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   answerReply,

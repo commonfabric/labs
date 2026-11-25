@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertObjectMatch } from "@std/assert";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
@@ -58,7 +59,7 @@ function assertLineMiss(
   assertEquals(hits.get(lineContaining(source, sourceLineText)), 0);
 }
 
-Deno.test("pattern coverage records original runtime lines", async () => {
+test("pattern coverage records original runtime lines", async () => {
   const identity = await Identity.fromPassphrase("pattern coverage test");
   const storageManager = StorageManager.emulate({ as: identity });
   const runtime = new Runtime({
@@ -130,7 +131,7 @@ Deno.test("pattern coverage records original runtime lines", async () => {
   }
 });
 
-Deno.test("pattern coverage records top-level runtime lines", async () => {
+test("pattern coverage records top-level runtime lines", async () => {
   const identity = await Identity.fromPassphrase("top-level coverage test");
   const storageManager = StorageManager.emulate({ as: identity });
   const runtime = new Runtime({
@@ -170,7 +171,7 @@ Deno.test("pattern coverage records top-level runtime lines", async () => {
   }
 });
 
-Deno.test("pattern coverage skips erased type-only namespaces", async () => {
+test("pattern coverage skips erased type-only namespaces", async () => {
   const identity = await Identity.fromPassphrase(
     "type namespace coverage test",
   );
@@ -215,7 +216,7 @@ Deno.test("pattern coverage skips erased type-only namespaces", async () => {
   }
 });
 
-Deno.test("pattern coverage does not let outer spans cover unrun callback bodies", async () => {
+test("pattern coverage does not let outer spans cover unrun callback bodies", async () => {
   const identity = await Identity.fromPassphrase(
     "unrun callback coverage test",
   );
@@ -255,7 +256,7 @@ Deno.test("pattern coverage does not let outer spans cover unrun callback bodies
   }
 });
 
-Deno.test("pattern coverage records taken and untaken control-flow branches", async () => {
+test("pattern coverage records taken and untaken control-flow branches", async () => {
   const identity = await Identity.fromPassphrase("branch coverage test");
   const storageManager = StorageManager.emulate({ as: identity });
   const runtime = new Runtime({
@@ -296,7 +297,7 @@ Deno.test("pattern coverage records taken and untaken control-flow branches", as
   }
 });
 
-Deno.test("pattern coverage treats compact control flow as line coverage", async () => {
+test("pattern coverage treats compact control flow as line coverage", async () => {
   const identity = await Identity.fromPassphrase(
     "compact branch coverage test",
   );
@@ -339,7 +340,7 @@ Deno.test("pattern coverage treats compact control flow as line coverage", async
   }
 });
 
-Deno.test("pattern coverage keeps authored lines for mixed default and named imports", async () => {
+test("pattern coverage keeps authored lines for mixed default and named imports", async () => {
   const identity = await Identity.fromPassphrase("mixed import coverage test");
   const storageManager = StorageManager.emulate({ as: identity });
   const runtime = new Runtime({
@@ -381,7 +382,7 @@ Deno.test("pattern coverage keeps authored lines for mixed default and named imp
   }
 });
 
-Deno.test("pattern coverage keeps authored lines when Common Fabric transform is disabled", async () => {
+test("pattern coverage keeps authored lines when Common Fabric transform is disabled", async () => {
   const identity = await Identity.fromPassphrase(
     "disabled transform coverage test",
   );
@@ -418,7 +419,7 @@ Deno.test("pattern coverage keeps authored lines when Common Fabric transform is
   }
 });
 
-Deno.test("pattern coverage records callback body lines after the full pipeline", async () => {
+test("pattern coverage records callback body lines after the full pipeline", async () => {
   const identity = await Identity.fromPassphrase("callback coverage test");
   const storageManager = StorageManager.emulate({ as: identity });
   const runtime = new Runtime({
@@ -469,7 +470,7 @@ Deno.test("pattern coverage records callback body lines after the full pipeline"
   }
 });
 
-Deno.test("pattern coverage reports fabric mount paths as virtual paths", () => {
+test("pattern coverage reports fabric mount paths as virtual paths", () => {
   const coverage = new PatternCoverageCollector();
   coverage.registerSpan({
     fileName: "/~cf/fid1abc/main.tsx",
@@ -499,7 +500,7 @@ Deno.test("pattern coverage reports fabric mount paths as virtual paths", () => 
   );
 });
 
-Deno.test("pattern coverage keeps raw mount report keys before LCOV emission", () => {
+test("pattern coverage keeps raw mount report keys before LCOV emission", () => {
   const coverage = new PatternCoverageCollector();
   coverage.registerSpan({
     fileName: "/~cf/fid1abc/main.tsx",
@@ -529,7 +530,7 @@ Deno.test("pattern coverage keeps raw mount report keys before LCOV emission", (
   );
 });
 
-Deno.test("pattern coverage normalizes file URLs and relative paths", () => {
+test("pattern coverage normalizes file URLs and relative paths", () => {
   const fileUrlCoverage = new PatternCoverageCollector();
   fileUrlCoverage.registerSpan({
     fileName: "file:///tmp/pattern.tsx",
@@ -577,7 +578,7 @@ Deno.test("pattern coverage normalizes file URLs and relative paths", () => {
   assertEquals(relativeCoverage.report().files[0].path, "relative.tsx");
 });
 
-Deno.test("pattern coverage ignores non-runtime spans", () => {
+test("pattern coverage ignores non-runtime spans", () => {
   const coverage = new PatternCoverageCollector();
   coverage.registerSpan({
     fileName: "/subject.tsx",
@@ -598,7 +599,7 @@ Deno.test("pattern coverage ignores non-runtime spans", () => {
   });
 });
 
-Deno.test("pattern coverage uses the highest hit count for equal-width spans", () => {
+test("pattern coverage uses the highest hit count for equal-width spans", () => {
   const coverage = new PatternCoverageCollector();
   coverage.registerSpan({
     fileName: "/subject.tsx",
@@ -636,7 +637,7 @@ Deno.test("pattern coverage uses the highest hit count for equal-width spans", (
   );
 });
 
-Deno.test("pattern coverage excludes test files by default", () => {
+test("pattern coverage excludes test files by default", () => {
   const coverage = new PatternCoverageCollector();
   coverage.registerSpan({
     fileName: "/subject.tsx",
@@ -667,7 +668,7 @@ Deno.test("pattern coverage excludes test files by default", () => {
   );
 });
 
-Deno.test("runtime-level coverage instruments the cell-cache compile path", async () => {
+test("runtime-level coverage instruments the cell-cache compile path", async () => {
   const identity = await Identity.fromPassphrase("cell-cache coverage test");
   const storageManager = StorageManager.emulate({ as: identity });
   const coverage = new PatternCoverageCollector();
@@ -743,7 +744,7 @@ Deno.test("runtime-level coverage instruments the cell-cache compile path", asyn
   }
 });
 
-Deno.test("runtime-level coverage instruments the direct (no-space) compile path", async () => {
+test("runtime-level coverage instruments the direct (no-space) compile path", async () => {
   const identity = await Identity.fromPassphrase("direct compile coverage");
   const storageManager = StorageManager.emulate({ as: identity });
   const coverage = new PatternCoverageCollector();
@@ -770,7 +771,7 @@ Deno.test("runtime-level coverage instruments the direct (no-space) compile path
   }
 });
 
-Deno.test("runtime-level coverage instruments the cell-cache path with no resolved compile version", async () => {
+test("runtime-level coverage instruments the cell-cache path with no resolved compile version", async () => {
   const identity = await Identity.fromPassphrase(
     "no-version cell-cache coverage",
   );
@@ -803,7 +804,7 @@ Deno.test("runtime-level coverage instruments the cell-cache path with no resolv
   }
 });
 
-Deno.test("toData/ingest round-trips spans and hit counts", () => {
+test("toData/ingest round-trips spans and hit counts", () => {
   const source = new PatternCoverageCollector();
   const span = {
     fileName: "/subject.tsx",
@@ -829,7 +830,7 @@ Deno.test("toData/ingest round-trips spans and hit counts", () => {
   );
 });
 
-Deno.test("ingest merges hit-only data against another realm's spans", () => {
+test("ingest merges hit-only data against another realm's spans", () => {
   // The realm that compiled the pattern owns the spans; a realm that only
   // warm-loaded the already-instrumented bytes reports hits with no spans. The
   // union carries both, keyed by the fileName the transformer baked in.
@@ -866,7 +867,7 @@ Deno.test("ingest merges hit-only data against another realm's spans", () => {
   );
 });
 
-Deno.test("ingest ignores zero-count hits", () => {
+test("ingest ignores zero-count hits", () => {
   // A realm that ran the instrumented bytes but never reached a statement
   // reports it with count 0; merging that must not mark the line covered.
 
@@ -887,7 +888,7 @@ Deno.test("ingest ignores zero-count hits", () => {
   assertEquals(collector.report().totals.coveredRuntimeLines, 0);
 });
 
-Deno.test("writePatternCoverageLcov writes the tagged report to a file", async () => {
+test("writePatternCoverageLcov writes the tagged report to a file", async () => {
   const collector = new PatternCoverageCollector();
   collector.registerSpan({
     fileName: "/subject.tsx",
@@ -922,7 +923,7 @@ Deno.test("writePatternCoverageLcov writes the tagged report to a file", async (
   }
 });
 
-Deno.test("patternCoverageReportToLcov tags the integration stream", () => {
+test("patternCoverageReportToLcov tags the integration stream", () => {
   const coverage = new PatternCoverageCollector();
   coverage.registerSpan({
     fileName: "/subject.tsx",
@@ -942,7 +943,7 @@ Deno.test("patternCoverageReportToLcov tags the integration stream", () => {
   assertEquals(lcov.split("\n")[0], "TN:pattern-runtime-integration");
 });
 
-Deno.test("pattern coverage output paths distinguish separators from underscores", () => {
+test("pattern coverage output paths distinguish separators from underscores", () => {
   const coverageDir = "/tmp/coverage";
   const cwd = Deno.cwd();
   const withSeparator = patternCoverageOutputPath(
@@ -1012,7 +1013,7 @@ const RESUME_COVERAGE_SOURCE = [
   `);`,
 ].join("\n");
 
-Deno.test("pattern coverage records a piece resumed by identity", async () => {
+test("pattern coverage records a piece resumed by identity", async () => {
   const signer = await Identity.fromPassphrase("by-identity pattern coverage");
   const space = signer.did();
   const storageManager = StorageManager.emulate({ as: signer });
@@ -1097,7 +1098,7 @@ Deno.test("pattern coverage records a piece resumed by identity", async () => {
   }
 });
 
-Deno.test("pattern coverage records a piece authored without coverage and resumed with it", async () => {
+test("pattern coverage records a piece authored without coverage and resumed with it", async () => {
   // The integration scenario: a non-coverage realm authored the piece, so the
   // coverage-keyed compiled closure the resuming runtime looks for does not
   // exist. The resume then falls back to cold recovery — a recompile from the

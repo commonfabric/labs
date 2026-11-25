@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { encode } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { argv, cf, checkStderr } from "./utils.ts";
 

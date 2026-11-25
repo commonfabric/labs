@@ -2,10 +2,10 @@
 // A pattern calls them by name, so what matters is the node shape they hand
 // back through that surface rather than through a direct module import.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("ui-helper-runtime", () => {
   describe("UiAction()", () => {

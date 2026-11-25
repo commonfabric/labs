@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { collect, literalToValue, parseModule } from "../transformed-ast.ts";
 import { transformSource, validateSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The transformed module for `source`, parsed back into an AST. */
 async function transform(source: string): Promise<ts.SourceFile> {

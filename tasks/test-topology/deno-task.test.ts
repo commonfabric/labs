@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import {
   memberTasks,
   memberTestFiles,
@@ -14,6 +13,7 @@ import {
   unquote,
   walkTestFiles,
 } from "./deno-task.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Every directory a case made, removed when the case is done. */
 const made: string[] = [];

@@ -6,7 +6,6 @@
  * addresses — the storage-affecting change the flag gates.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -16,6 +15,7 @@ import {
   entityRefToString,
   resetModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { createRef } from "../src/create-ref.ts";
 

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ACL } from "@commonfabric/memory/acl";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   type AclDocumentSource,
   createRuntimeSpaceMembershipProvider,

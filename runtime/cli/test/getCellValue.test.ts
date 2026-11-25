@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
@@ -10,6 +9,7 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { getCellValue } from "../lib/piece.ts";
 

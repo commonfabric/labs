@@ -9,7 +9,6 @@
  * replica that lost them would have, and the server's own delivery is untouched.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
@@ -25,6 +24,12 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   createDocumentReadiness,
   DocumentLoadError,

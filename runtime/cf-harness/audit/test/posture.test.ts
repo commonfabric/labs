@@ -11,11 +11,11 @@
  * reports the absence of evidence as evidence.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { harnessFabricSessionPosture } from "../../src/cfc-posture.ts";
 import type {
   HarnessCfcEnforcementModeSource,

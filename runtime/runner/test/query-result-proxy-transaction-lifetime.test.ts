@@ -12,10 +12,15 @@
 // state, which is what a materialized read wants: the value it describes is the
 // value that was there when it was taken.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { createQueryResultProxy } from "../src/query-result-proxy.ts";
 import type { Cell } from "../src/cell.ts";

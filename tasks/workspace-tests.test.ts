@@ -31,6 +31,7 @@ import {
   RECORDS_DIR_VARIABLE,
   type ResultLine,
 } from "@commonfabric/test-support/records";
+import { test } from "@commonfabric/test-support/test";
 import type { RunRecording } from "./test-records.ts";
 
 // Write a minimal workspace under `dir`: a root deno.jsonc listing the
@@ -73,7 +74,7 @@ async function ranPackages(
   return ran;
 }
 
-Deno.test("readWorkspaceMembers reads the workspace list from a JSONC manifest", async () => {
+test("readWorkspaceMembers reads the workspace list from a JSONC manifest", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-members-" });
   try {
     const configPath = `${dir}/deno.jsonc`;
@@ -96,7 +97,7 @@ Deno.test("readWorkspaceMembers reads the workspace list from a JSONC manifest",
   }
 });
 
-Deno.test("readWorkspaceMembers rejects a manifest declaring no workspace", async () => {
+test("readWorkspaceMembers rejects a manifest declaring no workspace", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-members-" });
   try {
     // A workspace member's own manifest, which is the file a caller handed a
@@ -117,7 +118,7 @@ Deno.test("readWorkspaceMembers rejects a manifest declaring no workspace", asyn
   }
 });
 
-Deno.test("assertTaskTestsIncluded requires tasks in the root workspace", () => {
+test("assertTaskTestsIncluded requires tasks in the root workspace", () => {
   assertTaskTestsIncluded(["./base/api", "./tasks"]);
   assertThrows(
     () => assertTaskTestsIncluded(["./base/api"]),
@@ -165,7 +166,7 @@ async function capturingOutput<T>(
   }
 }
 
-Deno.test("testConcurrency parses the override and defaults to half the cores", async () => {
+test("testConcurrency parses the override and defaults to half the cores", async () => {
   assertEquals(testConcurrency("3"), 3);
   await withEnv({ TEST_CONCURRENCY: undefined }, () => {
     assertEquals(
@@ -182,7 +183,7 @@ Deno.test("testConcurrency parses the override and defaults to half the cores", 
   assertEquals(threw, true);
 });
 
-Deno.test("runTests drains every package with a concurrency limit of one", async () => {
+test("runTests drains every package with a concurrency limit of one", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-serialpool-" });
   try {
     await makeWorkspace(dir, ["a", "b", "c"]);
@@ -226,7 +227,7 @@ async function recordingSeenBy(
   }
 }
 
-Deno.test("runTests records nothing into the spool it inherited for a caller that did not ask", async () => {
+test("runTests records nothing into the spool it inherited for a caller that did not ask", async () => {
   // The members of a workspace a test builds are that test's fixtures, so
   // neither the run nor any member writes into the spool the test inherited.
   // Each member is still handed a spool of its own beside its log, which is
@@ -237,7 +238,7 @@ Deno.test("runTests records nothing into the spool it inherited for a caller tha
   assertEquals(left, []);
 });
 
-Deno.test("runTests records into the spool for a caller that asked, handing each member a spool of its own", async () => {
+test("runTests records into the spool for a caller that asked, handing each member a spool of its own", async () => {
   const { spool, seen, left } = await recordingSeenBy({ recordResults: true });
   expect(seen).toMatch(/^\[.*\/deno-task-test-[^/]+\/a\.records\]$/);
   expect(seen).not.toContain(spool);
@@ -246,7 +247,7 @@ Deno.test("runTests records into the spool for a caller that asked, handing each
   assertEquals(left.length, 1);
 });
 
-Deno.test("runTests moves what a member's tests wrote into the spool, under the member's scope", async () => {
+test("runTests moves what a member's tests wrote into the spool, under the member's scope", async () => {
   // The member stands in for a test process: it writes one results line
   // into the spool it was handed, which the run reads back as a record.
   const dir = await Deno.makeTempDir({ prefix: "ws-records-" });
@@ -314,7 +315,7 @@ function logsOf(summary: readonly string[]): string {
   return summary.find((line) => line.startsWith("Logs: "))!.slice(6);
 }
 
-Deno.test("runTests without a coverage directory reports a failure and stops scheduling packages", async () => {
+test("runTests without a coverage directory reports a failure and stops scheduling packages", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-fail-fast-" });
   try {
     await makeFailingWorkspace(dir);
@@ -347,7 +348,7 @@ Deno.test("runTests without a coverage directory reports a failure and stops sch
   }
 });
 
-Deno.test("runTests without a coverage directory names the packages it never started", async () => {
+test("runTests without a coverage directory names the packages it never started", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-unstarted-" });
   try {
     await makeFailingWorkspace(dir);
@@ -374,7 +375,7 @@ Deno.test("runTests without a coverage directory names the packages it never sta
   }
 });
 
-Deno.test("runTests with a coverage directory runs every package after a failure and still fails", async () => {
+test("runTests with a coverage directory runs every package after a failure and still fails", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-coverage-" });
   try {
     await makeFailingWorkspace(dir);
@@ -447,7 +448,7 @@ async function makeTestingWorkspace(
   );
 }
 
-Deno.test("runTests names each failing test, its error, and how to run it again", async () => {
+test("runTests names each failing test, its error, and how to run it again", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-failing-test-" });
   try {
     await makeTestingWorkspace(dir, "Error: broken\nsecond");
@@ -484,7 +485,7 @@ Deno.test("runTests names each failing test, its error, and how to run it again"
   }
 });
 
-Deno.test("runTests ends a passing run with one line and keeps no logs", async () => {
+test("runTests ends a passing run with one line and keeps no logs", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-passing-test-" });
   try {
     await makeTestingWorkspace(dir);
@@ -504,7 +505,7 @@ Deno.test("runTests ends a passing run with one line and keeps no logs", async (
   }
 });
 
-Deno.test("testPackage reports a failure when the package directory cannot be spawned in", async () => {
+test("testPackage reports a failure when the package directory cannot be spawned in", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-nodir-" });
   try {
     const log = path.join(dir, "missing.log");
@@ -523,7 +524,7 @@ Deno.test("testPackage reports a failure when the package directory cannot be sp
   }
 });
 
-Deno.test("initializeDb runs the initialize-db task in the given directory", async () => {
+test("initializeDb runs the initialize-db task in the given directory", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-initdb-" });
   try {
     await makeWorkspace(dir, [], {
@@ -536,7 +537,7 @@ Deno.test("initializeDb runs the initialize-db task in the given directory", asy
   }
 });
 
-Deno.test("initializeDb returns false when the task fails", async () => {
+test("initializeDb returns false when the task fails", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-initdb-fail-" });
   try {
     await makeWorkspace(dir, [], {
@@ -548,7 +549,7 @@ Deno.test("initializeDb returns false when the task fails", async () => {
   }
 });
 
-Deno.test("runTests reports a failure for a workspace with no members", async () => {
+test("runTests reports a failure for a workspace with no members", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-empty-" });
   try {
     await makeWorkspace(dir, []);
@@ -569,7 +570,7 @@ Deno.test("runTests reports a failure for a workspace with no members", async ()
 // being named anywhere.
 //
 
-Deno.test("acceptsAppendedFlags reads an ordinary test task", () => {
+test("acceptsAppendedFlags reads an ordinary test task", () => {
   assertEquals(acceptsAppendedFlags("deno test"), true);
   assertEquals(
     acceptsAppendedFlags("ENV=test deno test --no-check -A"),
@@ -582,7 +583,7 @@ Deno.test("acceptsAppendedFlags reads an ordinary test task", () => {
   );
 });
 
-Deno.test("acceptsAppendedFlags refuses a task whose flag would land elsewhere", () => {
+test("acceptsAppendedFlags refuses a task whose flag would land elsewhere", () => {
   // An appended flag reaches only the last command of a chain, which would
   // hand a flag meant for the tests to whatever runs after them.
   assertEquals(
@@ -599,7 +600,7 @@ Deno.test("acceptsAppendedFlags refuses a task whose flag would land elsewhere",
   );
 });
 
-Deno.test("acceptsAppendedFlags takes a runner only when it is known to forward", () => {
+test("acceptsAppendedFlags takes a runner only when it is known to forward", () => {
   // The batch runner hands appended flags to each of its `deno test` runs;
   // a script of a package's own shows nothing of what it does with them.
   // Which member runs the task does not enter into it.
@@ -624,7 +625,7 @@ Deno.test("acceptsAppendedFlags takes a runner only when it is known to forward"
   );
 });
 
-Deno.test("memberTestTask accepts a directory path as well as a URL", async () => {
+test("memberTestTask accepts a directory path as well as a URL", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-manifest-root-" });
   try {
     await Deno.mkdir(`${dir}/runtime/probe`, { recursive: true });
@@ -650,7 +651,7 @@ Deno.test("memberTestTask accepts a directory path as well as a URL", async () =
   }
 });
 
-Deno.test("memberTestTask reads deno.json ahead of deno.jsonc", async () => {
+test("memberTestTask reads deno.json ahead of deno.jsonc", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-manifest-order-" });
   try {
     await Deno.mkdir(`${dir}/runtime/probe`, { recursive: true });
@@ -669,7 +670,7 @@ Deno.test("memberTestTask reads deno.json ahead of deno.jsonc", async () => {
   }
 });
 
-Deno.test("the workspace's capable members are read from their manifests", async () => {
+test("the workspace's capable members are read from their manifests", async () => {
   const rootUrl = new URL("../", import.meta.url);
   const members = await readWorkspaceMembers(new URL("deno.jsonc", rootUrl));
   const capable = new Set<string>();
@@ -699,7 +700,7 @@ Deno.test("the workspace's capable members are read from their manifests", async
   }
 });
 
-Deno.test("the flag reaches the `deno-test` of a member running the wrapper", async () => {
+test("the flag reaches the `deno-test` of a member running the wrapper", async () => {
   // `deno task` appends to the `test` task's own line, which for such a
   // member runs the wrapper. What decides whether the flag can be used
   // at all is the command the wrapper hands it to, so that is what is
@@ -742,7 +743,7 @@ Deno.test("the flag reaches the `deno-test` of a member running the wrapper", as
   }
 });
 
-Deno.test("every member whose leaf takes appended flags lets its tests read their variables", async () => {
+test("every member whose leaf takes appended flags lets its tests read their variables", async () => {
   // The test module reads the spool and the skip list from the environment,
   // and a refused read is swallowed, so a leaf that cannot read them records
   // nothing and skips nothing it is told to skip, silently.
@@ -763,7 +764,7 @@ Deno.test("every member whose leaf takes appended flags lets its tests read thei
   assertEquals(unreadable, []);
 });
 
-Deno.test("the spool a run records into is resolved once", () => {
+test("the spool a run records into is resolved once", () => {
   // Each leaf runs with its own package as the working directory, so a
   // relative spool would name a different place in each of them.
   assertEquals(
@@ -774,7 +775,7 @@ Deno.test("the spool a run records into is resolved once", () => {
   assertEquals(recordingSpool(undefined, "/work"), undefined);
 });
 
-Deno.test("a spool Deno cannot be told about is not recorded into", () => {
+test("a spool Deno cannot be told about is not recorded into", () => {
   // A comma separates one path from the next inside `--allow-write=`, so
   // such a spool is granted as two paths that are not it. The run turns
   // recording off rather than failing the members that would take it.
@@ -787,7 +788,7 @@ Deno.test("a spool Deno cannot be told about is not recorded into", () => {
   assertStringIncludes(said[0]!, "/var/a,b/records");
 });
 
-Deno.test("a forwarding runner is read by the flags it hands its leaf", () => {
+test("a forwarding runner is read by the flags it hands its leaf", () => {
   // The runner process and the leaf `deno test` carry separate flag
   // lists, and the leaf's is the one its tests run under. Reading the
   // whole line would answer from the runner's.
@@ -819,7 +820,7 @@ Deno.test("a forwarding runner is read by the flags it hands its leaf", () => {
   );
 });
 
-Deno.test("a recording leaf is given the permissions it needs", async () => {
+test("a recording leaf is given the permissions it needs", async () => {
   const rootUrl = new URL("../", import.meta.url);
   const granted = (member: string) =>
     memberRecordingArguments(member, "/spool", rootUrl);
@@ -840,7 +841,7 @@ Deno.test("a recording leaf is given the permissions it needs", async () => {
   assertEquals(await granted("./dashboard"), []);
 });
 
-Deno.test("a leaf that cannot read is granted the skip list the run names", async () => {
+test("a leaf that cannot read is granted the skip list the run names", async () => {
   const rootUrl = new URL("../", import.meta.url);
   const granted = (member: string) =>
     memberRecordingArguments(member, "/spool", rootUrl, "/lists/skip.json");
@@ -853,7 +854,7 @@ Deno.test("a leaf that cannot read is granted the skip list the run names", asyn
   assertEquals(await granted("./runtime/runner"), ["--allow-write=/spool"]);
 });
 
-Deno.test("a leaf that cannot take appended flags is granted nothing", async () => {
+test("a leaf that cannot take appended flags is granted nothing", async () => {
   // Its tests record only where its own flags already let them, since
   // whatever is appended lands on a command other than its `deno test`.
   const root = await Deno.makeTempDir({ prefix: "leaf-grant-" });
@@ -889,7 +890,7 @@ Deno.test("a leaf that cannot take appended flags is granted nothing", async () 
 // instead, and the suite re-enters itself once per such member.
 //
 
-Deno.test("assertMemberTestTasksDefined names every member defining no test task", async () => {
+test("assertMemberTestTasksDefined names every member defining no test task", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-missing-test-task-" });
   try {
     await makeWorkspace(dir, ["a", "b", "c"]);
@@ -922,7 +923,7 @@ Deno.test("assertMemberTestTasksDefined names every member defining no test task
   }
 });
 
-Deno.test("assertMemberTestTasksDefined accepts a test task defined by dependencies alone", async () => {
+test("assertMemberTestTasksDefined accepts a test task defined by dependencies alone", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-dependency-test-task-" });
   try {
     await makeWorkspace(dir, ["a"]);
@@ -948,7 +949,7 @@ Deno.test("assertMemberTestTasksDefined accepts a test task defined by dependenc
   }
 });
 
-Deno.test("assertMemberTestTasksDefined reads the manifest Deno resolves", async () => {
+test("assertMemberTestTasksDefined reads the manifest Deno resolves", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-manifest-precedence-" });
   try {
     await makeWorkspace(dir, ["a"]);
@@ -974,7 +975,7 @@ Deno.test("assertMemberTestTasksDefined reads the manifest Deno resolves", async
   }
 });
 
-Deno.test("runTests refuses a workspace whose member defines no test task", async () => {
+test("runTests refuses a workspace whose member defines no test task", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-guarded-run-" });
   try {
     await makeWorkspace(dir, ["a", "b"]);
@@ -997,7 +998,7 @@ Deno.test("runTests refuses a workspace whose member defines no test task", asyn
   }
 });
 
-Deno.test("every workspace member defines a test task of its own", async () => {
+test("every workspace member defines a test task of its own", async () => {
   // The same assertion the runner makes ahead of its spawn loop, made here
   // so that a member missing one is named by a failing test as well.
   const rootUrl = new URL("../", import.meta.url);
@@ -1066,7 +1067,7 @@ function rootTestHost(
   };
 }
 
-Deno.test("runRootTestTask refuses arguments, rather than running the whole suite", async () => {
+test("runRootTestTask refuses arguments, rather than running the whole suite", async () => {
   const { host, calls } = rootTestHost({ mode: "off" }, true);
   const { result, lines } = await capturingOutput(() =>
     runRootTestTask(["--filter", "a name"], host)
@@ -1078,7 +1079,7 @@ Deno.test("runRootTestTask refuses arguments, rather than running the whole suit
   expect(calls).toEqual([]);
 });
 
-Deno.test("runRootTestTask returns 0 for a passing run and 1 for a failing one", async () => {
+test("runRootTestTask returns 0 for a passing run and 1 for a failing one", async () => {
   const passing = rootTestHost({ mode: "off" }, true);
   expect(await runRootTestTask([], passing.host)).toBe(0);
   expect(passing.calls).toEqual(["pin", "start", "run", "finish off"]);
@@ -1088,7 +1089,7 @@ Deno.test("runRootTestTask returns 0 for a passing run and 1 for a failing one",
   expect(failing.calls).toEqual(["pin", "start", "run", "finish off"]);
 });
 
-Deno.test("runRootTestTask points the members at the spool of a run it owns", async () => {
+test("runRootTestTask points the members at the spool of a run it owns", async () => {
   const { host, calls } = rootTestHost(ownedRecording("/spool"), true);
   expect(await runRootTestTask([], host)).toBe(0);
   expect(calls).toEqual([
@@ -1100,19 +1101,19 @@ Deno.test("runRootTestTask points the members at the spool of a run it owns", as
   ]);
 });
 
-Deno.test("runRootTestTask leaves the environment alone for a run it joined", async () => {
+test("runRootTestTask leaves the environment alone for a run it joined", async () => {
   const { host, calls } = rootTestHost({ mode: "join", dir: "/ci" }, true);
   expect(await runRootTestTask([], host)).toBe(0);
   expect(calls).toEqual(["pin", "start", "run", "finish join"]);
 });
 
-Deno.test("runRootTestTask finishes the recording of a run that throws", async () => {
+test("runRootTestTask finishes the recording of a run that throws", async () => {
   const { host, calls } = rootTestHost({ mode: "off" }, new Error("boom"));
   await expect(runRootTestTask([], host)).rejects.toThrow("boom");
   expect(calls).toEqual(["pin", "start", "run", "finish off"]);
 });
 
-Deno.test("main refuses a workspace without tasks before initializing anything", async () => {
+test("main refuses a workspace without tasks before initializing anything", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
   try {
     await makeWorkspace(dir, ["a"]);
@@ -1143,7 +1144,7 @@ async function makeWorkspaceWithTasks(dir: string): Promise<void> {
   );
 }
 
-Deno.test("main runs no member when initializing the database fails", async () => {
+test("main runs no member when initializing the database fails", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
   try {
     await makeWorkspaceWithTasks(dir);
@@ -1160,7 +1161,7 @@ Deno.test("main runs no member when initializing the database fails", async () =
   }
 });
 
-Deno.test("main runs every member once the database is initialized", async () => {
+test("main runs every member once the database is initialized", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-main-" });
   try {
     await makeWorkspaceWithTasks(dir);
@@ -1193,7 +1194,7 @@ function resultOf(
   };
 }
 
-Deno.test("readMemberRecords reads the results a member's tests wrote as unit records under its scope", async () => {
+test("readMemberRecords reads the results a member's tests wrote as unit records under its scope", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-records-" });
   try {
     await Deno.writeTextFile(
@@ -1226,7 +1227,7 @@ Deno.test("readMemberRecords reads the results a member's tests wrote as unit re
   }
 });
 
-Deno.test("readMemberRecords returns what another producer spooled beside the results, as it was written", async () => {
+test("readMemberRecords returns what another producer spooled beside the results, as it was written", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-records-" });
   try {
     const writer = FragmentWriter.open(dir);
@@ -1252,7 +1253,7 @@ Deno.test("readMemberRecords returns what another producer spooled beside the re
   }
 });
 
-Deno.test("readMemberRecords returns nothing, and says nothing, for a member that wrote nothing", async () => {
+test("readMemberRecords returns nothing, and says nothing, for a member that wrote nothing", async () => {
   // A member whose task never started a test has no spool at all.
   const dir = await Deno.makeTempDir({ prefix: "ws-records-" });
   try {
@@ -1267,7 +1268,7 @@ Deno.test("readMemberRecords returns nothing, and says nothing, for a member tha
   }
 });
 
-Deno.test("readMemberRecords warns of a results line it cannot read, and returns the rest", async () => {
+test("readMemberRecords warns of a results line it cannot read, and returns the rest", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-records-" });
   try {
     await Deno.writeTextFile(
@@ -1303,7 +1304,7 @@ async function capturingWarnings<T>(
   }
 }
 
-Deno.test("testPackage appends the recording arguments to the member's task", async () => {
+test("testPackage appends the recording arguments to the member's task", async () => {
   const dir = await Deno.makeTempDir({ prefix: "ws-testpackage-" });
   try {
     await Deno.writeTextFile(

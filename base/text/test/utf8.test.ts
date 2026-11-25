@@ -9,13 +9,13 @@
  * process boundary needs this one to agree with itself on both sides.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   utf8ByteLength,
   utf8Compare,
   utf8SortedKeysOf,
 } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("utf8Compare()", () => {
   it("returns `0` for two equal UTF-8 strings", () => {

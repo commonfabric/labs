@@ -7,9 +7,14 @@
 // with DIFFERENT schemas. Changing a field covered by one schema should NOT
 // trigger the sink of the other schema.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import "@commonfabric/test-support/equal-ignoring-symbols";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";

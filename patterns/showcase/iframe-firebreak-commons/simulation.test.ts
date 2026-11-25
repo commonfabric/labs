@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   DEFAULT_INPUT,
@@ -18,6 +17,7 @@ import {
   reportRendererFailure,
   type TileState,
 } from "./simulation.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const input: IframeInputData = {
   ...DEFAULT_INPUT,

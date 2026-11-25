@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -28,6 +27,12 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "@commonfabric/runner/cfc/trust-authority";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("loom-root-contract");
 const foreignSigner = await Identity.fromPassphrase("loom-root-foreign");

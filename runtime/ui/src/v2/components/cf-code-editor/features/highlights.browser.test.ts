@@ -21,6 +21,7 @@ import {
   type OperationFieldSnapshot,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 
 import { createMockCellHandle } from "../../../test-utils/mock-cell-handle.ts";
 import { CFCodeEditor } from "../index.ts";
@@ -130,7 +131,7 @@ function pressOn(view: EditorView, pos: number, fraction: number): void {
   pressAt(view, x, y);
 }
 
-Deno.test("a press that drags out a selection inside a highlight reports nothing", async () => {
+test("a press that drags out a selection inside a highlight reports nothing", async () => {
   // The highlight covers "Hello"; the drag starts on its "e" and ends on its
   // second "l", so the press and the release are both on the mark.
 
@@ -159,7 +160,7 @@ Deno.test("a press that drags out a selection inside a highlight reports nothing
   }
 });
 
-Deno.test("a newly mounted editor reports that nothing is selected", async () => {
+test("a newly mounted editor reports that nothing is selected", async () => {
   const editor = new CFCodeEditor();
   editor.value = "Hello world";
   const reports: unknown[] = [];
@@ -190,7 +191,7 @@ Deno.test("a newly mounted editor reports that nothing is selected", async () =>
   }
 });
 
-Deno.test("a press on either half of a highlighted character reports the highlight", async () => {
+test("a press on either half of a highlighted character reports the highlight", async () => {
   // The highlight covers the one character "e", so each half of it is also
   // an edge of the highlight.
 
@@ -206,7 +207,7 @@ Deno.test("a press on either half of a highlighted character reports the highlig
   }
 });
 
-Deno.test("a press on a character beside a highlight reports nothing", async () => {
+test("a press on a character beside a highlight reports nothing", async () => {
   const { view, clicks, done } = await mount({ from: 1, to: 2 });
   try {
     // The right half of "H", which ends where the highlight starts, and the
@@ -220,7 +221,7 @@ Deno.test("a press on a character beside a highlight reports nothing", async () 
   }
 });
 
-Deno.test("a press past the end of a line that ends in a highlight reports nothing", async () => {
+test("a press past the end of a line that ends in a highlight reports nothing", async () => {
   // The highlight covers "world", the end of the first line.
 
   const { view, clicks, done } = await mount({ from: 6, to: 11 });
@@ -246,7 +247,7 @@ class PillWidget extends WidgetType {
   }
 }
 
-Deno.test("a press to the right of a widget that ends a highlighted line reports nothing", async () => {
+test("a press to the right of a widget that ends a highlighted line reports nothing", async () => {
   // The highlight covers "world", the end of the first line, and a widget
   // stands in for it.
 
@@ -281,7 +282,7 @@ Deno.test("a press to the right of a widget that ends a highlighted line reports
   }
 });
 
-Deno.test("a press below the last line of a document that ends in a highlight reports nothing", async () => {
+test("a press below the last line of a document that ends in a highlight reports nothing", async () => {
   // The highlight covers "second", the whole of the last line.
 
   const { view, clicks, done } = await mount({ from: 12, to: 18 });
@@ -327,7 +328,7 @@ function nextEditableState(view: EditorView): Promise<void> {
   return editable.promise;
 }
 
-Deno.test("a highlight on a field nobody has typed in is drawn, and stays drawn while the first edit gives the field a version", async () => {
+test("a highlight on a field nobody has typed in is drawn, and stays drawn while the first edit gives the field a version", async () => {
   // The field stores "abc", has no version, and holds anchors around "bc",
   // as it does once a pattern's handler has written them. The stand-in for
   // Memory then confirms the editor's first edit as version 1.

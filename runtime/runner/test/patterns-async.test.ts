@@ -1,11 +1,17 @@
 // Async scheduling: how the runtime handles promises returned (or not returned)
 // by lifts and handlers, and the interaction between async work and idle/pull.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { createBuilder } from "../src/builder/factory.ts";
 import type { Cell } from "../src/builder/types.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";

@@ -8,13 +8,13 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   createMockCellHandle,
   writesSent,
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFModal } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A modal mounted with `properties`, and every event it emits. */
 async function modalWith(properties: Partial<CFModal> = {}) {

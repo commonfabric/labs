@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
 import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
+import { describe, it } from "@commonfabric/test-support/test";
 import { loadUnitSuites } from "./unit.ts";
 import type { Suite } from "./suite.ts";
 import { EXCLUDED_FROM_COVERAGE_GATE } from "../test-selection/policy.ts";

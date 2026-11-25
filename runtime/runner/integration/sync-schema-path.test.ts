@@ -13,6 +13,7 @@ import {
 import { Identity, type IdentityCreateConfig } from "@commonfabric/identity";
 import { env } from "@commonfabric/integration";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 
 import { parseLink } from "../src/link-utils.ts";
 import { IStorageManager } from "../src/storage/interface.ts";
@@ -180,7 +181,7 @@ async function runTest() {
   console.log("\nDone");
 }
 
-Deno.test({
+test({
   name: "sync schema path test",
   fn: runTest,
   sanitizeResources: false,

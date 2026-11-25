@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { identitySeal, normalizeDid } from "./identity-seal.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DID_A = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const DID_B = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRrm6XYMq2dnQ";

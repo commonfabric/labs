@@ -8,6 +8,7 @@ import {
   createUnifiedDiff,
   defineFixtureSuite,
 } from "@commonfabric/test-support/fixture-runner";
+import { test } from "@commonfabric/test-support/test";
 import {
   FabricPrimitive,
   type FabricValue,
@@ -251,7 +252,7 @@ function normalizeArrayOrdering(obj: unknown): unknown {
 // catching it.
 //
 
-Deno.test("golden encoding preserves values JSON cannot represent", () => {
+test("golden encoding preserves values JSON cannot represent", () => {
   const schema = {
     type: "object",
     properties: {
@@ -281,7 +282,7 @@ Deno.test("golden encoding preserves values JSON cannot represent", () => {
   assert(valueEqual(schema as FabricValue, decoded as FabricValue));
 });
 
-Deno.test("plain JSON would lose exactly those values", () => {
+test("plain JSON would lose exactly those values", () => {
   // Not a test of our code -- an executable statement of why the golden format
   // is what it is. If these ever stop holding, the encoding indirection can go.
   const roundTrip = (v: unknown) => JSON.parse(JSON.stringify({ v })).v;
@@ -293,7 +294,7 @@ Deno.test("plain JSON would lose exactly those values", () => {
   assertThrows(() => JSON.stringify({ v: 1n }), TypeError);
 });
 
-Deno.test("golden compare keeps `FabricSpecialObject`s distinct, not flattened to {}", () => {
+test("golden compare keeps `FabricSpecialObject`s distinct, not flattened to {}", () => {
   // Both normalizers walk objects by key. A `FabricSpecialObject` has no
   // enumerable own properties, so walking it flattens it to `{}` -- and then
   // `valueEqual` sees only `{}` on each side and calls two different values

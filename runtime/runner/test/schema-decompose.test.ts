@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
@@ -12,6 +11,7 @@ import {
   isExternalSchemaRef,
   parseExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   type DecomposedSchema,
   decomposeSchema,

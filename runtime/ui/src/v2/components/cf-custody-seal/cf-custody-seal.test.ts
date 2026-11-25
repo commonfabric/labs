@@ -1,8 +1,8 @@
 /** Custody seal workflow state transitions under Lit's headless element shim. */
 
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { summarizeCustodyTerms } from "./cf-custody-seal.ts";

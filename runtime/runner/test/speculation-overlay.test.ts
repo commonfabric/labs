@@ -28,7 +28,6 @@
 //   nothing to re-derive behind it, a refused seed strands the
 //   coordinator on a container that never arrives.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -56,6 +55,13 @@ import {
 import { flushMicrotasks } from "./speculation-intent-test-utils.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+import {
   SpeculationOverlayDestination,
   stampSpeculationRunContext,
 } from "../src/speculation/overlay-destination.ts";
@@ -79,6 +85,12 @@ import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { JSONSchema, Module, Pattern } from "../src/builder/types.ts";
 import { type Cell, cellTx, sendEvent } from "../src/cell.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 /**
  * The label-map entries `document`'s stored envelope holds, which a fixture

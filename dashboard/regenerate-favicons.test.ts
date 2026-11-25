@@ -6,8 +6,9 @@ import {
 } from "@std/assert";
 import { fromFileUrl, join } from "@std/path";
 import { regenerateFavicons } from "./regenerate-favicons.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("favicon regeneration writes missing output and preserves current output", async () => {
+test("favicon regeneration writes missing output and preserves current output", async () => {
   const directory = await Deno.makeTempDir({ prefix: "dashboard-favicons-" });
   const output = join(directory, "favicon-png.generated.ts");
   try {
@@ -27,7 +28,7 @@ Deno.test("favicon regeneration writes missing output and preserves current outp
   }
 });
 
-Deno.test("favicon regeneration preserves read errors", async () => {
+test("favicon regeneration preserves read errors", async () => {
   const directory = await Deno.makeTempDir({ prefix: "dashboard-favicons-" });
   try {
     const error = await assertRejects(() => regenerateFavicons(directory));
@@ -37,7 +38,7 @@ Deno.test("favicon regeneration preserves read errors", async () => {
   }
 });
 
-Deno.test("favicon regeneration command verifies the committed output", async () => {
+test("favicon regeneration command verifies the committed output", async () => {
   // The command runs under the Deno running this test, not the program named
   // `deno`, which would be whichever copy comes first on `PATH`.
   const result = await new Deno.Command(Deno.execPath(), {

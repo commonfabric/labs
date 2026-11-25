@@ -3,6 +3,7 @@ import { base58btc } from "multiformats/bases/base58";
 import { varint } from "multiformats";
 import { didToBytes } from "../src/ed25519/utils.ts";
 import { DIDKey } from "../src/interface.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const ED25519_CODE = 0xed;
 const ED25519_PUB_KEY_RAW_SIZE = 32;
@@ -17,7 +18,7 @@ function makeTaggedDid(code: number, keyBytes: Uint8Array): DIDKey {
   return `did:key:${base58btc.encode(bytes)}`;
 }
 
-Deno.test("didToBytes rejects an ed25519 key of the wrong length", () => {
+test("didToBytes rejects an ed25519 key of the wrong length", () => {
   // The unsupported-multicodec branch is covered in ed25519.test.ts and
   // memory/test/util.test.ts. This covers the adjacent length-check branch,
   // which those tests skip because their non-ed25519 DID throws first: a

@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchemaObj } from "commonfabric";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { resolveSchema } from "../src/schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("$ref with default support", () => {
   describe("resolveSchema() with default", () => {

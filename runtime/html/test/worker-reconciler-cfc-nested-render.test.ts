@@ -25,6 +25,8 @@ import {
 } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { CellRef } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -62,7 +64,7 @@ import type {
 // see carries a string that appears nowhere else, so a search of the
 // operations for it is a search for the value having escaped.
 
-Deno.test("worker reconciler CFC decisions over a cf-render's nested render", async (t) => {
+test("worker reconciler CFC decisions over a cf-render's nested render", async (t) => {
   const owner = await Identity.fromPassphrase("nested render owner");
   const visitor = await Identity.fromPassphrase("nested render visitor");
   const storageManager = StorageManager.emulate({ as: owner });
@@ -241,7 +243,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
       ...viewedBy(viewer),
       ...(spaceAccess === undefined ? {} : { spaceAccess }),
     }).mount(getCell(runtime, reference).asSchema(rendererVDOMSchema));
-    await t.settle();
+    await clock.settle();
     return {
       cancel,
       emitted: () => JSON.stringify(ops),
@@ -792,7 +794,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           await write("relabeled-pins", value, [[["element"], [
             ownerOnlyAtom,
           ]]]);
-          await t.settle();
+          await clock.settle();
           expect(page.removed()).toBe(1);
         } finally {
           page.cancel();
@@ -1163,7 +1165,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
             try {
               const bound = mounted.bindings(propName).length;
               await relabel(`${id}-piece`, `${id}-hop`);
-              await t.settle();
+              await clock.settle();
               outcomes[`${relabeled}, ${host}`] = {
                 bound,
                 removed: mounted.removed(propName),
@@ -1224,7 +1226,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
                 await (way === "linked"
                   ? write(`${id}-linked-array`, [...items])
                   : write(`${id}-${way}`, { items: [...items] }));
-                await t.settle();
+                await clock.settle();
               }
               seen.push({
                 bound: mounted.bindings("items").length,
@@ -1275,7 +1277,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
           ) {
             if (change !== undefined) {
               await change();
-              await t.settle();
+              await clock.settle();
             }
             seen.push({
               bound: mounted.bindings("items").length,
@@ -1303,7 +1305,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         try {
           const before = unsealed.bindings("items").length;
           await write("changing-unsealed", unsealedValue);
-          await t.settle();
+          await clock.settle();
           outcomes.unsealed = [before, unsealed.bindings("items").length];
         } finally {
           unsealed.cancel();
@@ -1352,7 +1354,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         const setRevoked = async (value: boolean) => {
           revoked = value;
           for (const observer of [...observers]) observer();
-          await t.settle();
+          await clock.settle();
         };
         const pieces: [string, unknown, [string[], CfcAtom[]][]][] = [
           ["public", {
@@ -1487,7 +1489,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         const setRevoked = async (value: boolean) => {
           revoked = value;
           for (const observer of [...observers]) observer();
-          await t.settle();
+          await clock.settle();
         };
         const publicPiece = {
           [NAME]: "Shelf",
@@ -1672,10 +1674,10 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
             });
           look();
           await tileView("swapped-view", near);
-          await t.settle();
+          await clock.settle();
           look();
           await tileView("swapped-view", far);
-          await t.settle();
+          await clock.settle();
           look();
           expect(seen).toEqual([
             { placeholders: 1, bound: 0 },
@@ -2148,7 +2150,7 @@ Deno.test("worker reconciler CFC decisions over a cf-render's nested render", as
         try {
           expect(page.bindings()).toHaveLength(1);
           await write("stored-relabeled", relabeledValue, [[[], [sealedAtom]]]);
-          await t.settle();
+          await clock.settle();
           expect(page.removed()).toBe(1);
         } finally {
           page.cancel();

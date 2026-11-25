@@ -10,6 +10,7 @@ import {
 import { Identity, IdentityCreateConfig } from "@commonfabric/identity";
 import { env } from "@commonfabric/integration";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 const { API_URL } = env;
 
 // Create test identity
@@ -109,7 +110,7 @@ async function runTest() {
   console.log("\nDone");
 }
 
-Deno.test({
+test({
   name: "basic persistence test",
   fn: runTest,
   sanitizeResources: false,

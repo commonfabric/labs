@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { renderInProcess } from "../src/in-process.ts";
 import { MockDoc } from "../src/mock-doc.ts";

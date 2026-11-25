@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { logUnhandledRejections } from "../src/sandbox/unhandled-rejections.ts";
 import { runLockedDownProcess } from "./support/run-locked-down-process.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type WorkerOutcome = { message: string } | { error: string };
 

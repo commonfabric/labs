@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import { listElementLink } from "../src/builtins/list-element-link.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const base = (schema?: NormalizedFullLink["schema"]): NormalizedFullLink => ({
   id: "of:list",

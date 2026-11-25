@@ -4,7 +4,6 @@
  * both write to standard output, which the tests replace to read it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
@@ -17,6 +16,12 @@ import {
 import type { MemorySpace } from "@commonfabric/runner";
 import { decode } from "@commonfabric/text/utf8";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { ValidationError } from "@cliffy/command";
 
 import {

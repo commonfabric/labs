@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import {
@@ -8,6 +7,7 @@ import {
 import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import type { DID } from "@commonfabric/identity";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   ClientNotificationType,

@@ -24,6 +24,7 @@ import {
   type RenderConfidentialityResolver,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -52,7 +53,7 @@ const PUBLIC_ONLY: RenderPolicy = {
   maxConfidentiality: [],
 };
 
-Deno.test("display fit release-gate integrity", async (t) => {
+test("display fit release-gate integrity", async (t) => {
   const signer = await Identity.fromPassphrase("display fit integrity");
   const space = signer.did();
   const room = cfcAtom.space(space);

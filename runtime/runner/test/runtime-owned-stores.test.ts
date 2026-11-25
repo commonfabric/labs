@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -7,6 +6,7 @@ import {
   RuntimeOwnedStores,
 } from "../src/cfc/runtime-owned-stores.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:zOwnedStores" as const;
 const OTHER_SPACE = "did:key:zElsewhere" as const;

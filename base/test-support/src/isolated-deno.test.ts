@@ -6,6 +6,7 @@ import {
   runDenoCommandWithTemporaryLock,
   runFrozenDriftCheck,
 } from "./isolated-deno.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const ROOT = join(import.meta.dirname!, "..", "..", "..");
 
@@ -13,7 +14,7 @@ function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
-Deno.test({
+test({
   name: "a task's `deno` is the Deno running the task, not one on PATH",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -65,7 +66,7 @@ Deno.test({
   },
 });
 
-Deno.test("nested checks use the checked-in dependency graph", async () => {
+test("nested checks use the checked-in dependency graph", async () => {
   const lockPath = join(ROOT, "deno.lock");
   const lockBefore = await Deno.readTextFile(lockPath);
   const rootConfig = await readDenoConfig(join(ROOT, "deno.jsonc"));
@@ -87,7 +88,7 @@ Deno.test("nested checks use the checked-in dependency graph", async () => {
   assertEquals(await Deno.readTextFile(lockPath), lockBefore);
 });
 
-Deno.test("a command with a temporary lock runs in the environment it is given", async () => {
+test("a command with a temporary lock runs in the environment it is given", async () => {
   const output = await runDenoCommandWithTemporaryLock({
     root: ROOT,
     args: (lockPath) => [
@@ -103,7 +104,7 @@ Deno.test("a command with a temporary lock runs in the environment it is given",
   assertEquals(decode(output.stdout).trim(), `given ${ROOT}`);
 });
 
-Deno.test("nested frozen checks reject dependency graph drift", async () => {
+test("nested frozen checks reject dependency graph drift", async () => {
   // A frozen check rejects a config whose dependency graph no longer matches
   // its lockfile. Proving that against the whole workspace would force Deno to
   // re-resolve every npm package from the registry, so this uses a small
@@ -151,7 +152,7 @@ Deno.test("nested frozen checks reject dependency graph drift", async () => {
   assertMatch(decode(check.stderr), /lockfile is out of date/i);
 });
 
-Deno.test("a child records nothing and skips nothing unless the caller says so", async () => {
+test("a child records nothing and skips nothing unless the caller says so", async () => {
   // A child's tests are the caller's fixtures, so the recording variables the
   // caller's own run carries do not reach it.
 

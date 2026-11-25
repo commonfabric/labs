@@ -6,7 +6,6 @@
  * class added to the package is covered without an edit here.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FabricPrimitive, type FabricPrimitiveSchemaType } from "@";
@@ -20,6 +19,7 @@ import {
   isFabricPrimitiveSchemaType,
 } from "@/fabric-primitives";
 import { LAYER_CORPUS } from "../fabric-value-corpus.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The `FabricPrimitive`s among the corpus, labeled as the corpus labels them.

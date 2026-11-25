@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
@@ -16,6 +15,7 @@ import {
   resetMockMode,
 } from "@commonfabric/llm";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { Cell } from "../src/cell.ts";
 import { ExecutorHost } from "../src/executor/host.ts";

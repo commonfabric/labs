@@ -6,7 +6,6 @@
  * narrowing off and compares the two.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -18,6 +17,7 @@ import type {
   State,
   URI,
 } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { rendererVDOMSchema } from "../src/schemas.ts";

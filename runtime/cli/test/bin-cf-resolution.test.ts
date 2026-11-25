@@ -14,6 +14,7 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
 
 const binCf = join(
   dirname(fromFileUrl(import.meta.url)),
@@ -85,7 +86,7 @@ async function withTempDir(
   }
 }
 
-Deno.test("a checkout is selected from a directory inside it", async () => {
+test("a checkout is selected from a directory inside it", async () => {
   await withTempDir(async (dir) => {
     const labs = join(dir, "labs");
     await makeCheckout(labs);
@@ -98,7 +99,7 @@ Deno.test("a checkout is selected from a directory inside it", async () => {
   });
 });
 
-Deno.test("a vendoring host resolves to its vendored labs", async () => {
+test("a vendoring host resolves to its vendored labs", async () => {
   await withTempDir(async (dir) => {
     const host = join(dir, "loom");
     await makeCheckout(join(host, "vendor", "labs"));
@@ -111,7 +112,7 @@ Deno.test("a vendoring host resolves to its vendored labs", async () => {
   });
 });
 
-Deno.test("a vendoring host is found from any depth below it", async () => {
+test("a vendoring host is found from any depth below it", async () => {
   // The realistic shape: working somewhere deep inside a loom instance, with
   // its labs several levels up. `vendor/labs` is tested at every ancestor, not
   // just the immediate parent.
@@ -127,7 +128,7 @@ Deno.test("a vendoring host is found from any depth below it", async () => {
   });
 });
 
-Deno.test("a vendoring host is found from the host root itself", async () => {
+test("a vendoring host is found from the host root itself", async () => {
   await withTempDir(async (dir) => {
     const host = join(dir, "loominstance");
     await makeCheckout(join(host, "vendor", "labs"));
@@ -138,7 +139,7 @@ Deno.test("a vendoring host is found from the host root itself", async () => {
   });
 });
 
-Deno.test("inside the vendored labs, that checkout wins over its host", async () => {
+test("inside the vendored labs, that checkout wins over its host", async () => {
   // The nearer checkout is the answer; walking up to the host and re-deriving
   // `vendor/labs` would reach the same place here, but must not be relied on.
   await withTempDir(async (dir) => {
@@ -153,7 +154,7 @@ Deno.test("inside the vendored labs, that checkout wins over its host", async ()
   });
 });
 
-Deno.test("the nearest checkout wins when checkouts nest", async () => {
+test("the nearest checkout wins when checkouts nest", async () => {
   await withTempDir(async (dir) => {
     const outer = join(dir, "outer");
     const inner = join(outer, "nested", "labs");
@@ -166,7 +167,7 @@ Deno.test("the nearest checkout wins when checkouts nest", async () => {
   });
 });
 
-Deno.test("outside any checkout, the script's own checkout is used", async () => {
+test("outside any checkout, the script's own checkout is used", async () => {
   await withTempDir(async (dir) => {
     const labs = join(dir, "labs");
     await makeCheckout(labs);
@@ -193,7 +194,7 @@ Deno.test("outside any checkout, the script's own checkout is used", async () =>
   });
 });
 
-Deno.test("`which` reports the CLI that would run, on stdout alone", async () => {
+test("`which` reports the CLI that would run, on stdout alone", async () => {
   // Answered by the wrapper: asking the CLI which CLI would run begs the
   // question. stdout stays a bare path so a script can consume it.
   await withTempDir(async (dir) => {
@@ -212,7 +213,7 @@ Deno.test("`which` reports the CLI that would run, on stdout alone", async () =>
   });
 });
 
-Deno.test("`which` reports an entry that is not there", async () => {
+test("`which` reports an entry that is not there", async () => {
   // The checkout test only proves launcher.ts exists; the entry is a separate
   // file. A diagnostic that names a path it never checked is worse than one
   // that admits it cannot find it.
@@ -229,7 +230,7 @@ Deno.test("`which` reports an entry that is not there", async () => {
   });
 });
 
-Deno.test("`which` names CF_LABS_ROOT as the reason when it applies", async () => {
+test("`which` names CF_LABS_ROOT as the reason when it applies", async () => {
   await withTempDir(async (dir) => {
     const here = join(dir, "here");
     const elsewhere = join(dir, "elsewhere");
@@ -245,7 +246,7 @@ Deno.test("`which` names CF_LABS_ROOT as the reason when it applies", async () =
   });
 });
 
-Deno.test("`which` is only intercepted as the first argument", async () => {
+test("`which` is only intercepted as the first argument", async () => {
   // `cf piece call ... which` must still reach the CLI.
   await withTempDir(async (dir) => {
     const labs = join(dir, "labs");
@@ -262,7 +263,7 @@ Deno.test("`which` is only intercepted as the first argument", async () => {
   });
 });
 
-Deno.test("CF_LABS_ROOT overrides the cwd", async () => {
+test("CF_LABS_ROOT overrides the cwd", async () => {
   await withTempDir(async (dir) => {
     const here = join(dir, "here");
     const elsewhere = join(dir, "elsewhere");
@@ -275,7 +276,7 @@ Deno.test("CF_LABS_ROOT overrides the cwd", async () => {
   });
 });
 
-Deno.test("a CF_LABS_ROOT that is not a checkout fails loudly", async () => {
+test("a CF_LABS_ROOT that is not a checkout fails loudly", async () => {
   // Explicitly wrong input must not fall through to the cwd or the script's
   // own checkout: the caller asked for something specific.
   await withTempDir(async (dir) => {

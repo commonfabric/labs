@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   fromBase64url,
@@ -11,6 +10,7 @@ import {
   bigintToMinimalTwosComplement,
   bigintToUnpaddedBase64url,
 } from "@commonfabric/bytes/bigint";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   bigintFromMtcDirect,

@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
 import { fromFileUrl, toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Database } from "@db/sqlite";
 
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { DID } from "../interface.ts";
 import { Server } from "../v2/server.ts";

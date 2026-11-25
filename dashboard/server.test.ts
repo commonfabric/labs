@@ -14,7 +14,6 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
 import {
@@ -56,6 +55,7 @@ import {
   sampleManifest,
   serializeManifest,
 } from "@commonfabric/test-support/records";
+import { afterEach, beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 import {
   MANIFEST_SHARE_MS,
   TEST_SELECTION_PREFIX,
@@ -67,7 +67,7 @@ const req = (path: string) => new Request(`http://localhost${path}`);
 // it sees none of the views, run times, and red streak an earlier test left.
 // The reset after the test fails the test that left a collection running.
 function boardTest(name: string, fn: () => void | Promise<void>): void {
-  Deno.test(name, async () => {
+  test(name, async () => {
     resetBoardForTest();
     await fn();
     resetBoardForTest();
