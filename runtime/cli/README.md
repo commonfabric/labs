@@ -3392,6 +3392,14 @@ from that container directly. An address-only selection can therefore return a
 stored child link without loading the child. The verb's declared result remains
 available for cycle bounding; it does not replace the selection's source schema.
 
+A selection that names fields beside an address loads no more than it names. A
+source with no schema of its own is read through the positions the selection
+selects, with no claim about the shape at any of them: a named field is loaded
+with what it links to, and every other child is left unloaded. What a read loads
+is what the runtime's session goes on watching, and a serving runtime keeps
+current every value a session watches, so a process that makes many calls keeps
+only what their selections named.
+
 Root links, instances, scalars, and receipts read through an explicit schema are
 materialized before selection. A root link can resolve to an absent value, so
 its stored existence alone does not establish a result. Tool calls also
