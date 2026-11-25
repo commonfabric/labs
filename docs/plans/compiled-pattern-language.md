@@ -6760,6 +6760,22 @@ is relitigated.
   Planned, not built: the sidecar becomes a table of the memory server's
   store instead of documents.
 
+- A value a user types into a space is shared with that space, so an event
+  input carries no `User` clause of the acting user (2026-11-25, Z100). The
+  owner's words: "for the new issues that attach the User label too much.
+  The concept is that typing something into a space means sharing with it,
+  so i think we're overlabeling event inputs right now". The coordinator
+  put that wording to the owner as a ruling, and the owner confirmed it.
+  This is the rule to reach, not what the runtime does today, on either
+  path. It stores less label than the runtime stores now, and it changes
+  what CFC decides, so it goes through the specification procedure of
+  `docs/development/cfc-spec-correspondence.md` before it is built. Not
+  settled by the ruling: whether it reaches every event payload or typed
+  input alone, and whether it reaches a per-session or per-user cell a
+  client writes through a binding. Round thirty traces where a `User`
+  clause enters the commit that handles a click, on both paths, and
+  changes no label of an event input.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
