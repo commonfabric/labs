@@ -664,7 +664,7 @@ const counted = (instance: Instance, before: ReturnType<typeof countsOf>) => ({
  * `facts`, an authored body that reads about eight positions per message
  * held, through the new row's records, which name the inputs of `facts`,
  * and through the values that read the stored messages whole (notes 1044,
- * 1052 and 1068 of `../../SPEC-NOTES.md`); `changedBytes`, which the
+ * 1052 and 1067 of `../../SPEC-NOTES.md`); `changedBytes`, which the
  * document of the stored messages and the parts of the basis follow;
  * `writes` and `changedDocuments`, which vary with the parts of the basis a
  * send writes; and the times.

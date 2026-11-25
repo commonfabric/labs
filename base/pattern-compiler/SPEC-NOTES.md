@@ -26659,3 +26659,455 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    argument's label there. Whether the result's path carries a label of its own
    that the redirect has to join, as for the redirect to a state cell of P470,
    is open.
+
+## Round twenty-five: why a FabriChat send followed the room after the link-following merge
+
+Round twenty-five (2026-11-25), on the branch
+`claude/compiled-pattern-scoped-rows` from `0f9b207a49`, the merge of round
+twenty-four's head `5fc3cf732c` and the link-following work (notes 1060 to
+1066). The notes are numbered from 1067, the provisional decisions from P472.
+The logs are in the folder `r25-merge-regression/` of the session. Whenever a
+note says `map` or `filter`, it names the case. Times are on an Apple M5 Max
+with 18 cores at the load averages given, from other sessions; the counts do not
+depend on the load.
+
+1067. **Findings, first.**
+      - _Correctness, open, brought by the merge: each row of the main
+        conversation holds an error state in place of its reactions._ The row's
+        `tallies.map(...)` is a `map` over a value of the scope `user`; with the
+        rows of the space it stands below a row of another collection, which
+        `Instance.#scopedRows` refuses with the error state "a collection of a
+        scope narrower than the space, in a row of another collection". The
+        dumps hold 103, 503 and 1,003 of them at 100, 500 and 1,000 messages at
+        `0f9b207a49` and after this round, none at `5fc3cf732c`; no gate, test
+        or figure reported them, and the harness now counts them (`errors` in
+        the step `read`). Not fixed; the plan, a place per row and scope key for
+        the rows of such a collection as P455 has for a value, is note 1075.
+      - _Scale, fixed: a change of labels gave again the record of every row
+        whose inputs read another array of the same document through `*`._ A
+        send appends to the stored messages, which changes the labels of the
+        argument at `messages/N-1` and `messages/N`. Each row of the main
+        conversation (a `map` over the result of a `filter` over an array of
+        references) has two records, at its thread label and the display of its
+        thread link, whose templates name `places` and through it the inputs of
+        `facts`, among them `threadInfo/*/root` and `threadInfo/*/title`,
+        positions of the argument. `#readsChangedLabel` counted a position whose
+        path names every element as changed for any change of its document, so
+        every row's two records were given again with their labels formed alone
+        (`relabel`): 2 records per message held at every send, with their
+        preparation by the runtime and their commit (note 1068). Fixed (P472,
+        note 1069).
+      - _Scale, fixed: a handler's read of which children the room's result
+        holds copied the result whole._ `tellManagerJoined` asks whether `self`
+        is there, a `shape` entry beside the handle, and the read made for it
+        copied every record and array in place below the result: 14,312
+        containers at 100 messages, 147 more per message held, 118 ms of the
+        handler's 120 at 100 messages. Fixed (P473, note 1070).
+      - _Neither is a defect of the merge's resolution or of the link-following
+        work._ The resolution of `Instance.stored` passes `previous` (P462) and
+        then `ofResult` (P470) in that order at every call, `#storedMember`
+        included. Both paths are older than round twenty-one (`6213717fae` of
+        2026-11-22 and `7a7e442d54` of 2026-11-23, in the merged branch at
+        `5db1c2658d`) and held while the rows of the main conversation were of
+        the scope `user` (note 1042): `#relabel` gave nothing for a record whose
+        path through the result led into a scope instance (`store.peek` found
+        nothing there), and the copy stopped at the link into the scope
+        instance. The link-following work made the rows of the space, as it was
+        expected to: a message's `authorProfile` now leads to the profile
+        document, and no row reads the `#profile` wish's state.
+      - _Evaluations fell from 54 to 49_ because the new row has no places of
+        values of a scope any more (P454): the five places of its values that
+        read through `authorProfile` into the wish's state (values 228, 229,
+        231, 291 and 294 of `FabriChatRoom`) were evaluated per send at
+        `5fc3cf732c` and are of the space, in the row's own cone, now.
+      - _Scale, open and older than this round: what a send still does per
+        message held._ `facts` reads about eight positions per message held, the
+        appended row's records register the positions of `facts`'s inputs whole
+        (note 1052), and the reads of a send copy about 5 containers per message
+        held: one of them is value 63 of `FabriChatRoom`, which reads the stored
+        messages whole (93 to 104 containers per send at 100 messages, 113 to
+        124 at 120), and the rest were not attributed. The label of a value read
+        at an ancestor of a changed path (`messages` of the argument) is formed
+        from every label entry below it, once per change. None of these grew
+        with the merge.
+      - _Observed, not traced: a body that reads each element of an array of
+        references through `get()` of the whole array stores no clause of the
+        elements._ In a variant of the fixture of note 1071 whose `facts`
+        iterate `items.get()` and read each `item.title`, the label stored at
+        `count` holds the clause of the document of the list and none of the
+        items', at `5fc3cf732c`, at `0f9b207a49` and after this round; read by
+        `items.key(index).key("title").get()`, as the fixture does, it holds
+        every item's. If the body consumed those clauses, that is an under-label
+        (CFC question 3 below).
+      - _Found with the merge, not traced (note 1074):_ a Topics create gives
+        205 to 206 records where it gave 111 to 123, and the first create of a
+        run is refused once and runs 16 derivations, at 1,000 and 2,000 topics
+        alike; and `system/fabrichat/message-row.tsx` in the corpus handles two
+        events fewer on the runner path and one fewer under the serving loop
+        ("the handler did not commit"). Both are the same at `0f9b207a49`.
+      - _Scale, fixed beside the growth: the label change walk at `5fc3cf732c`
+        followed the room too._ `labelsChanged` took 46 ms per send at 1,000
+        messages before the merge, 34.5 of them asking each row's set, and takes
+        0.6 ms after (note 1073).
+
+1068. **The bisect, and what a send gave per message held.**
+      - _Bisect_ (`fab.sh` in the log folder, scratch worktrees `r25-base`,
+        `r25-link` and `r25-default` at `5fc3cf732c`, `34677573f1` and
+        `59d09d45d1`, with the crate built at `0f9b207a49`, whose Rust is that
+        of all three): at 100 messages a send gives 300 records and 54
+        evaluations at `5fc3cf732c`, 490 to 494 and 49 at `34677573f1` and at
+        `59d09d45d1`. The growth comes with `34677573f1`, the link-following
+        commit (P470, P471); the default of a reference that names nothing
+        (`59d09d45d1`) changes no count.
+      - _Which records_ (`SCALE_TRACE` at 20 and 40 messages, the counts of the
+        third send compared): at `34677573f1` the records of outputs 339 and 340
+        of `FabriChatRoom`, `unchanged`, at
+        `$UI/children/#/children/#/children/#/children/#/children/#` and
+        `.../props/style/display`, one each per row of the main conversation.
+        They are interim outputs of cone 134, the `map` over the result of the
+        `filter` `mainMessages`, whose templates name outputs 236
+        (`threadLabel`) and 237 (`threadLinkDisplay`) of the inlined
+        `FabriChatMessageRow`, and through `replies` the member of `places` the
+        row reads. Each is given by `Instance.#relabel` with `relabel: true`,
+        after `labelsChanged` found it among the records that read a changed
+        label: the change is the argument's at `messages/N-1` and `messages/N`,
+        written by the send's push, and the record's set of positions, a
+        snapshot of `facts`'s inputs when the row was given (note 1052), holds
+        nine positions of the argument and the row's element record, among them
+        `messages`, which the walk of `#recordsReading` reaches as an ancestor
+        of the changed path, and `threadInfo/*/root` and `threadInfo/*/title`. A
+        test of each position and class against the store's `unchanged` found no
+        label changed; `#readsChangedLabel` answered yes through the `*` alone.
+        At `5fc3cf732c` the same walk reached 19 sets more per message held, and
+        `#relabel` was handed the records of outputs 308 and 309 of each row
+        (the same positions in the row's own cone 133), each skipped because
+        `store.peek` found nothing at its path through the result, which led
+        into a scope instance.
+      - _Which work_ (profiles at 200 messages, three timed sends each,
+        `profile-phases.py`, before `5fc3cf732c` and at `59d09d45d1` side by
+        side at loads of 1.4 to 2.9): 166 ms per send before, 613 ms at
+        `59d09d45d1`. The handler event took 14 and 248 ms: 242 ms were
+        `Store.#copy` under the handler's read of `self` (note 1070). The rest
+        of the growth followed the 400 more records: the runtime's preparation
+        of a commit 23 and 86 ms, the executor's derivation outside the store
+        step 35 and 90 ms, garbage collection 10 and 41 ms, receive and decode
+        12 and 48 ms.
+
+1069. **What was built: the records a change of labels reaches (provisional
+      decision P472).**
+      - _What was asked._ `#recordsReading` collected every set of positions
+        registered at, above or below a changed path, and `labelsChanged` then
+        asked each set (`#readsChangedLabel`) whether any of its positions in
+        the changed document consumes another label in some class, counting one
+        whose path names every element as changed. A position unrelated to the
+        changed paths was asked about, and the work was every set that read an
+        ancestor of a changed path: every row's, in FabriChat, where every row's
+        set holds `messages`.
+      - _What was built._ The test is made in the walk over the readers of
+        labels (`#recordsReading`): each position at, above or below a changed
+        path that some record read is asked once whether a read of it consumes
+        another label in some class (`OBSERVED_CLASSES`,
+        `LabelChange.unchanged`), and only then are its readers taken. A
+        position whose path names every element, and every position where the
+        store cannot tell, counts as changed, as before. A position of the
+        document that no changed path reaches is not asked about: what a read of
+        a path consumes is formed from the entries at, above and below it
+        (`consumedEntriesForRead`), so a change elsewhere leaves it.
+        `#readsChangedLabel` is gone. `Counts.labelReaders` counts the sets
+        found.
+      - _P472._ As above. It is the rule `LabelChange.unchanged` and
+        `plan-and-label-templates.md` §4.1 state ("A label that changes alone":
+        a demanded output whose template reaches a slot whose label changed is
+        instantiated again); the records it leaves out are those whose positions
+        consume the labels they consumed before. Today's runtime keeps no index
+        of the records that read a label; this index exists for the compiled
+        path (P463), and the walk now costs the positions on the changed paths
+        and the readers of those whose label changed.
+
+1070. **What was built: a handler's read of which children a container holds
+      (provisional decision P473).**
+      - _What was read._ A `shape` or `enumeration` entry of a handler's state
+        that gives way to a handle at or above its path places nothing in the
+        state; the read made for it (`Host.v` under the schema
+        `CHILDREN_UNREAD`, `{ items: {} }`) only had to report the position for
+        the slot's binding. That schema types the elements of an array as
+        `unknown` and declares no member of a record, so `Store.#copy` copied
+        every record and array in place below the position and reported each
+        link in it read (as a position that stops). In FabriChat the room's
+        result holds the rows of the main conversation in place in the
+        executor's store (their storage is in row documents), so the read of
+        `self` copied every row.
+      - _What was built._ `Host.readChildren` locates the position, following
+        the links on the way and at it, and reports it read; nothing below is
+        copied or read. A non-reference value is read as before (`v`, under
+        which the schema played no part).
+      - _P473._ As above. What the entry observes is which children the
+        container has (ES §2.4), so the slot is bound to the container's
+        position. It is bound to fewer positions than before: the positions of
+        the links below the container are no longer among them (CFC question 1
+        below).
+
+1071. **The tests, seen failing first.** The fixture
+      `compare/fixtures/followed-rows.tsx`: the rows of a `map` over `items`, an
+      array of references in the argument, each following its item's link to the
+      owner, another document, as a message's `authorProfile` does, and looking
+      up what `facts` say of its title; `facts` read every note through `*` and
+      every item's title by its position, and the argument holds the notes
+      beside the items; the handler `add` pushes an item that links to the owner
+      and asks whether the result of the instance is there, as
+      `tellManagerJoined` does.
+      - `runtime/runner/test/compiled/followed-rows.test.ts`, a compiled piece
+        in the runtime, one add after 10 and after 100 adds: the records given
+        and the readers of labels reached are the same at both sizes (22 and 112
+        records, 24 and 204 readers at `0f9b207a49`); the containers the reads
+        copied are the same (127 and 1,207 before); every count of the executor
+        and of the adapter is the same but the reads of the facts and the
+        positions registered for the appended row's record, which follow the
+        rows by design of the fixture.
+      - `exec/test/store-step.test.ts`: a label change at an appended item that
+        no read consumes forms no label again (the look-up of each of 10 rows
+        and the count before); a change of a note's label still forms again the
+        count and every row's look-up; an add copies as much at 10 rows as at
+        100 (127 and 1,207 before).
+      - `compare/test/followed-rows-labels.test.ts`, the fixture in the
+        runtime's storage with each document under a clause of its own: the
+        labels stored at the count, the titles, the owners and the look-ups of
+        the rows after two appends, and at the state cell the handler writes and
+        the items it appends after two adds, are the same at `0f9b207a49` and
+        after (run there in a scratch worktree). A record given again alone
+        forms its label from the inputs it was last given, so the relabels that
+        P472 leaves out formed the labels already stored; the look-up of a row
+        keeps the clauses of the items there were when it was given (note 1052).
+
+1072. **The check: a growth gate in the harness.** `SCALE_GROWTH` makes
+      `compare/fabrichat/scale.ts` compare the last timed send of the room at
+      each size with that at the first, in the counts the room's size is not to
+      change (`GROWTH_COUNTS`: evaluations, element evaluations, assemblies,
+      positions placed, records noted, readers of labels reached, records given,
+      commits, derivations), print a step `growth` and exit with status 1 where
+      one differs. With
+      `SCALE_STAND_INS=table SCALE_GROWTH=1 ... scale.ts runner room 100,200` it
+      exits 1 at `0f9b207a49` (records given 494 and 694, readers of labels
+      1,920 and 3,720) and 0 at this round's head. Left out, and named in the
+      harness: the reads and the registrations (`facts`, note 1052), the
+      containers copied (note 1067), the bytes changed (the stored messages and
+      the parts of the basis), and the writes and the documents changed, which
+      vary between sends with the parts of the basis a send writes (21 or 23
+      writes, 67 to 70 documents, at either size). Below 100 messages the window
+      of the newest messages holds every message and a send gives a record more
+      per message held, so the sizes compared are 100 and more: at 20 and 60 the
+      records noted and the records given differ by 40 at this round's head. The
+      seeds take about 40 s together. The gate is not run by `deno test`: it
+      needs the release build of the crate, as every FabriChat figure does.
+
+1073. **Measured: FabriChat.** `SCALE_STAND_INS=table SCALE_CHANGES=1`,
+      `compare/fabrichat/scale.ts runner room <n>`, one process per size
+      (`fab.sh`), three timed sends each. "Before" is `5fc3cf732c` (note 1050's
+      figures at 100 and 500, and at 1,000 a run in the scratch worktree
+      `r25-base` started beside a first run after); "merge" is `0f9b207a49` (the
+      coordinator's run, one process for the three sizes,
+      `work/link-merge/scale.log`); "after" is this round's code. Times in
+      milliseconds, the piece's own time in brackets; "KB" is the size as JSON
+      after the commit of each document a send's commits changed.
+
+      | messages | when   | load    | ms per send (own)         | records     | evaluations | element evaluations | documents | KB changed |
+      | -------- | ------ | ------- | ------------------------- | ----------- | ----------- | ------------------- | --------- | ---------- |
+      | 100      | before | 3.0     | 108–129 (53–54)           | 300         | 54          | 31                  | 77–78     | 329–331    |
+      | 100      | merge  | 1.8     | 290–315 (191–197)         | 490–494     | 49          | 31                  | 69–70     | 339–340    |
+      | 100      | after  | 2.5     | 96–123 (45–48)            | 282         | 49          | 31                  | 68–69     | 320–322    |
+      | 500      | before | 2.6     | 319–336 (174–182)         | 300         | 54          | 31                  | 76–78     | 480–482    |
+      | 500      | merge  | 3.1–3.2 | 1,573–1,929 (1,190–1,491) | 1,290–1,294 | 49          | 31                  | 68–70     | 466–469    |
+      | 500      | after  | 2.6     | 270–338 (146–152)         | 282         | 49          | 31                  | 67–69     | 447–451    |
+      | 1,000    | before | 3.5     | 612–657 (330–361)         | 300         | 54          | 31                  | 77–80     | 714–729    |
+      | 1,000    | merge  | 2.3–2.7 | 3,576–4,053 (2,837–3,155) | 2,290–2,294 | 49          | 31                  | 69–71     | 664–677    |
+      | 1,000    | after  | 2.7     | 539–826 (287–367)         | 282         | 49          | 31                  | 68–70     | 646–658    |
+
+      - _At 1,000 messages side by side._ The before and a first run after,
+        started together: the after finished its seed first, so its timed sends
+        ran beside the before's seed (load 4.2) and the before's alone (3.5):
+        612 to 657 ms (330 to 361 of its own) before, 572 to 598 (318 to 330)
+        after. The row of the table is a second run after, alone. The counts are
+        the same in both runs after.
+      - _What did not change and what fell._ Element evaluations, 31; the
+        positions placed, 83. Records noted 271 where 282 (before) and 272
+        (merge), the registrations 8,133 to 8,149 at 1,000 where 8,212 to 8,228:
+        the records of the places of the new row's values of the scope `user`
+        are gone (note 1067). The readers of labels reached are 16 per send at
+        every size (1,920 at 100 and 3,720 at 200 at the merge, `SCALE_GROWTH`
+        runs of note 1072). The containers the reads copy are 936 to 946, 2,936
+        to 2,946 and 5,436 to 5,446 at 100, 500 and 1,000, about 5 per message
+        held (note 1067); 14,312 at 100 at the merge.
+      - _The seeds._ 8 s at 100 (1.10 GB peak resident), 84 s at 500 (3.50 GB),
+        287 s at 1,000 alone (4.66 GB) and 324 s beside the before (4.85 GB);
+        the before at 1,000 took 373 s (4.77 GB), note 1050 347 to 427 s, the
+        merge 1,701 s (one process for the three sizes, 4.74 GB).
+      - _The dumps_ (`SCALE_DUMP`) hold one error state per message held, 103,
+        503 and 1,003, at the merge and after, and none before: the reactions of
+        each row (note 1075). The reader's rights of every message read back
+        (103, 503, 1,003).
+      - _Phases per send at 1,000_ (`profile-phases.py`, the three timed sends;
+        the before beside the first after, load 3.5; the second after alone,
+        2.7), in milliseconds:
+
+        | phase                                     | before | after |
+        | ----------------------------------------- | ------ | ----- |
+        | all                                       | 635.5  | 709.4 |
+        | garbage collection                        | 52.8   | 144.4 |
+        | memory server: apply commit               | 37.1   | 90.9  |
+        | client: CFC preparation of a commit       | 72.8   | 80.1  |
+        | client: transaction commit (encode, send) | 80.4   | 35.8  |
+        | executor: `#pullScoped`                   | 12.5   | 2.4   |
+        | executor: `#storeResult`                  | 96.2   | 121.6 |
+        | executor: `#reassemble`                   | 1.0    | 1.2   |
+        | executor: other of a derivation           | 146.4  | 131.1 |
+        | handler event                             | 56.7   | 18.2  |
+        | scheduler: resubscribe after a commit     | 7.8    | 8.9   |
+        | client: receive and decode                | 49.1   | 53.6  |
+        | other                                     | 22.6   | 21.3  |
+
+        The second after's sends took 763, 826 and 539 ms (367, 305 and 287 of
+        the piece's own), and its profile has 144 ms of garbage collection and
+        91 of the memory server's apply per send; the first after's profile,
+        beside the before's seed, gives 586.6 ms in all, with 58.7 of garbage
+        collection, 38.3 of apply and 125.0 of `#storeResult`, so the difference
+        in those two phases is of the run and was not traced further. Of the
+        before's 46.0 ms in `labelsChanged` per send, 34.5 were
+        `#readsChangedLabel` asking each row's set (the walk that reached 19
+        sets per message held); after, `labelsChanged` takes 0.6 ms. The handler
+        event falls from 57 to 18 ms: the read of `self` at the before copied
+        what the result held in place, about three containers per message held
+        while the rows were of the scope `user`. `#storeResult` takes 96 and 122
+        ms: `#storeUnit` brings the rows of `messageRights` up to date (56 and
+        81 ms), where `#current` compares what each row's entry read; it was not
+        traced why that takes longer after; the executor's phases together take
+        256 ms before and 256 after.
+
+1074. **Measured: Topics, the serving path, and the corpus.**
+      - _Topics, the arm `serving` on `filing-order`_, the boards of the
+        measurement branch copied into the scratch worktree `r25-probe` at this
+        round's code head, one run each, loads 2.2 to 2.9. An edit of a title
+        runs 1 derivation and 5 evaluations and gives 2 to 8 records at 1,000
+        and 2,000 topics, as in note 1051; the second client reads it after 13
+        to 34 ms at 1,000 and 14 to 37 ms at 2,000 (note 1051: 14 to 37 and 12
+        to 32). A create runs 9 derivations and gives 205 to 206 records, and
+        the first create of a run 16 derivations and 245 records behind one
+        refusal (a stale read of the piece's own document, whose list of recent
+        documents another session's run had changed), at both sizes; note 1051
+        has 9 derivations, no refusal and 111 to 123 records. The same at
+        `0f9b207a49` (a run at 1,000 in the scratch worktree `r25-default` with
+        the boards, load 1.9 to 2.5): the change of the creates came with the
+        merge and not with this round, and was not traced. The second client
+        reads a create after 109 to 168 ms at 1,000 and 134 to 191 ms at 2,000
+        (note 1051: 217 to 477 and 386 to 929). The first run at `0f9b207a49`
+        went idle before the load with 1.5 s of processor time (note 931) and
+        was stopped and run again.
+      - _`compare/serving-path.ts 1000`_: the piece is found current after the
+        takeover with no evaluation, 6 evaluations at the wake, 11 derivations,
+        no refusal, 20.8 ms of its own for its ten events and derivations (load
+        2.0 to 2.6; note 1051: 20.7 ms at 2.1 to 3.0).
+      - _The corpus,_ `compare/runner-corpus.ts` in its four modes, run side by
+        side once at `355147cfaf` (loads 1.8 to 4.4): started, every event
+        handled, no commit refused, equal to the executor in memory, and for the
+        resumes, resumed, found current, wrote no document.
+
+        | Mode                  | Note 1041                        | This round                       |
+        | --------------------- | -------------------------------- | -------------------------------- |
+        | runner                | 259, 215, 249, 229               | 259, 215, 249, 230               |
+        | serving               | 235, 201, 221, 211               | 235, 201, 221, 211               |
+        | after a resume        | 259, 215, 251, 226; 148, 121, 82 | 259, 215, 251, 227; 148, 121, 82 |
+        | serving with a resume | 235, 201, 221, 210; 81, 72, 0    | 235, 201, 221, 210; 81, 72, 0    |
+
+        - _Modules whose line changes_ (`compare.py` over the lines of each
+          module). Against the coordinator's run at `0f9b207a49`
+          (`work/link-merge/`): `apps/agent/agent.tsx` is equal to the executor
+          in memory on the runner path and after a resume, where that run was
+          not (the date the module formats, note 1041; the runs crossed midnight
+          UTC or not), and after a resume it has 2 refusals where 3. Against
+          round twenty-four's run (note 1051): the same for
+          `apps/agent/agent.tsx`, and `system/fabrichat/message-row.tsx` handles
+          6 of its 19 events on the runner path and after a resume, and 7 under
+          the serving loop with and without a resume, where it handled 8 in each
+          mode: two more events, one more under the serving loop, end in "the
+          handler did not commit". The coordinator's run at `0f9b207a49` has the
+          same, so it came with the merge; the four counts of each mode did not
+          show it, since the module handled no mode's every event before either.
+          Not traced.
+
+1075. **Planned, not built.**
+      - _The reactions of each row of the main conversation are an error state
+        (finding of note 1067, correctness, open)._ The row of
+        `FabriChatMessageRow` holds `tallies.map(...)`, a `map` over `tallies`,
+        a value of the scope `user` (it reads `myProfile` to mark the viewer's
+        own reactions). While the rows were of the scope `user`, the inner
+        collection stood in a row of that scope and was stored with it. With the
+        rows of the space, `Instance.#scopedRows` finds a collection of a scope
+        narrower than the space below a row of another collection, which has no
+        path in the scope instance of the document of the scoped outputs, and
+        stores the error state "a collection of a scope narrower than the space,
+        in a row of another collection" at the row's position (1 per message
+        held: 103, 503 and 1,003 at 100, 500 and 1,000 messages, at `0f9b207a49`
+        and after this round; none at `5fc3cf732c`). The values of a row that
+        read a value of a scope have a place per row and key (P454, P455); a
+        collection has none. The plan extends P455 to the rows of an assembly:
+        for an assembly of a scope key below the rows of another collection,
+        `#scopedRows` stores a link to a document of its own per collection and
+        outer element keys
+        (`#identifier("scoped rows", within, keys, {
+        collection })`),
+        with an instance per scope key that holds the inner assembly's rows
+        whole, and the entry that stores them is kept under the outer element
+        keys, so that it is dropped with them, is set aside per scope key (P456)
+        and is marked alone by the restore of a refused commit, as
+        `#valuePlace`, `#valueDocument` and `#valueScopes` do for a value. The
+        records of the rows are those of the inner collection's outputs under
+        the outer and inner element keys. Tests first: a fixture whose `map`
+        over an array of references holds, in each row, a `map` over a value of
+        the scope `user`, with two principals at 10 and 100 items: no error
+        state, each principal reads its own inner rows, the scope instances hold
+        one place per row and key of a size that does not follow the rows, an
+        edit of one item writes that row's places alone; then FabriChat's dumps
+        hold no error state. Not built: it is a change of its own across the
+        stored form, the places, the restore and the basis list, with the CFC
+        questions of round twenty-one (notes 1020, 1031) for each place, and the
+        brief of this round is the growth of a send.
+      - _What a send still does per message held_ (note 1067): `facts` and the
+        registration of the appended row's records (note 1052, which needs the
+        answer to question 5 of round twenty-four), and the read of the stored
+        messages whole by value 63 of `FabriChatRoom`. The label of a read at an
+        ancestor of a changed path joins every label entry below it
+        (`RuntimeTransactions.#labelIn` of
+        `runtime/runner/src/compiled/transactions.ts`), once per change and
+        class; it could be kept per container and brought up to date with the
+        entries that change. Not built.
+
+1076. **Provisional decisions, and what was not verified.** P472: as note 1069.
+      P473: as note 1070. Not verified: the stored labels beyond the fixture of
+      note 1071 (FabriChat's were not compared); FabriChat under the serving
+      loop or with two users; a resume of FabriChat; the growth gate at sizes
+      other than 100 and 200; why `#storeUnit` takes longer after at 1,000 (note
+      1073); the records of a Topics create and the message-row module of the
+      corpus, which changed with the merge (note 1074); the observation on
+      `get()` of note 1067; the times beyond one or two runs of each cell.
+
+### CFC questions deferred, round twenty-five
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. P473: a handler's `shape` or `enumeration` slot that gives way to a handle is
+   bound to the container's position alone, where it was bound to that position
+   and to the position of every link in place below it, each read as a position
+   that stops. A change that consumes less label: the label of what the handler
+   writes no longer joins the `shape` labels at those link positions. In the
+   fixture of note 1071 the labels stored at what the handler writes are the
+   same before and after.
+2. P472: a record is no longer given again where a label changed at a path
+   unrelated to every position its inputs read, though one of them names every
+   element of an array of the same document. Such a relabel formed the label
+   from the inputs the record was last given, so the labels it stored were those
+   already stored (note 1071), and no rule of a label changes. Whether such a
+   record owes the labels of what the output it names reads now is question 5 of
+   round twenty-four, which this change does not decide.
+3. Note 1067, observed and not traced: a body that reads each element of an
+   array of references through `get()` of the whole array stores no clause of
+   the elements at its outputs. If the body consumed those labels, the outputs
+   are under-labeled.
