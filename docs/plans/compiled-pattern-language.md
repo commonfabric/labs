@@ -6680,6 +6680,30 @@ is relitigated.
   Version-1 envelopes that an earlier build of the compiled path stored are
   rewritten at their next commit, and nothing else is done for them.
 
+- The marker of a stream that a derivation writes for the row of an element
+  carries the label of that row, the label a record of what the marker
+  depends on would give it, and not the join of everything the derivation
+  read (2026-11-24, Z96). This answers the question of round twenty-two
+  (note 1027, first finding; FabriChat round two's question 4, note 745) on
+  the branch `claude/compiled-pattern-scoped-rows`: written under no record,
+  the marker took the derivation's join and was refused at every derivation
+  while an element carrying a confidentiality clause existed, as in
+  `examples/fair-share/main.tsx` and `apps/redactor/vault.tsx`. The
+  coordinator recommended this form, and the owner agreed: "I agreed with
+  your suggestions". Not built.
+
+- A spread of a record that a body builds is emitted as a pass: each member
+  is placed at its position with the label of that member's value, where a
+  read of the whole record joined the labels of every member into each
+  position the spread gives (2026-11-24, Z97). This answers question 4 of
+  round twenty-two (note 1031, read 2) on the same branch, a change that
+  stores less label; it is what lets the room's rendered tree stay of the
+  space where it spreads a record that holds a scoped value. The coordinator
+  recommended it, and the owner agreed in the same words as Z96. Not built.
+  Both rulings decide questions that Z88 deferred; when each is built, the
+  round checks it against `docs/development/cfc-spec-correspondence.md` and
+  says whether the specification needs a change.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on

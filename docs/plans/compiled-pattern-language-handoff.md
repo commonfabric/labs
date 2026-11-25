@@ -135,8 +135,9 @@ twenty).
   element carrying a confidentiality clause is written under no record,
   takes the join of what the derivation evaluated, and is refused at every
   derivation while the element exists; `vault` loses an event under the
-  serving loop the same way. Which label the marker owes is FabriChat round
-  two's question 4 (note 745), deferred. The basis document's list is now
+  serving loop the same way. The owner ruled on 2026-11-24 (Z96) that the
+  marker carries the label of its row, as a record of what it depends on
+  would give; not built. The basis document's list is now
   spread over 256 part documents (P457): the basis is about 4 KB at every
   size and a send writes about 31 parts, so what it writes still grows, at
   1/256 of the rate. Leaving out the documents a resume derives again was
@@ -153,9 +154,8 @@ twenty).
   stored it in a document of the space was refused by
   `#refuseStoredForEveryKey` (note 1030). Round twenty-three fixed that
   defect, the `#generated` case included (P458), and landed `rootOf`
-  without `failed` (P459). Still open: emitting the spread as a pass stores
-  less label and waits for the owner's ruling (CFC question 4 of round
-  twenty-two).
+  without `failed` (P459). Emitting the spread as a pass, which stores less
+  label, the owner ruled on 2026-11-24 (Z97); not built.
   Round twenty-three (`71fefaf1e3`, notes 1035 to 1043, P458 to P461) made
   the room's rendered tree of the space: a value that becomes of a scope
   after its array was stored in a document of the space moves to the scope
