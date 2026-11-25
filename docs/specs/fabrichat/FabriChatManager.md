@@ -31,6 +31,15 @@ nothing else: deriving it reads no room. Every link to a room the manager
 stores, in `roomMembership`, `direct`, `requests` and `outgoingNotices`, is
 declared a handle with nothing behind it (`Cell<unknown>`), so a read of any of
 them, Home's own sync among them, keeps the link and loads no room. The
+manager's `[UI]` is where a runtime serving the home space does load a room:
+each row of the Chats list binds a link to its room, the memory server's
+traversal of the rendered rows follows that link into the room's space and
+reports it, and a serving runtime loads what is reported
+([session sync payload](../memory-v2/04-protocol.md#423-session-sync-payload)).
+So the home space's serving runtime holds each listed room's root document,
+with the schema documents that arrive with it, and, until a derivation reads
+the room, none of the room's other documents. A runtime that isn't serving
+loads a room when one of its reads reaches the room. The
 derivations that read rooms, `people` from the listed rooms' rosters, for a
 session that has sent `askForPeople`, and the notices with nothing left to
 tell from each notice's room's roster, first

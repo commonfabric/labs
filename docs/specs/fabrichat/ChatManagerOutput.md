@@ -190,7 +190,10 @@ session that has none is refused.
   manager's own records alone: each saved `roomMembership`, read against the
   user's shared-space catalog, Home's, which governs a standalone room's
   membership. Listing the rooms reads nothing in any room's space, so it costs
-  the same whatever the rooms hold, and a reader of `rooms` loads no room. An
+  the same whatever the rooms hold, and a reader of `rooms` loads no room. A
+  runtime serving the home space still holds each listed room's root document,
+  which the manager's rendered list loads there
+  ([`FabriChatManager`](FabriChatManager.md#state)). An
   entry holds the room's link, as a handle that declares nothing of the room,
   and what the manager's handlers recorded of the room when they read it: its
   kind, its counterpart, its title and where its conversation stands, each as
