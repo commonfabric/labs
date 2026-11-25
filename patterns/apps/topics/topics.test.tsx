@@ -812,10 +812,24 @@ export default pattern(() => {
   // half-written source. The first two entries are what a settled board looks
   // like; the third is the one that used to throw. Reading its list as
   // undefined is exactly what `mentionedBy` above declares and guards.
+  // A cell's initial value holds no link, so the settled source's mention of
+  // `twinA` is pushed by an action.
+  const settledWithMention = new Writable<{ mentions: unknown[] }>({
+    mentions: [],
+  });
+  const settledWithNone = new Writable<{ mentions: unknown[] }>({
+    mentions: [],
+  });
+  const midSync = new Writable<{ mentions: unknown[] } | undefined>();
+  const action_settle_mention_source = action(() => {
+    settledWithMention.key("mentions").push(twinA);
+  });
   const assert_mention_lists_tolerate_a_mid_sync_source = assert(() => {
-    const settled = (m: unknown[]) => ({ get: () => ({ mentions: m }) });
-    const midSync = { get: () => undefined };
-    const lists = mentionListsOf([settled([twinA]), settled([]), midSync]);
+    const lists = mentionListsOf([
+      settledWithMention,
+      settledWithNone,
+      midSync,
+    ]);
     return lists.length === 3 &&
       (lists[0] as unknown[]).length === 1 &&
       (lists[1] as unknown[]).length === 0 &&
@@ -1486,6 +1500,7 @@ export default pattern(() => {
       { action: action_alias_identity_target },
       { assertion: assert_distinct_by_identity_keeps_each_first_occurrence },
       { assertion: assert_mentioned_by_each_follows_an_alias },
+      { action: action_settle_mention_source },
       { assertion: assert_mention_lists_tolerate_a_mid_sync_source },
       { action: action_mention_subject_gets_a_link },
       { assertion: assert_plain_link_is_no_mention },

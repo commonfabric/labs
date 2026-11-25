@@ -279,21 +279,23 @@ export interface TopicIndexRow {
  * stays green over a board that silently accepts no new topic. Only a read
  * against a board with an in-flight append tells the two apart.
  *
- * Declaring the source structurally is what changes that. The parameter type
- * says `get(): { mentions: M } | undefined`, so omitting the second `?.` HERE
- * is a compile error: `deno task cfcheck` fails with "Object is possibly
+ * Declaring the cell's value with `undefined` is what changes that. The
+ * parameter is a `ReadonlyCell<{ mentions: M } | undefined>`, which every
+ * `ReadonlyCell<TopicMentionSource>` is assignable to, and whose `get()`
+ * returns `undefined` among its values, so omitting the second `?.` HERE is a
+ * compile error: `deno task cfcheck` fails with "Object is possibly
  * 'undefined'". `deno task check` passes either way — it walks the
  * hand-maintained path list in `tasks/typecheck.ts`, which this package is not
- * on, and patterns are checked by `cfcheck`. So the structural declaration buys
- * two things rather than one: the read becomes testable, and the optionality
- * moves somewhere the pattern typechecker can see it.
+ * on, and patterns are checked by `cfcheck`. So the declaration buys two things
+ * rather than one: the read becomes testable with a cell that holds nothing,
+ * and the optionality moves somewhere the pattern typechecker can see it.
  *
  * Whether a cell's `get()` may return undefined against its declared type is a
  * question about the cell contract rather than about this pattern, and it is
  * not answered here.
  */
 export function mentionListsOf<M>(
-  sources: readonly ({ get(): { mentions: M } | undefined } | undefined)[],
+  sources: readonly (ReadonlyCell<{ mentions: M } | undefined> | undefined)[],
 ): (M | undefined)[] {
   return Array.from(sources, (source) => source?.get()?.mentions);
 }
@@ -584,7 +586,9 @@ export interface CardSource {
  * no card rather than a junk one; it appears on the next run.
  *
  * The parameter is an array of CELLS, as `mentionableIndex`'s is, so each
- * row's `topic` is the member's identity and writes as a link. Each row is
+ * row's `topic` is the member's identity and writes as a link. Each cell's
+ * value is declared with `undefined`, so the mid-sync read is one the compiler
+ * sees and a test can hand over a cell that holds nothing. Each row is
  * addressed by the topic it describes — `Writable.for(topic)`, as the
  * crossref table's rows are — so a card keeps its identity wherever its row
  * sits in the order: an activity reorder moves rows, and the mapped card
@@ -593,10 +597,7 @@ export interface CardSource {
  * and writes nothing.
  */
 export function cardRowsOf(
-  topics: readonly (
-    | { get(): CardSource | undefined }
-    | undefined
-  )[],
+  topics: readonly (ReadonlyCell<CardSource | undefined> | undefined)[],
 ): CardRow[] {
   const read: { topic: unknown; value: CardSource }[] = [];
   for (const topic of topics) {
