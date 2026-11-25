@@ -45,6 +45,8 @@ function opensWithObject(text: string): boolean {
 export const jsonLanguage: Language = {
   id: "json",
 
+  literalValues: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {
@@ -84,6 +86,8 @@ export const jsonLanguage: Language = {
 /** JSON Lines and NDJSON with lexical state isolated to each record. */
 export const jsonLinesLanguage: Language = {
   id: "json-lines",
+
+  literalValues: true,
 
   input: { kind: "text", decoder: utf8Decoder },
 

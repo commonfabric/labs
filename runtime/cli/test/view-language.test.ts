@@ -84,6 +84,7 @@ import { assemblyLanguage } from "../lib/view/languages/assembly/language.ts";
 import { sqlLanguage } from "../lib/view/languages/sql/language.ts";
 import { systemdLanguage } from "../lib/view/languages/systemd/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
+import { authorizedKeysLanguage } from "../lib/view/languages/authorized-keys/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import {
@@ -265,6 +266,10 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   expect(languageForName("assembly")).toBe(assemblyLanguage);
   expect(languageForName("asm")).toBe(assemblyLanguage);
   assertEquals(languageForName("sql"), sqlLanguage);
+  expect(languageForName("authorized-keys")).toBe(authorizedKeysLanguage);
+  expect(languageForName("ssh-public-key")).toBe(authorizedKeysLanguage);
+  expect(languageForName("jinja")?.id).toBe("jinja");
+  expect(languageForName("j2")).toBe(languageForName("jinja"));
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -318,6 +323,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "dat",
     "assembly",
     "sql",
+    "authorized-keys",
+    "jinja",
     "binary",
     "plain-text",
   ]);
@@ -423,6 +430,12 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "assembly",
     "asm",
     "sql",
+    "authorized-keys",
+    "ssh-authorized-keys",
+    "ssh-public-key",
+    "jinja",
+    "jinja2",
+    "j2",
     "binary",
     "bytes",
     "plain-text",
@@ -466,16 +479,11 @@ describe("language byte decoding", () => {
         throw new TypeError("selected decoder rejected input");
       },
     };
-    const selectedLanguage = {
-      ...plainTextLanguage,
-      id: "selected-text",
-      input: { kind: "text", decoder: rejectedDecoder } as const,
-    };
     const byteFallback = { ...binaryLanguage, id: "byte-fallback" };
 
     const decoded = languageInternals.decodeTextInput(
       "source.ts",
-      typeScriptLanguage,
+      typeScriptLanguage.input.decoder,
       bytes,
       byteFallback,
     );
@@ -485,7 +493,7 @@ describe("language byte decoding", () => {
 
     const fallback = languageInternals.decodeTextInput(
       "source.selected",
-      selectedLanguage,
+      rejectedDecoder,
       bytes,
       byteFallback,
     );
@@ -495,7 +503,7 @@ describe("language byte decoding", () => {
     expect(() =>
       languageInternals.decodeTextInput(
         "source.selected",
-        selectedLanguage,
+        rejectedDecoder,
         bytes,
         undefined,
       )

@@ -63,6 +63,9 @@ their patterns and macro definitions. Git configuration files, which cover
 variables in each. Lean has syntax highlighting and a structure tree of
 namespaces, sections, and declarations, and a project's `lean-toolchain` file
 has highlighting of its own.
+OpenSSH authorized keys files and public key files have syntax highlighting and
+list their keys. A Jinja template is colored as the language the rest of its
+name selects, with Jinja's syntax colored inside it.
 Directive configuration, which covers nginx, Apache httpd, nftables, Netdata
 health alerts, and sysusers.d, has syntax highlighting and a structure tree of
 blocks, sections, and alert entries. Logs, checksums, version files, PID files,
@@ -109,7 +112,8 @@ on Tree-sitter through a shared, language-neutral adapter, which HTML will use
 as well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
 configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
 and checksum files, Bazel rc files, Graphviz DOT, Dockerfiles, delimited tables,
-assembly, SQL, linker scripts, and systemd units use focused scanners. The order
+assembly, SQL, linker scripts, systemd units, authorized keys files, and Jinja
+use focused scanners. The order
 is provisional because recent activity was measured in six of the 26 active
 organization repositories.
 
@@ -119,8 +123,8 @@ Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, CSS, shell, C, C++,
 CUDA, makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git
 attributes, Git configuration, XML, Org mode, directive configuration,
 ignore-file, Graphviz DOT, CSV, TSV, `.dat` table, assembly, SQL, linker script,
-systemd unit, and diff support to honest handling of every textual syntax in the
-active `commonfabric` repositories.
+systemd unit, authorized keys, Jinja, and diff support to honest handling of
+every textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -1023,8 +1027,8 @@ selection path. The gate passes.
 
 - [x] Add `.tf` and `.tfvars` HCL.
 - [ ] Layer Terraform interpolation over the shell host in `.tftpl`.
-- [ ] Layer Jinja delimiters over a separately selected host syntax.
-- [ ] Cover the surveyed shell, systemd-unit, authorized-keys, and YAML Jinja
+- [x] Layer Jinja delimiters over a separately selected host syntax.
+- [x] Cover the surveyed shell, systemd-unit, authorized-keys, and YAML Jinja
   hosts.
 
 Completion gate: an extension such as `.j2` does not force one host language,
@@ -1042,6 +1046,66 @@ files through `.tfbackend`, and test files and dependency lock files through
 `.hcl`. The JSON forms of those files, such as `.tf.json`, remain JSON. It
 colored every character other than white space in those 153 files, and each
 file reconstructed exactly.
+
+Jinja is implemented ahead of the `.tftpl` item. A November 13, 2026 read of the
+local checkouts of the organization's repositories found 26 Jinja templates, all
+of them Ansible templates in Infra named with a `.j2` suffix, and 43 path-change
+events on them in the six months before the read. The files they produce are
+shell scripts (6), Apple property lists (5), systemd units (4), YAML (3),
+authorized keys files (3), dotenv files (2), and one each of nginx
+configuration, logrotate configuration, and sudoers configuration. By November
+22, Infra held seven more: a shell script, a systemd unit, two systemd drop-in
+files, a dotenv file, and an nginx and a Netdata configuration file. The test of
+Jinja's selection lists all 33 with the language each selects.
+
+A template syntax is a layer over a host language. The host is the language that
+the rest of the template's name selects, so `deploy.sh.j2` is Jinja over shell.
+When the rest of the name selects nothing, the source can select the host, as a
+shebang does, and otherwise, as for `nginx-logrotate.j2`, the host is plain
+text. `.j2`, `.jinja`, and `.jinja2` select Jinja. The host colors the source
+with every Jinja region hidden from it, line breaks included, as Jinja's output
+holds none of them, so that no offset moves and no host misreads Jinja's braces.
+It reads an expression as a name of the same length, such as `_999999`, which
+can start a name or stand for a value, and a tag or a comment as blank space.
+TOML and JSON, whose values are all literals, read the expression as a number
+instead, such as `1999999`. To list the structure, each expression with room
+reads as a name or number unique to it that the source does not hold, such as
+`_a99999`, so that the structure tree can replace each one with its source.
+Jinja colors its own regions with a focused scanner, which ends an expression or
+a tag at its closing delimiter outside strings and braces. Inside an unclosed
+parenthesis or bracket, the closing delimiter ends it as well, which is where
+Jinja's lexer stops with an error. The structure tree is the host's, with its
+labels and names spelled as the source spells them. `--language jinja` selects
+Jinja over plain text, and `jinja-` followed by any other text language's
+identifier or alias, as in `jinja-shell`, selects Jinja over that language. A
+template of a dotenv file takes dotenv as its host when its source opens with an
+assignment, as a dotenv file's does, and a template of a systemd drop-in file
+takes systemd units as its host when its source opens the way a drop-in does. The
+templates of the other files that no language claims yet take a host as soon as
+a language claims their names, with no change to Jinja.
+
+Every one of the 26 templates reconstructed exactly, and every character other
+than white space inside their 113 Jinja regions has a token class. Outside the
+regions, a host leaves uncolored what it leaves uncolored in its own files, such
+as shell command arguments and the text inside XML elements. Measured before the
+expression marks took their present form, by the medians of CPU time, Jinja over
+shell took less than shell alone on the same source in every dimension but
+initialization, where the two were within 6 percent. The machine was too loaded
+for timings that compare directly with the maximums. Scaled against a TOML
+control, every timing of Jinja over shell is inside its maximum by the rounds'
+medians, the re-color after one edit at an estimated 15.7 ms against 25. By
+their 95th percentiles, as earlier measurements were scaled, the re-color is
+over its maximum, at 34.2 ms, because of one round. The
+[November 2026 Jinja measurement](../history/runtime/cli/cf-view-jinja-2026-11.md)
+records both.
+
+Authorized keys files use a focused scanner as well. A line lists one key: an
+optional option list, the key's type, its base64 data, and a comment, and the
+structure tree lists the keys by their comments. `authorized_keys`,
+`authorized_keys2`, names ending in either after `_`, `-`, or `.`, and `.pub`
+public key files, which share the line format, select it. The checkouts hold three
+authorized keys files, all of them Jinja templates, and one public key file,
+all in Infra. The fixtures for both languages come from Infra.
 
 ## Stage 9: build and operational configuration
 

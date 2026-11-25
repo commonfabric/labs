@@ -91,9 +91,6 @@ describe("dotenvLanguage", () => {
         "plain-text",
       );
       expect(languageForSource("environment", "A=1\n").id).toBe("plain-text");
-      expect(languageForSource("templates/runner.env.j2", "A=1\n").id).toBe(
-        "plain-text",
-      );
     });
 
     it("leaves a variant with another language's extension to that language", () => {

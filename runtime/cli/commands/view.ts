@@ -1,7 +1,10 @@
 import { Command } from "@cliffy/command";
 import { type ColorWhen, ViewError, viewMain } from "../lib/view/mod.ts";
 import { cliText } from "../lib/cli-name.ts";
-import { languageNames } from "../lib/view/languages/language.ts";
+import {
+  languageNames,
+  TEMPLATE_LANGUAGE_NAMES,
+} from "../lib/view/languages/language.ts";
 
 const description = cliText(
   `Interactive, syntax-aware pager for transformed patterns, source files and diffs.
@@ -117,7 +120,9 @@ export const view = new Command()
   )
   .option(
     "--language <language:string>",
-    `Select piped source explicitly: ${languageNames().join(", ")}.`,
+    `Select piped source explicitly: ${
+      languageNames().join(", ")
+    }. ${TEMPLATE_LANGUAGE_NAMES}`,
   )
   .option(
     "--filename <filename:string>",

@@ -1,0 +1,18 @@
+#!/bin/bash
+set -euo pipefail
+
+ARTIFACT_PATH=$1
+SIG_PATH=$2
+PUBLIC_KEY="{{ release_base_dir }}/{{ release_public_key | default('codesigning-publickey.pem') }}"
+
+if [[ ! -f "$ARTIFACT_PATH" || ! -f "$SIG_PATH" ]]; then
+  echo "ERROR: Artifact or signature file not found"
+  exit 1
+fi
+{% if release_signing_required | default(true) %}
+
+if ! openssl dgst -sha256 -verify "$PUBLIC_KEY" -signature "$SIG_PATH" "$ARTIFACT_PATH"; then
+  echo "ERROR: Signature verification failed"
+  exit 1
+fi
+{% endif %}

@@ -32,8 +32,8 @@ import type { Language } from "./languages/language.ts";
 import {
   canRenderDiffLines,
   decodeLanguageInput,
+  filenameSettlesLanguage,
   languageForFile,
-  languageMatchingFilename,
   languageMatchingSources,
   readOnlyReasonFor,
   renderedLinesFor,
@@ -1397,8 +1397,7 @@ export function diffLanguages(
   const oldBlobs = ws.readBlobs?.(
     oldObjects(
       model,
-      (file) =>
-        languageMatchingFilename(file.oldPath ?? file.newPath) === undefined,
+      (file) => !filenameSettlesLanguage(file.oldPath ?? file.newPath),
     ),
   );
   const firstLines = function* (file: DiffFile, side: "old" | "new") {
