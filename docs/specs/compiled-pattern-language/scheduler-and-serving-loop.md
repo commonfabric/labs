@@ -953,7 +953,8 @@ below that position. It registers the slot at the collection's
 membership as well as at the bound address, so a move rebinds the
 slot, which makes no reader stale where the value at the path is the
 same, and a removal or an edit of the element in place leaves the
-slot unbound, reading as nothing. A write through such a reference is
+slot unbound, reading as a place that holds nothing
+(`execution-and-storage.md` §2.5). A write through such a reference is
 resolved the same way when it is made. By ruling a write through it
 that changes the element's value re-keys the element in the same
 transaction (`execution-and-storage.md` §2.5): the entries registered

@@ -2918,6 +2918,22 @@ export class Store {
         }
         reads?.push({ doc, path: at });
         this.#read(doc, at);
+        // A place declared with a default, as a state cell, gives the
+        // default at the position that holds the link to what the chain
+        // reaches, and a link after it that declares one gives its own: a
+        // read that the chain leads to nothing, as a reference by key that
+        // no position holds, gives the cell's default, as a read of the
+        // cell before its first write does.
+        const declared = this.declared.get(doc)?.default;
+        if (declared !== undefined) {
+          const here = [...at, ...rest].some(isKeySegment)
+            ? undefined
+            : [...at, ...rest].reduce(
+              (held: unknown, segment) => child(held, segment),
+              declared,
+            );
+          if (here !== undefined) fallback = here;
+        }
         const below = rest.reduce(schemaBelow, value.$link.schema);
         // The schema of the first link crossed, where the reference has
         // none of its own, and the default of the last link that
@@ -3257,9 +3273,6 @@ export class Store {
     if (located.value === undefined && isStreamSchema(located.ref.schema)) {
       return { $stream: true };
     }
-    // A reference by key whose key no position holds reads as nothing
-    // (ruling Z24), whatever default a link on the way to it declares.
-    if (located.missing && located.value === undefined) return undefined;
     const shape = bound ?? located.ref.schema;
     if (
       !copies && this.plain(located.value) &&

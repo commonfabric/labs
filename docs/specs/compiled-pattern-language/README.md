@@ -521,8 +521,9 @@ which element keys what they hold is kept
   a member bound both ways, and a write through the element work over
   an array of plain values in place, and a move still evaluates
   nothing. A cone that passes such an element on stores that
-  reference and no copy. After the element is removed the reference
-  reads as nothing, which is a deliberate difference from today. A
+  reference and no copy. After the element is removed a read through
+  the reference gives the default the cell holding it declares, which
+  is a deliberate difference from today. A
   write through the reference that changes the value re-keys the
   element in the same transaction, and what its key holds moves with
   it. A function body that reads such a value through a handle holds

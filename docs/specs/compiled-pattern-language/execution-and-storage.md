@@ -1628,8 +1628,8 @@ member of it on, and where a body passes on a handle that it was
 given for the element, and no copy and no link to the position. The
 reference resolves to
 the position that holds the key at each read and each write, so it
-stays right when the element moves, and it reads as nothing once no
-position holds the key. By ruling such a reference does not reach a
+stays right when the element moves, and once no position holds the
+key a read through it gives the default declared for it (below). By ruling such a reference does not reach a
 function body through a read: a function body that reads a plain
 value in place through `get()` or `sample()` on a handle holds a
 copy, and writing it elsewhere stores the value, as today. A position of
@@ -1916,8 +1916,9 @@ key, and its reference is by key as well. By ruling an element of a
 plain array generated from scratch, which a `lift` or a `computed`
 returns whole and the instance stores as an output, is named the same
 way: by the output, at its address, and its key, with or without a
-declared key. With no declared key such a reference reads as nothing
-once the computation returns the element with another value. The owner
+declared key. With no declared key such a reference names nothing once
+the computation returns the element with another value, and a read
+through it gives the default declared for it. The owner
 gave that ruling with the reservation that a copy is acceptable where
 the reference proves complex to build for little gain
 (`plan-and-label-templates.md` §8, question 148). By ruling the same
@@ -1955,9 +1956,15 @@ Provisional (P24 of the continuation plan): a write below the array
 marks the readers through the keys that the write touched, and not
 every reader through a key of the array
 (`scheduler-and-serving-loop.md` §3.2).
-A reference whose key no position holds reads as nothing. How the
-reference is stored, and what a client does that cannot read the
-salt, are assumed (`plan-and-label-templates.md` §8, question 113).
+A reference whose key no position holds names nothing, and a read
+through it gives what a read of a place that holds nothing gives: the
+default that the cell holding the reference declares, or a link on the
+way to it, and nothing where none is declared. How long ago the element
+left plays no part, so a cell whose type admits no `undefined` and
+that declares a default never reads as `undefined` (the owner's
+decision of 2026-11-24). How the reference is stored, and what a client
+does that cannot read the salt, are assumed
+(`plan-and-label-templates.md` §8, question 113).
 
 **A write that changes the value re-keys the element.** The case is an
 array of plain values in place, where the key is formed from the
@@ -2572,7 +2579,9 @@ references, where the element is a cell.
   handle it was given for the member, store a reference by key with
   the member's path. It follows the element when
   the element moves. After the element is removed no position holds
-  the key, and the cell reads as nothing. That is a deliberate
+  the key, and the cell reads its default, or nothing where it declares
+  none (section 2.5, "A reference whose key no position holds"). That is
+  a deliberate
   difference from the runtime of today, where a reference to a member
   of a record stored in place names the position: after a removal it
   reads the element that moved to the position, and nothing once no
@@ -2583,7 +2592,7 @@ references, where the element is a cell.
   By ruling a handler that is given the element at a state path of
   data type, as `center.set(stop.position)` with the state
   `stop: Stop`, stores a reference by key with the member's path,
-  and the cell reads as nothing after the removal. By the
+  and the cell reads its default after the removal. By the
   prototype's measurement the runtime of today stores a link to the
   position there.
 
@@ -3667,9 +3676,8 @@ names"; `normalizeAndDiff` in `runtime/runner/src/data-updating.ts`). A
 write through the path of a protected input is then checked against the
 input's policy, as today. The schema gives a reader through the link the
 cell's default where the cell has no document yet, as for a cell whose
-first value is a constant (ruling Z3), and not where the link leads to a
-reference by key that no position holds: that reads as nothing (section
-2.5). The first write of such a cell by another writer makes its
+first value is a constant (ruling Z3), and where the cell holds a
+reference by key that no position holds (section 2.5). The first write of such a cell by another writer makes its
 document, and the instance takes that write as it takes a later one.
 
 **The paths of the rendered tree.** The rendered tree is stored under
@@ -7194,8 +7202,9 @@ Added by the ruling that the scheduler is switched per space (section 9):
     cone that passes the element on stores that reference by key and
     no copy. `equals` compares two such references by collection, key
     and path, a write through one lands at the position that holds the
-    key, a move evaluates nothing, and after removal the reference
-    reads as nothing, which is a deliberate difference from today. The
+    key, a move evaluates nothing, and after removal a read through the
+    reference gives the default declared for it, which is a deliberate
+    difference from today. The
     case is an array of plain values in place, and the result of
     another per-element construct where the upstream position holds a
     value. Over an array of references the result holds the link to

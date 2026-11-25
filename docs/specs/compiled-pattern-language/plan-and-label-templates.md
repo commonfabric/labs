@@ -3096,8 +3096,9 @@ to an element is the link to its cell, which a move does not change.
   the instance stores as an output, has a reference by key whose
   collection is the output, at its address, by the same rule and with
   or without a declared key. With no declared key the key is formed
-  from the whole value, so such a reference reads as nothing once the
-  computation returns the element with another value, and no write
+  from the whole value, so such a reference names nothing once the
+  computation returns the element with another value, a read through it
+  gives the default declared for it, and no write
   repairs it, because a write through a handle to a value the
   instance computes is refused ("A write", below). With a declared key
   the reference stays with the element while the values of its key
@@ -3245,13 +3246,16 @@ to an element is the link to its cell, which a move does not change.
   whole, the write is refused by the ruling on a write through a
   handle to a value the instance computes (section 3.11).
 - **After the element is removed** no position holds the key, and a
-  read through the reference reads as nothing. That is a deliberate
+  read through the reference gives what a read of a place that holds
+  nothing gives: the default that the cell holding the reference, or a
+  link on the way to it, declares, and nothing where none is declared
+  (`execution-and-storage.md` §2.5). That is a deliberate
   difference from the runtime of today, which the ruling names. Today
   a reference to an element that is a plain value in place, or to a
   member of it, names the position ("Which stored forms make which
   case", above): after a removal it reads the element that moved to
   the position, and nothing once no element stands there. In this
-  design it reads as nothing in both. That is for a reference by key,
+  design it reads as a place that holds nothing in both. That is for a reference by key,
   which a node of the reactive tier stores and a handle to the
   element is. A handler that reads a member of such an element
   through a handle and stores it in a cell, as
@@ -3260,8 +3264,8 @@ to an element is the link to its cell, which a move does not change.
   and the cell reads the value after the element is removed, as
   today. A handler that is given the element at a state path of data
   type holds a reference by key, by ruling, and
-  `center.set(stop.position)` stores that reference, which reads as
-  nothing after the element is removed ("What a function body
+  `center.set(stop.position)` stores that reference, and the cell
+  reads its default after the element is removed ("What a function body
   holds", above). Where function bodies wrote the records into the
   list with `push`, the list is an array of references: a stored
   handle to the record is a link into the record's document and reads
@@ -3269,7 +3273,8 @@ to an element is the link to its cell, which a move does not change.
 - **Occurrences.** The key holds the occurrence count. Where two equal
   values stand in a collection and the first is removed, the one that
   remains is occurrence 0: a reference to occurrence 0 resolves to it,
-  and a reference to occurrence 1 reads as nothing.
+  and a reference to occurrence 1 names nothing and reads as a place
+  that holds nothing.
 
 One more thing is ruled for a write, and three things that the rulings
 do not determine are assumed. Each is for an array of plain values in
@@ -14954,8 +14959,9 @@ this document made.
      the row keeps its state and a handler that writes two members in
      turn, as `item.key("done").set(true)` followed by
      `item.key("at").set(now)`, succeeds at both. A reference stored
-     elsewhere under the old key still reads as nothing, because the
-     runtime cannot find them all (section 1.3, "A write that changes
+     elsewhere under the old key names nothing, and a read through it
+     gives the default declared for it, because the runtime cannot find
+     them all (section 1.3, "A write that changes
      the value"). *Assumed* beside the ruling: what the old key holds
      is the state cells, the streams, the operation state and the
      children of the row; the label of what is moved is unchanged; a
@@ -15663,8 +15669,9 @@ this document made.
      as an element of an array of plain values in place, with or
      without a declared key (section 1.3, "A plain value in place has
      an identity"). Without a declared key the key is the whole value,
-     so the reference reads as nothing once the element changes, and
-     no write repairs it, since a computed output refuses writes. The
+     so the reference names nothing once the element changes, a read
+     through it gives the default declared for it, and no write repairs
+     it, since a computed output refuses writes. The
      owner gave the ruling with a reservation: "if all that hashing
      gets too complex for little gain, copies are fine". So storing a
      copy is acceptable if building the reference proves complex for

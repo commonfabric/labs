@@ -5243,7 +5243,8 @@ use, so that the other numbers stay as other documents cite them.
     reported where the compiler can follow the result to a write edge
     whose target is outside the collection, and nothing is reported
     where it cannot. The alternative allows the store and lets the
-    reference read as nothing after the element leaves. The same over
+    reference read as a place that holds nothing after the element
+    leaves (`execution-and-storage.md` §2.5). The same over
     an array of references, over an array of plain values in place,
     and over the result of another per-element construct.
 42. **`asInstance()` outside a per-element body** (to the project

@@ -2157,10 +2157,11 @@ describe("an element that is a plain value in place", () => {
     expect(result(instance).chosen).toBe("x");
 
     // The first `x` leaves. The one that remains is occurrence 0, and
-    // the reference to occurrence 1 names nothing.
+    // the reference to occurrence 1 names nothing: `chosen` reads its
+    // default.
     instance.send(bindingOf(instance, "removeFirst"), {});
 
-    expect(result(instance).chosen).toBe(undefined);
+    expect(result(instance).chosen).toBe(null);
 
     // An equal value is added: a position holds occurrence 1 again, and
     // the reference resolves to it.
@@ -2293,7 +2294,7 @@ describe("an element that is a plain value in place", () => {
     ]);
   });
 
-  it("reads as nothing through a stored reference to a member after it is removed, over plain values in place", async () => {
+  it("reads the cell's default through a stored reference to a member after it is removed, over plain values in place", async () => {
     const instance = await start();
     instance.send(bindingOf(instance, "pick"), {}, [0]);
     expect(result(instance).center).toEqual({ lat: 1, lng: 1 });
@@ -2304,10 +2305,11 @@ describe("an element that is a plain value in place", () => {
 
     instance.writeArgument(["stops"], [stop("b", 2), stop("c", 3)]);
 
-    // Today's runtime reads the element that moved to the position here
+    // No position holds the key, and each cell reads its default. Today's
+    // runtime reads the element that moved to the position here
     // (`cpp/probe26`): the difference is the ruling's.
-    expect(result(instance).center).toBe(undefined);
-    expect(result(instance).selected).toBe(undefined);
+    expect(result(instance).center).toEqual({ lat: 0, lng: 0 });
+    expect(result(instance).selected).toBe(null);
   });
 
   it("keeps the value readable through a stored reference to a member after it is removed, over references", async () => {
@@ -2373,8 +2375,9 @@ describe("an element that is a plain value in place", () => {
     expect(open).toContainEqual([key, true]);
     expect(open.map(([held]) => held)).not.toContain(keyOf(instance, "b", 2));
     // The reference `selected` holds was stored under the old key before
-    // the write, keeps that key, and reads as nothing.
-    expect(result(instance).selected).toBe(undefined);
+    // the write, keeps that key, names nothing, and the cell reads its
+    // default.
+    expect(result(instance).selected).toBe(null);
     expect(result(instance).rows.map((row) => row.isSelected)).toEqual([
       false,
       false,
@@ -2700,14 +2703,14 @@ describe("a write through a reference by key that changes the value", () => {
     });
   });
 
-  it("leaves a reference stored elsewhere under the old key reading as nothing", async () => {
+  it("leaves a reference stored elsewhere under the old key reading the cell's default", async () => {
     const instance = await start();
     instance.send(PICK, {}, [1]);
     expect(result(instance).picked).toEqual(task("b"));
 
     instance.send(FINISH_AND_RENAME, {}, [1]);
 
-    expect(result(instance).picked).toBe(undefined);
+    expect(result(instance).picked).toBe(null);
   });
 
   it("moves the state cell on a write through a member bound both ways", async () => {
@@ -6207,7 +6210,7 @@ describe("an element of a plain array generated from scratch that declares no ke
     );
   });
 
-  it("is stored by a handler as a reference by key of its whole value, which reads nothing once the element changes", async () => {
+  it("is stored by a handler as a reference by key of its whole value, which reads the cell's default once the element changes", async () => {
     const instance = await start();
 
     expect(instance.send(PICK, {}, [1]).committed).toBe(true);
@@ -6224,10 +6227,11 @@ describe("an element of a plain array generated from scratch that declares no ke
     // Another element is added, and the reference names the same one.
     instance.writeArgument(["titles"], ["z", "ab", "cde"]);
     expect((instance.result() as Result).pickedTitle).toBe("cde");
-    // Every element has another value, so no element has the key.
+    // Every element has another value, so no element has the key, and the
+    // cell reads its default.
     instance.writeArgument(["bonus"], 2);
     const after = instance.result() as Result;
-    expect(after.picked).toBe(undefined);
+    expect(after.picked).toBe(null);
     expect(after.pickedTitle).toBe(undefined);
     // No write repairs it: the output refuses writes.
     expect(() =>
@@ -6374,6 +6378,36 @@ describe("an element of a plain array generated from scratch inside an element b
     });
     expect(instance.store.docs.get(itemsOf(instance, 0))).toEqual(before);
     expect((instance.result() as Result).pickedStars).toBe(3);
+  });
+});
+
+// A state cell that holds a reference by key whose key no position holds
+// any more (`fixtures/dangling-default.tsx`).
+describe("a state cell whose reference names no position", () => {
+  const stop = (title: string, at: number) => ({
+    title,
+    position: { lat: at, lng: at },
+  });
+  const [PICK, REPORT] = [0, 1];
+
+  it("reads its default through the result, in value code and in a handler", async () => {
+    const instance = new Instance(await artifactOf("dangling-default"), {
+      stops: [stop("a", 1), stop("b", 2)],
+    });
+    instance.send(PICK, {}, [0]);
+    expect(instance.result()).toMatchObject({
+      center: { lat: 1, lng: 1 },
+      shownLat: 1,
+    });
+
+    instance.writeArgument(["stops"], [stop("b", 2)]);
+    instance.send(REPORT, {});
+
+    expect(instance.result()).toMatchObject({
+      center: { lat: 0, lng: 0 },
+      shownLat: 0,
+      seen: { lat: 0, lng: 0 },
+    });
   });
 });
 
