@@ -105,6 +105,7 @@
     "./cfc/represents-principal": "./src/cfc/represents-principal.ts",
     "./executor/lifecycle-verb": "./src/executor/lifecycle-verb.ts",
     "./executor/host": "./src/executor/host.ts",
+    "./indexed-collection-host": "./src/builtins/indexed-collection/host.ts",
     "./executor/loopback-storage": "./src/executor/loopback-storage.ts",
     "./executor/routed-plane": "./src/executor/routed-plane.ts",
     "./executor/served-requests": "./src/executor/served-requests.ts",

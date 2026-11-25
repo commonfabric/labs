@@ -433,9 +433,14 @@ flags it adopts from the deployment it runs against.
   is read by every deployed-topology entry point — the `productionServer` / `remoteClient` construction presets
   (toolshed's operator runtime, the CLI, every pieces controller and
   integration harness against a toolshed),
-  toolshed's serving-host gate and its memory ACL principal lists (the
-  DELEGATING class since OW31's build — the process identity is no
-  longer an implicit-OWNER service principal), and the browser
+  toolshed's serving-host gate, its indexed-collection host, and its memory
+  ACL principal lists (under the flag, the DELEGATING class since OW31's
+  build — the process identity is no longer an implicit-OWNER service
+  principal there; OFF the flag the process identity is an OWNER-class
+  service principal, for the sessions of the indexed-collection host that
+  keeps every space's
+  [indexed collections](../features/indexed-collections.md#which-runtime-maintains)
+  current on that arm), and the browser
   shell where neither its build define nor its deployment states an arm. An
   UNSET flag resolves to it; an explicit
   `EXPERIMENTAL_SERVER_EXECUTION=false` (or `experimental.serverExecution:

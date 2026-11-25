@@ -45,6 +45,7 @@ export type {
   SpaceCellContents,
 } from "./runtime.ts";
 export type { EventIntentOutcome } from "./speculation/overlay-destination.ts";
+export type { IndexedCollectionMaintenance } from "./builtins/indexed-collection/maintainer.ts";
 export {
   ADOPT_SERVER_FLAGS_ENV,
   type BrowserWorkerPresetParams,

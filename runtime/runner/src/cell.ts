@@ -113,6 +113,7 @@ import {
   nextMaintenanceRevision,
   projectMember,
 } from "./builtins/indexed-collection/maintenance.ts";
+import { listIndexedCollection } from "./builtins/indexed-collection/registry.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
 import { sqliteQueryNodeFactory } from "./builtins/sqlite/query-node.ts";
 import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
@@ -2472,6 +2473,18 @@ export class CellImpl<T extends FabricValue>
     }
     const rows = projectMember(this.#tx, kind, descriptor, cell);
     addMemberRows(this, descriptor, rows);
+    // A runtime that maintains the collections of spaces whose declaring
+    // piece it never loaded finds this one in the registry, so the commit
+    // that gives the collection a member lists it.
+    const value: unknown = this.getRaw({ lastNode: "value" });
+    if (isSqliteDbRef(value)) {
+      listIndexedCollection(
+        this.#runtime,
+        this.#tx,
+        this.withTx(this.#tx).resolveAsCell(),
+        value.id,
+      );
+    }
     // A piece the calling handler has just made is set up only if something
     // the handler writes refers to it, and a row is not such a write. The
     // handle is written by every `exec()` already, so it carries the
