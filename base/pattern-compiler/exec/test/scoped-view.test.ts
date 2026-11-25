@@ -418,6 +418,69 @@ for (const { fixture, case: written, plain, rowsOf } of ROW_CASES) {
   });
 }
 
+// `fixtures/scoped-wish-view.tsx`: a rendered tree that passes the result
+// of a `wish` of the scope `user` on by reference, as an attribute bound to
+// a cell, beside the rows of a `map` over an array of references. The cone
+// of the tree holds the reference to the outcome of the `wish` and reads
+// nothing of the state document of the operation.
+describe("a rendered tree that passes the result of a `wish` of the scope `user` on by reference, beside the rows of a `map` over an array of references", () => {
+  /** The instance over `size` items, evaluated for `ann` and `bob`. */
+  const wished = async (size: number) => {
+    let acting = "ann";
+    const items = Array.from({ length: size }, (_, index) => ({
+      id: `item ${index}`,
+      kind: "item",
+      value: { title: `item ${index}` },
+    }));
+    const instance = new Instance(
+      await artifact("scoped-wish-view"),
+      { items: { $link: { doc: "items", path: [] } } },
+      {
+        documents: [
+          {
+            id: "items",
+            kind: "items",
+            value: items.map(({ id }) => ({ $link: { doc: id, path: [] } })),
+          },
+          ...items,
+        ],
+        scopes: {
+          keyOf: (scope: Scope) =>
+            scope === "user" ? `user:${acting}` : `session:${acting}:s`,
+        },
+        wishes: () => ({ result: { name: `the profile of ${acting}` } }),
+      },
+    );
+    const view = (principal: string): Node => {
+      acting = principal;
+      instance.settle();
+      return (instance.result() as { $UI: Node }).$UI;
+    };
+    view("ann");
+    view("bob");
+    const scoped = [...instance.store.docs]
+      .filter(([, { kind }]) => kind === "scope instance")
+      .reduce((sum, [, document]) => sum + JSON.stringify(document).length, 0);
+    return { instance, view, scoped };
+  };
+
+  it("holds no row in a scope instance, at 10 items as at 100", async () => {
+    const small = await wished(10);
+    const large = await wished(100);
+
+    expect(large.scoped).toBe(small.scoped);
+  });
+
+  it("gives each principal the profile its own `wish` resolves to", async () => {
+    const { view } = await wished(10);
+
+    const ann = view("ann").children?.[0] as Node;
+    const bob = view("bob").children?.[0] as Node;
+    expect(JSON.stringify(ann.props)).toContain("the profile of ann");
+    expect(JSON.stringify(bob.props)).toContain("the profile of bob");
+  });
+});
+
 // `fixtures/scoped-rows-output.tsx`: the rows of a `map` over an array of
 // references read a value of the scope `session`, and the result holds that
 // value as an output as well, in the scope instances of the document of the

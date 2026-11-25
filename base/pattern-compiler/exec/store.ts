@@ -2864,6 +2864,10 @@ export class Store {
         this.#refresh(doc);
         value = this.#held(doc);
       }
+      // A path below a position that holds an error state reads that error
+      // state, as a read of a member of a value in an error state does
+      // (PL §5.2): a reader through a reference that crosses it fails.
+      if (rest.length > 0 && isErrorState(value)) break;
       const segment = rest.shift();
       if (segment === undefined) break;
       if (isKeySegment(segment)) {

@@ -488,3 +488,68 @@ describe("a `navigateTo` of the reactive tier", () => {
     ]);
   });
 });
+
+// `fixtures/failed-request.tsx`: the request of `fetched` holds a value
+// whose cone fails for one address, so the request is not made and the
+// operation's result is that error state (SS §6.2, step 1). The outcome
+// of the state document holds the error state: a reader through the
+// reference to the outcome takes it, and a reader that passes the
+// reference on reads nothing. No per-element construct is here.
+describe("an effect whose request was not made", () => {
+  /** The instance, and the transactions of an address that fails. */
+  const failing = async () => {
+    const instance = new Instance(await artifactOf("failed-request"), {
+      note: "n",
+    });
+    const transactions = during(instance, () => {
+      instance.send(bindingOf(instance, "setSite"), { to: "bad:address" });
+    });
+    return { instance, transactions };
+  };
+
+  it("gives a cone that reads a member of its result the error state", async () => {
+    const { instance, transactions } = await failing();
+
+    expect(transactions.flatMap(({ failed }) => failed)).toContain("status");
+    expect(instance.result()).toMatchObject({
+      status: { $error: { message: "a bad address" } },
+    });
+  });
+
+  it("evaluates no cone that passes its result on by reference again, and that cone holds the reference", async () => {
+    const { instance, transactions } = await failing();
+
+    expect(evaluated(transactions)).not.toContain("held");
+    const stored = instance.store.docs.get(instance.id)?.value as {
+      passed: unknown;
+    };
+    expect(isLink(stored.passed)).toBe(true);
+  });
+
+  it("gives a handler that reads its result through a handle the error state", async () => {
+    const { instance } = await failing();
+
+    instance.send(bindingOf(instance, "look"), undefined);
+
+    expect(instance.result()).toMatchObject({
+      seen: { $error: { message: "a bad address" } },
+    });
+  });
+
+  it("gives a client that reads the stored link the error state, and a record again once a request is made", async () => {
+    const { instance } = await failing();
+
+    expect(instance.result()).toMatchObject({
+      passed: { $error: { message: "a bad address" } },
+      held: { request: { $error: { message: "a bad address" } } },
+    });
+    instance.send(bindingOf(instance, "setSite"), {
+      to: "https://example.test/b",
+    });
+    expect(instance.result()).toMatchObject({
+      passed: { pending: true },
+      held: { request: { pending: true } },
+      status: "pending",
+    });
+  });
+});

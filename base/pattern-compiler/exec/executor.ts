@@ -3298,16 +3298,10 @@ export type Outstanding = {
 export type Completion = { result?: unknown; error?: unknown };
 
 /**
- * The member of the state document of an operation that holds the error
- * state that is the operation's result, where its request was not made
- * (SS §6.2, step 1).
- */
-const FAILED = "failed";
-
-/**
  * The member of the state document of an operation that holds what a
  * reader of the operation's result reads: `pending`, `result` and
- * `error` (BI, "The refused globals").
+ * `error` (BI, "The refused globals"), or the error state that is the
+ * operation's result, where its request was not made (SS §6.2, step 1).
  */
 const OUTCOME = "outcome";
 
@@ -5186,12 +5180,13 @@ export class Instance {
           // The result of an effect or of a `wish`: the reader demands
           // the operation, and depends on the evaluation that stages its
           // request (SS §6.2, "When an operation of a plan is
-          // demanded"). It reads the result through the reference to the
-          // state document. An operation whose request holds an error
-          // state has that error state as its result.
+          // demanded"). It holds the reference to the outcome and reads
+          // nothing of the state document, which is of the scope of the
+          // operation: a reader that passes the result on stays of its
+          // own scope. A reader that reads through the reference reads
+          // the error state of a request that was not made there.
           const state = host.depend(this.#operationState(operation)) as Ref;
-          const failed = this.store.read(state.key(FAILED), host.reads);
-          return isErrorState(failed) ? failed : state.key(OUTCOME);
+          return state.key(OUTCOME);
         }
         // An operation with no function of its request: its result is
         // pending.
@@ -5748,15 +5743,19 @@ export class Instance {
       const failed = holdsErrorState(request);
       if (failed !== undefined) {
         // A request that holds an error state is not made, and the
-        // operation's result is that error state.
-        this.store.write(state.key(FAILED), failed);
-        this.store.write(state.key(OUTCOME, "pending"), false);
+        // operation's result is that error state: the outcome holds it,
+        // and no request is outstanding, so the next request that holds
+        // none is made.
+        this.store.write(state.key(OUTCOME), failed);
+        this.store.write(state.key("requestHash"), undefined);
       } else {
         const hash = identifierOf({
           builtin: operation.builtin,
           request: JSON.parse(read) as FabricValue,
         });
-        this.store.write(state.key(FAILED), undefined);
+        if (isErrorState(this.store.read(state.key(OUTCOME)))) {
+          this.store.write(state.key(OUTCOME), {});
+        }
         if (held.requestHash !== hash) {
           // Neither a settled result of this request nor this request
           // outstanding: the hash and the pending mark are written, and
@@ -14034,19 +14033,7 @@ export class Instance {
         this.#indexBinding(slot, keys);
       if (source !== undefined) return source;
     }
-    // Whether a `wish` failed is decided by its resolution, as its outcome
-    // is: a read of the mark of a failure in its state document, which
-    // holds nothing, is bound to the outcome, whose label is that of the
-    // resolution (PL §3.19).
-    if (wish) {
-      chain = chain.map(({ doc, path }) =>
-        path.length === 1 && path[0] === FAILED &&
-          this.store.peek(doc, path) === undefined
-          ? { doc, path: [OUTCOME] }
-          : { doc, path }
-      );
-      return this.#chainsOf(chain, bound.observes);
-    }
+    if (wish) return this.#chainsOf(chain, bound.observes);
     const cover = this.#coveredMembers(chain, bound.observes);
     if (cover.covers.length > 0) {
       this.root.#covers.set(bound, {
