@@ -3,10 +3,10 @@
 This builds on
 [What patterns and agents are made of, in the spec's terms](spec-surface-alignment.md),
 called _primitives_ below. Every term here is defined in one of three places:
-primitives, the CFC specification, or cfs#11124
-(`docs/development/proposals/mcp-bridge.md`, merged). Where this proposal would
-need a rule that none of those has, the rule goes into the questions for Berni
-and not into the design.
+primitives, the CFC specification, or cfs#11124, merged as
+[`docs/development/proposals/mcp-bridge.md`](https://github.com/commonfabric/cfs/blob/main/docs/development/proposals/mcp-bridge.md)
+in the cfs repository. Where this proposal would need a rule that none of those
+has, the rule goes into the questions for Berni and not into the design.
 
 ## Why
 
@@ -64,13 +64,17 @@ Everything calls the verbs: other patterns, cf-harness, and `agent()` through
 
 ### The one check is at the edge
 
-The handler's outside call carries the tool's descriptor binding. §18.3.2
-already has the runtime attach `ToolDescriptorBound` to invocations. The runtime
-checks it at the sink:
+The handler's outside call carries the tool's descriptor binding, which §18.3.2
+calls `ToolDescriptorBound`. The runtime checks it at the sink:
 
 - whether the descriptor is in a snapshot the caller's context accepts;
 - whether that snapshot has expired or been revoked;
 - whether the schema hash still matches.
+
+None of this is built yet. The runtime has no registry snapshots, no
+`ToolDescriptorBound`, and no sink check against them. They are primitives
+cleanups 5 and 6, and they come before reviewed sets (step 3 below). Unreviewed
+tools need none of it, because nothing about them is trusted.
 
 The check runs in the runtime, never in generated code. A revoked tool therefore
 stops at once, even if its wrapper is never regenerated.
@@ -136,9 +140,12 @@ No credential enters a sandbox, a pattern, or a model context.
 
 - **Remote MCP calls.** The token goes in a declared authority-only field of the
   handler's fetch (§5.3.1, for example `options.headers.Authorization`). It is
-  released at the sink with an `AuthorizedRequest` (§5.2). The runtime half
-  exists, as `dependencies.authorityOnly` in `runtime/runner/src/cfc/policy.ts`.
-  Attaching the stored token to that field is the missing piece.
+  released at the sink with an `AuthorizedRequest` (§5.2). None of that is
+  enforced yet. A policy template can declare `dependencies.authorityOnly`
+  (`runtime/runner/src/cfc/policy.ts`), but the declaration is only validated:
+  nothing protects a request field or mints an `AuthorizedRequest`. Until that
+  enforcement exists, the bridge stores no tokens, and a server that needs one
+  waits.
 - **Stdio servers that read a key from their environment.** These wait. Swapping
   a placeholder for the real key on the way out does not work:
   - it needs TLS interception inside the sandbox;
@@ -188,13 +195,17 @@ Each step is the long-term mechanism in a smaller form.
 
    Agents can use prose skills everywhere, and harness runs keep scripts.
 2. **`cf import mcp <url>`.** It generates the wrapper pattern and the candidate
-   descriptors, and each handler fetches the endpoint with the token in an
-   authority-only field. This depends on
-   [handler-callable egress](handler-callable-egress.md), because today a
-   handler cannot issue a request and await its result. Unreviewed tools run
-   under worst-case assumptions. Until `IntentOnce` exists, that means the
-   person confirms each call. Remote MCP servers are then usable from patterns
-   and agents.
+   descriptors, and each handler fetches the server's endpoint. Two things come
+   first:
+   - [handler-callable egress](handler-callable-egress.md), because today a
+     handler cannot issue a request and await its result;
+   - source entry for fetched responses (primitives cleanup 4, top/1892), so
+     that what a server returns arrives labeled and is never left unlabeled.
+
+   Servers that need a token wait for the authority-only enforcement described
+   under "Credentials". Unreviewed tools run under worst-case assumptions. Until
+   `IntentOnce` exists, that means the person confirms each call. Remote MCP
+   servers are then usable from patterns and agents.
 3. **The translator, and accepted sets.** It reads the connectors repository's
    reviewed adapters into a snapshot that the fabric accepts. Reviewed reads
    become free for agents.
@@ -217,6 +228,9 @@ has an interim limit that lifts when the gap closes.
 | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | H9 / CT-2175: side effects are admitted on run-level direct-command authority. top/3606: skill text in a delegated child inherits that authority. | A run that holds unreviewed prose runs side effects only when the person starts them. |
 | `IntentOnce` is unbuilt.                                                                                                                          | Per-call authority means the person confirms each call.                               |
+| Registry snapshots, `ToolDescriptorBound` and the sink check against them are unbuilt (primitives cleanups 5 and 6).                              | No reviewed sets: every imported tool runs as unreviewed.                             |
+| Authority-only request fields are declared in policy templates but not enforced, and nothing mints `AuthorizedRequest`.                           | The bridge stores no tokens; servers that need one wait.                              |
+| `fetch*` assigns no source-entry labels (primitives cleanup 4, top/1892).                                                                         | `cf import mcp` waits for it.                                                         |
 | top/3597: `llmDialog` writes fail open, and `agent()`'s `call_verb` fails closed.                                                                 | Agents reach wrapper verbs only through cf-harness.                                   |
 | top/3595: tools that take a URL do not check the context label. top/3594: DNS egress.                                                             | Runs that hold unreviewed prose do not get `web_fetch`.                               |
 | Sandbox: egress by default, sessions persist between calls, no measured rootfs, host execution target.                                            | Unreviewed scripts run only in a fresh sandbox, never on the host.                    |

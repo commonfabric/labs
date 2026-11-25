@@ -95,9 +95,9 @@ only the provenance rung its evidence establishes. The rungs are
 `ConnectorObserved`, `ExternalIngest`, `NetworkProvenance` and `AuthoredBy`, and
 "are not synonyms".
 
-- **Runtime:** `custodyIngest` (`runtime/runner/src/cfc/external-ingest.ts`),
-  which mints `ExternalIngest`, and `stampExternalFetchIngest` in
-  `acquire_skill`.
+- **Runtime:** `custodyIngest` (`runtime/toolshed/lib/custody-ingest.ts`, over
+  the stamp helpers in `runtime/runner/src/cfc/external-ingest.ts`), which mints
+  `ExternalIngest`, and `stampExternalFetchIngest` in `acquire_skill`.
 - **Diverges:**
   - `fetch*` mints nothing.
   - Webhook deliveries enter as a service identity with no ingest mark.
