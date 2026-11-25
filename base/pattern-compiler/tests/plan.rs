@@ -5483,6 +5483,57 @@ export const P = pattern<{ items: Writable<Item[]>; count: number }>(({ items, c
     assert_eq!(selecting, [true, false]);
 }
 
+/// A member read whose computed key is a well-known key of the API reads
+/// the path the same key names in a record literal, `$UI`: a JSX child
+/// that places `profile[UI]`, a path of the result of a `wish` of the
+/// scope `user`, passes the place on by reference, and the cone of the
+/// tree reads nothing of the operation and holds no pick. A key the
+/// module binds itself is a pick as before.
+#[test]
+fn a_member_read_by_a_well_known_key_is_a_static_path() {
+    let analysis = program(
+        r##"import { pattern, UI, type VNode, wish } from "commonfabric";
+export const P = pattern<{ key: string }>(({ key }) => {
+  const profile = wish<{ [UI]: VNode; other: string }>({ query: "#profile" });
+  return {
+    [UI]: (
+      <div>
+        <div>{profile[UI]}</div>
+        <i>{profile[key]}</i>
+      </div>
+    ),
+  };
+});
+"##,
+    );
+    let plan = plan_of(&analysis, "P");
+    let slots = plan["slots"].as_array().expect("slots");
+    let operation: Vec<(Vec<&str>, &str)> = slots
+        .iter()
+        .filter(|slot| slot["root"]["kind"] == "operation")
+        .map(|slot| {
+            (
+                slot["path"]
+                    .as_array()
+                    .expect("a path")
+                    .iter()
+                    .map(|segment| segment.as_str().expect("a segment"))
+                    .collect(),
+                slot["observes"].as_str().expect("an observation"),
+            )
+        })
+        .collect();
+    assert!(operation.contains(&(vec!["$UI"], "identity")));
+    let tree = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .find(|cone| cone["entry"] == "$UI")
+        .expect("the tree");
+    // The pick is that of `profile[key]` alone.
+    assert_eq!(tree["picks"].as_array().expect("picks").len(), 1);
+}
+
 /// P454: in the body of a per-element construct, an operator expression
 /// that reads a value of a scope narrower than the space is a cone of its
 /// own per element key where it is the value of a member of the record the

@@ -2494,6 +2494,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             Expression::ComputedMemberExpression(member) => {
                 let object = self.eval(&member.object, hint);
+                if let Some(name) = self.well_known_key(&member.expression) {
+                    return Self::extend(&object, &name);
+                }
                 match unwrap(&member.expression) {
                     Expression::StringLiteral(key) => Self::extend(&object, key.value.as_str()),
                     Expression::NumericLiteral(index) => {
@@ -2515,6 +2518,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                     let object = self.eval(&member.object, hint);
                     if member.optional {
                         self.observe(&object, "shape");
+                    }
+                    if let Some(name) = self.well_known_key(&member.expression) {
+                        return Self::extend(&object, &name);
                     }
                     match unwrap(&member.expression) {
                         Expression::StringLiteral(key) => Self::extend(&object, key.value.as_str()),
@@ -2958,6 +2964,25 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .get(name)
                 .is_some_and(|place| self.place_scope(place, &mut seen).is_some())
         })
+    }
+
+    /// The path segment that the computed key of a member read names where
+    /// the key is a well-known key of the API, as `UI` or `NAME`: `$UI`,
+    /// the name a record literal gives the same key (PL §3.4, "A key that
+    /// is static ... is the name it evaluates to"). The read is then one of
+    /// a static path, as one with a string key is, so a position that only
+    /// passes the place on holds a reference to it and reads nothing.
+    fn well_known_key(&self, key: &Expression<'a>) -> Option<String> {
+        let key = unwrap(key);
+        if !matches!(key, Expression::Identifier(_)) {
+            return None;
+        }
+        let parsed = self.resolver.parsed(self.module)?;
+        let api = self
+            .resolver
+            .model(self.module)?
+            .api_ref_of_callee(parsed.semantic.scoping(), key)?;
+        (api.value() == crate::api::ApiValue::WellKnownKey).then(|| format!("${}", api.name))
     }
 
     /// Evaluates an expression written at a position of a constructed

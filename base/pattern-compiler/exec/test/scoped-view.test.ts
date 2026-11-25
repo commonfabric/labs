@@ -4,6 +4,7 @@ import { maxOf } from "@commonfabric/collections/math";
 
 import { type Artifact, Instance } from "../executor.ts";
 import type { Scope } from "../scope-instances.ts";
+import { isLink } from "../store.ts";
 
 /** The pattern of `compare/fixtures/<name>.tsx`. */
 const artifact = async (name: string): Promise<Artifact> => {
@@ -478,6 +479,34 @@ describe("a rendered tree that passes the result of a `wish` of the scope `user`
     const bob = view("bob").children?.[0] as Node;
     expect(JSON.stringify(ann.props)).toContain("the profile of ann");
     expect(JSON.stringify(bob.props)).toContain("the profile of bob");
+  });
+});
+
+// `fixtures/scoped-wish-child.tsx`: a rendered tree that places
+// `profile[UI]`, a path of the result of a `wish` of the scope `user`, as a
+// child, beside the rows of a `map` over an array of references. The child
+// passes the place on by reference, as a child that names a state cell
+// does, so the cone of the tree reads nothing of a user.
+describe("a rendered tree that places a path of the result of a `wish` of the scope `user` as a child, beside the rows of a `map` over an array of references", () => {
+  it("holds the tree in the result document of the space and no row in a scope instance, and writes the same documents and no scope instance for an edit of one item, at 10 items as at 100", async () => {
+    const sizes = await Promise.all([10, 100].map(async (size) => {
+      const held = await started("scoped-wish-child", size);
+      const writes = held.written(() => {
+        held.send("ann", "rename", { at: 3, title: "renamed" });
+        held.view("ann");
+        held.view("bob");
+      });
+      const result = held.instance.store.docs.get(held.instance.id)
+        ?.value as { $UI: unknown };
+      return { scoped: held.scoped(), writes, tree: result.$UI };
+    }));
+
+    for (const { tree, writes } of sizes) {
+      expect(isLink(tree)).toBe(false);
+      expect(writes.filter((write) => write.includes("~"))).toEqual([]);
+    }
+    expect(sizes[1].scoped).toBe(sizes[0].scoped);
+    expect(sizes[1].writes).toEqual(sizes[0].writes);
   });
 });
 
