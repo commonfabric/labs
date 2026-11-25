@@ -6714,6 +6714,18 @@ is relitigated.
   round twenty-six as P478, and classified as conforming implementation of
   §3.4, with no change of the specification (note 1083).
 
+- A pattern that hands a cell to an authored function declares the
+  parameter as a cell type (`ReadonlyCell<…>` or `Writable<…>`); the
+  compiler does not accept a cell where a structural type such as
+  `{ get(): T | undefined }` is declared (2026-11-25, Z98). The owner's
+  words: "Change the pattern to ReadonlyCell. Don't support the get cast. I
+  am fixing all other patterns". The compiler's check
+  (`subset-type:mismatch`) stays as it is. The real Topics board
+  (`patterns/apps/topics/main.tsx`) declared `mentionListsOf` and
+  `cardRowsOf` that way so its tests could pass plain stand-ins; round
+  twenty-eight changes those two parameters and the tests, and the owner
+  changes the other patterns.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
