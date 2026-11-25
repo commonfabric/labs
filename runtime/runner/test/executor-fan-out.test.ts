@@ -53,6 +53,7 @@ import { scopedArgumentInitializationTargets } from "../src/data-updating.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const spaceSigner = await Identity.fromPassphrase("fan-out stage B");
 const space = spaceSigner.did() as MemorySpace;
@@ -223,21 +224,20 @@ const stampedViewers = (
   const viewers = new Set<string>();
   let witnessed = false;
   for (const id of rowsUnder(engine, scopeKey).keys()) {
-    const record = Engine.read(engine, { id, scopeKey } as never) as {
-      cfc?: {
-        labelMap?: {
-          entries?: {
-            label?: {
-              integrity?: {
-                viewer?: string;
-                inputWitness?: { identity?: { symbol?: string } };
-              }[];
-            };
-          }[];
-        };
+    // The envelope holds a label longer than the inline limit as a
+    // reference to a label document, which the engine stores beside it.
+    const entries = storedLabelEntries<{
+      label?: {
+        integrity?: {
+          viewer?: string;
+          inputWitness?: { identity?: { symbol?: string } };
+        }[];
       };
-    } | undefined;
-    for (const entry of record?.cfc?.labelMap?.entries ?? []) {
+    }>(
+      Engine.read(engine, { id, scopeKey } as never)?.cfc,
+      (document) => Engine.read(engine, { id: document } as never),
+    );
+    for (const entry of entries) {
       for (const atom of entry.label?.integrity ?? []) {
         if (typeof atom?.viewer !== "string") continue;
         viewers.add(atom.viewer);

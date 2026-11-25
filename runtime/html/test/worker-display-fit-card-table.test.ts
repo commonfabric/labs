@@ -41,6 +41,7 @@ import { defer } from "@commonfabric/async/defer";
 import { ExecutorHost } from "../../runner/src/executor/host.ts";
 import { EmulatedStorageManager } from "../../runner/src/storage/v2-emulate.ts";
 import { newSharedServer } from "../../runner/test/memory-v2-test-utils.ts";
+import { storedLabelEntries } from "../../runner/test/cfc-stored-labels.ts";
 import { awaitAdmitted } from "../../runner/test/support/serving-waits.ts";
 import { readRefusal } from "../src/worker/display-fit.ts";
 import type { RenderPolicy } from "../src/worker/types.ts";
@@ -367,24 +368,20 @@ const atTable = async (
         id: view.resolveAsCell().getAsNormalizedFullLink().id,
         scopeKey: resolveScopeKey("user", { principal: seat.did }),
       } as never;
-      const viewers = (): string[] => {
-        const record = Engine.read(engine, address) as {
-          cfc?: {
-            labelMap?: {
-              entries?: { label?: { integrity?: { viewer?: string }[] } }[];
-            };
-          };
-        } | undefined;
-        return [
-          ...new Set(
-            (record?.cfc?.labelMap?.entries ?? []).flatMap((entry) =>
-              (entry.label?.integrity ?? []).flatMap((atom) =>
-                typeof atom?.viewer === "string" ? [atom.viewer] : []
-              )
-            ),
+      // The envelope holds a label longer than the inline limit as a
+      // reference to a label document, which the engine stores beside it.
+      const viewers = (): string[] => [
+        ...new Set(
+          storedLabelEntries<{ label?: { integrity?: { viewer?: string }[] } }>(
+            Engine.read(engine, address)?.cfc,
+            (id) => Engine.read(engine, { id } as never),
+          ).flatMap((entry) =>
+            (entry.label?.integrity ?? []).flatMap((atom) =>
+              typeof atom?.viewer === "string" ? [atom.viewer] : []
+            )
           ),
-        ];
-      };
+        ),
+      ];
       await awaitAdmitted(server, () => viewers().length > 0);
       return viewers();
     };
