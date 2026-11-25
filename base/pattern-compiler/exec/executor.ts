@@ -14131,7 +14131,7 @@ export class Instance {
     ) {
       return this.#chainsOver(kept.cover, bound.observes);
     }
-    let chain = this.#addressesOf(bound.at);
+    const chain = this.#addressesOf(bound.at);
     if (chain.length === 0) {
       const source = this.#sourceReadBinding(slot, keys) ??
         this.#indexBinding(slot, keys);
