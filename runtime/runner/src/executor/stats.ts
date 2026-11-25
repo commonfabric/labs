@@ -390,11 +390,13 @@ export type ServingLoopStats = {
      * left. */
     servedFromStore: number;
 
-    /** Roots a judgment found to be documents that lead to no piece and that
-     * nothing derives, counted at each judgment that found it so. The `skip`
-     * and `start-upstream` modes park each one as a structure load that
-     * finds no piece would, without the load. */
-    underived: number;
+    /** Roots a judgment found to be documents a structure load starts no
+     * piece from: no `computed:` id, and a stored space instance that is
+     * absent or carries neither a `result` field nor a pattern pointer.
+     * Counted at each judgment that found it so, under every mode. The
+     * `skip` and `start-upstream` modes park each one as that load would,
+     * without the load; `record` loads it. */
+    plainRoots: number;
 
     /** Roots a judgment had left unloaded that were then loaded: an input
      * marked the piece, or a session's demand reached an instance the
@@ -1049,7 +1051,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     servable: 0,
     refused: {},
     servedFromStore: 0,
-    underived: 0,
+    plainRoots: 0,
     rearmed: 0,
     indexWakes: 0,
     expiryWakes: 0,

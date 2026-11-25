@@ -394,15 +394,22 @@ running, whether the store can serve it as it stands. A root that is no
 result document is judged as the piece its `result` back-links lead to,
 which is the piece a load of it would start, and a `computed:` root that
 one recorded piece writes is judged as that piece with no back-link read.
-A root whose stored document carries neither a back-link nor a pattern
-pointer starts no piece when loaded: one that one recorded piece writes is
-judged as that piece, with the root's own instance among the instances it
-is to vouch for, and one nothing derives (no record names it as written,
-no recorded slice read it as derived, and no `derived` commit wrote its
-shared instance) is **underived**. Under `skip` and `start-upstream` an
-underived root is parked as its load would park it, terminal and watching
-the document (a commit to it re-arms it, §3), without the load, unless
-a commit to the document was admitted while the judgment ran.
+A space-scoped root that is no `computed:` document, and whose stored
+document is absent or carries neither a `result` field nor a pattern
+pointer (tested as the load tests it, `asPatternIdentityRef()`), starts no
+piece when loaded, whatever writes it, and is **plain**. Under `skip` and
+`start-upstream` a plain root is parked as its load would park it, terminal
+and watching the document (a commit to it re-arms it, §3), without the
+load, unless a commit to the document was admitted while the judgment ran.
+Its document is still synced into the serving replica, as the load's first
+step syncs it, and a root whose sync fails is loaded in the same pass.
+Whether a plain root's stored value is current is not judged, since a load
+would not change it: a document a recorded piece maintains is current once
+that piece runs, and one written by something the index cannot account
+for, a client or a lift's write through `Writable.for(...).set()`, is read
+as the store holds it until its writer runs for another reason. That
+staleness is accepted in preference to starting a writer for each such
+document. A root demanded at a narrower scope is loaded.
 The store can serve a root
 when the piece's `space` slice is clean and of the current epoch, and every
 demand row of every session whose id the piece writes or owns, or a recorded
@@ -2853,7 +2860,7 @@ demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
 {recordsStored, unvouched, judged, servable, refused, servedFromStore,
-underived, rearmed, indexWakes, expiryWakes, falseClean, carried,
+plainRoots, rearmed, indexWakes, expiryWakes, falseClean, carried,
 carriedRefused, heldUpstream, upstreamAbandoned},
 settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
@@ -3063,9 +3070,9 @@ mode;
 `servedFromStore` the roots the `skip` and `start-upstream` modes left
 unloaded on it, once each time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
-instance it does not vouch for; `underived` the roots a judgment found
-nothing derives (§1), which the `skip` and `start-upstream` modes park
-without a load; `falseClean` the pieces the index held
+instance it does not vouch for; `plainRoots` the roots a judgment found
+plain (§1), under every mode, which the `skip` and `start-upstream` modes
+park without a load and `record` loads; `falseClean` the pieces the index held
 clean that wrote an instance they answered for again, to a value other than
 the one it held, with no input of theirs changed, each one a judgment that
 would have served a stale value. An instance a slice vouches for at its own
