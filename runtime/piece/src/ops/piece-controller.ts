@@ -2814,43 +2814,6 @@ export function assertSuppliedLinkSchemasCompatible(
         displayPath,
       );
     }
-    // A metadata-less document is held to the piece's prior input contract,
-    // so the proof below compares that contract with the candidate's at this
-    // path. Where the link is also the one already committed, at a position
-    // the candidate reads as a value, and what it reaches is the piece's own
-    // plain input one hop away, the update judges that input as it judges
-    // the same value written inline: under the piece-evolution policy. A link
-    // staged by this update, or one a caller rebuilds, is a new binding and
-    // keeps the proof without it, as does a handle and anything setup's
-    // validation of the stored input does not read in full.
-    const pieceEvolution = heldToPriorContract &&
-      targetOuter === undefined &&
-      options.linksPreservedVerbatim === true &&
-      options.destinationIsStream !== true &&
-      linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
-      holdsOwnPlainInput(linkedCell, baseCell, pieces, (below) => {
-        // A position the candidate reads as a value localizes without an
-        // issue and has no outer Cell wrapper. One whose wrappers it cannot
-        // settle, or that it cannot place, is not known to be read as a
-        // value.
-        try {
-          const localized = localizeUniformOuter(
-            deriveTargetContracts(
-              destinationSchema,
-              options.destinationRoot ?? destinationSchema,
-              false,
-              basePath,
-              [...suppliedLink.path, ...below],
-              displayPath,
-            ),
-            "destination Cell constraints disagree",
-          );
-          return localized.issue === undefined &&
-            localized.outer === undefined;
-        } catch {
-          return false;
-        }
-      });
     if (preservedOuter === undefined) {
       // When the contract is also unchanged, the proof can only refuse what
       // new-link default insertion refuses, and a link carried over byte for
@@ -2867,6 +2830,45 @@ export function assertSuppliedLinkSchemasCompatible(
           targetContracts,
         )
       ) continue;
+      // A metadata-less document is held to the piece's prior input contract,
+      // so the proof below compares that contract with the candidate's at this
+      // path. Where the link is also the one already committed, at a position
+      // the candidate reads as a value, and what it reaches is the piece's own
+      // plain input one hop away, the update judges that input as it judges the
+      // same value written inline: under the piece-evolution policy. A link
+      // staged by this update, or one a caller rebuilds, is a new binding and
+      // keeps the proof without it, as does a handle and anything setup's
+      // validation of the stored input does not read in full. This is decided
+      // only here, past the unchanged-contract case above, since deciding it
+      // reads what the link reaches.
+      const pieceEvolution = heldToPriorContract &&
+        targetOuter === undefined &&
+        options.linksPreservedVerbatim === true &&
+        options.destinationIsStream !== true &&
+        linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
+        holdsOwnPlainInput(linkedCell, baseCell, pieces, (below) => {
+          // A position the candidate reads as a value localizes without an
+          // issue and has no outer Cell wrapper. One whose wrappers it cannot
+          // settle, or that it cannot place, is not known to be read as a
+          // value.
+          try {
+            const localized = localizeUniformOuter(
+              deriveTargetContracts(
+                destinationSchema,
+                options.destinationRoot ?? destinationSchema,
+                false,
+                basePath,
+                [...suppliedLink.path, ...below],
+                displayPath,
+              ),
+              "destination Cell constraints disagree",
+            );
+            return localized.issue === undefined &&
+              localized.outer === undefined;
+          } catch {
+            return false;
+          }
+        });
       proveRebuiltContracts(
         sourceContracts,
         targetContracts,
