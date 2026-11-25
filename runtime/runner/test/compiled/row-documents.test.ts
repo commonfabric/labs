@@ -618,12 +618,22 @@ describe("the rows of a `map` over an array declared as references", () => {
       expect(storedRows(result).length).toBe(5);
     });
 
-    it("writes the links of one chunk at most, and gives as many records, for a member added at the end of 4 members as of 200", async () => {
-      const few = await after(5, (cells) => cells);
-      const many = await after(201, (cells) => cells);
+    it("writes the links of one chunk at most, and gives as many records, for a member added at the end of 4 members as of 200 where the option `listWhole` puts a long list in chunks", async () => {
+      const chunked: CompiledPieceOptions = { listWhole: 128 };
+      const few = await after(5, (cells) => cells, chunked);
+      const many = await after(201, (cells) => cells, chunked);
 
       expect(many.links).toBeLessThanOrEqual(64);
       expect(many.records).toBe(few.records);
+    });
+
+    it("writes the one list document with every link, and gives as many records, for a member added at the end of 4 members as of 200", async () => {
+      const few = await after(5, (cells) => cells);
+      const many = await after(201, (cells) => cells);
+
+      expect(many.links).toBe(201);
+      expect(many.records).toBe(few.records);
+      expect(storedRows(many.result).length).toBe(201);
     });
 
     it("writes one link, and gives as many records, for a member added at the end of 4 members as of 200 where the links are in the result document", async () => {

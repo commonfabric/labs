@@ -40,9 +40,11 @@ const BOUND = 64_000;
 // references whose rows are documents of their own, a list of links to the
 // rows, and for an index it keeps, a record of links to the buckets. With
 // the option `lists` at `documents`, each is stored in documents of its
-// own, an array of more than 128 rows in chunks, and the result document
-// holds a link to it. So a step that changes one link of an array writes
-// documents whose size does not follow the number of rows.
+// own, and the result document holds a link to it. With the option
+// `listWhole` at 128, which the cases below give unless one says otherwise,
+// an array of more than 128 rows is stored in chunks, so a step that changes
+// one link of an array writes documents whose size does not follow the
+// number of rows.
 describe("the lists of links of the result of a compiled piece, with the option `lists` at `documents`", () => {
   let runtime: Runtime;
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -93,9 +95,15 @@ describe("the lists of links of the result of a compiled piece, with the option 
     await runtime.scheduler.idleWithPendingCommits();
   };
 
+  /**
+   * Starts the piece of `fixtures/<name>.tsx` over `argument`, with the
+   * links of an array of more than 128 rows in chunks unless `options`
+   * says otherwise.
+   */
   const start = async (
     name: string,
     argument: Record<string, unknown>,
+    options: { listWhole?: number } = { listWhole: 128 },
   ): Promise<Cell<Record<string, unknown>>> => {
     const result = runtime.getCell<Record<string, unknown>>(
       space,
@@ -109,7 +117,7 @@ describe("the lists of links of the result of a compiled piece, with the option 
         compiled,
         argument,
         result.withTx(tx),
-        { lists: "documents" },
+        { lists: "documents", ...options },
       );
     });
     expect(piece!.refusals).toEqual([]);
@@ -270,6 +278,23 @@ describe("the lists of links of the result of a compiled piece, with the option 
     expect(rows[147].mentionedBy).toEqual(["t148", "t149"]);
   });
 
+  it("holds the rows of a long array in the one document the link leads to, unless the option `listWhole` bounds it, so that a reader reads the array at its path", async () => {
+    const { list } = await ranked(300);
+    const result = await start("sorted-rows", { items: list }, {});
+
+    const tx = runtime.edit();
+    try {
+      const cards = result.withTx(tx).key("cards").get() as {
+        title: string;
+      }[];
+      expect(cards.map(({ title }) => title)).toEqual(
+        Array.from({ length: 300 }, (_, index) => `t${index}`),
+      );
+    } finally {
+      tx.abort();
+    }
+  });
+
   it("holds the rows of an array of at most 128 in the document the link leads to, so that a reader reads the array at its path", async () => {
     const { list } = await ranked(40);
     const result = await start("sorted-rows", { items: list });
@@ -322,7 +347,7 @@ describe("the lists of links of the result of a compiled piece, with the option 
       runtime,
       await artifact("sorted-rows"),
       result,
-      { lists: "documents" },
+      { lists: "documents", listWhole: 128 },
     );
     await runtime.scheduler.idleWithPendingCommits();
     expect(piece.refusals).toEqual([]);

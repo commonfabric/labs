@@ -123,17 +123,18 @@ export type CompiledPieceOptions = {
   /**
    * Where the links to the row documents of an array, and the links to the
    * bucket documents of an index the result keeps, are stored. `documents`,
-   * the default: in documents of their own, a long array in chunks, with a
-   * link in the result document at the path of the array or of the record
+   * the default: in documents of their own, with a link in the result
+   * document at the path of the array or of the record
    * (`RuntimeTransactions` option `listDocuments`). `in-place`: in the
    * result document. With `rows` at `in-place` there are no such links.
    */
   lists?: "documents" | "in-place";
   /**
    * The most rows of an array whose links one list document holds, where
-   * `lists` is `documents`: a reader through the runtime reads such an
-   * array as the array of its rows, and a longer one as an array of chunks
-   * (`RuntimeTransactions` option `listWhole`, which has the default).
+   * `lists` is `documents`, no bound where it is not given: a reader
+   * through the runtime reads such an array as the array of its rows, and
+   * a longer one, stored in chunks, as an array of chunks
+   * (`RuntimeTransactions` option `listWhole`).
    */
   listWhole?: number;
   /**
