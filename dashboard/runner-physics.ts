@@ -48,13 +48,16 @@ export function heapDiameter(
  * the left, down which balls dropped far off to the left roll into the box.
  *
  * Each step moves every ball by Verlet integration, then pushes apart those
- * that overlap, twice, finding them by a grid of squares a ball across, from
- * the floor up, the ball below giving way less than the one on top of it, so
- * that a deep heap bears its weight rather than squeezing its bottom out
- * sideways. Each step puts the balls in the order of the squares they are in,
- * so that neighbors are neighbors in memory too. The heap takes as many steps
- * a second as keep the fastest ball from moving much more than its own width
- * in one, and so from passing through another.
+ * that overlap, finding them by a grid of squares a ball across, row by row
+ * from the floor up, the ball below giving way less than the one on top of
+ * it, so that a deep heap bears its weight rather than squeezing its bottom
+ * out sideways. It does so once for each eight rows of awake balls, at least
+ * twice and at most six times, so that the weight of a heap up to about
+ * fifty rows deep reaches its floor and its balls come to rest, rather than
+ * go on jostling. Each step puts the balls in the order of the squares they
+ * are in, so that neighbors are neighbors in memory too. The heap takes as
+ * many steps a second as keep the fastest ball from moving much more than its
+ * own width in one, and so from passing through another.
  *
  * A heap at rest sleeps: its balls are not moved, and a change wakes only the
  * balls it can move. A ball added is awake; a ball taken out wakes those that
@@ -63,8 +66,7 @@ export function heapDiameter(
  * one presses into it by more than a quarter of its width, rests on it nearer
  * its top than a ball nested between two others does, or is squeezed level
  * beside it. Until then it bears what presses on it without giving way. So
- * a deep heap, which would otherwise go on settling for as long as it is
- * simulated, stays as it lies when a ball is added to it.
+ * a heap at rest stays as it lies when a ball is added to it.
  *
  * Once no ball has moved a quarter of a pixel, or a twelfth of its width if
  * that is less, in each sixtieth of a second for a tenth of a second, and
@@ -100,7 +102,7 @@ export class HeapWorld {
   #moved = 0;
   #insideSince = Infinity;
   #resting = true;
-  #rows = 0;
+  #columns = 0;
 
   /** Constructs an instance for a box `width` by `height`, with balls `diameter` across. */
   constructor(width: number, height: number, diameter: number) {
@@ -389,7 +391,11 @@ export class HeapWorld {
       y[i] += vy + gravity;
     }
     this.#sort();
-    for (let pass = 0; pass < 2; pass++) {
+    let woken = 0;
+    for (let i = 0; i < count; i++) woken += awake[i];
+    const rows = woken / Math.max(1, Math.floor(this.#width / this.#d));
+    const passes = Math.min(6, Math.max(2, Math.ceil(rows / 8)));
+    for (let pass = 0; pass < passes; pass++) {
       this.#separate();
       for (let i = 0; i < count; i++) this.#confine(i);
     }
@@ -457,8 +463,8 @@ export class HeapWorld {
 
   /**
    * Helper for `#step()`, which puts the balls in order of the grid's
-   * squares they are in, by column from the left, and in each column from
-   * the floor up, by insertion, which, as the order changes little from one
+   * squares they are in, by row from the floor up, and in each row from the
+   * left, by insertion, which, as the order changes little from one
    * step to the next, takes little more than a look at each.
    */
   #sort(): void {
@@ -479,11 +485,12 @@ export class HeapWorld {
     top = Math.floor(top / square) * square;
     left = Math.floor(left / square) * square;
     const rows = Math.floor((this.#height - top) / square) + 2;
-    this.#rows = rows;
+    const columns = Math.floor((this.#width - left) / square) + 2;
+    this.#columns = columns;
     for (let i = 0; i < count; i++) {
-      const column = Math.max(0, Math.floor((x[i] - left) / square));
+      const column = Math.min(columns - 1, Math.max(0, Math.floor((x[i] - left) / square)));
       const row = rows - 1 - Math.min(rows - 1, Math.max(0, Math.floor((y[i] - top) / square)));
-      squares[i] = column * rows + row;
+      squares[i] = row * columns + column;
     }
     for (let i = 1; i < count; i++) {
       if (squares[i] >= squares[i - 1]) continue;
@@ -521,14 +528,14 @@ export class HeapWorld {
    * looking for each ball's neighbors in its own square and the eight around
    * it, from the floor up. As the balls are taken in order, where the balls
    * of the squares beside a ball's start and end, in each of the three
-   * columns, only ever moves on, so each is found by moving on from where it
+   * rows, only ever moves on, so each is found by moving on from where it
    * was for the ball before.
    */
   #separate(): void {
     const count = this.#ids.length;
     const d = this.#d;
     const width = this.#width;
-    const rows = this.#rows;
+    const columns = this.#columns;
     const x = this.#x;
     const y = this.#y;
     const ids = this.#ids;
@@ -544,20 +551,20 @@ export class HeapWorld {
     const starts = [0, 0, 0];
     const ends = [0, 0, 0];
     for (let i = 0; i < count; i++) {
-      const column = Math.floor(squares[i] / rows);
-      const row = squares[i] % rows;
+      const row = Math.floor(squares[i] / columns);
+      const column = squares[i] % columns;
       const odd = ids[i] % 2 === 1;
-      for (let side = 0; side < 3; side++) {
-        const c = column + side - 1;
-        if (c < 0) continue;
-        const low = c * rows + Math.max(0, row - 1);
-        const high = c * rows + Math.min(rows - 1, row + 1);
-        let start = starts[side];
+      for (let level = 0; level < 3; level++) {
+        const r = row + level - 1;
+        if (r < 0) continue;
+        const low = r * columns + Math.max(0, column - 1);
+        const high = r * columns + Math.min(columns - 1, column + 1);
+        let start = starts[level];
         while (start < count && squares[start] < low) start++;
-        let end = Math.max(ends[side], start);
+        let end = Math.max(ends[level], start);
         while (end < count && squares[end] <= high) end++;
-        starts[side] = start;
-        ends[side] = end;
+        starts[level] = start;
+        ends[level] = end;
         for (let j = Math.max(i + 1, start); j < end; j++) {
           if (!awake[i] && !awake[j]) continue;
           let nx = x[j] - x[i];
