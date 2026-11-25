@@ -537,6 +537,78 @@ work; the next is 1119). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
+## The independent review of rounds twenty-five to twenty-nine, and the change of method
+
+On 2026-11-25 the owner asked for a review of the recent rounds and then
+set a new order of work. Five reviewers that had not written the rounds
+each read one round at `dcaad56391`. What has to hold before the option is
+turned on for users is in
+[compiled-pattern-language-ship-criteria.md](compiled-pattern-language-ship-criteria.md),
+a draft for the owner to edit. The order: the comparison of both paths with
+two principals as a standing gate (round thirty-one, branch
+`claude/compiled-pattern-two-principal-gate`, cut from `dcaad56391`), then
+derivation by demand, then the record. Round thirty (the topic hidden from
+its creator, and a returned value stored as a link) runs on the build
+branch. A round's result counts once a reviewer that did not write it has
+read it.
+
+Findings, the coordinator's confirmation said for each. None is fixed.
+
+- *Soundness, confirmed by reading:* the serving worker's compile cache
+  (`compiles` and `compiledFor` in `runtime/runner/src/compiled/serving.ts`)
+  is keyed by the source document's id and shared between spaces, and the
+  text read is not checked against the id (`patternSourceDocumentOf` is
+  used in `setup.ts` only). A writer of one space can store other text at
+  the id of a program and have its compile served to another space's piece.
+  Older than round twenty-seven, which made it reachable on a toolshed.
+- *Soundness, the test change confirmed by reading:* the sidecar commit
+  `854faa3f7f` is not fit for a pull request against `main`. It keeps the
+  transaction's join on an entry's `payload`, `error` and `reason` only and
+  skips writer fit for the whole entries document, so a labeled value
+  written to any other position of that document is stored unmeasured and
+  unstamped (the reviewer's scratch test; whether pattern code can address
+  the document is not shown). Three cases of `cfc-processed-claim.test.ts`
+  that asserted a refusal now assert none, the forged-claim case is
+  deleted, and the overwrite case writes `false` where it wrote a secret.
+  The round classified it as a host arrangement;
+  `docs/development/cfc-spec-correspondence.md` records the narrower
+  own-space skip as a semantic gap pending a specs pull request. The
+  reviewer's narrower form: skip writer fit for the declared tail append
+  and the processed claim only, and keep the stamps.
+- *Soundness, not confirmed:* P476 enrolls every stream marker document as
+  a store the piece owns, while `#recordsOfMarkers` gives a record only to
+  a marker with element keys; every other marker takes the transaction's
+  whole join, now admitted where it was refused. The reviewer reads
+  `profile-embed` going to 5 of 5 as this admission. P474 stores, at the
+  link a row of the space holds to its scoped rows, a label resolved with
+  the inputs of one scope key's run. Both are possible causes of a foreign
+  `User` clause in a document of the space, and were given to round thirty
+  to check.
+- *A difference from today's path, confirmed for the fixture:* by P471 a
+  handler's write through a link replaces the link where today's path
+  writes the linked record, and the `replace` event of the fixture
+  `set-over-link` in `compare/values-fixtures.ts` is no longer sent. This
+  needs the owner's ratification as a difference of the language.
+- *Suspected, not run:* by P470 a redirect to an argument position is
+  stored at depth 0 or 1 of the result only, so a client's write through a
+  deeper result path would be lost at the next derivation; `Store.write`
+  creates a document for any absent target.
+- *The gates, confirmed by reading:* `SCALE_GROWTH` in
+  `compare/fabrichat/scale.ts` compares nine counts, leaves out reads,
+  registrations, bytes, writes, documents and time, never compares the
+  error states it prints, and exits 0 with fewer than two sizes. No test
+  stores labels under clauses that differ between two principals.
+- *Scaling:* P474 writes a document per outer row and principal; with one
+  list document by default (P480) the Topics figures above at 2,000 topics,
+  taken with chunks, no longer describe the default.
+- *The CLI:* `checkCompiledProgram` in `runtime/cli/lib/piece.ts` treats
+  every compile failure but a missing binary as a refusal of the program.
+- *Round twenty-eight has no blocking finding.* The 10 failing board tests
+  pass with server execution off, as continuous integration runs them; with
+  it on they fail by the defect #10204 fixes, which the branch lacks. The
+  upgrade handles of `topic.tsx` now declare stored authors as complete, so
+  the type checker sees the guards for partial legacy data as unneeded.
+
 ## Open lines of work
 
 Each line names the notes that hold its plan. The notes are in
