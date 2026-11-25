@@ -68,6 +68,59 @@ class Given implements TransactionHooks {
   end(): void {}
 }
 
+// `fixtures/shared-window.tsx`: a window of the three newest items, each
+// read whole with the owner it links to, and every item links to one owner.
+// An append moves every entry by one position, so each holds another title
+// and the owner record placed before at its position, which the store step
+// does not form again; the window is still written whole, as an array that
+// holds another value at every position is.
+describe("the store step of a window whose entries hold a record placed before", () => {
+  it("writes the window whole at an append", async () => {
+    const written: string[] = [];
+    const item = (index: number) => ({
+      id: `item-${index}`,
+      kind: "external",
+      value: {
+        title: `t${index}`,
+        owner: { $link: { doc: "owner", path: [] } },
+      },
+    });
+    const instance = new Instance(
+      await artifactOf("shared-window"),
+      {
+        items: [0, 1, 2].map((index) => ({
+          $link: { doc: `item-${index}`, path: [] },
+        })),
+      },
+      {
+        transactions: Object.assign(new Given(), {
+          change: (doc: string, path: readonly string[]) => {
+            if (doc === "result") written.push(path.join("/"));
+          },
+        }),
+        documents: [
+          { id: "owner", kind: "external", value: { name: "o" } },
+          ...[0, 1, 2].map(item),
+        ],
+      },
+    );
+    written.length = 0;
+
+    const { id, kind, value } = item(3);
+    instance.store.create(id, kind, value);
+    instance.spliceArgument(["items"], 3, 0, [
+      { $link: { doc: "item-3", path: [] } },
+    ]);
+
+    expect(
+      (instance.result() as { latest: { title: string }[] }).latest.map((
+        { title },
+      ) => title),
+    ).toEqual(["t1", "t2", "t3"]);
+    expect(written).toEqual(["latest"]);
+  });
+});
+
 // `fixtures/result-tree.tsx`: a result that holds a tree over the rows of a
 // `map` over `items`, an array of references with each item a document of
 // its own, beside the count and the titles that a body forms from every

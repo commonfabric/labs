@@ -772,12 +772,34 @@ const KEPT = Symbol("kept");
  */
 const SAME = Symbol("same");
 
-/** Whether a stored form has `KEPT` or `SAME` at or below it. */
+/** Whether a stored form has `KEPT` at or below it. */
 const holdsKept = (form: unknown): boolean =>
-  form === KEPT || form === SAME ||
+  form === KEPT ||
   (Array.isArray(form)
     ? form.some(holdsKept)
     : isRecord(form) && Object.values(form).some(holdsKept));
+
+/**
+ * A stored form with each `SAME` in it replaced by what `held`, which the
+ * position of the form holds, holds at that place: the form that was
+ * placed there before.
+ */
+const withSame = (form: unknown, held: unknown): unknown => {
+  if (form === SAME) return held;
+  if (Array.isArray(form)) {
+    return form.map((member, index) =>
+      withSame(member, Array.isArray(held) ? held[index] : undefined)
+    );
+  }
+  if (isRecord(form)) {
+    const members: Record<string, unknown> = {};
+    for (const [name, member] of Object.entries(form)) {
+      members[name] = withSame(member, isRecord(held) ? held[name] : undefined);
+    }
+    return members;
+  }
+  return form;
+};
 
 /**
  * Whether two arrays of one length, longer than one member, hold another
@@ -796,7 +818,7 @@ const differsThroughout = (
 ): boolean => {
   const differs = (index: number) =>
     !holdsKept(form[index]) &&
-    canonical(form[index]) !== canonical(held[index]);
+    canonical(withSame(form[index], held[index])) !== canonical(held[index]);
   if (form.length < 2 || !differs(0) || !differs(form.length - 1)) {
     return false;
   }
@@ -7173,7 +7195,10 @@ export class Instance {
         );
         return;
       }
-      if (isRecord(form) && isRecord(held) && !isLink(form) && !isLink(held)) {
+      if (
+        isRecord(form) && isRecord(held) && !isLink(form) && !isLink(held) &&
+        !isStream(form) && !isStream(held)
+      ) {
         // The store holds the members of a record in the order of the
         // storage, whatever order the form has them in.
         const [names, were] = [Object.keys(form), Object.keys(held)];
