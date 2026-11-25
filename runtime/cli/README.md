@@ -722,6 +722,12 @@ attribute, an attribute's value, a port, or a node. The structure tree lists
 graphs and subgraphs, with the nodes that node statements declare in each. A
 node that only an edge names is not listed.
 
+Git configuration files use their own syntax highlighting as well. The language
+covers `.gitmodules`, user and system configuration named `.gitconfig` or
+`gitconfig`, a worktree's `config.worktree`, other files whose names end in
+`.gitconfig`, and Git LFS's `.lfsconfig`. The structure tree lists sections with
+the variables in each.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each

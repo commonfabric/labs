@@ -64,6 +64,7 @@ import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { dockerfileLanguage } from "../lib/view/languages/dockerfile/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
+import { gitConfigLanguage } from "../lib/view/languages/git-config/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
 import { directiveLanguage } from "../lib/view/languages/directive/language.ts";
 import { iniLanguage } from "../lib/view/languages/ini/language.ts";
@@ -231,6 +232,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("dot"), dotLanguage);
   assertEquals(languageForName("graphviz"), dotLanguage);
   assertEquals(languageForName("dotenv"), dotenvLanguage);
+  assertEquals(languageForName("git-config"), gitConfigLanguage);
+  assertEquals(languageForName("gitmodules"), gitConfigLanguage);
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
@@ -277,6 +280,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "ini",
     "dot",
     "dotenv",
+    "git-config",
     "proguard",
     "gitattributes",
     "xml",
@@ -355,6 +359,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "graphviz",
     "gv",
     "dotenv",
+    "git-config",
+    "gitconfig",
+    "gitmodules",
     "proguard",
     "r8",
     "gitattributes",

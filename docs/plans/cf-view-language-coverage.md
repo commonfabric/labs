@@ -56,10 +56,12 @@ and the keys and hosts in each. Dotenv, which covers environment files and the
 example copies of them that projects commit, has syntax highlighting and a
 structure tree of the variables each file sets. Org mode has syntax highlighting, with each
 source block colored as the language it names, and a structure tree of
-headlines. Git attributes files have syntax highlighting and a structure tree
-of their patterns and macro definitions. Lean has syntax highlighting and a
-structure tree of namespaces, sections, and declarations, and a project's
-`lean-toolchain` file has highlighting of its own.
+headlines. Git attributes files have syntax highlighting and a structure tree of
+their patterns and macro definitions. Git configuration files, which cover
+`.gitmodules`, have syntax highlighting and a structure tree of sections and the
+variables in each. Lean has syntax highlighting and a structure tree of
+namespaces, sections, and declarations, and a project's `lean-toolchain` file
+has highlighting of its own.
 Directive configuration, which covers nginx, Apache httpd, nftables, Netdata
 health alerts, and sysusers.d, has syntax highlighting and a structure tree of
 blocks, sections, and alert entries. Logs, checksums, version files, PID files,
@@ -88,19 +90,20 @@ remain outside diff editing and semantic source loading.
 
 Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
-well. Java properties, INI, dotenv, ProGuard rules, Git attributes, XML, makefiles, Org
-mode, Lean, ignore files, Go's module and checksum files, Bazel rc files,
-Graphviz DOT, and Dockerfiles use focused scanners.
+well. Java properties, INI, dotenv, ProGuard rules, Git attributes, Git
+configuration files, XML, makefiles, Org mode, Lean, ignore files, Go's module
+and checksum files, Bazel rc files, Graphviz DOT, and Dockerfiles use focused
+scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
-makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes, XML, Org
-mode, directive configuration, ignore-file, Graphviz DOT, and diff support to
-honest handling of every textual syntax in the active `commonfabric`
-repositories.
+makefile, Dockerfile, Java properties, INI, dotenv, ProGuard, Git attributes,
+Git configuration, XML, Org mode, directive configuration, ignore-file, Graphviz
+DOT, and diff support to honest handling of every textual syntax in the active
+`commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -983,7 +986,7 @@ file reconstructed exactly.
 - [x] Add Makefile and `.mk`.
 - [x] Add Git, Docker, Deno, and Bazel ignore files.
 - [x] Add Git attributes files.
-- [ ] Add Git modules.
+- [x] Add Git modules and other Git configuration files.
 - [x] Add worktree-include syntax.
 - [x] Add dotenv files and compound examples.
 - [x] Add INI, Ansible configuration, and inventory files.
@@ -1083,6 +1086,33 @@ way. Of the 100-kilobyte inputs built to slow the scanner, 20,000 lines that
 each open a bracket expression and a character class that nothing closes take
 7.0 milliseconds to highlight and 15 to parse, and one line of 20,000
 attributes takes 2.0 to highlight.
+
+Git configuration files are implemented ahead of the rest of this stage. A
+November 13, 2026 read of the local checkouts of the organization's
+repositories found one tracked file in Git's configuration syntax, Pond's
+`.gitmodules`, with 2 path-change events on it in the six months before the
+read.
+
+Git configuration uses a focused scanner that follows the rules Git's own parser
+applies: section headers with optional quoted subsection names, several of which
+may share a line, variable names, quoted values, backslash escapes, comments
+after a value, and values continued onto the next line by a final backslash. A
+line Git rejects is left out of the structure tree. It is colored up to the
+point where Git rejects it, except that a name is colored as a variable's only
+when a `=` or the end of the line follows it. `.gitmodules`, `.gitconfig`,
+`gitconfig`, a worktree's `config.worktree`, `.lfsconfig`, and names ending in
+`.gitconfig` select it. A repository's own `.git/config` is not claimed, because
+many other formats share its name, `config`. A coverage check read Pond's
+`.gitmodules`, the `.git/config` of each of the 32 local checkouts, and the user
+configuration file of the machine that ran the check. Every one of the 34 files
+reconstructed exactly, and every character other than white space in them has a
+token class. The machine was too loaded for 95th percentiles to mean anything,
+so the shortest of 100 runs stands in for each figure. On 100 kilobytes of those
+files the scanner highlighted in 2.3 milliseconds and parsed with structure in
+3.9, where the INI scanner took 1.7 and 3.2 on the same input in the same run.
+The slowest input built to slow it, 34,134 section headers on one line, parsed
+in 44 milliseconds and highlighted in 6, so most of the time went to building
+the structure tree. The fixture comes from Pond.
 
 A November 13, 2026 read of the local checkouts of the organization's
 repositories found 11 `.conf` files, in Infra, gVisor, and Legibility, and they

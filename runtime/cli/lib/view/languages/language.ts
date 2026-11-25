@@ -50,6 +50,7 @@ import { propertiesLanguage } from "./properties/language.ts";
 import { iniLanguage } from "./ini/language.ts";
 import { dotLanguage } from "./dot/language.ts";
 import { dotenvLanguage } from "./dotenv/language.ts";
+import { gitConfigLanguage } from "./git-config/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
 import { hclLanguage } from "./hcl/language.ts";
 import {
@@ -543,6 +544,7 @@ function allLanguages(): readonly Language[] {
     iniLanguage,
     dotLanguage,
     dotenvLanguage,
+    gitConfigLanguage,
     proguardLanguage,
     gitAttributesLanguage,
     xmlLanguage,

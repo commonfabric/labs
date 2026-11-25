@@ -646,9 +646,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "toml",
-    // An INI section header is a TOML table header, and INI colors its name
-    // as TOML colors a table's.
-    highlightingPeers: ["ini"],
+    // An INI or Git configuration section header is a TOML table header, and
+    // INI and Git configuration color its name as TOML colors a table's.
+    highlightingPeers: ["ini", "git-config"],
     surveyRepository: "labs",
     surveyCommit: "fbdd14d3fa220dfffcb52a423d1180e514c5134b",
     surveyPath: "mise.toml",
@@ -1035,10 +1035,18 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "properties",
     // A shell or make variable assignment, an HCL or DOT attribute, an INI
-    // key, and a dotenv variable are each a `name=value` line, and shell,
-    // make, HCL, DOT, INI, and dotenv color the name as properties files
-    // color their keys.
-    highlightingPeers: ["hcl", "shell", "make", "ini", "dot", "dotenv"],
+    // key, a dotenv variable, and a Git configuration variable are each a
+    // `name=value` line, and shell, make, HCL, DOT, INI, dotenv, and Git
+    // configuration color the name as properties files color their keys.
+    highlightingPeers: [
+      "hcl",
+      "shell",
+      "make",
+      "ini",
+      "dot",
+      "dotenv",
+      "git-config",
+    ],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "b457431c6f5e32305a2e6feb7901f8d05a9b2f6e",
     surveyPath: "android/gradle/wrapper/gradle-wrapper.properties",
@@ -1148,6 +1156,36 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: ":-", className: "operator" },
     afterEvidence: { text: ":-", className: "operator" },
     incompleteEvidence: { text: ":-", className: "operator" },
+  },
+  {
+    languageId: "git-config",
+    // A Git configuration section header reads as an INI section header, and
+    // INI colors the section name as Git configuration does.
+    highlightingPeers: ["ini"],
+    surveyRepository: "pond",
+    surveyCommit: "b812bb02648ef3017fa45f28ad0f4e38f9080028",
+    surveyPath: ".gitmodules",
+    before: new URL("./git-config-pond/before.gitconfig", import.meta.url),
+    after: new URL("./git-config-pond/after.gitconfig", import.meta.url),
+    incomplete: new URL(
+      "./git-config-pond/incomplete.gitconfig",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        ".gitmodules",
+        "vendor/labs/.gitmodules",
+        ".gitconfig",
+        "etc/gitconfig",
+        "config/work.gitconfig",
+        ".git/worktrees/VF/config.worktree",
+        ".lfsconfig",
+      ],
+      aliases: ["git-config", "gitconfig", "gitmodules"],
+    },
+    beforeEvidence: { text: "submodule", className: "interfaceName" },
+    afterEvidence: { text: "submodule", className: "interfaceName" },
+    incompleteEvidence: { text: "submodule", className: "interfaceName" },
   },
   {
     languageId: "proguard",
