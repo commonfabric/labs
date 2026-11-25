@@ -125,6 +125,7 @@ import {
   labelMetadataTemplatesFor,
   loadStoredCfcEnvelope,
   prepareBoundaryCommitSteps,
+  stampAttributionAtStake,
   writeStoredCfcEnvelope,
 } from "../cfc/prepare.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "../cfc/policy.ts";
@@ -3967,6 +3968,18 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       this.probeFlowLabelWork()
     ) {
       this.markCfcRelevant("flow-labels");
+    }
+    // A write at, above, or below a stamp naming the function that computed
+    // what it labels withdraws that attribution whatever the flow-label dial
+    // (`carriedStampLabel`), so a transaction at `off`, which the probe above
+    // skips, still reaches the boundary for it.
+    if (
+      !this.#cfcState.relevant &&
+      this.#cfcState.prepare.status === "unprepared" &&
+      this.#cfcState.flowLabelsMode === "off" &&
+      stampAttributionAtStake(this)
+    ) {
+      this.markCfcRelevant("stamp-attribution");
     }
     // Sink-request ceiling relevance (audit item 21): a request built from a
     // value pulled through a schema-less link marks nothing, so the egress

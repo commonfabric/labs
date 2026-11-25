@@ -312,6 +312,15 @@ const FLOOR_EVIDENCE_META = {
   ...internalVerifierRead,
 };
 
+// Whether `entry` is a flow stamp naming the function that computed what it
+// labels: one whose attribution a write at, above, or below it withdraws
+// (`carriedStampLabel`).
+const carriesAttribution = (
+  entry: Pick<LabelMapEntry, "origin" | "label">,
+): boolean =>
+  (entry.origin === "derived" || entry.origin === "structure") &&
+  entry.label.integrity?.some(isTransformedByAtom) === true;
+
 // The path whose writers a stamp's `TransformedBy` atom must agree with: the
 // stamp's own, or for a `*` template, its container's, since a write to any
 // slot changes what the template labels.
@@ -3889,18 +3898,11 @@ const valueWriteTargets = (
       // write outright.
       const writePath = canonicalizeDocumentPath(rawPath);
       if (writePath === undefined) continue;
-      // A link at a payload field named `internal` is the runtime's link
-      // plumbing inside a process document's value. Link writes carry their
-      // labels through the link-write machinery, not here.
       if (
         write.address.id.startsWith("cid:") ||
         (
           isReservedCfcDocumentId(write.address.id) &&
           !forgedSystemDocuments.has(write.address.id)
-        ) ||
-        (
-          writePath[0] === "internal" &&
-          isPrimitiveCellLink(write.value)
         )
       ) {
         continue;
@@ -6446,6 +6448,36 @@ const deriveFlowJoinImpl = (
 };
 
 /**
+ * The documents whose label metadata `tx` itself wrote: a raw `["cfc"]` write,
+ * or a whole-envelope root write whose value embeds a `cfc` record (the
+ * raw-seed idiom). A write whose final value equals its value before the
+ * transaction minted nothing, so the metadata it touched is still the
+ * pre-existing kind. That includes one that changed only whether an
+ * `undefined` slot is present: such a slot holds no label, and counting the
+ * document self-minted would only hide the entries it already had.
+ */
+const selfMintedDocuments = (tx: IExtendedStorageTransaction): Set<string> => {
+  const documents = new Set<string>();
+  for (const space of getTransactionWrittenSpaces(tx)) {
+    for (const write of tx.getWriteDetails?.(space) ?? []) {
+      if (
+        (write.address.path[0] === "cfc" ||
+          (write.address.path.length === 0 && isObjectOrArray(write.value) &&
+            isObjectOrArray((write.value as { cfc?: unknown }).cfc))) &&
+        !fabricAwareEqual(write.value, write.previousValue)
+      ) {
+        documents.add(targetKey({
+          space: write.address.space,
+          id: write.address.id,
+          scope: normalizeCellScope(write.address.scope),
+        }));
+      }
+    }
+  }
+  return documents;
+};
+
+/**
  * Cheap relevance trigger for the flow-labels dial: true when the
  * transaction observed any labeled document or wrote into one. Used by the
  * commit gate / prepare chokepoint to auto-mark relevance, so flow-label
@@ -6460,30 +6492,7 @@ export const flowLabelWorkExists = (
   // metadata writes are either the CFC machinery's own or the raw-seed test
   // idiom. The raw-write surface itself is the S18 chokepoint seam, not a
   // relevance question.
-  const selfMintedDocs = new Set<string>();
-  for (const space of getTransactionWrittenSpaces(tx)) {
-    for (const write of tx.getWriteDetails?.(space) ?? []) {
-      // Either a direct `["cfc"]` write or a whole-envelope root write whose
-      // value embeds a `cfc` record (the raw-seed idiom). A write whose final
-      // value equals its value before the transaction minted nothing, so the
-      // metadata it touched is still the pre-existing kind. That includes one
-      // that changed only whether an `undefined` slot is present: such a slot
-      // holds no label, and counting the document self-minted would only hide
-      // the entries it already had.
-      if (
-        (write.address.path[0] === "cfc" ||
-          (write.address.path.length === 0 && isObjectOrArray(write.value) &&
-            isObjectOrArray((write.value as { cfc?: unknown }).cfc))) &&
-        !fabricAwareEqual(write.value, write.previousValue)
-      ) {
-        selfMintedDocs.add(targetKey({
-          space: write.address.space,
-          id: write.address.id,
-          scope: normalizeCellScope(write.address.scope),
-        }));
-      }
-    }
-  }
+  const selfMintedDocs = selfMintedDocuments(tx);
   const entriesByDoc = new Map<
     string,
     {
@@ -6537,9 +6546,47 @@ export const flowLabelWorkExists = (
     return true;
   }
   // Write side keeps any-entry sensitivity: overwriting a link-labeled path
-  // must run the flow stage to clear/replace the per-value components.
+  // must run the flow stage to clear/replace the per-value components, and a
+  // write at, above, or below a stamp naming the function that computed what
+  // it labels must reach the boundary to withdraw that attribution
+  // (`carriedStampLabel`), so narrowing this to consumed classes, as the read
+  // side is, would leave such a stamp standing at `observe` and `persist`.
   for (const [, target] of valueWriteTargets(tx)) {
     if (docEntries(target.space, target.id, target.scope, target.type).any) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Relevance trigger for a transaction whose flow-label dial derives nothing:
+ * true when it writes at, above, or below a stamp naming the function that
+ * computed what the stamp labels. Such a write withdraws that attribution
+ * whatever the dial (`carriedStampLabel`), so the transaction reaches the
+ * boundary although it derives no label.
+ */
+export const stampAttributionAtStake = (
+  tx: IExtendedStorageTransaction,
+): boolean => {
+  const selfMintedDocs = selfMintedDocuments(tx);
+  for (const [key, target] of valueWriteTargets(tx)) {
+    if (selfMintedDocs.has(key)) continue;
+    const written = new PathPrefixIndex();
+    for (const path of target.paths) written.add(path);
+    const entries = storedMetadataFor(
+      tx,
+      target.space,
+      target.id,
+      target.scope,
+      target.type,
+    )?.labelMap.entries ?? [];
+    if (
+      entries.some((entry) =>
+        carriesAttribution(entry) &&
+        written.overlaps(transformedByProbePath(entry))
+      )
+    ) {
       return true;
     }
   }
@@ -13155,6 +13202,14 @@ export function* prepareBoundaryCommitSteps(
   // decide whether a computed target's exemption applies.
   const labelProtectionMode = state.labelMetadataProtectionMode;
   const valueTargets = valueWriteTargets(tx);
+  // Every path of a document this transaction wrote, whatever the flow-label
+  // dial: the paths that withdraw the attribution of the stamps they overlap
+  // (`carriedStampLabel`).
+  const changedPrefixesOf = (key: string): PathPrefixIndex => {
+    const changed = new PathPrefixIndex();
+    for (const path of valueTargets.get(key)?.paths ?? []) changed.add(path);
+    return changed;
+  };
   const flowTargets = flowMode === "off"
     ? undefined
     : withRestatedResultWirings(tx, valueTargets);
@@ -13334,17 +13389,6 @@ export function* prepareBoundaryCommitSteps(
             entry.origin === "structure") &&
           writtenPrefixes.hasPrefixOf(entry.path)
         ) ||
-        // A stamp naming the function that computed what it labels stops
-        // naming it once anything else writes at, above, or below its path
-        // (`carriedStampLabel`), so a write BELOW such a stamp admits the
-        // document too, even from a transaction that read nothing: without
-        // this a writer with an empty join could add content under another
-        // function's `TransformedBy`.
-        existingEntries.some((entry) =>
-          (entry.origin === "derived" || entry.origin === "structure") &&
-          entry.label.integrity?.some(isTransformedByAtom) === true &&
-          writtenPrefixes.overlaps(transformedByProbePath(entry))
-        ) ||
         // Stage B healing, the template-ONLY arm (cubic P2 on the Stage B
         // PR): an envelope holding label-metadata templates and no payload
         // entry has nothing a written path could cover, so it would never
@@ -13379,6 +13423,7 @@ export function* prepareBoundaryCommitSteps(
       target.scope,
       target.type,
     )?.labelMap.entries ?? [];
+    const changed = changedPrefixesOf(key);
     if (
       existingEntries.some((entry) =>
         (entry.origin === "link" &&
@@ -13389,7 +13434,15 @@ export function* prepareBoundaryCommitSteps(
           mintedEntryReached(
             canonicalizeLogicalPath(entry.path),
             target.paths,
-          ))
+          )) ||
+        // A stamp naming the function that computed what it labels stops
+        // naming it once anything else writes at, above, or below its path
+        // (`carriedStampLabel`), whatever the flow-label mode and even from a
+        // transaction that read nothing: without this a writer with an empty
+        // join, or one that persists no flow labels, could add content under
+        // another function's `TransformedBy`.
+        (carriesAttribution(entry) &&
+          changed.overlaps(transformedByProbePath(entry)))
       )
     ) {
       targetKeys.add(key);
@@ -14149,6 +14202,11 @@ export function* prepareBoundaryCommitSteps(
       )
       : [];
     for (const root of assertedRoots) flowWrittenPrefixes.add(root);
+    const changedPrefixes = changedPrefixesOf(key);
+    for (const root of assertedRoots) changedPrefixes.add(root);
+    // Whether a carried stamp lost attribution, which the stored envelope
+    // must then lose too, even when the stamp held nothing else.
+    let attributionWithdrawn = false;
     let flowCleared = false;
     let remintCleared = false;
     let linkCleared = false;
@@ -14258,30 +14316,29 @@ export function* prepareBoundaryCommitSteps(
     // keeps only the `TransformedBy` atoms this transaction's join carries as
     // well: attribution meets across the writers of a path. Membership stamps
     // survive a slot write that adds a key, which is what makes this
-    // necessary rather than merely tidy.
+    // necessary rather than merely tidy. The meet holds whatever the
+    // flow-label dial: a writer that persists no flow labels replaces no
+    // stamp, so the stamps under its writes keep their confidentiality, and
+    // its join is empty when it derives none, so they keep no attribution.
     const carriedStampLabel = (
       entry: LabelMapEntry,
       entryPath: readonly string[],
     ): IFCLabel => {
-      const integrity = entry.label.integrity;
       if (
-        !flowPersist ||
-        (entry.origin !== "derived" && entry.origin !== "structure") ||
-        integrity === undefined || !integrity.some(isTransformedByAtom)
-      ) {
-        return entry.label;
-      }
-      if (
-        !flowWrittenPrefixes.overlaps(
+        !carriesAttribution(entry) ||
+        !changedPrefixes.overlaps(
           transformedByProbePath({ origin: entry.origin, path: entryPath }),
         )
       ) {
         return entry.label;
       }
+      const integrity = entry.label.integrity!;
       const kept = integrity.filter((atom) =>
         !isTransformedByAtom(atom) ||
         flowTransformedBy.some((minted) => deepEqual(minted, atom))
       );
+      if (kept.length === integrity.length) return entry.label;
+      attributionWithdrawn = true;
       const { integrity: _dropped, ...rest } = entry.label;
       return kept.length > 0 ? { ...rest, integrity: kept } : rest;
     };
@@ -14759,12 +14816,58 @@ export function* prepareBoundaryCommitSteps(
       // make the stamp loop re-mint it from the CURRENT join, silently
       // unfreezing it; legacy entries await the write-path migration absorb.
       const structureContainerPath = structureContainerPaths.get(key);
+      // The `TransformedBy` a membership stamp carries where this transaction
+      // re-mints it without writing the container there: at a declared
+      // container (`recordCfcStructureContainer`), and at each path a read
+      // was declared onward to, both of which a reconcile re-mints from its
+      // own join whether or not it wrote them. Setting the container decides
+      // every slot, even where the diff writes only the slots that changed,
+      // so the attempted write of the whole value earns the join's
+      // attribution as a write of the container itself does. A reconcile
+      // that sets nothing there decides no slot, so the function it names
+      // keeps the attribution only where every stamp it replaces carried it
+      // too: attribution meets across reconciles as it does across writers,
+      // and `carriedStampLabel` has already withdrawn it from the stamps
+      // another writer's slot writes overlapped.
+      const remintedAttribution = new Map<string, typeof flowTransformedBy>();
+      const attemptedWrites = tx.getReactivityLog?.().attemptedWrites ?? [];
+      const remintAttribution = (
+        path: readonly string[],
+        replaced: readonly LabelMapEntry[],
+      ): void => {
+        const set = attemptedWrites.some((write) => {
+          if (
+            write.space !== space || write.id !== id ||
+            normalizeCellScope(write.scope) !== scope
+          ) {
+            return false;
+          }
+          const writePath = canonicalizeDocumentPath(
+            toDocumentPath(write.path),
+          );
+          return writePath !== undefined &&
+            concretePathHasPrefix(path, writePath);
+        });
+        if (set) return;
+        remintedAttribution.set(
+          pathKey(path),
+          flowTransformedBy.filter((atom) =>
+            replaced.length > 0 &&
+            replaced.every((entry) =>
+              (entry.label.integrity ?? []).some((held) =>
+                deepEqual(held, atom)
+              )
+            )
+          ),
+        );
+      };
       if (structureContainerPath !== undefined) {
         const containerPathKey = pathKey(structureContainerPath);
         const containerTemplateKey = pathKey([
           ...structureContainerPath,
           "*",
         ]);
+        const replaced: LabelMapEntry[] = [];
         let kept = 0;
         for (const candidateEntry of persistedLabelEntries) {
           if (
@@ -14773,6 +14876,7 @@ export function* prepareBoundaryCommitSteps(
               pathKey(candidateEntry.path) === containerPathKey) ||
               pathKey(candidateEntry.path) === containerTemplateKey)
           ) {
+            replaced.push(candidateEntry);
             continue;
           }
           persistedLabelEntries[kept++] = candidateEntry;
@@ -14782,6 +14886,7 @@ export function* prepareBoundaryCommitSteps(
           !structureStampPaths.some((p) => pathKey(p) === containerPathKey)
         ) {
           structureStampPaths.push(structureContainerPath);
+          remintAttribution(structureContainerPath, replaced);
         }
       }
       // Each path a read was declared onward to lands here: its MEMBERSHIP
@@ -14798,6 +14903,7 @@ export function* prepareBoundaryCommitSteps(
         if (targetKey(onward.target) !== key) continue;
         const onwardPath = canonicalizeLogicalPath(onward.target.path);
         const onwardPathKey = pathKey(onwardPath);
+        const replaced: LabelMapEntry[] = [];
         let kept = 0;
         for (const candidateEntry of persistedLabelEntries) {
           if (
@@ -14805,6 +14911,7 @@ export function* prepareBoundaryCommitSteps(
             candidateEntry.observes === "enumerate" &&
             pathKey(candidateEntry.path) === onwardPathKey
           ) {
+            replaced.push(candidateEntry);
             continue;
           }
           persistedLabelEntries[kept++] = candidateEntry;
@@ -14812,8 +14919,11 @@ export function* prepareBoundaryCommitSteps(
         persistedLabelEntries.length = kept;
         if (!structureStampPaths.some((p) => pathKey(p) === onwardPathKey)) {
           onwardStampPaths.push(onwardPath);
+          remintAttribution(onwardPath, replaced);
         }
       }
+      const attributionAt = (path: readonly string[]) =>
+        remintedAttribution.get(pathKey(path)) ?? flowTransformedBy;
       // Writer-fit measures the documents a schema could have declared a
       // policy on, which leaves out two id classes and a document the runtime
       // marked as undeclarable alike (`isDeclarablePolicyStore`). The
@@ -15083,13 +15193,14 @@ export function* prepareBoundaryCommitSteps(
           ...flowConfidentiality,
           ...onward,
         ]);
+        const attribution = attributionAt(path);
         if (membershipConfidentiality.length > 0) {
           persistedLabelEntries.push(markFlowStampEntry({
             path,
             label: {
               confidentiality: [...membershipConfidentiality],
-              ...(flowTransformedBy.length > 0
-                ? { integrity: [...flowTransformedBy] }
+              ...(attribution.length > 0
+                ? { integrity: [...attribution] }
                 : {}),
             },
             origin: "structure",
@@ -15114,7 +15225,7 @@ export function* prepareBoundaryCommitSteps(
           ? wiringConfidentiality(wiring.setupBegan)
           : flowConfidentiality;
       const membershipTransformedByAt = (path: readonly string[]) =>
-        wiringNarrowed && !isDeclaredContainer(path) ? [] : flowTransformedBy;
+        wiringNarrowed && !isDeclaredContainer(path) ? [] : attributionAt(path);
       // A container this transaction reaches only by restating a result
       // wiring existed before it and was not written by it, so no existence
       // entry is minted there: one would record a creation this attempt did
@@ -15507,7 +15618,8 @@ export function* prepareBoundaryCommitSteps(
 
     if (
       coalescedLabelEntries.length === 0 && !flowCleared && !remintCleared &&
-      !linkCleared && !mintedCleared && !droppedLabelMetadataTemplates
+      !linkCleared && !mintedCleared && !droppedLabelMetadataTemplates &&
+      !attributionWithdrawn
     ) {
       if (deferredWriterRefusal !== undefined) {
         reasons.push(verdictReason(deferredWriterRefusal));
