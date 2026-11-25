@@ -1689,6 +1689,36 @@ describe("piece pull materialization", () => {
       ),
     ).not.toThrow();
 
+    // Stored bytes can hold a link envelope with nothing a link is made of
+    // inside it. A cell write refuses one, so it is written here as a store
+    // write below that layer would leave it. It is recognized as a link and
+    // cannot be followed, so the element keeps the proof without the policy
+    // rather than stopping the update on the envelope.
+    const malformed = runtime.getCell(
+      pieces.getSpace(),
+      "malformed-comment-" + crypto.randomUUID(),
+    );
+    const overMalformed = await overElement(
+      { author: comment.key("author"), body: "x" },
+      candidate,
+      prior,
+      malformed,
+    );
+    const rawWrite = runtime.edit();
+    seedStoredEnvelope(rawWrite, {
+      space: pieces.getSpace(),
+      scope: "space",
+      id: malformed.getAsNormalizedFullLink().id,
+      path: [],
+    }, { value: { author: { "/": { "link@1": null } }, body: "x" } });
+    expect((await rawWrite.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    expect(malformed.getRaw()).toEqual({
+      author: { "/": { "link@1": null } },
+      body: "x",
+    });
+    expect(overMalformed).toThrow(/comments\.0\.author\.pictureBlob/);
+
     // A position whose handle wrappers the candidate cannot settle is not
     // known to be read as a value.
     const eitherScope = (author: JSONSchema): JSONSchema =>
