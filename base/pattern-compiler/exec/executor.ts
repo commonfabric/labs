@@ -2168,6 +2168,21 @@ class HandedValues {
     }
   }
 
+  /**
+   * Notes that a body is handed `value` as what the position `at` holds,
+   * where no read gave it an address of its own.
+   */
+  at(value: object, at: Ref): void {
+    if (this.#roots.has(value)) return;
+    this.#roots.set(value, {
+      at,
+      shape: undefined,
+      given: undefined,
+      bounded: false,
+    });
+    this.#below = undefined;
+  }
+
   /** The address a container was handed with, where it was with one. */
   addressOf(value: object): Ref | undefined {
     const root = this.#roots.get(value);
@@ -2852,6 +2867,95 @@ export class Host {
   }
 
   /**
+   * The argument of a body with each element of the array at the place of
+   * `at`, an entry at `*` where the body declares no handle, given with
+   * the address of its position (ES §2.4, "A value passed on unchanged is
+   * stored as a reference"): a reference stand-in where every entry there
+   * observes the element's identity alone, as for a reference at a
+   * position of no handle type (`Instance.handleOf`), and the element's
+   * value, noted as handed with that address, where an entry reads it. A
+   * body that returns the element, or a container it builds that holds
+   * it, unchanged then stores the link to the position, over an array of
+   * references and over an array of plain values in place alike; a value
+   * the body made of it, as a spread or a record with a member changed,
+   * is a new value and has no address.
+   */
+  #elementsWithAddress(
+    argument: unknown,
+    layout: readonly {
+      slot: number;
+      at: readonly string[];
+      handle?: unknown;
+    }[],
+    at: readonly string[],
+    root: Root,
+    path: readonly string[],
+    handed: HandedValues,
+  ): unknown {
+    const instance = this.#instance;
+    const text = JSON.stringify(at);
+    const entries = layout.filter((entry) => JSON.stringify(entry.at) === text);
+    if (entries.some((entry) => entry.handle !== undefined)) return argument;
+    const above = path.slice(0, -1);
+    const container = this.at(instance.rootOf(root, this, above), above);
+    const held = this.at(argument, at.slice(0, -1));
+    if (!(container instanceof Ref) || !Array.isArray(held)) return argument;
+    // The body reads nothing of an element where every entry at the
+    // element observes its identity and no entry reads below it.
+    const below = layout.some((entry) =>
+      entry.at.length > at.length &&
+      at.every((segment, index) => entry.at[index] === segment)
+    );
+    const identity = !below &&
+      entries.every(({ slot }) =>
+        instance.plan.slots[slot].observes === "identity"
+      );
+    // The address of each element that is a document of its own, reached
+    // through the link the array holds at its position: an element of an
+    // array of plain values in place has no document of its own and is
+    // handed as the read gave it.
+    const own = instance.store.locate(container, true, undefined, true).named;
+    const addressOf = (index: number): Ref | undefined => {
+      const named = instance.store.locate(
+        container.key(`${index}`),
+        true,
+        undefined,
+        true,
+      ).named;
+      return named.doc === own.doc ? undefined : named;
+    };
+    if (!identity) {
+      // The body reads the elements: each container it is handed is noted
+      // with the address of its position, where no read gave it one, and
+      // the array stays the one the read gave.
+      held.forEach((member, index) => {
+        if (
+          typeof member !== "object" || member === null ||
+          instance.addressRead(member) !== undefined
+        ) return;
+        const address = addressOf(index);
+        if (address !== undefined) handed.at(member, address);
+      });
+      return argument;
+    }
+    let replaced = false;
+    const members = held.map((member, index) => {
+      // An element that holds nothing, or a value that is no container,
+      // is handed as it is.
+      if (typeof member !== "object" || member === null) return member;
+      const address = addressOf(index);
+      if (address === undefined) return member;
+      replaced = true;
+      const standIn = Object.freeze({});
+      instance.store.addresses.set(standIn, address);
+      return standIn;
+    });
+    return replaced
+      ? instance.placed(argument, at.slice(0, -1), members)
+      : argument;
+  }
+
+  /**
    * Runs a sandboxed body of the cone (ES §2.4). An entry of `Body.reads`
    * of a body of a pattern compiled in holds the default the callee
    * declares for the path the call bound to the slot: the body is handed
@@ -2995,9 +3099,20 @@ export class Host {
     for (const { slot, at, handle, schema } of layout) {
       const { root, path } = instance.plan.slots[slot];
       if (
-        handle === undefined || at.indexOf("*") !== at.length - 1 ||
+        at.indexOf("*") !== at.length - 1 ||
         path.indexOf("*") !== path.length - 1
       ) continue;
+      if (handle === undefined) {
+        argument = this.#elementsWithAddress(
+          argument,
+          layout,
+          at,
+          root,
+          path,
+          handed,
+        );
+        continue;
+      }
       const above = path.slice(0, -1);
       const container = this.at(instance.rootOf(root, this, above), above);
       const held = this.at(argument, at.slice(0, -1));

@@ -309,4 +309,38 @@ export const SCENARIOS: Scenario[] = [
     }],
     steps: [],
   },
+  {
+    // Bodies that return a value they read through a link, unchanged or
+    // inside a container they build, and bodies that return a new value
+    // made from one (ES §2.4). The items are pieces of their own, with a
+    // title whose type declares no clause; `rows` holds plain values in
+    // place; `holder.item` is a link to the first item. What each path
+    // stores at each output, a link or a copy, and the labels there, are
+    // compared.
+    name: "fixtures/returned-links",
+    labels: true,
+    pieces: [
+      ...["first", "second"].map((name) => ({
+        name,
+        module: "base/pattern-compiler/compare/fixtures/returned-item.tsx",
+        as: "alice",
+      })),
+      {
+        name: "returned",
+        module: "base/pattern-compiler/compare/fixtures/returned-links.tsx",
+        argument: ({ first, second }) => ({
+          items: [first, second],
+          rows: [{ title: "r" }, { title: "s" }],
+          holder: { item: first },
+        }),
+        as: "alice",
+      },
+    ],
+    steps: ["first", "second"].map((piece) => ({
+      piece,
+      stream: "name",
+      event: { title: `the ${piece}` },
+      as: "alice",
+    })),
+  },
 ];

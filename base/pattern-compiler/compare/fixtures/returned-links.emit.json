@@ -1,0 +1,1117 @@
+[
+  {
+    "module": "returned-links.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "returned-links.tsx",
+              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst elementOf = $rt.data(lift(({ items }) => items[0]));\nconst typedElementOf = $rt.data(lift(({ items }) => items[0]));\nconst arrayOf = $rt.data(lift(({ items }) => items));\nconst memberOf = $rt.data(lift(({ holder }) =>\n  holder.item\n));\nconst rowOf = $rt.data(lift(({ rows }) => rows[0]));\nconst pickedOf = $rt.data(lift((\n  { items },\n) => ({ picked: items[0] })));\nconst keptOf = $rt.data(lift(({ items }) =>\n  items.filter((item) => item !== undefined && item !== null)\n));\nconst spreadOf = $rt.data(lift(({ items }) => ({\n  ...items[0],\n})));\nconst renamedOf = $rt.data(lift(({ items }) => ({\n  title: `${items[0].title}!`,\n})));\nconst titleOf = $rt.data(lift(({ items }) => items[0].title));\n\n\nconst $default = $rt.data((pattern(\"sha256:4e0593c0194e67a6cddbcf2b0ea55010c4c09604f19e15e1009d30c213e5d032\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ items }) => items[0])($a));\n$rt.body(1, ($a) => (({ items }) => items[0])($a));\n$rt.body(2, ($a) => (({ items }) => items)($a));\n$rt.body(3, ($a) => (({ holder }) =>\n  holder.item)($a));\n$rt.body(4, ($a) => (({ rows }) => rows[0])($a));\n$rt.body(5, ($a) => ((\n  { items },\n) => ({ picked: items[0] }))($a));\n$rt.body(6, ($a) => (({ items }) =>\n  items.filter((item) => item !== undefined && item !== null))($a));\n$rt.body(7, ($a) => (({ items }) => ({\n  ...items[0],\n}))($a));\n$rt.body(8, ($a) => (({ items }) => ({\n  title: `${items[0].title}!`,\n}))($a));\n$rt.body(9, ($a) => (({ items }) => items[0].title)($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ items: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ items: $h.slot(0) }))));\n$rt.value(2, ($h) => ($h.invoke(2, ({ items: $h.slot(2) }))));\n$rt.value(3, ($h) => ($h.invoke(3, ({ holder: $h.read({\"kind\":\"argument\"}, [\"holder\"]) }))));\n$rt.value(4, ($h) => ($h.invoke(4, ({ rows: $h.slot(4) }))));\n$rt.value(5, ($h) => ($h.invoke(5, ({ items: $h.slot(0) }))));\n$rt.value(6, ($h) => ($h.invoke(6, ({ items: $h.slot(0) }))));\n$rt.value(7, ($h) => ($h.invoke(7, ({ items: $h.slot(0) }))));\n$rt.value(8, ($h) => ($h.invoke(8, ({ items: $h.slot(0) }))));\n$rt.value(9, ($h) => ($h.invoke(9, ({ items: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ element: $h.output(0), typedElement: $h.output(1), array: $h.output(2), member: $h.output(3), row: $h.output(4), picked: $h.output(5), kept: $h.output(6), spread: $h.output(7), renamed: $h.output(8), title: $h.output(9) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [
+            {
+              "cone": 3,
+              "path": [
+                "holder"
+              ],
+              "root": {
+                "kind": "argument"
+              }
+            }
+          ],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 3
+            },
+            {
+              "cone": 4,
+              "function": true,
+              "output": 4
+            },
+            {
+              "cone": 5,
+              "function": true,
+              "output": 5
+            },
+            {
+              "cone": 6,
+              "function": true,
+              "output": 6
+            },
+            {
+              "cone": 7,
+              "function": true,
+              "output": 7
+            },
+            {
+              "cone": 8,
+              "function": true,
+              "output": 8
+            },
+            {
+              "cone": 9,
+              "function": true,
+              "output": 9
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 76,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "elementOf",
+              "outputs": [
+                {
+                  "path": [],
+                  "reference": {
+                    "oneOf": [
+                      1
+                    ]
+                  }
+                }
+              ],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "typedElementOf",
+              "outputs": [
+                {
+                  "path": [],
+                  "reference": {
+                    "oneOf": [
+                      1
+                    ]
+                  }
+                }
+              ],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "arrayOf",
+              "outputs": [
+                {
+                  "path": [],
+                  "reference": {
+                    "passes": 2
+                  }
+                }
+              ],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "memberOf",
+              "outputs": [
+                {
+                  "path": [],
+                  "reference": {
+                    "passes": 3
+                  }
+                }
+              ],
+              "reads": [
+                {
+                  "at": [
+                    "holder",
+                    "item"
+                  ],
+                  "slot": 3
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "rowOf",
+              "outputs": [
+                {
+                  "path": [],
+                  "reference": {
+                    "oneOf": [
+                      5
+                    ]
+                  }
+                }
+              ],
+              "reads": [
+                {
+                  "at": [
+                    "rows"
+                  ],
+                  "slot": 4
+                },
+                {
+                  "at": [
+                    "rows",
+                    "*"
+                  ],
+                  "slot": 5
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "pickedOf",
+              "outputs": [
+                {
+                  "path": [
+                    "picked"
+                  ],
+                  "reference": {
+                    "oneOf": [
+                      1
+                    ]
+                  }
+                }
+              ],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "keptOf",
+              "outputs": [
+                {
+                  "path": [
+                    "*"
+                  ],
+                  "reference": {
+                    "oneOf": [
+                      1
+                    ]
+                  }
+                }
+              ],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "items",
+                    "*"
+                  ],
+                  "slot": 6
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spreadOf",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "renamedOf",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*",
+                    "title"
+                  ],
+                  "slot": 7
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "titleOf",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*",
+                    "title"
+                  ],
+                  "slot": 7
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2581
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "element",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2619
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "typedElement",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2655
+              },
+              "bodies": [
+                2
+              ],
+              "entry": "array",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2685
+              },
+              "bodies": [
+                3
+              ],
+              "entry": "member",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2714
+              },
+              "bodies": [
+                4
+              ],
+              "entry": "row",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4,
+                5
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2741
+              },
+              "bodies": [
+                5
+              ],
+              "entry": "picked",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2770
+              },
+              "bodies": [
+                6
+              ],
+              "entry": "kept",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1,
+                6
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2799
+              },
+              "bodies": [
+                7
+              ],
+              "entry": "spread",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2831
+              },
+              "bodies": [
+                8
+              ],
+              "entry": "renamed",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                7
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "returned-links.tsx",
+                "start": 2862
+              },
+              "bodies": [
+                9
+              ],
+              "entry": "title",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                7
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "element"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "typedElement"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "array"
+              ],
+              "template": {
+                "by": {
+                  "body": 2
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "member"
+              ],
+              "template": {
+                "by": {
+                  "body": 3
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "row"
+              ],
+              "template": {
+                "by": {
+                  "body": 4
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 4
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "picked"
+              ],
+              "template": {
+                "by": {
+                  "body": 5
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept"
+              ],
+              "template": {
+                "by": {
+                  "body": 6
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 6
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "spread"
+              ],
+              "template": {
+                "by": {
+                  "body": 7
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "renamed"
+              ],
+              "template": {
+                "by": {
+                  "body": 8
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "title"
+              ],
+              "template": {
+                "by": {
+                  "body": 9
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:4e0593c0194e67a6cddbcf2b0ea55010c4c09604f19e15e1009d30c213e5d032"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "items",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "holder",
+                "item"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "rows"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "rows",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "inPlace": true,
+              "observes": "shape",
+              "path": [
+                "items",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "items",
+                "*",
+                "title"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/4"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title"
+                  ],
+                  "type": "object"
+                },
+                "t1": {
+                  "items": {
+                    "$ref": "#/$defs/t0"
+                  },
+                  "type": "array"
+                }
+              },
+              "properties": {
+                "holder": {
+                  "properties": {
+                    "item": {
+                      "$ref": "#/$defs/t0"
+                    }
+                  },
+                  "required": [
+                    "item"
+                  ],
+                  "type": "object"
+                },
+                "items": {
+                  "$ref": "#/$defs/t1"
+                },
+                "rows": {
+                  "$ref": "#/$defs/t1"
+                }
+              },
+              "required": [
+                "items",
+                "rows",
+                "holder"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "items": {
+                    "type": "unknown"
+                  },
+                  "type": "array"
+                },
+                "t1": {
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title"
+                  ],
+                  "type": "object"
+                }
+              },
+              "properties": {
+                "array": {
+                  "$ref": "#/$defs/t0"
+                },
+                "element": {
+                  "type": "unknown"
+                },
+                "kept": {
+                  "$ref": "#/$defs/t0"
+                },
+                "member": {
+                  "$ref": "#/$defs/t1"
+                },
+                "picked": {
+                  "properties": {
+                    "picked": {
+                      "$ref": "#/$defs/t1"
+                    }
+                  },
+                  "required": [
+                    "picked"
+                  ],
+                  "type": "object"
+                },
+                "renamed": {
+                  "$ref": "#/$defs/t1"
+                },
+                "row": {
+                  "$ref": "#/$defs/t1"
+                },
+                "spread": {
+                  "$ref": "#/$defs/t1"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "typedElement": {
+                  "$ref": "#/$defs/t1"
+                }
+              },
+              "required": [
+                "element",
+                "typedElement",
+                "array",
+                "member",
+                "row",
+                "picked",
+                "kept",
+                "spread",
+                "renamed",
+                "title"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "items": {
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "properties": {
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

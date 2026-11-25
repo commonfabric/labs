@@ -51,6 +51,25 @@ const OPEN: Record<string, string[]> = {
     "step 2 flow",
     "step 3 flow",
   ],
+  // A `lift` whose body spreads an element of an array of references
+  // (`spreadOf`) stores `{}` on the compiled path: the crate's footprint
+  // reads a spread as the identity of its argument (`footprint.rs`,
+  // `SpreadProperty`), so the body is handed a reference stand-in, and
+  // the spread of it gives no member (`values`). The atom that names what
+  // transformed a member differs by construction, as for
+  // `fixtures/get-iterated` (`flow`). Every other output stores what
+  // today's path stores, a link where the body returned an element it
+  // read through a link unchanged (note 1122).
+  "fixtures/returned-links": [
+    "start 0 values",
+    "start 1 values",
+    "start 2 values",
+    "start 2 flow",
+    "step 0 values",
+    "step 0 flow",
+    "step 1 values",
+    "step 1 flow",
+  ],
   // The compiled path is the stricter one: it holds a computed output to
   // the claims its result type declares, and a derivation is no writer a
   // claim admits. Today's path holds a computed output to no claim of the
