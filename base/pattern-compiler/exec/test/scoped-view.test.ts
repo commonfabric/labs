@@ -538,6 +538,83 @@ describe("a `map` over the result of a `computed` of the scope `user`", () => {
   });
 });
 
+// `fixtures/scoped-generated.tsx`: a `map` over the result of a `computed`
+// over an array of references, an array of plain values the `computed`
+// generates, whose rows pass each element on. The `computed` reads nothing
+// of a user until an item holds a link to the acting user's nickname, a
+// state cell of the scope `user`; its value then becomes of that scope,
+// after the document that holds the array was named in the space, the rows
+// hold references into it, the result document of the space holds the
+// rows, and a state cell of the space holds the reference to one element a
+// row's handler kept. In `fixtures/scoped-generated-count.tsx` the rendered
+// tree reads the length of the array as well, so the tree becomes of the
+// scope too.
+for (const fixture of ["scoped-generated", "scoped-generated-count"]) {
+  describe(`a \`map\` over the result of a \`computed\` over an array of references that becomes of the scope \`user\`, over \`fixtures/${fixture}.tsx\``, () => {
+    /** The text of each row of the tree `view` gave. */
+    const rows = (view: Node): string[] =>
+      ((view.children?.[0] as Node[] | undefined) ?? []).map((row) =>
+        JSON.stringify(row.children)
+      );
+    /** The documents of the space that hold what an output returned. */
+    const outputsOfTheSpace = (instance: Instance) =>
+      [...instance.store.docs].filter(([id, { kind }]) =>
+        kind === "output" && !id.includes("~")
+      );
+    /** How many links each document of the store holds to `doc`. */
+    const linksTo = (instance: Instance, doc: string): number =>
+      [...instance.store.docs].reduce(
+        (sum, [, { value }]) =>
+          sum + JSON.stringify(value).split(`"doc":"${doc}"`).length - 1,
+        0,
+      );
+
+    for (const size of [10, 100]) {
+      it(`gives each principal the rows its own nickname selects, and stores no value of a user in a document of the space, at ${size} items`, async () => {
+        const { instance, send, view } = await started(fixture, size);
+        send("bob", "$UI/children/0/0/props/onClick", undefined);
+        send("ann", "call", { name: "Ann" });
+        send("ann", "claim", { at: 3 });
+
+        const ann = rows(view("ann"));
+        expect(JSON.stringify(outputsOfTheSpace(instance))).not.toContain(
+          "Ann",
+        );
+        const bob = rows(view("bob"));
+
+        expect(instance.failed).toEqual([]);
+        const [[before]] = outputsOfTheSpace(instance);
+        expect(JSON.stringify(outputsOfTheSpace(instance))).not.toContain(
+          "Ann",
+        );
+        // The rows hold no reference to the document named before; the
+        // state cell holds the one its handler kept.
+        expect(linksTo(instance, before)).toBe(1);
+        expect(ann[3]).toBe(JSON.stringify(["Ann"]));
+        expect(bob[3]).toBe(JSON.stringify([""]));
+        for (const shown of [ann, bob]) {
+          expect(shown.filter((row) => row.includes("nobody")).length).toBe(
+            size - 1,
+          );
+        }
+      });
+    }
+
+    it("shows each principal the rows its own nickname selects after the nickname changes", async () => {
+      const { instance, send, view } = await started(fixture, 10);
+      send("ann", "claim", { at: 3 });
+      view("ann");
+      view("bob");
+      send("ann", "call", { name: "Ann" });
+      send("bob", "call", { name: "Bob" });
+
+      expect(rows(view("ann"))[3]).toBe(JSON.stringify(["Ann"]));
+      expect(rows(view("bob"))[3]).toBe(JSON.stringify(["Bob"]));
+      expect(instance.failed).toEqual([]);
+    });
+  });
+}
+
 // `fixtures/scoped.tsx`: `summary` is an output of the result that reads
 // state of the scope `user`. The place of an output of the result in the
 // scope instance holds its value, which the entry of that place evaluates

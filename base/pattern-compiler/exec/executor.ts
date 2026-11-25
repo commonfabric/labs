@@ -633,6 +633,15 @@ const compareSortKeys = (a: unknown, b: unknown): number => {
 const isSortKey = (key: unknown): boolean =>
   key === null || typeof key !== "object";
 
+/**
+ * Whether two sources of the element of one key name the same place: a
+ * reference names it by its document and path. A source of another kind
+ * is no place a reader holds.
+ */
+const samePlace = (a: Element["source"], b: Element["source"]): boolean =>
+  !(a instanceof Ref) || !(b instanceof Ref) ||
+  (a.doc === b.doc && textOf(a.path) === textOf(b.path));
+
 /** A value of the reactive tier held for a later host. */
 class Thunk {
   constructor(readonly evaluate: (host: Host) => unknown) {}
@@ -3753,6 +3762,27 @@ export class Instance {
     if (aside === undefined) return;
     for (const slot of [...aside]) {
       if (scopeKeyReaches(scoped, slot.scoped)) {
+        this.#mark(slot, undefined, used);
+      }
+    }
+  }
+
+  /**
+   * Marks the entries of a scope key that used what `used` names, where the
+   * entry of `used` for the scope key `scoped` is dropped: those set aside
+   * as well as those in the memo, of the keys a change of `scoped` reaches
+   * (`scopeKeyReaches`). An entry of no scope key holds a reference to
+   * `used` at most, which stays what it was.
+   */
+  #markScopedUsers(used: string, scoped: string): void {
+    for (const user of this.#users.get(used) ?? []) {
+      const slot = this.#slots.get(user);
+      if (slot?.scoped !== undefined && scopeKeyReaches(scoped, slot.scoped)) {
+        this.#mark(slot, undefined, used);
+      }
+    }
+    for (const slot of [...this.#asideUsers.get(used) ?? []]) {
+      if (slot.scoped !== undefined && scopeKeyReaches(scoped, slot.scoped)) {
         this.#mark(slot, undefined, used);
       }
     }
@@ -7011,6 +7041,19 @@ export class Instance {
       this.freshContext(unit.context),
     );
     if (entry === unit.seen) return;
+    if (entry.scoped !== undefined) {
+      // An assembly found to be of a scope key after its rows were stored
+      // for every reader: the place holds what `#formOf()` gives a
+      // reference to such an assembly from the first, and the unit goes.
+      const { place } = unit;
+      const reference = new Assembled(unit.collection, unit.context, unit.name);
+      if ("path" in place) {
+        this.#place(place.path, reference, undefined, [...place.path]);
+      } else {
+        this.#place(this.#pathOf(unit), reference, place, place.below);
+      }
+      return;
+    }
     const values = Array.isArray(entry.value) ? entry.value : [];
     const path = this.#pathOf(unit);
     const { delta } = entry;
@@ -8133,13 +8176,17 @@ export class Instance {
         scopes.setAside(name, held);
         if (slot !== undefined) this.#toAside(slot, held);
       } else if (slot !== undefined) {
-        // An assembly is formed again for each key.
+        // An assembly is formed again for each key. What used the entry of
+        // the other key, set aside or not, is marked for that key: no mark
+        // can reach it through the assembly of its key, which is gone, and
+        // the assembly that key's next run forms differs from what it used.
         this.#unregister(slot);
         slot.marked = false;
         slot.all = false;
         slot.suspects.clear();
         slot.reads.clear();
         slot.scoped = undefined;
+        this.#markScopedUsers(key, held.scoped);
       }
       this.#memo.delete(key);
     }
@@ -8900,6 +8947,23 @@ export class Instance {
   }
 
   /**
+   * Marks as not current what is kept under an element key whose element
+   * is now at another place than when it was evaluated, with the key
+   * unchanged: an element of an array whose document was named again in
+   * the scope its value was found to have (`#generated()`). A row that
+   * passed the reference to its element on holds the reference to the old
+   * place and read nothing there that a change would mark.
+   */
+  #placeMoved(
+    collection: number,
+    around: readonly string[],
+    key: string,
+  ): void {
+    const id = this.#name("under", collection, around, key);
+    for (const entry of this.#underKey.get(id) ?? []) this.markStale(entry);
+  }
+
+  /**
    * Fails a cone instance whose next evaluation would be one more than
    * the bound allows (SS §8.1 and §8.2): the evaluation does not run, the
    * entry takes the error state, and the side-writes the cone instance
@@ -9272,13 +9336,16 @@ export class Instance {
           const before = this.#tables.get(key);
           this.#setTable(key, collection, around, elements);
           const now = this.#tables.get(key)?.byKey;
-          for (const { key: left, index } of before?.elements ?? []) {
+          for (const { key: left, index, source } of before?.elements ?? []) {
             const stays = now?.get(left);
             if (stays === undefined) {
               this.#drop(collection, around, left);
-            } else if (stays.index !== index) {
-              this.#moved(collection, around, left);
+              continue;
             }
+            if (!samePlace(source, stays.source)) {
+              this.#placeMoved(collection, around, left);
+            }
+            if (stays.index !== index) this.#moved(collection, around, left);
           }
           // What reads the value of an element from the table.
           this.#markUsers(tableName(key));
@@ -10641,10 +10708,12 @@ export class Instance {
     const keys = within.map((collection) =>
       context.get(collection)?.key ?? "?"
     );
-    const id = this.#inScope(
-      this.outputDocument(output, keys),
-      this.#scopeOfOutput(output, keys),
-    );
+    // A value found to be of a scope after its array was stored is stored
+    // in the instances of that scope from then on, as the place of a value
+    // moves (`#valuePlace`).
+    const base = this.outputDocument(output, keys);
+    const named = () => this.#inScope(base, this.#scopeOfOutput(output, keys));
+    const id = named();
     this.#documents.add(id);
     const store = (array: readonly unknown[]) => {
       const stored = this.stored(array);
@@ -10655,14 +10724,17 @@ export class Instance {
     store(held);
     // The executor evaluates on demand, and a link stored elsewhere is
     // no dependency on the output: the read that reaches the document
-    // evaluates the output for the elements that hold the keys now.
+    // evaluates the output for the elements that hold the keys now. A
+    // value that this evaluation finds to be of a scope narrower than the
+    // document's is not stored in it, as every reader of a document of the
+    // space reads one value: the document named before is no place of it.
     const value = this.valueOfOutput.get(output);
     if (value !== undefined) {
       this.store.sources.set(id, () => {
         const current = this.#contextOfKeys(within, keys);
         if (current === undefined) return;
         const now = this.evaluated(value)(current).value;
-        if (Array.isArray(now)) store(now);
+        if (Array.isArray(now) && named() === id) store(now);
       });
     }
     return new Ref(id, []);
