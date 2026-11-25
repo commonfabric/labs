@@ -56,14 +56,18 @@ class HeldCommitSessionFactory implements SessionFactory {
   readonly #held = Promise.withResolvers<void>();
   readonly #answered = Promise.withResolvers<{ name?: unknown } | undefined>();
 
-  /** Resolves once a commit is held. */
-  readonly held = this.#held.promise;
-
-  /** Resolves to the error the server answered the held commit with, if any. */
-  readonly answered = this.#answered.promise;
-
   constructor(server: MemoryV2Server.Server) {
     this.#server = server;
+  }
+
+  /** Resolves once a commit is held. */
+  get held(): Promise<void> {
+    return this.#held.promise;
+  }
+
+  /** Resolves to the error the server answered the held commit with, if any. */
+  get answered(): Promise<{ name?: unknown } | undefined> {
+    return this.#answered.promise;
   }
 
   /** Holds the next commit sent. */
@@ -97,7 +101,9 @@ class HeldCommitSessionFactory implements SessionFactory {
       close: () => base.close(),
       setReceiver: (receive) =>
         base.setReceiver((payload) => {
-          const received = decodeMemoryBoundary(payload);
+          const received = this.#requestId === undefined
+            ? undefined
+            : decodeMemoryBoundary(payload);
           if (
             isFabricPlainObject(received) && received.type === "response" &&
             received.requestId === this.#requestId
