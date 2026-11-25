@@ -45,6 +45,7 @@ import {
   parseLink,
 } from "../link-utils.ts";
 import { rawMetaWriteAuthorization } from "../meta-seam.ts";
+import { writeResultSchemaMeta } from "../result-schema-meta.ts";
 import { isPrimitiveCellLink, type NormalizedFullLink } from "../link-types.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import {
@@ -132,6 +133,7 @@ import type {
   SlotBindings,
 } from "../../../../base/pattern-compiler/exec/plan-write.ts";
 import {
+  argumentOf,
   canonical,
   identifierOf,
   isKeySegment,
@@ -542,6 +544,11 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #artifact: Artifact | undefined;
   /** The artifact of each instance the executor made of another artifact. */
   readonly #artifactOf = new Map<string, Artifact>();
+  /**
+   * The instance each argument document of an instance a body made is
+   * the argument of, by the document.
+   */
+  readonly #madeArguments = new Map<string, string>();
   /**
    * The number of changes of what decides whether a binding takes a staged
    * label, in the transaction in progress: its writes, and its reads of a
@@ -1286,6 +1293,7 @@ export class RuntimeTransactions implements TransactionHooks {
   /** @inheritDoc */
   instantiated(instance: string, artifact: Artifact): void {
     this.#artifactOf.set(instance, artifact);
+    this.#madeArguments.set(argumentOf(instance), instance);
     this.#declared.declare(instance, artifact, true);
     if (this.#compiledPattern === undefined) return;
     this.#patternOf.set(instance, this.#register(artifact));
@@ -4724,7 +4732,27 @@ export class RuntimeTransactions implements TransactionHooks {
    * a document the executor named from one that exists outside it.
    */
   #linkToResult(tx: IExtendedStorageTransaction, doc: string): void {
-    if (this.#owner === undefined || doc === this.#owner) return;
+    if (this.#owner === undefined) return;
+    if (doc === this.#owner) {
+      if (this.#artifact !== undefined) {
+        this.#describeResult(tx, doc, this.#artifact);
+      }
+      return;
+    }
+    // The argument document of an instance a body made belongs to that
+    // instance, as a piece's argument belongs to the piece, so a client
+    // that writes it through the instance's result finds the contract of
+    // the write there.
+    const instance = this.#madeArguments.get(doc);
+    if (instance !== undefined) {
+      tx.writeOrThrow(
+        { ...this.#address(doc, []), path: ["result"] },
+        this.#runtime.getCellFromLink(this.#address(instance, []))
+          .getAsWriteRedirectLink({ includeSchema: true }) as FabricValue,
+        rawMetaWriteAuthorization,
+      );
+      return;
+    }
     const owner = this.#address(this.#owner, []);
     this.#resultLink ??= this.#runtime.getCellFromLink(owner)
       .getAsWriteRedirectLink({ includeSchema: true });
@@ -4732,6 +4760,61 @@ export class RuntimeTransactions implements TransactionHooks {
       { ...this.#address(doc, []), path: ["result"] },
       this.#resultLink as FabricValue,
       rawMetaWriteAuthorization,
+    );
+    const artifact = this.#artifactOf.get(doc);
+    if (artifact !== undefined) this.#describeAsPiece(tx, doc, artifact);
+  }
+
+  /**
+   * Writes onto the result document `doc` of an instance a body made, of
+   * the pattern of `artifact`, what the runner writes onto a piece's
+   * result (`Runner.#setupInternal`): the `argument` link to its argument
+   * document, under the argument schema of the plan, and the plan's result
+   * schema (`#describeResult`). A client then addresses the instance as a
+   * piece of its own: it reads and writes its argument and sends to its
+   * streams. The `result` link to the instance the executor was started
+   * with stays, as a nested piece's result links to its parent.
+   */
+  #describeAsPiece(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    artifact: Artifact,
+  ): void {
+    const argument = schemaOfPlan(
+      artifact,
+      (artifact.plan as { argumentSchema?: string }).argumentSchema,
+    );
+    tx.writeOrThrow(
+      { ...this.#address(doc, []), path: ["argument"] },
+      this.#runtime.getCellFromLink({
+        ...this.#address(argumentOf(doc), []),
+        ...(argument === undefined ? {} : { schema: argument }),
+      }).getAsWriteRedirectLink({ includeSchema: true }) as FabricValue,
+      rawMetaWriteAuthorization,
+    );
+    this.#describeResult(tx, doc, artifact);
+  }
+
+  /**
+   * Writes the result schema of the plan of `artifact` as the `schema`
+   * metadata of the result document `doc` of an instance of it, as the
+   * runner writes a piece's (`writeResultSchemaMeta`): a client reads a
+   * path of the result through the links it holds under that schema, and
+   * reads the declared type of each verb's event from it.
+   */
+  #describeResult(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    artifact: Artifact,
+  ): void {
+    const result = schemaOfPlan(
+      artifact,
+      (artifact.plan as { resultSchema?: string }).resultSchema,
+    );
+    if (result === undefined) return;
+    writeResultSchemaMeta(
+      this.#runtime.getCellFromLink(this.#address(doc, []), undefined, tx),
+      result,
     );
   }
 
@@ -4759,7 +4842,20 @@ export class RuntimeTransactions implements TransactionHooks {
           ),
           "result",
         );
-        if (link?.id === this.#owner && entity !== this.#owner) {
+        // A document of an instance a body made links to that instance's
+        // result, which links to the result of the instance the executor
+        // was started with.
+        const owned = link !== undefined &&
+          (link.id === this.#owner ||
+            getMetaLink(
+                this.#runtime.getCellFromLink(
+                  { space: this.#space, id: link.id, path: [], scope: "space" },
+                  undefined,
+                  read,
+                ),
+                "result",
+              )?.id === this.#owner);
+        if (owned && entity !== this.#owner) {
           doc = entity.slice("of:".length);
         }
       } finally {
@@ -5942,3 +6038,14 @@ const changedLabelPaths = (
   }
   return { paths, alone };
 };
+
+/** The schema of the table of `artifact` that `id` names, where it names one. */
+const schemaOfPlan = (
+  artifact: Artifact,
+  id: string | undefined,
+): JSONSchema | undefined =>
+  id === undefined
+    ? undefined
+    : artifact.schemas.find((schema) => schema.id === id)?.schema as
+      | JSONSchema
+      | undefined;

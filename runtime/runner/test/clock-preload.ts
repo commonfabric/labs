@@ -229,6 +229,8 @@ installFakeClock({
     "stored-append",
     // The same, for an event a handler sends after reading another space.
     "relay-send",
+    // The same, for an instance a handler made, which a client addresses.
+    "made-verbs",
   ],
 });
 
