@@ -1545,11 +1545,11 @@ function ownedCellOwesSeed(
  * Whether a reader of an absent instance of `link`, a cell owed a default
  * (`ownedCellOwesSeed`), reads exactly what the seed writes there: the
  * default is a scalar. A reader of an absent instance reads the schema's
- * default, and the seed writes that default whole. An object or an array
- * default is not one: a viewer's first write into a part of an absent
- * instance creates the instance holding that part alone, which a seed would
- * have filled with the rest of the default and a reader then reads without
- * it.
+ * default, the seed writes that default whole, and a write to a scalar
+ * replaces it whole. An object or an array default is not one: a viewer's
+ * first write into part of an absent instance creates the instance holding
+ * that part alone, where a seed would have written the rest of the default
+ * beside it.
  */
 function absentReadsAsSeed(link: NormalizedFullLink): boolean {
   if (!isObjectOrArray(link.schema)) return false;
