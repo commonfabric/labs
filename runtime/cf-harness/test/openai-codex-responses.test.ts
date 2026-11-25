@@ -2177,6 +2177,29 @@ test("Codex Responses issues a refused request again with a refreshed token", as
   );
 });
 
+test("Codex Responses stops, issuing nothing again, when aborted as it reports a refused token", async () => {
+  const { client, seen, request } = rejectionHarness(
+    [refusedToken(), completedHello()],
+    { credential: refreshedCredential, fresh: true },
+  );
+  const controller = new AbortController();
+  const reason = new Error("the caller stopped");
+  const error = await assertRejects(() =>
+    client.complete({
+      ...request,
+      signal: controller.signal,
+      onAttempt: (attempt: HarnessModelAttemptDiagnostic) => {
+        seen.attempts.push(attempt);
+        if (attempt.retry?.kind === "credential_refused") {
+          controller.abort(reason);
+        }
+      },
+    })
+  );
+  assertEquals(error, reason);
+  assertEquals(seen.tokens, ["Bearer access-secret"]);
+});
+
 test("Codex Responses reports a refresh that could not be completed, not the refusal", async () => {
   const attempts: HarnessModelAttemptDiagnostic[] = [];
   let requests = 0;
