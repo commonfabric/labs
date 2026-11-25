@@ -577,6 +577,14 @@ export async function buildCli(
       // prior to building.
       "--no-check",
       ...CF_PERMISSION_FLAGS,
+      // The main thread's heap limit, 16 GiB, the same as the toolshed's:
+      // under V8's default of about 4 GB, `cf piece survey` and
+      // `cf piece retarget` over Estuary's Topics board of about 3,600
+      // topics ran out of heap within a minute, and the move peaked at about
+      // 10.4 GB (2026-11-24). A compiled binary reads no V8 flags when it
+      // starts, `DENO_V8_FLAGS` included, so this is the limit every
+      // installed `cf` runs with.
+      "--v8-flags=--max-old-space-size=16384",
       ...embedArgs(config, "cf"),
       config.cliEntryPath(),
     ],

@@ -281,6 +281,17 @@ The main thread and the compile workers are Deno isolates under the 16 GiB
 limit, and one of those that reaches it takes its process down. Events still
 queued survive that, and the restarted process handles them.
 
+## The `cf` binary's heap limit
+
+The compiled `cf` is built with the toolshed's `--max-old-space-size=16384` and
+none of its other V8 flags (`tasks/build-binaries.ts`). Under V8's default of
+about 4 GB, `cf piece survey` and `cf piece retarget` over Estuary's Topics
+board of about 3,600 topics ran out of heap within a minute, and the move peaked
+at about 10.4 GB (2026-11-24). Like the toolshed, the compiled `cf` ignores
+`DENO_V8_FLAGS`, so the release's `cf` always runs with that limit. A `cf` run
+from a checkout, through `bin/cf` or `deno task cf`, runs under Deno and takes
+V8's default limit unless `DENO_V8_FLAGS` sets another.
+
 ## A deploy states when it happened
 
 A toolshed orders the releases of the system patterns it serves by
