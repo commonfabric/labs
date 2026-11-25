@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { compressImage, formatFileSize } from "./image-compression.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /**
  * An image `createImageBitmap()` decodes to, standing in for a real one, which

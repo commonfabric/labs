@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isBuilderSourceSitesV1 } from "../../src/core/runtime-contract.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("runtime-contract", () => {
   describe("isBuilderSourceSitesV1()", () => {

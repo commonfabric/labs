@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
   type LLMResponse,
 } from "@commonfabric/llm";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { Runtime } from "../../src/runtime.ts";
 import { createTransactionCommitReceipt } from "../../src/storage/commit-receipt.ts";

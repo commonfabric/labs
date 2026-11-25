@@ -15,6 +15,7 @@ import type {
   Stream,
 } from "@commonfabric/api";
 import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
 
 interface AddTopic {
   title: string;
@@ -80,6 +81,6 @@ export function _handlerFunctionSurfaceProbe() {
   return { concise, declared, declaredWithSchemas, output };
 }
 
-Deno.test("HandlerFunction exposes the declared-result overloads to patterns", () => {
+test("HandlerFunction exposes the declared-result overloads to patterns", () => {
   assertEquals(typeof _handlerFunctionSurfaceProbe, "function");
 });

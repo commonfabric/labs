@@ -1040,6 +1040,14 @@ export interface PatternIndexRepoSource {
    * compares it to decide whether the source changed, without compiling.
    */
   sourceHash: string;
+
+  /**
+   * The path in the same repository this file moved from: the index moves
+   * that path's lineage here, history and all. It refuses a move it cannot
+   * make (no lineage there, or a live one here) with `move_refused`, writing
+   * nothing.
+   */
+  movedFrom?: string;
 }
 
 /** Asks for the newest version of every lineage a repository holds. */
@@ -1108,6 +1116,13 @@ export interface PatternIndexPublishResponse {
    * why `standalone` is false.
    */
   standaloneFloor?: string;
+
+  /**
+   * For a repository sync that sent `source.movedFrom`: the path whose
+   * lineage the index moved here, as it stores it. Absent when no lineage
+   * moved, including from deployments that predate moves.
+   */
+  movedFrom?: string;
 
   /**
    * The version recorded, or the head that already had this source. Absent

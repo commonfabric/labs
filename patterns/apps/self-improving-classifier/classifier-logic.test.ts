@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -30,6 +29,12 @@ import {
   type Tier,
   viewVerdict,
 } from "./classifier-logic.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const rule = (overrides: Partial<ClassificationRule>): ClassificationRule => ({
   id: "r",

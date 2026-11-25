@@ -11,11 +11,17 @@
 // refused by commit-time conflict detection whatever the stamp does, which is
 // what this file used to pin and what it no longer relies on.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";

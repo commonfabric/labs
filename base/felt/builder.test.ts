@@ -2,11 +2,11 @@ import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path/join";
 import { toFileUrl } from "@std/path/to-file-url";
-import { describe, it } from "@std/testing/bdd";
 
 import { Builder, resolveOtelBrowserPlatform } from "./builder.ts";
 import { Config, ResolvedConfig } from "./interface.ts";
 import { build } from "./mod.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 // Unique markers so we can tell, from a bundle's bytes alone, whether a
 // dynamically-imported module was inlined into its entry or peeled into a
@@ -75,7 +75,7 @@ function fixtureConfig(metafile?: string): Config {
   };
 }
 
-Deno.test("Builder: a split entry peels its dynamic import into a co-located chunk; a plain entry inlines it", async () => {
+test("Builder: a split entry peels its dynamic import into a co-located chunk; a plain entry inlines it", async () => {
   const root = await Deno.makeTempDir({ prefix: "felt-split-test-" });
   try {
     await writeFixture(root);
@@ -138,7 +138,7 @@ Deno.test("Builder: a split entry peels its dynamic import into a co-located chu
   }
 });
 
-Deno.test("Builder: metafiles from plain and split passes are merged", async () => {
+test("Builder: metafiles from plain and split passes are merged", async () => {
   const root = await Deno.makeTempDir({ prefix: "felt-metafile-test-" });
   try {
     await writeFixture(root);
@@ -165,7 +165,7 @@ Deno.test("Builder: metafiles from plain and split passes are merged", async () 
   }
 });
 
-Deno.test("Builder: repeated builds retain one prior split generation and prune older chunks", async () => {
+test("Builder: repeated builds retain one prior split generation and prune older chunks", async () => {
   const root = await Deno.makeTempDir({ prefix: "felt-split-prune-test-" });
   try {
     await writeFixture(root);

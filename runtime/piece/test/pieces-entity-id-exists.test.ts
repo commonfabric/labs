@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The hash a piece reports its own id as, which carries no entity scheme. */
 const HASH = "fid1:UxcP-io0AJMETFuGcRTKkR6KFYJvwnnHbMUvXS-9YQY";

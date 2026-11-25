@@ -21,12 +21,18 @@
 // timers diverge from the bucket's time source — same class as the
 // serving-loop suites.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
@@ -43,6 +49,12 @@ import { SpaceOutbox } from "../src/executor/outbox.ts";
 import { emptyServingLoopStats } from "../src/executor/stats.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitEach } from "./support/serving-waits.ts";
+
+// This file runs on the real clock because it drives the egress-rate token
+// bucket, whose pacing sleeps are a wall-clock policy. Logical timers would
+// diverge from the bucket's time source, and the rate gate would regenerate its
+// refill sleep without end.
+useRealClock();
 
 const signer = await Identity.fromPassphrase("executor outbox budget test");
 const space = signer.did() as MemorySpace;

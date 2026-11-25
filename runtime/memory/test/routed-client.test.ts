@@ -5,6 +5,7 @@ import { FakeTime } from "@std/testing/time";
 import { Identity } from "@commonfabric/identity";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { test } from "@commonfabric/test-support/test";
 import { registerSchemaDocument } from "../../runner/src/schema-registry.ts";
 import { getMemoryProtocolFlags, type SessionSync } from "../v2.ts";
 import {
@@ -99,7 +100,7 @@ function peer(
   };
 }
 
-Deno.test("routed hello rejects malformed audiences, deployments and inconsistent capabilities", async (t) => {
+test("routed hello rejects malformed audiences, deployments and inconsistent capabilities", async (t) => {
   setModernCellRepConfig(true);
   const cases: [string, unknown, ReturnType<typeof flags>][] = [
     [
@@ -140,7 +141,7 @@ Deno.test("routed hello rejects malformed audiences, deployments and inconsisten
   }
 });
 
-Deno.test("invalid hello frames and malformed response frames reject pending SDK work", async (t) => {
+test("invalid hello frames and malformed response frames reject pending SDK work", async (t) => {
   setModernCellRepConfig(true);
   for (
     const greeting of [
@@ -190,7 +191,7 @@ function principal(): SessionPrincipal {
   };
 }
 
-Deno.test("unsolicited, malformed and failed pushed renewals reject pending SDK work", async (t) => {
+test("unsolicited, malformed and failed pushed renewals reject pending SDK work", async (t) => {
   setModernCellRepConfig(true);
   for (
     const failure of [
@@ -256,7 +257,7 @@ Deno.test("unsolicited, malformed and failed pushed renewals reject pending SDK 
   }
 });
 
-Deno.test("a permanent automatic renewal denial terminates only its mounted principal", async () => {
+test("a permanent automatic renewal denial terminates only its mounted principal", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   let authenticated = false;
@@ -312,7 +313,7 @@ Deno.test("a permanent automatic renewal denial terminates only its mounted prin
   }
 });
 
-Deno.test("an automatic renewal refused for now sends the same statement again a second or more later", async () => {
+test("an automatic renewal refused for now sends the same statement again a second or more later", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   let auths = 0, challenges = 0;
@@ -385,7 +386,7 @@ Deno.test("an automatic renewal refused for now sends the same statement again a
   }
 });
 
-Deno.test("a ten-minute lease is renewed two minutes ahead of each expiry, over several leases", async () => {
+test("a ten-minute lease is renewed two minutes ahead of each expiry, over several leases", async () => {
   setModernCellRepConfig(true);
   const start = Date.UTC(2026, 9, 1);
   const time = new FakeTime(start);
@@ -485,7 +486,7 @@ function refusingPeer(challengeLife = 60) {
   return { p, log };
 }
 
-Deno.test("a renewal refused for now waits a second, and takes a new challenge when its own is nearly gone", async () => {
+test("a renewal refused for now waits a second, and takes a new challenge when its own is nearly gone", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // Challenges last four seconds, under the five a resend needs left.
@@ -561,7 +562,7 @@ async function mountTwice(
   await time.tickAsync(0);
 }
 
-Deno.test("a second mount right after a refusal for now sends the refused statement a second later", async () => {
+test("a second mount right after a refusal for now sends the refused statement a second later", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log } = refusingFromTheStart(60);
@@ -582,7 +583,7 @@ Deno.test("a second mount right after a refusal for now sends the refused statem
   }
 });
 
-Deno.test("a refused statement whose challenge will not last takes a new challenge at once", async () => {
+test("a refused statement whose challenge will not last takes a new challenge at once", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // Four seconds, under the five a resend needs left.
@@ -604,7 +605,7 @@ Deno.test("a refused statement whose challenge will not last takes a new challen
   }
 });
 
-Deno.test("a refused statement whose wait ran late takes a new challenge instead", async () => {
+test("a refused statement whose wait ran late takes a new challenge instead", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // Seven seconds: six left once the second's wait is over, under five
@@ -630,7 +631,7 @@ Deno.test("a refused statement whose wait ran late takes a new challenge instead
   }
 });
 
-Deno.test("a refused statement is sent again at most three times, then signed anew", async () => {
+test("a refused statement is sent again at most three times, then signed anew", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log } = refusingPeer();
@@ -656,7 +657,7 @@ Deno.test("a refused statement is sent again at most three times, then signed an
   }
 });
 
-Deno.test("a direct server's renewal refused for now is retried at the reconnect backoff", async () => {
+test("a direct server's renewal refused for now is retried at the reconnect backoff", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const auths: number[] = [];
@@ -715,7 +716,7 @@ Deno.test("a direct server's renewal refused for now is retried at the reconnect
   }
 });
 
-Deno.test("a released key's refused statement is not sent again", async () => {
+test("a released key's refused statement is not sent again", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log } = refusingPeer();
@@ -742,7 +743,7 @@ Deno.test("a released key's refused statement is not sent again", async () => {
   }
 });
 
-Deno.test("a pushed challenge's signature refused for good ends only that key's sessions", async () => {
+test("a pushed challenge's signature refused for good ends only that key's sessions", async () => {
   setModernCellRepConfig(true);
   let refuse = false;
   let pushed = false;
@@ -808,7 +809,7 @@ Deno.test("a pushed challenge's signature refused for good ends only that key's 
   }
 });
 
-Deno.test("a pushed challenge's signature refused for now leaves the connection's other requests alone", async () => {
+test("a pushed challenge's signature refused for now leaves the connection's other requests alone", async () => {
   setModernCellRepConfig(true);
   let refuse = false;
   let pushed = false;
@@ -1029,7 +1030,7 @@ async function tickUntil(
   for (let i = 0; i < steps && !done(); i++) await time.tickAsync(stepMs);
 }
 
-Deno.test("a pushed challenge's signature refused for now is sent again a second later, with no open waiting for it", async () => {
+test("a pushed challenge's signature refused for now is sent again a second later, with no open waiting for it", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths, pushChallenge } = routedPeer((n) => n === 2);
@@ -1065,7 +1066,7 @@ Deno.test("a pushed challenge's signature refused for now is sent again a second
   }
 });
 
-Deno.test("an attempt armed after a refusal for now waits for an authentication already under way", async (t) => {
+test("an attempt armed after a refusal for now waits for an authentication already under way", async (t) => {
   setModernCellRepConfig(true);
   for (
     const refusedAttempt of [
@@ -1122,7 +1123,7 @@ Deno.test("an attempt armed after a refusal for now waits for an authentication 
   }
 });
 
-Deno.test("a key released while a refusal for now is on its way is not authenticated again", async (t) => {
+test("a key released while a refusal for now is on its way is not authenticated again", async (t) => {
   setModernCellRepConfig(true);
   for (
     const refusedAttempt of [
@@ -1164,7 +1165,7 @@ Deno.test("a key released while a refusal for now is on its way is not authentic
   }
 });
 
-Deno.test("a key released while its authentication is unanswered is not renewed when the answer admits it", async (t) => {
+test("a key released while its authentication is unanswered is not renewed when the answer admits it", async (t) => {
   setModernCellRepConfig(true);
   for (
     const attempt of ["a pushed challenge's answer", "a renewal"] as const
@@ -1203,7 +1204,7 @@ Deno.test("a key released while its authentication is unanswered is not renewed 
   }
 });
 
-Deno.test("a held session's retry after its key is refused for now waits a second and the backoff", async () => {
+test("a held session's retry after its key is refused for now waits a second and the backoff", async () => {
   setModernCellRepConfig(true);
   const random = Math.random;
   // No jitter, so the first step of the backoff is 25 ms.
@@ -1233,7 +1234,7 @@ Deno.test("a held session's retry after its key is refused for now waits a secon
   }
 });
 
-Deno.test("a lease's renewal signs a challenge of its own while a refused statement's resend is unanswered", async () => {
+test("a lease's renewal signs a challenge of its own while a refused statement's resend is unanswered", async () => {
   setModernCellRepConfig(true);
   const random = Math.random;
   // No jitter: a held mount sends its refused statement again 1,025 ms on.
@@ -1288,7 +1289,7 @@ Deno.test("a lease's renewal signs a challenge of its own while a refused statem
   }
 });
 
-Deno.test("a renewal refused for now after a pushed challenge was admitted leaves the admitted lease's renewal armed", async () => {
+test("a renewal refused for now after a pushed challenge was admitted leaves the admitted lease's renewal armed", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const renewed = Promise.withResolvers<void>();
@@ -1340,7 +1341,7 @@ Deno.test("a renewal refused for now after a pushed challenge was admitted leave
   }
 });
 
-Deno.test("a mount whose statement is refused for now sends it again a second later and resolves", async () => {
+test("a mount whose statement is refused for now sends it again a second later and resolves", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // Refused once, as at the source's authentication rate, then admitted.
@@ -1373,7 +1374,7 @@ Deno.test("a mount whose statement is refused for now sends it again a second la
   }
 });
 
-Deno.test("two mounts as one key both resolve after a refusal for now of the statement they share", async () => {
+test("two mounts as one key both resolve after a refusal for now of the statement they share", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths } = routedPeer((n) => n === 1);
@@ -1402,7 +1403,7 @@ Deno.test("two mounts as one key both resolve after a refusal for now of the sta
   }
 });
 
-Deno.test("mounts waiting to send one refused statement all resolve when the connection drops first", async () => {
+test("mounts waiting to send one refused statement all resolve when the connection drops first", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths } = routedPeer((n) => n === 1);
@@ -1440,7 +1441,7 @@ Deno.test("mounts waiting to send one refused statement all resolve when the con
   }
 });
 
-Deno.test("a refused statement whose wait outlasts its connection asks the next connection for no challenge", async () => {
+test("a refused statement whose wait outlasts its connection asks the next connection for no challenge", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // Seven seconds: the refused statement may be sent again a second later,
@@ -1469,7 +1470,7 @@ Deno.test("a refused statement whose wait outlasts its connection asks the next 
   }
 });
 
-Deno.test("a mount whose refused statement may not be sent again signs a new challenge and goes on", async (t) => {
+test("a mount whose refused statement may not be sent again signs a new challenge and goes on", async (t) => {
   setModernCellRepConfig(true);
   await t.step("after three resends", async () => {
     const time = new FakeTime(Date.UTC(2026, 9, 1));
@@ -1525,7 +1526,7 @@ Deno.test("a mount whose refused statement may not be sent again signs a new cha
   });
 });
 
-Deno.test("a mount whose request for a challenge is refused for now asks again a second later", async () => {
+test("a mount whose request for a challenge is refused for now asks again a second later", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // The first request for a challenge is refused, as when the connection
@@ -1552,7 +1553,7 @@ Deno.test("a mount whose request for a challenge is refused for now asks again a
   }
 });
 
-Deno.test("a mount whose open is refused for now is tried again on the same connection until it is admitted", async () => {
+test("a mount whose open is refused for now is tried again on the same connection until it is admitted", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // The space's toolshed is down for the first three opens.
@@ -1694,7 +1695,7 @@ function namedSigner(did: string): SessionPrincipal {
   };
 }
 
-Deno.test("a held mount that wakes between a drop and the next hello signs for the next connection", async (t) => {
+test("a held mount that wakes between a drop and the next hello signs for the next connection", async (t) => {
   setModernCellRepConfig(true);
   for (
     const [name, laterFlags, mounted] of [
@@ -1793,7 +1794,7 @@ const manyKeys = (count: number) =>
     }),
   );
 
-Deno.test("new keys on a routed connection sign a challenge one of them asked for", async (t) => {
+test("new keys on a routed connection sign a challenge one of them asked for", async (t) => {
   setModernCellRepConfig(true);
   const keys = await manyKeys(40);
   const helloChallenge = "11".repeat(32);
@@ -1848,7 +1849,7 @@ Deno.test("new keys on a routed connection sign a challenge one of them asked fo
   }
 });
 
-Deno.test("a direct connection's keys do not share a challenge one of them asked for", async () => {
+test("a direct connection's keys do not share a challenge one of them asked for", async () => {
   setModernCellRepConfig(true);
   const keys = await manyKeys(40);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
@@ -1872,7 +1873,7 @@ Deno.test("a direct connection's keys do not share a challenge one of them asked
   }
 });
 
-Deno.test("a challenge a renewal asked for is signed by the next new key", async () => {
+test("a challenge a renewal asked for is signed by the next new key", async () => {
   setModernCellRepConfig(true);
   const [first, second] = await manyKeys(2);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
@@ -1906,7 +1907,7 @@ Deno.test("a challenge a renewal asked for is signed by the next new key", async
   }
 });
 
-Deno.test("a mount held after a refusal for now starts over on the next connection when this one drops", async () => {
+test("a mount held after a refusal for now starts over on the next connection when this one drops", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths } = routedPeer(() => false, {
@@ -1933,7 +1934,7 @@ Deno.test("a mount held after a refusal for now starts over on the next connecti
   }
 });
 
-Deno.test("a mount held after a refusal for now ends when its caller cancels it or the client closes", async (t) => {
+test("a mount held after a refusal for now ends when its caller cancels it or the client closes", async (t) => {
   setModernCellRepConfig(true);
   for (
     const ending of [
@@ -1994,7 +1995,7 @@ Deno.test("a mount held after a refusal for now ends when its caller cancels it 
   }
 });
 
-Deno.test("a mount cancelled while its refused statement waits sends nothing more", async () => {
+test("a mount cancelled while its refused statement waits sends nothing more", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths } = routedPeer((n) => n === 1);
@@ -2024,7 +2025,7 @@ Deno.test("a mount cancelled while its refused statement waits sends nothing mor
   }
 });
 
-Deno.test("a mount cancelled while its key is being authenticated sends no open", async () => {
+test("a mount cancelled while its key is being authenticated sends no open", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths } = routedPeer((n) => n === 1);
@@ -2055,7 +2056,7 @@ Deno.test("a mount cancelled while its key is being authenticated sends no open"
   }
 });
 
-Deno.test("a mount cancelled while it waits for the reconnect sends nothing on the next connection", async () => {
+test("a mount cancelled while it waits for the reconnect sends nothing on the next connection", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // The reconnect's hello is answered only when the test says.
@@ -2085,7 +2086,7 @@ Deno.test("a mount cancelled while it waits for the reconnect sends nothing on t
   }
 });
 
-Deno.test("a signed open's round after a reconnect is checked as its first round is", async (t) => {
+test("a signed open's round after a reconnect is checked as its first round is", async (t) => {
   setModernCellRepConfig(true);
   // A direct server without connection authentication: each open is signed.
   const signedFlags = (spaceKind: boolean) => ({
@@ -2188,7 +2189,7 @@ Deno.test("a signed open's round after a reconnect is checked as its first round
   );
 });
 
-Deno.test("a mount held through a reconnect is held to the next connection's capabilities", async () => {
+test("a mount held through a reconnect is held to the next connection's capabilities", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // The server the client reconnects to does not seal a space's kind.
@@ -2216,7 +2217,7 @@ Deno.test("a mount held through a reconnect is held to the next connection's cap
   }
 });
 
-Deno.test("a mount held after a refusal for now fails when the connection fails for good", async () => {
+test("a mount held after a refusal for now fails when the connection fails for good", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // The server the client reconnects to cannot be used at all.
@@ -2247,7 +2248,7 @@ Deno.test("a mount held after a refusal for now fails when the connection fails 
   }
 });
 
-Deno.test("a mount whose open is refused for good, or by a direct server, fails at once", async (t) => {
+test("a mount whose open is refused for good, or by a direct server, fails at once", async (t) => {
   setModernCellRepConfig(true);
   const direct: SessionPrincipal = {
     did: identity.did(),
@@ -2316,7 +2317,7 @@ Deno.test("a mount whose open is refused for good, or by a direct server, fails 
   }
 });
 
-Deno.test("a routed connection is sent at most the holdings one frame may name", async (t) => {
+test("a routed connection is sent at most the holdings one frame may name", async (t) => {
   setModernCellRepConfig(true);
   const direct: SessionPrincipal = {
     did: identity.did(),
@@ -2403,7 +2404,7 @@ Deno.test("a routed connection is sent at most the holdings one frame may name",
   }
 });
 
-Deno.test("closing a routed watch consumer settles queued and waiting iterators", async () => {
+test("closing a routed watch consumer settles queued and waiting iterators", async () => {
   const sync: SessionSync = {
     type: "sync",
     fromSeq: 0,
@@ -2432,7 +2433,7 @@ Deno.test("closing a routed watch consumer settles queued and waiting iterators"
   assertEquals(view.serverSeq, 1);
 });
 
-Deno.test("routed session binding covers presence pushes, refused joins and event attention", async () => {
+test("routed session binding covers presence pushes, refused joins and event attention", async () => {
   setModernCellRepConfig(true);
   const events: string[] = [];
   let joins = 0, leaves = 0;
@@ -2598,7 +2599,7 @@ Deno.test("routed session binding covers presence pushes, refused joins and even
   }
 });
 
-Deno.test("a cancelled routed mount closes its unheld toolshed session", async () => {
+test("a cancelled routed mount closes its unheld toolshed session", async () => {
   setModernCellRepConfig(true);
   const abort = new AbortController();
   const abandoned = Promise.withResolvers<void>();
@@ -2640,7 +2641,7 @@ Deno.test("a cancelled routed mount closes its unheld toolshed session", async (
   }
 });
 
-Deno.test("handshake refusals retain the server error and signature custody propagates signer failure", async () => {
+test("handshake refusals retain the server error and signature custody propagates signer failure", async () => {
   const p = peer(
     frame({
       type: "response",
@@ -2664,7 +2665,7 @@ Deno.test("handshake refusals retain the server error and signature custody prop
   );
 });
 
-Deno.test("on a routed connection a space's unanswered body fetch holds back no other space's frames", async () => {
+test("on a routed connection a space's unanswered body fetch holds back no other space's frames", async () => {
   setModernCellRepConfig(true);
   // Two spaces behind one routed connection name the same schema document
   // by reference. Space A's host never answers its body fetch until space B
@@ -2769,7 +2770,7 @@ Deno.test("on a routed connection a space's unanswered body fetch holds back no 
   }
 });
 
-Deno.test("a client fetches a schema that names a principal from the space that named it, though it holds the body", async () => {
+test("a client fetches a schema that names a principal from the space that named it, though it holds the body", async () => {
   setModernCellRepConfig(true);
   // A server that names such a schema by reference is one probing for it: an
   // honest one sends the body. The client holds the body already, and asks
@@ -2969,7 +2970,7 @@ for (
     ],
   ] as const
 ) {
-  Deno.test(`after ${outcome}, a client applies the frame without the reference`, async () => {
+  test(`after ${outcome}, a client applies the frame without the reference`, async () => {
     setModernCellRepConfig(true);
     // The reference resolves to nothing, so the frame applies without it:
     // the client's view holds the frame's other documents and not the schema
@@ -3014,7 +3015,7 @@ for (
   });
 }
 
-Deno.test("a client that did not negotiate references refuses a sync carrying one", async () => {
+test("a client that did not negotiate references refuses a sync carrying one", async () => {
   setModernCellRepConfig(true);
   const schema = { type: "string", title: "routed-cid-unnegotiated" } as const;
   const hash = internSchema(schema, true).taggedHashString;
@@ -3052,7 +3053,7 @@ Deno.test("a client that did not negotiate references refuses a sync carrying on
   }
 });
 
-Deno.test("a client hands on a sync no session claims without fetching for it", async () => {
+test("a client hands on a sync no session claims without fetching for it", async () => {
   setModernCellRepConfig(true);
   // A response to no request this client made names a body by reference.
   // No session takes it, so nothing is fetched, and the session the client

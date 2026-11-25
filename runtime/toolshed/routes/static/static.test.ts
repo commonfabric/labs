@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { TEST_ASSET, TEST_ASSET_CONTENT } from "@commonfabric/static/utils";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import env from "@/env.ts";
 import createApp from "@/lib/create-app.ts";

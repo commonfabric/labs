@@ -3,8 +3,13 @@ import { createTestSpace, env } from "@commonfabric/integration";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { assertEquals } from "@std/assert";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { waitForRuntimeIdle, waitForText } from "./cfc-browser-helpers.ts";
 import {

@@ -78,8 +78,10 @@ the same directory is not evidence of what to write.
 The eight rules its readers most often get wrong by defaulting to the
 surrounding code:
 
-- BDD only — `describe()` / `it()` / `beforeEach()` from `@std/testing/bdd`,
-  never `Deno.test()`.
+- `describe()` / `it()` / `beforeEach()` from
+  `@commonfabric/test-support/test`, never `Deno.test()` or
+  `@std/testing/bdd`, which register a test no lane can skip or record; the
+  `cf-test/registration` lint rule reports both.
 - One top-level `describe()`, titled with the name of the file under test
   minus its suffix, with everything else nested inside it.
 - An `it()` description is a third-person verb phrase completing "it", and
@@ -93,7 +95,7 @@ surrounding code:
   it describes. Two shapes are exceptions: hooks — a `beforeEach()` reads like
   any other statement with a comment over it — and a callback with no body of
   its own, which keeps its comment beside it. That second shape covers a bare
-  expression, `{}` on the opener's line, and a `Deno.test({ … })` whose `fn`
+  expression, `{}` on the opener's line, and a `test({ … })` whose `fn`
   names a function declared elsewhere.
 - A comment covering several adjacent tests is telling you those tests want a
   `describe()` of their own, or says one thing per case and belongs in each.
@@ -180,7 +182,7 @@ nothing about it.
 ## Every test's runs are recorded
 
 Each test execution produces a telemetry record named by what the runner
-reports — the describe chain, the `Deno.test` name, the pattern file path.
+reports — the describe chain, the `test()` name, the pattern file path.
 Nothing to instrument when adding a test to an existing suite; the runners
 record on their own. Four consequences worth knowing while writing one:
 
@@ -191,11 +193,13 @@ record on their own. Four consequences worth knowing while writing one:
   `tasks/test-identity-aliases/`, in the file named after the test file;
   `docs/development/test-records.md` states the naming rule.
 - The name has to be unique within its scope — the whole describe chain
-  plus the `it()` description, or the bare `Deno.test` name, across every
+  plus the `it()` description, or the bare `test()` name, across every
   test file of the package. Two tests under one name are one identity, so
   their outcomes and durations merge and neither can be tracked on its
-  own. A loop that generates names is the case to check twice: a
-  hand-written test beside it can land on one of them.
+  own. The test module refuses two within one file, groups and steps
+  included; across files nothing checks. A loop that generates names is
+  the case to check twice: a hand-written test beside it can land on one
+  of them.
 - Every test must finish within sixty seconds in CI, not counting setup.
 - A lane runs a selected test on its own, with its file's other tests
   registered as ignored. A test that passes only after a neighbor has
@@ -205,6 +209,10 @@ record on their own. Four consequences worth knowing while writing one:
   nowhere. "Every
   test has to pass on its own" in `docs/development/TESTING.md` covers
   the rest, including how to run one test that way locally.
+
+The test module hears its file end from the global `unload` event, so a
+test never dispatches one: exercise code that runs at unload in a process
+of its own, as `base/test-support/src/compile-byte-cache.test.ts` does.
 
 A new test *surface* (a new script, harness, or kind of test) is a new suite in
 `tasks/test-topology/`, never a new CI job, and does need wiring —

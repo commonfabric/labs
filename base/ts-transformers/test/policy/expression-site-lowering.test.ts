@@ -9,6 +9,7 @@ import {
   findLowerableExpressionSite,
 } from "../../src/transformers/expression-site-policy.ts";
 import type { ExpressionContainerKind } from "../../src/transformers/expression-site-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgramAndContext(source: string): {
   sourceFile: ts.SourceFile;
@@ -283,7 +284,7 @@ function assertJsxRouteCase(testCase: JsxRouteCase): void {
   }
 }
 
-Deno.test(
+test(
   "Expression site policy: array-method callback call arguments under local helper roots defer to the enclosing call root",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -341,7 +342,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: array-method-owned receiver-method roots classify distinctly from shared expression sites",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -380,7 +381,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: optionality preserves receiver-method call-root ownership",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -420,7 +421,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: aliased reactive array callbacks keep receiver-method ownership",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -475,7 +476,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: reactive direct JSX array-method roots use the generic owned pre-closure route when enabled",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -517,7 +518,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: nested JSX array-method roots inside authored callbacks stay array-method-owned",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -562,7 +563,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: non-reactive direct JSX array-method roots stay skipped",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -722,12 +723,12 @@ const ownedOrSkippedJsxRouteCases: JsxRouteCase[] = [
 ];
 
 for (const testCase of ownedOrSkippedJsxRouteCases) {
-  Deno.test(`Expression site policy: ${testCase.name}`, () => {
+  test(`Expression site policy: ${testCase.name}`, () => {
     assertJsxRouteCase(testCase);
   });
 }
 
-Deno.test(
+test(
   "Expression site policy: direct JSX helper-call roots use the generic owned pre-closure route",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -765,7 +766,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: synthetic compute-owned authored subtrees stay out of rewrite eligibility",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -802,7 +803,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: lowerable-site search skips non-pattern JSX roots without analyzing them",
   () => {
     const { sourceFile, context } = createProgramAndContext(`
@@ -844,7 +845,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: restricted reactive computation classification reuses lowerable expression-site handling",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -872,7 +873,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: restricted reactive if-conditions still require computed()",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -907,7 +908,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: top-level JSX wrapper roots defer to the shared post-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -937,7 +938,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: JSX free-function call roots defer to the shared post-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -966,7 +967,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: JSX receiver-method call roots defer to the shared post-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -995,7 +996,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: receiver-method chains over reactive array-method sinks defer to the shared post-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1026,7 +1027,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: array-method-owned nested join chains stay out of the shared sink-chain slice",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1063,7 +1064,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: JSX opaque path-terminal calls use the owned pre-closure root path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1100,7 +1101,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: local helper calls join the shared non-JSX ordinary-call slice",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1127,7 +1128,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: non-JSX array callback local helper calls join the shared ordinary-call slice",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1157,7 +1158,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: lowerable-site search prefers an ordinary parent call over an array-callback receiver-method child",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1200,7 +1201,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: JSX local helper call roots with reactive args defer to the shared post-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1233,7 +1234,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: JSX parameterized inline-function call roots join the shared post-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1264,7 +1265,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: parameterized inline-function call roots join the shared non-JSX slice",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1290,7 +1291,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: wildcard traversal calls share the ordinary-call lowering slice",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1318,7 +1319,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: JSX wildcard traversal call roots defer to the shared post-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1354,7 +1355,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: array-method-owned JSX wrapper roots stay out of the shared JSX routes",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1824,12 +1825,12 @@ const sharedPostClosureJsxRouteCases: JsxRouteCase[] = [
 ];
 
 for (const testCase of sharedPostClosureJsxRouteCases) {
-  Deno.test(`Expression site policy: ${testCase.name}`, () => {
+  test(`Expression site policy: ${testCase.name}`, () => {
     assertJsxRouteCase(testCase);
   });
 }
 
-Deno.test(
+test(
   "Expression site policy: whole-branch compute-wrap ternaries use the shared pre-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1871,7 +1872,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: ternary branches with direct deferred JSX array-method roots use the shared pre-closure path",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
@@ -1912,7 +1913,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Expression site policy: array-method-owned JSX wrapper roots with reactive array-method subexpressions stay out of the shared JSX routes",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`

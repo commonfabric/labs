@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assertSpyCall, assertSpyCalls, spy } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import type { Entity } from "@commonfabric/memory/interface";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { TYPE } from "../src/builder/types.ts";
 import type { Cell, JSONSchema } from "../src/builder/types.ts";

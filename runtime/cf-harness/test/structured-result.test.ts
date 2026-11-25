@@ -5,10 +5,9 @@
  * preserved, which `sealedPaths` never lists — passes through untouched.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   addressSealedPositions,
   parseStructuredResultSchema,

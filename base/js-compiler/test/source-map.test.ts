@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { StaticCache } from "@commonfabric/static";
+import { describe, it } from "@commonfabric/test-support/test";
 import { SourceMapConsumer, SourceMapGenerator } from "source-map-js";
 
 import { getComposeBundleSourceMapCallsForTesting } from "../source-map.ts";

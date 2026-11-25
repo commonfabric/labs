@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { testIdentityKey } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { census, pricedForRun, unknownIdentity } from "./census.ts";
 import {

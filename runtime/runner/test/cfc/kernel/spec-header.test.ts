@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   formatSpecHeader,
   parseSpecHeaders,
 } from "@commonfabric/runner/cfc/kernel/spec-header";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HASH = "a".repeat(64);
 const FILE = "08-12-store-label-monotonicity.md";

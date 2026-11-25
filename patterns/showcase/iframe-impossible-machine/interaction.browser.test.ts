@@ -11,6 +11,7 @@ import { flushSync } from "npm:react-dom@19.2.8";
 import { expect } from "@std/expect";
 
 import { nodeControlBoundaryProps } from "./interaction.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function NodeControlHarness(
   { onNodeSelection }: Readonly<{ onNodeSelection: () => void }>,
@@ -41,7 +42,7 @@ function NodeControlHarness(
   );
 }
 
-Deno.test("embedded controls do not select their React Flow node", () => {
+test("embedded controls do not select their React Flow node", () => {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);

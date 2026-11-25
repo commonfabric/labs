@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createHarnessPatternIndexClientFactory } from "../../src/pattern-index/factory.ts";
 
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";

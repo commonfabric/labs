@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import {
@@ -13,6 +12,7 @@ import {
 import { parseExecArgs } from "../lib/exec-schema.ts";
 import { pieceDataCommand } from "../commands/piece.ts";
 import { exec } from "../commands/exec.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The verb opens the callable's section and `--` closes it, so a projection

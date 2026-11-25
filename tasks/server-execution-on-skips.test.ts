@@ -5,15 +5,16 @@ import {
   serverExecutionOnStepSkip,
   validateServerExecutionOnSkips,
 } from "./server-execution-on-skips.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const repoRoot = new URL("../", import.meta.url);
 
-Deno.test("every skip entry names an existing file (no stale lists)", async () => {
+test("every skip entry names an existing file (no stale lists)", async () => {
   const problems = await validateServerExecutionOnSkips(repoRoot);
   assertEquals(problems, []);
 });
 
-Deno.test("validation flags missing files and duplicates, and passes real files", async () => {
+test("validation flags missing files and duplicates, and passes real files", async () => {
   const lists: Record<string, ServerExecutionOnSkip[]> = {
     patterns: [
       // A file that really exists, resolved against the real repo root.
@@ -49,7 +50,7 @@ Deno.test("validation flags missing files and duplicates, and passes real files"
   ]);
 });
 
-Deno.test("the patterns list is EMPTY after the ruled 3b close and the flip bar's list-EMPTY precondition is met", () => {
+test("the patterns list is EMPTY after the ruled 3b close and the flip bar's list-EMPTY precondition is met", () => {
   // The patterns list is EMPTY again — lunch-poll-vote's FILE entry, the
   // LAST entry in any suite, lifted 2026-08-28 (the THIRD lift) on the
   // owner-ruled 3b close: the owner ruled "go with (1) plus the (2-D)
@@ -95,7 +96,7 @@ Deno.test("the patterns list is EMPTY after the ruled 3b close and the flip bar'
   assertEquals(SERVER_EXECUTION_ON_SKIPS.shell.length, 0);
 });
 
-Deno.test("the runtime-client list is EMPTY — the OW33 triage (2026-08-22) lifted both STEP entries (CT-1606 PerUser header render; single-navigateTo dispatch) on 12/12 green at the true ON topology — so the full suite runs, and the in-file guard resolves to no entry", () => {
+test("the runtime-client list is EMPTY — the OW33 triage (2026-08-22) lifted both STEP entries (CT-1606 PerUser header render; single-navigateTo dispatch) on 12/12 green at the true ON topology — so the full suite runs, and the in-file guard resolves to no entry", () => {
   assertEquals(SERVER_EXECUTION_ON_SKIPS["runtime-client"].length, 0);
   // The lifted steps' guard lookups resolve to NOTHING, so the steps RUN
   // on the ON arm — pinned so a re-skip is a deliberate entry, never a
@@ -118,7 +119,7 @@ Deno.test("the runtime-client list is EMPTY — the OW33 triage (2026-08-22) lif
   }
 });
 
-Deno.test("validation binds a step entry: the file must name the step and call the guard", async () => {
+test("validation binds a step entry: the file must name the step and call the guard", async () => {
   const lists: Record<string, ServerExecutionOnSkip[]> = {
     patterns: [],
     runner: [
@@ -160,7 +161,7 @@ Deno.test("validation binds a step entry: the file must name the step and call t
   ]);
 });
 
-Deno.test("the runner list is EMPTY and NO suite carries any entry — the ON-skip registry is EMPTY after the ruled 3b close", () => {
+test("the runner list is EMPTY and NO suite carries any entry — the ON-skip registry is EMPTY after the ruled 3b close", () => {
   // The runner list emptied with the arrival-witness lift (RULED 2026-08-22,
   // candidate (B) of the OW33 fork memo); the LAST list anywhere emptied
   // (a third time) with the lunch-poll-vote ruled-3b-close lift

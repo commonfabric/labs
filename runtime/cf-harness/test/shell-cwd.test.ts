@@ -4,15 +4,16 @@ import {
   cwdMarkerForOutput,
   extractFinalWorkingDirectory,
 } from "../src/tools/shell-cwd.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("cwdMarkerForOutput builds namespaced output markers", () => {
+test("cwdMarkerForOutput builds namespaced output markers", () => {
   assertEquals(
     cwdMarkerForOutput("__CF_HARNESS_CWD__", "run-1:bash:1"),
     "__CF_HARNESS_CWD__run-1:bash:1__",
   );
 });
 
-Deno.test("commandWithFinalWorkingDirectoryMarker wraps commands with a cwd trap", () => {
+test("commandWithFinalWorkingDirectoryMarker wraps commands with a cwd trap", () => {
   assertEquals(
     commandWithFinalWorkingDirectoryMarker("pwd", "__MARKER__"),
     [
@@ -23,14 +24,14 @@ Deno.test("commandWithFinalWorkingDirectoryMarker wraps commands with a cwd trap
   );
 });
 
-Deno.test("extractFinalWorkingDirectory leaves stdout untouched without a marker", () => {
+test("extractFinalWorkingDirectory leaves stdout untouched without a marker", () => {
   assertEquals(
     extractFinalWorkingDirectory("plain output\n", "__MARKER__"),
     { stdout: "plain output\n" },
   );
 });
 
-Deno.test("extractFinalWorkingDirectory uses the last marker occurrence", () => {
+test("extractFinalWorkingDirectory uses the last marker occurrence", () => {
   assertEquals(
     extractFinalWorkingDirectory(
       "user output __MARKER__ still output\n__MARKER__/workspace/repo",

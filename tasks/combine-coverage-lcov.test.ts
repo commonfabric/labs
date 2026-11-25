@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import * as path from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 import {
   combineCoverageLcov,
   main,
@@ -10,7 +11,7 @@ import {
 
 const ROOT = path.join(import.meta.dirname!, "..");
 
-Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () => {
+test("mergeLcovReports sums line coverage for a file seen in two jobs", () => {
   // Both jobs include the function and branch records deno emits, which
   // the merge drops.
 
@@ -56,7 +57,7 @@ Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () 
   );
 });
 
-Deno.test("mergeLcovReports keeps a line uncovered in every job", () => {
+test("mergeLcovReports keeps a line uncovered in every job", () => {
   const report = [
     "SF:runtime/a/mod.ts",
     "DA:5,0",
@@ -80,7 +81,7 @@ Deno.test("mergeLcovReports keeps a line uncovered in every job", () => {
   );
 });
 
-Deno.test("mergeLcovReports writes only Deno's lines of a file the pattern instrumentation also recorded", () => {
+test("mergeLcovReports writes only Deno's lines of a file the pattern instrumentation also recorded", () => {
   // Lines 3 to 5 are one statement, which Deno's coverage counts on lines 3
   // and 4 and the instrumentation names on all three. The merged record is
   // read as Deno's, so it carries no pattern-coverage test name.
@@ -114,7 +115,7 @@ Deno.test("mergeLcovReports writes only Deno's lines of a file the pattern instr
   );
 });
 
-Deno.test("mergeLcovReports writes every line and the test name of a file only the pattern instrumentation recorded", () => {
+test("mergeLcovReports writes every line and the test name of a file only the pattern instrumentation recorded", () => {
   const pattern = [
     "TN:pattern-runtime",
     "SF:patterns/a/main.tsx",
@@ -140,7 +141,7 @@ Deno.test("mergeLcovReports writes every line and the test name of a file only t
   );
 });
 
-Deno.test("combineCoverageLcov tolerates a missing input directory", async () => {
+test("combineCoverageLcov tolerates a missing input directory", async () => {
   const { lcov, fileCount } = await combineCoverageLcov(
     "/tmp/combine-lcov-does-not-exist-abc123",
   );
@@ -148,7 +149,7 @@ Deno.test("combineCoverageLcov tolerates a missing input directory", async () =>
   assertEquals(fileCount, 0);
 });
 
-Deno.test("combineCoverageLcov merges reports from a directory tree", async () => {
+test("combineCoverageLcov merges reports from a directory tree", async () => {
   const dir = await Deno.makeTempDir({ prefix: "combine-lcov-" });
   try {
     await Deno.writeTextFile(
@@ -201,7 +202,7 @@ Deno.test("combineCoverageLcov merges reports from a directory tree", async () =
   }
 });
 
-Deno.test("combineCoverageLcov surfaces a non-NotFound read error", async () => {
+test("combineCoverageLcov surfaces a non-NotFound read error", async () => {
   const dir = await Deno.makeTempDir({ prefix: "combine-lcov-" });
   const file = path.join(dir, "not-a-directory");
   await Deno.writeTextFile(file, "");
@@ -214,7 +215,7 @@ Deno.test("combineCoverageLcov surfaces a non-NotFound read error", async () => 
   }
 });
 
-Deno.test("combineCoverageLcov surfaces an input directory it cannot look up", async () => {
+test("combineCoverageLcov surfaces an input directory it cannot look up", async () => {
   const dir = await Deno.makeTempDir({ prefix: "combine-lcov-" });
   const file = path.join(dir, "not-a-directory");
   await Deno.writeTextFile(file, "");
@@ -230,7 +231,7 @@ Deno.test("combineCoverageLcov surfaces an input directory it cannot look up", a
   }
 });
 
-Deno.test("parseArgs reads --key=value flags and ignores other tokens", () => {
+test("parseArgs reads --key=value flags and ignores other tokens", () => {
   const parsed = parseArgs(["--input-dir=a", "--output=x=y", "stray", "-z"]);
   assertEquals(parsed.get("input-dir"), "a");
   // Everything after the first "=" is the value, so embedded "=" is preserved.
@@ -239,7 +240,7 @@ Deno.test("parseArgs reads --key=value flags and ignores other tokens", () => {
   assertEquals(parsed.size, 2);
 });
 
-Deno.test("main combines reports and writes the output file", async () => {
+test("main combines reports and writes the output file", async () => {
   const dir = await Deno.makeTempDir({ prefix: "combine-lcov-main-" });
   try {
     const inputDir = path.join(dir, "in");
@@ -279,11 +280,11 @@ Deno.test("main combines reports and writes the output file", async () => {
   }
 });
 
-Deno.test("main returns exit code 2 when a required flag is missing", async () => {
+test("main returns exit code 2 when a required flag is missing", async () => {
   assertEquals(await main(["--input-dir=a"]), 2);
 });
 
-Deno.test("the CLI entry point runs the task as a process", async () => {
+test("the CLI entry point runs the task as a process", async () => {
   // Run the task as its own process so the `import.meta.main` entry point is
   // exercised end to end. Lockfile isolation keeps the real deno.lock
   // untouched, and all inputs and outputs live under temporary directories.

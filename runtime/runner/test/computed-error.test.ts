@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import { lift } from "../src/builder/module.ts";
 import { pattern, popFrame, pushFrame } from "../src/builder/pattern.ts";
@@ -11,7 +12,7 @@ import { trustPattern } from "./support/trusted-builder.ts";
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
 
-Deno.test("computed throws error", async () => {
+test("computed throws error", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),

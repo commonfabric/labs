@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterAll, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import {
@@ -18,6 +17,7 @@ import {
   MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES,
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
+import { afterAll, describe, it } from "@commonfabric/test-support/test";
 
 import {
   attachMemorySocketPipeline,

@@ -2,9 +2,14 @@
 // graph reaches @commonfabric/ui, whose components extend a bare HTMLElement as
 // they load, so it can only load once the test has installed one.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CellReadRefusedError } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { XBodyView } from "../src/views/BodyView.ts";
 import { installBrowserGlobals } from "./browser-globals.ts";

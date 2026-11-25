@@ -5,10 +5,10 @@
 // and its attribution, --json, and the two notices a reader must not miss (a
 // window with no timed commits, and commits absent from every bucket).
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { argv, cf, stripAnsi } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * `CliResult` streams are line arrays; join before substring assertions.

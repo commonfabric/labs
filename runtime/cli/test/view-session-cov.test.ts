@@ -19,6 +19,7 @@ import { diffSource } from "../lib/view/diffedit.ts";
 import { overlayBox, renderFrame, type ViewState } from "../lib/view/render.ts";
 import type { Document } from "../lib/view/model.ts";
 import { frameTop, maxTop } from "../lib/view/actions.ts";
+import { test } from "@commonfabric/test-support/test";
 
 //
 // key helpers
@@ -71,7 +72,7 @@ function makeSession(width = 90, height = 24): Session {
 // save dialog: more than six edited files
 //
 
-Deno.test("session: the save prompt lists six files plus an '… and N more' line", () => {
+test("session: the save prompt lists six files plus an '… and N more' line", () => {
   const path = "/work/main.ts";
   const text = "const a = 1;\n";
   const doc = parseDocument(text, path);
@@ -103,7 +104,7 @@ Deno.test("session: the save prompt lists six files plus an '… and N more' lin
   assertEquals(body[body.length - 1], "  … and 3 more");
 });
 
-Deno.test("session: a single edited file shows no notice list", () => {
+test("session: a single edited file shows no notice list", () => {
   const path = "/work/solo.ts";
   const doc = parseDocument("const a = 1;\n", path);
   const source: EditableSource = {
@@ -131,7 +132,7 @@ Deno.test("session: a single edited file shows no notice list", () => {
 // selectNode out-of-range guard (288)
 //
 
-Deno.test("session: navigating past the last node is a no-op (selectNode guard)", () => {
+test("session: navigating past the last node is a no-op (selectNode guard)", () => {
   const s = makeSession();
   press(s, "tab"); // establish a selection at the first node
   // Step pre-order forward well past the end; selectNode rejects out-of-range.
@@ -152,7 +153,7 @@ Deno.test("session: navigating past the last node is a no-op (selectNode guard)"
 // definition lookup (319-348)
 //
 
-Deno.test("session: definition lookup reports a miss", () => {
+test("session: definition lookup reports a miss", () => {
   const s = makeSession();
   press(s, "t");
   type(s, "nonexistentName");
@@ -164,7 +165,7 @@ Deno.test("session: definition lookup reports a miss", () => {
   assertEquals(s.view().overlay, null, "no overlay on a miss");
 });
 
-Deno.test("session: definition lookup with a structure node opens its card", () => {
+test("session: definition lookup with a structure node opens its card", () => {
   const s = makeSession();
   press(s, "t");
   type(s, "myPattern");
@@ -175,7 +176,7 @@ Deno.test("session: definition lookup with a structure node opens its card", () 
   assert(ov.title.includes("myPattern"), ov.title);
 });
 
-Deno.test("session: definition lookup without a matching structure node falls back to source lines", () => {
+test("session: definition lookup without a matching structure node falls back to source lines", () => {
   // `Foo` is a type alias; force a definition with offsets that match no
   // structure node by using a document whose definition has no node at that
   // exact range. A bare `type Foo` aliasing works, but to take the fallback we
@@ -252,7 +253,7 @@ function externalSession(destLine = 1, fileLines = 3): {
   return { s, filePath };
 }
 
-Deno.test("session: card selection wraps at the bottom and scrolls to stay visible", () => {
+test("session: card selection wraps at the bottom and scrolls to stay visible", () => {
   // A card with many reference lines so moving down past the inner height
   // scrolls the overlay.
   const doc = parseDocument(SAMPLE);
@@ -278,7 +279,7 @@ Deno.test("session: card selection wraps at the bottom and scrolls to stay visib
   assert(lastScroll >= 0);
 });
 
-Deno.test("session: Enter on a card's '… N more' line expands the list in place", () => {
+test("session: Enter on a card's '… N more' line expands the list in place", () => {
   let src = "// transformed: /app.ts\n";
   for (let i = 0; i < 16; i++) src += `const v${i} = ${i};\n`;
   const doc = parseDocument(src);
@@ -312,7 +313,7 @@ Deno.test("session: Enter on a card's '… N more' line expands the list in plac
   assert(lines().some((l) => l.text.includes("v15")), "every child listed");
 });
 
-Deno.test("session: following card references stacks them; Esc walks back, q closes all", () => {
+test("session: following card references stacks them; Esc walks back, q closes all", () => {
   let src = "// transformed: /app.ts\n";
   for (let i = 0; i < 4; i++) src += `const v${i} = ${i};\n`;
   const doc = parseDocument(src);
@@ -353,7 +354,7 @@ Deno.test("session: following card references stacks them; Esc walks back, q clo
   assertEquals(s.view().overlay, null, "q closed the whole stack");
 });
 
-Deno.test("session: Enter on a 'defined elsewhere' entry, then Esc, returns to the card", () => {
+test("session: Enter on a 'defined elsewhere' entry, then Esc, returns to the card", () => {
   const { s } = externalSession(1, 4);
   const cardTitle = s.view().overlay!.title; // the flag card
   press(s, "down"); // select the external reference
@@ -376,7 +377,7 @@ Deno.test("session: Enter on a 'defined elsewhere' entry, then Esc, returns to t
   assertEquals(s.view().overlay, null, "the last Esc closes");
 });
 
-Deno.test("session: 'z' on a card opens the external definition file in place", () => {
+test("session: 'z' on a card opens the external definition file in place", () => {
   const { s } = externalSession(1, 4);
   press(s, "down"); // select the external reference
   press(s, "z"); // reveal: opens the file in place
@@ -389,7 +390,7 @@ Deno.test("session: 'z' on a card opens the external definition file in place", 
   );
 });
 
-Deno.test("session: opening an unreadable external file reports an error", () => {
+test("session: opening an unreadable external file reports an error", () => {
   // A semantics stub that advertises a definition but returns no file lines.
   const filePath = "/workspace/missing.ts";
   const stub: Semantics = {
@@ -416,7 +417,7 @@ Deno.test("session: opening an unreadable external file reports an error", () =>
   assert(s.view().message.includes("Cannot open"), s.view().message);
 });
 
-Deno.test("session: Enter on a reference with no openable node reports nothing to open", () => {
+test("session: Enter on a reference with no openable node reports nothing to open", () => {
   // Build a card whose target resolves to no node and no destination line.
   const doc = parseDocument(SAMPLE);
   const s = new Session(
@@ -437,7 +438,7 @@ Deno.test("session: Enter on a reference with no openable node reports nothing t
   );
 });
 
-Deno.test("session: 'z' on a card with no selected reference reveals the subject node", () => {
+test("session: 'z' on a card with no selected reference reveals the subject node", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -456,7 +457,7 @@ Deno.test("session: 'z' on a card with no selected reference reveals the subject
   );
 });
 
-Deno.test("session: overlay paging keys scroll the card", () => {
+test("session: overlay paging keys scroll the card", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -479,7 +480,7 @@ Deno.test("session: overlay paging keys scroll the card", () => {
   assertEquals(s.view().overlay, null, "q closed the overlay");
 });
 
-Deno.test("session: overlay letter shortcuts match the help text", () => {
+test("session: overlay letter shortcuts match the help text", () => {
   const s = makeSession(60, 8);
   press(s, "?");
   press(s, "J");
@@ -506,7 +507,7 @@ Deno.test("session: overlay letter shortcuts match the help text", () => {
   }
 });
 
-Deno.test("session: info-card letter shortcuts match the help text", () => {
+test("session: info-card letter shortcuts match the help text", () => {
   for (const reveal of ["z", "Z"]) {
     const s = makeSession();
     selectByLabel(s, "pattern myPattern");
@@ -553,7 +554,7 @@ Deno.test("session: info-card letter shortcuts match the help text", () => {
   assert(s.view().overlay?.title.includes("__cfLift_1"));
 });
 
-Deno.test("session: overlay scrolling stops once the last line reaches the bottom", () => {
+test("session: overlay scrolling stops once the last line reaches the bottom", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -573,7 +574,7 @@ Deno.test("session: overlay scrolling stops once the last line reaches the botto
   assertEquals(s.view().overlay!.scroll, maxScroll, "cannot scroll further");
 });
 
-Deno.test("session: Tab toggles a peek card to source and z reveals the subject from there", () => {
+test("session: Tab toggles a peek card to source and z reveals the subject from there", () => {
   const s = makeSession(100, 24);
   selectByLabel(s, "pattern myPattern");
   press(s, "enter");
@@ -590,7 +591,7 @@ Deno.test("session: Tab toggles a peek card to source and z reveals the subject 
 // normal-mode keys: search stepping & paging (546-845)
 //
 
-Deno.test("session: n with no matches reports 'No matches'", () => {
+test("session: n with no matches reports 'No matches'", () => {
   const s = makeSession();
   press(s, "n");
   assertEquals(s.view().message, "No matches");
@@ -598,7 +599,7 @@ Deno.test("session: n with no matches reports 'No matches'", () => {
   assertEquals(s.view().message, "No matches");
 });
 
-Deno.test("session: n / N step through matches and reveal them", () => {
+test("session: n / N step through matches and reveal them", () => {
   const s = makeSession(40, 10);
   press(s, "/");
   type(s, "token");
@@ -611,7 +612,7 @@ Deno.test("session: n / N step through matches and reveal them", () => {
   assert(second !== first || s.view().matches!.length === 1);
 });
 
-Deno.test("session: a search jumps and reveals a match off the bottom and to the right", () => {
+test("session: a search jumps and reveals a match off the bottom and to the right", () => {
   // A doc tall and wide enough that a later match is off both axes.
   const lines = [
     "// transformed: /m.ts",
@@ -631,7 +632,7 @@ Deno.test("session: a search jumps and reveals a match off the bottom and to the
   assert(s.view().left > 0, "scrolled right to the match");
 });
 
-Deno.test("session: paging, half-paging and home/end via the keymap", () => {
+test("session: paging, half-paging and home/end via the keymap", () => {
   const lines = ["// transformed: /m.ts"].concat(
     Array.from({ length: 60 }, (_, i) => `const v${i} = ${i};`),
   );
@@ -674,7 +675,7 @@ Deno.test("session: paging, half-paging and home/end via the keymap", () => {
   assertEquals(s.view().top, 0);
 });
 
-Deno.test("session: capital keycap shortcuts accept either letter case", () => {
+test("session: capital keycap shortcuts accept either letter case", () => {
   const cases: Array<{
     lower: string;
     upper: string;
@@ -704,7 +705,7 @@ Deno.test("session: capital keycap shortcuts accept either letter case", () => {
   }
 });
 
-Deno.test("session: capital WASD keycaps navigate to the same tree nodes", () => {
+test("session: capital WASD keycaps navigate to the same tree nodes", () => {
   const cases = [
     {
       lower: "w",
@@ -741,7 +742,7 @@ Deno.test("session: capital WASD keycaps navigate to the same tree nodes", () =>
   }
 });
 
-Deno.test("session: capital Z keycap frames the selected node", () => {
+test("session: capital Z keycap frames the selected node", () => {
   const height = 8;
   const lowerSession = makeSession(80, height);
   const upperSession = makeSession(80, height);
@@ -766,13 +767,13 @@ Deno.test("session: capital Z keycap frames the selected node", () => {
   assertEquals(upperSession.view(), lowerSession.view(), "Z matches z");
 });
 
-Deno.test("session: Enter with no selection prompts to select a node", () => {
+test("session: Enter with no selection prompts to select a node", () => {
   const s = makeSession();
   press(s, "enter");
   assert(s.view().message.includes("Select a node first"), s.view().message);
 });
 
-Deno.test("session: 'z' in pager mode frames the selected node", () => {
+test("session: 'z' in pager mode frames the selected node", () => {
   const s = makeSession(80, 8);
   selectByLabel(s, "pattern myPattern");
   press(s, "g");
@@ -785,7 +786,7 @@ Deno.test("session: 'z' in pager mode frames the selected node", () => {
   );
 });
 
-Deno.test("session: '#' toggles line numbers and escape clears selection & search", () => {
+test("session: '#' toggles line numbers and escape clears selection & search", () => {
   const s = makeSession();
   assertEquals(s.view().showLineNumbers, false);
   press(s, "#");
@@ -800,7 +801,7 @@ Deno.test("session: '#' toggles line numbers and escape clears selection & searc
   assertEquals(s.view().matches, null, "search cleared");
 });
 
-Deno.test("session: navigateTree with no structure reports no structure", () => {
+test("session: navigateTree with no structure reports no structure", () => {
   const doc = parseDocument("   \n   \n");
   // A whitespace-only document has an empty structure tree.
   const empty = { ...doc, structure: [], flatStructure: [] };
@@ -852,7 +853,7 @@ function fileSession(text: string, width = 80, height = 12): {
   return { s, source, saved };
 }
 
-Deno.test("session: revealing the cursor on a non-editable view reports the reason", () => {
+test("session: revealing the cursor on a non-editable view reports the reason", () => {
   const doc = parseDocument("const a = 1;\n");
   // No source at all: bare arrow reports there's no file to edit.
   const s = new Session(
@@ -868,7 +869,7 @@ Deno.test("session: revealing the cursor on a non-editable view reports the reas
   );
 });
 
-Deno.test("session: a read-only source reports its reason on edit", () => {
+test("session: a read-only source reports its reason on edit", () => {
   const doc = parseDocument("const a = 1;\n");
   const source: EditableSource = {
     label: null,
@@ -889,7 +890,7 @@ Deno.test("session: a read-only source reports its reason on edit", () => {
   assert(s.view().message.includes("read-only"), s.view().message);
 });
 
-Deno.test("session: word, line and buffer movement in a file buffer", () => {
+test("session: word, line and buffer movement in a file buffer", () => {
   const { s } = fileSession("alpha beta gamma\nsecond line here\nthird\n");
   press(s, "e"); // reveal cursor at top
   assertEquals(s.view().cursor, { line: 0, col: 0 });
@@ -927,7 +928,7 @@ Deno.test("session: word, line and buffer movement in a file buffer", () => {
   assertEquals(s.view().cursor, { line: 0, col: 0 });
 });
 
-Deno.test("session: cursor paging up and down moves the cursor by a page", () => {
+test("session: cursor paging up and down moves the cursor by a page", () => {
   const { s } = fileSession(
     Array.from({ length: 40 }, (_, i) => `line${i}`).join("\n") + "\n",
     60,
@@ -945,7 +946,7 @@ Deno.test("session: cursor paging up and down moves the cursor by a page", () =>
   assert(s.view().cursor!.line >= 0);
 });
 
-Deno.test("session: typing, tab, space, kill-line, yank and word-case edits in a file", () => {
+test("session: typing, tab, space, kill-line, yank and word-case edits in a file", () => {
   const { s } = fileSession("hello world\n");
   press(s, "e"); // reveal cursor
   press(s, "end"); // end of "hello world"
@@ -972,7 +973,7 @@ Deno.test("session: typing, tab, space, kill-line, yank and word-case edits in a
   assert(s.doc.lines[0].text.startsWith("Hello"), s.doc.lines[0].text);
 });
 
-Deno.test("session: displayed Alt-letter shortcuts accept either case", () => {
+test("session: displayed Alt-letter shortcuts accept either case", () => {
   const cases: Array<{
     lower: string;
     upper: string;
@@ -1005,7 +1006,7 @@ Deno.test("session: displayed Alt-letter shortcuts accept either case", () => {
   }
 });
 
-Deno.test("session: delete-forward, backspace, kill-word forward/back, newline and mark/region", () => {
+test("session: delete-forward, backspace, kill-word forward/back, newline and mark/region", () => {
   const { s } = fileSession("abcdef ghij\n");
   press(s, "e"); // enter edit mode
   press(s, "delete"); // delete the 'a'
@@ -1032,7 +1033,7 @@ Deno.test("session: delete-forward, backspace, kill-word forward/back, newline a
   press(s, "backspace");
 });
 
-Deno.test("session: yank-pop in a file rotates the kill ring", () => {
+test("session: yank-pop in a file rotates the kill ring", () => {
   const { s } = fileSession("one\ntwo\nthree\n");
   press(s, "e"); // enter edit mode
   press(s, "ctrl-k", "ctrl-k"); // kill "one" then the empty line / newline
@@ -1043,14 +1044,14 @@ Deno.test("session: yank-pop in a file rotates the kill ring", () => {
   assert(s.doc.text.length >= 0, "yank-pop ran");
 });
 
-Deno.test("session: ctrl-` sets the mark like ctrl-space", () => {
+test("session: ctrl-` sets the mark like ctrl-space", () => {
   const { s } = fileSession("mark me\n");
   press(s, "e"); // enter edit mode
   s.handleKey({ name: "ctrl-`" });
   assertEquals(s.view().message, "Mark set");
 });
 
-Deno.test("session: an unmodelled Alt combo while editing is a no-op", () => {
+test("session: an unmodelled Alt combo while editing is a no-op", () => {
   const { s } = fileSession("text\n");
   press(s, "e"); // enter edit mode
   const before = s.doc.text;
@@ -1058,7 +1059,7 @@ Deno.test("session: an unmodelled Alt combo while editing is a no-op", () => {
   assertEquals(s.doc.text, before, "unmodelled Alt combo changed nothing");
 });
 
-Deno.test("session: escape leaves edit mode and triggers a reparse", () => {
+test("session: escape leaves edit mode and triggers a reparse", () => {
   const { s } = fileSession("const a = 1;\n");
   press(s, "e"); // enter edit mode
   type(s, "x"); // dirty + set needsReparse via live highlight
@@ -1066,7 +1067,7 @@ Deno.test("session: escape leaves edit mode and triggers a reparse", () => {
   assertEquals(s.view().cursor, null, "cursor hidden after escape");
 });
 
-Deno.test("session: ctrl-c while editing quits a clean buffer", () => {
+test("session: ctrl-c while editing quits a clean buffer", () => {
   const { s } = fileSession("clean\n");
   press(s, "e"); // enter edit mode
   press(s, "ctrl-c");
@@ -1077,7 +1078,7 @@ Deno.test("session: ctrl-c while editing quits a clean buffer", () => {
 // F3 / save / quit prompts (1391-1474)
 //
 
-Deno.test("session: F3 saves an editable file and ctrl-x ctrl-s also saves", () => {
+test("session: F3 saves an editable file and ctrl-x ctrl-s also saves", () => {
   const { s, saved } = fileSession("save me\n");
   press(s, "e"); // reveal cursor at the start
   press(s, "end"); // move to the end of the line
@@ -1091,7 +1092,7 @@ Deno.test("session: F3 saves an editable file and ctrl-x ctrl-s also saves", () 
   assert(s.view().message.startsWith("Saved"), s.view().message);
 });
 
-Deno.test("session: requestSave with nothing to save reports it", () => {
+test("session: requestSave with nothing to save reports it", () => {
   const doc = parseDocument("no source\n");
   const s = new Session(
     doc,
@@ -1102,7 +1103,7 @@ Deno.test("session: requestSave with nothing to save reports it", () => {
   assertEquals(s.view().message, "Nothing to save.");
 });
 
-Deno.test("session: requestSave on a read-only source reports it", () => {
+test("session: requestSave on a read-only source reports it", () => {
   const doc = parseDocument("ro\n");
   const source: EditableSource = {
     label: null,
@@ -1122,7 +1123,7 @@ Deno.test("session: requestSave on a read-only source reports it", () => {
   assert(s.view().message.includes("read-only"), s.view().message);
 });
 
-Deno.test("session: a save that throws is reported as a failure", () => {
+test("session: a save that throws is reported as a failure", () => {
   const path = "/work/boom.ts";
   const source: EditableSource = {
     label: "boom.ts",
@@ -1150,7 +1151,7 @@ Deno.test("session: a save that throws is reported as a failure", () => {
   assert(s.view().message.includes("disk full"), s.view().message);
 });
 
-Deno.test("session: the quit save-prompt answers s / d / c", () => {
+test("session: the quit save-prompt answers s / d / c", () => {
   // (s) save then quit. Escape leaves edit mode first; q in the pager quits.
   {
     const { s, saved } = fileSession("one\n");
@@ -1211,7 +1212,7 @@ Deno.test("session: the quit save-prompt answers s / d / c", () => {
   }
 });
 
-Deno.test("session: requestQuitFromSignal raises the prompt with unsaved edits", () => {
+test("session: requestQuitFromSignal raises the prompt with unsaved edits", () => {
   const { s } = fileSession("sig\n");
   press(s, "e"); // enter edit mode
   type(s, "Z"); // dirty
@@ -1221,7 +1222,7 @@ Deno.test("session: requestQuitFromSignal raises the prompt with unsaved edits",
   assertEquals(s.requestQuitFromSignal(), false);
 });
 
-Deno.test("session: requestQuitFromSignal on a clean buffer quits without a prompt", () => {
+test("session: requestQuitFromSignal on a clean buffer quits without a prompt", () => {
   const { s } = fileSession("clean\n");
   press(s, "e"); // reveal cursor but make no edits
   const willPrompt = s.requestQuitFromSignal();
@@ -1229,13 +1230,13 @@ Deno.test("session: requestQuitFromSignal on a clean buffer quits without a prom
   assert(s.quit, "and it quit");
 });
 
-Deno.test("session: an unbound C-x chord reports it", () => {
+test("session: an unbound C-x chord reports it", () => {
   const { s } = fileSession("chord\n");
   press(s, "ctrl-x", "z"); // C-x z is unbound
   assert(s.view().message.includes("unbound"), s.view().message);
 });
 
-Deno.test("session: C-x C-c quits", () => {
+test("session: C-x C-c quits", () => {
   const { s } = fileSession("clean\n");
   press(s, "ctrl-x", "ctrl-c");
   assert(s.quit, "C-x C-c quit a clean buffer");
@@ -1245,14 +1246,14 @@ Deno.test("session: C-x C-c quits", () => {
 // revert prompt (1480-1544)
 //
 
-Deno.test("session: ctrl-r on a clean buffer reports nothing to revert", () => {
+test("session: ctrl-r on a clean buffer reports nothing to revert", () => {
   const { s } = fileSession("nothing\n");
   press(s, "e"); // enter edit mode
   press(s, "ctrl-r");
   assertEquals(s.view().message, "Nothing to revert.");
 });
 
-Deno.test("session: a plain-file revert prompt accepts y and reverts all", () => {
+test("session: a plain-file revert prompt accepts y and reverts all", () => {
   const { s } = fileSession("original line\n");
   press(s, "e"); // enter edit mode
   type(s, "EDIT");
@@ -1264,7 +1265,7 @@ Deno.test("session: a plain-file revert prompt accepts y and reverts all", () =>
   assert(s.view().message.includes("Reverted"), s.view().message);
 });
 
-Deno.test("session: a plain-file revert prompt ignores unlisted keys, cancels on c", () => {
+test("session: a plain-file revert prompt ignores unlisted keys, cancels on c", () => {
   const { s } = fileSession("keep me\n");
   press(s, "e"); // enter edit mode
   type(s, "X");
@@ -1277,7 +1278,7 @@ Deno.test("session: a plain-file revert prompt ignores unlisted keys, cancels on
   assert(s.doc.text.includes("X"), "edit retained after cancel");
 });
 
-Deno.test("session: revert when the source offers none reports it", () => {
+test("session: revert when the source offers none reports it", () => {
   // A source with editable text but no revert function.
   const path = "/work/norev.ts";
   const source: EditableSource = {
@@ -1302,7 +1303,7 @@ Deno.test("session: revert when the source offers none reports it", () => {
   assertEquals(s.view().message, "Revert isn't available here.");
 });
 
-Deno.test("session: revert that returns nothing-there is reported", () => {
+test("session: revert that returns nothing-there is reported", () => {
   const path = "/work/empty-rev.ts";
   const source: EditableSource = {
     label: "empty-rev.ts",
@@ -1331,14 +1332,14 @@ Deno.test("session: revert that returns nothing-there is reported", () => {
 // expand context errors (1556-1574)
 //
 
-Deno.test("session: ctrl-l when expanding context is unavailable reports it", () => {
+test("session: ctrl-l when expanding context is unavailable reports it", () => {
   const { s } = fileSession("plain file\n");
   press(s, "e"); // enter edit mode
   press(s, "ctrl-l"); // a plain file has no expandContext
   assertEquals(s.view().message, "Expanding context isn't available here.");
 });
 
-Deno.test("session: ctrl-l in pager mode with no hunk in view reports move-to-a-hunk", () => {
+test("session: ctrl-l in pager mode with no hunk in view reports move-to-a-hunk", () => {
   // A source that advertises expandContext but whose document has no hunks.
   const path = "/work/nohunk.ts";
   const source: EditableSource = {
@@ -1365,7 +1366,7 @@ Deno.test("session: ctrl-l in pager mode with no hunk in view reports move-to-a-
   );
 });
 
-Deno.test("session: ctrl-l when expandContext yields nothing reports no more context", () => {
+test("session: ctrl-l when expandContext yields nothing reports no more context", () => {
   const { ws, done } = expandWs();
   try {
     const model = parseDiff(EXPAND_DIFF)!;
@@ -1481,7 +1482,7 @@ function toLine(s: Session, line: number): void {
   }
 }
 
-Deno.test("diffcov: editing a non-editable removed line is refused for typed chars", () => {
+test("diffcov: editing a non-editable removed line is refused for typed chars", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1495,7 +1496,7 @@ Deno.test("diffcov: editing a non-editable removed line is refused for typed cha
   }
 });
 
-Deno.test("diffcov: delete-forward at end of a diff line is refused as a join", () => {
+test("diffcov: delete-forward at end of a diff line is refused as a join", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1512,7 +1513,7 @@ Deno.test("diffcov: delete-forward at end of a diff line is refused as a join", 
   }
 });
 
-Deno.test("diffcov: a multi-line paste is refused while editing a diff", () => {
+test("diffcov: a multi-line paste is refused while editing a diff", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1526,7 +1527,7 @@ Deno.test("diffcov: a multi-line paste is refused while editing a diff", () => {
   }
 });
 
-Deno.test("diffcov: M-d / M-backspace / C-w / C-k respect the diff marker", () => {
+test("diffcov: M-d / M-backspace / C-w / C-k respect the diff marker", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1550,7 +1551,7 @@ Deno.test("diffcov: M-d / M-backspace / C-w / C-k respect the diff marker", () =
   }
 });
 
-Deno.test("diffcov: C-w without a mark asks to set the mark", () => {
+test("diffcov: C-w without a mark asks to set the mark", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1562,7 +1563,7 @@ Deno.test("diffcov: C-w without a mark asks to set the mark", () => {
   }
 });
 
-Deno.test("diffcov: a multi-line region kill is refused in a diff", () => {
+test("diffcov: a multi-line region kill is refused in a diff", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1580,7 +1581,7 @@ Deno.test("diffcov: a multi-line region kill is refused in a diff", () => {
   }
 });
 
-Deno.test("diffcov: M-d and word-case edits work on an editable diff line", () => {
+test("diffcov: M-d and word-case edits work on an editable diff line", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1599,7 +1600,7 @@ Deno.test("diffcov: M-d and word-case edits work on an editable diff line", () =
   }
 });
 
-Deno.test("diffcov: yank-pop is blocked while editing a diff", () => {
+test("diffcov: yank-pop is blocked while editing a diff", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1612,7 +1613,7 @@ Deno.test("diffcov: yank-pop is blocked while editing a diff", () => {
   }
 });
 
-Deno.test("diffcov: ctrl-s edit-mode search lands the cursor on a match", () => {
+test("diffcov: ctrl-s edit-mode search lands the cursor on a match", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1633,7 +1634,7 @@ Deno.test("diffcov: ctrl-s edit-mode search lands the cursor on a match", () => 
   }
 });
 
-Deno.test("diffcov: backspace in an edit-mode search refreshes matches", () => {
+test("diffcov: backspace in an edit-mode search refreshes matches", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1648,7 +1649,7 @@ Deno.test("diffcov: backspace in an edit-mode search refreshes matches", () => {
   }
 });
 
-Deno.test("diffcov: revert prompt offers hunk / file / all for a diff", () => {
+test("diffcov: revert prompt offers hunk / file / all for a diff", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1667,7 +1668,7 @@ Deno.test("diffcov: revert prompt offers hunk / file / all for a diff", () => {
   }
 });
 
-Deno.test("diffcov: revert 'file' scope through the session", () => {
+test("diffcov: revert 'file' scope through the session", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1683,7 +1684,7 @@ Deno.test("diffcov: revert 'file' scope through the session", () => {
   }
 });
 
-Deno.test("diffcov: an unlisted key at the diff revert prompt does nothing; Esc cancels", () => {
+test("diffcov: an unlisted key at the diff revert prompt does nothing; Esc cancels", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1701,7 +1702,7 @@ Deno.test("diffcov: an unlisted key at the diff revert prompt does nothing; Esc 
   }
 });
 
-Deno.test("diffcov: a diff that matches no file on disk is read-only", () => {
+test("diffcov: a diff that matches no file on disk is read-only", () => {
   // A workspace whose read always fails: the diff source is not editable.
   const ws: DiffWorkspace = {
     resolve: (p) => p,
@@ -1721,7 +1722,7 @@ Deno.test("diffcov: a diff that matches no file on disk is read-only", () => {
   assert(s.view().message.length > 0, s.view().message);
 });
 
-Deno.test("diffcov: Enter splits a context line into a removed/added pair, then collapses back", () => {
+test("diffcov: Enter splits a context line into a removed/added pair, then collapses back", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1738,7 +1739,7 @@ Deno.test("diffcov: Enter splits a context line into a removed/added pair, then 
   }
 });
 
-Deno.test("diffcov: Enter mid-context produces +head/+tail added lines", () => {
+test("diffcov: Enter mid-context produces +head/+tail added lines", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1752,7 +1753,7 @@ Deno.test("diffcov: Enter mid-context produces +head/+tail added lines", () => {
   }
 });
 
-Deno.test("diffcov: Backspace at the start of an added line removes it", () => {
+test("diffcov: Backspace at the start of an added line removes it", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -1768,7 +1769,7 @@ Deno.test("diffcov: Backspace at the start of an added line removes it", () => {
   }
 });
 
-Deno.test("diffcov: pager-mode ctrl-l expands the hunk in view", () => {
+test("diffcov: pager-mode ctrl-l expands the hunk in view", () => {
   const { ws, done } = expandWs();
   try {
     const model = parseDiff(EXPAND_DIFF)!;
@@ -1793,7 +1794,7 @@ Deno.test("diffcov: pager-mode ctrl-l expands the hunk in view", () => {
   }
 });
 
-Deno.test("diffcov: pager-mode ctrl-l with a selected hunk expands that hunk", () => {
+test("diffcov: pager-mode ctrl-l with a selected hunk expands that hunk", () => {
   const { ws, done } = expandWs();
   try {
     const model = parseDiff(EXPAND_DIFF)!;
@@ -1858,7 +1859,7 @@ function tallSession(height: number): { s: Session; done: () => void } {
   return { s, done: () => Deno.removeSync(root, { recursive: true }) };
 }
 
-Deno.test("diffcov: pager-mode ctrl-l at a hunk's top expands upwards", () => {
+test("diffcov: pager-mode ctrl-l at a hunk's top expands upwards", () => {
   const { s, done } = tallSession(13);
   try {
     // With the viewport at the top of the hunk, the quarter-screen target is in
@@ -1872,7 +1873,7 @@ Deno.test("diffcov: pager-mode ctrl-l at a hunk's top expands upwards", () => {
   }
 });
 
-Deno.test("diffcov: pager-mode ctrl-l at a hunk's bottom expands downwards", () => {
+test("diffcov: pager-mode ctrl-l at a hunk's bottom expands downwards", () => {
   const { s, done } = tallSession(13);
   try {
     // Scrolled to the end, the quarter-screen target is in the hunk's lower
@@ -1898,7 +1899,7 @@ Deno.test("diffcov: pager-mode ctrl-l at a hunk's bottom expands downwards", () 
   }
 });
 
-Deno.test("diffcov: padded blank rows do not move the quarter-screen target", () => {
+test("diffcov: padded blank rows do not move the quarter-screen target", () => {
   const root = Deno.makeTempDirSync();
   try {
     const lines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
@@ -1937,7 +1938,7 @@ index 0000000..1111111 100644
   }
 });
 
-Deno.test("diffcov: pager-mode ctrl-l follows the quarter-screen target as the view scrolls", () => {
+test("diffcov: pager-mode ctrl-l follows the quarter-screen target as the view scrolls", () => {
   const { s, done } = tallSession(13);
   try {
     // The same session expands up first, then down once scrolled, rather than
@@ -1951,7 +1952,7 @@ Deno.test("diffcov: pager-mode ctrl-l follows the quarter-screen target as the v
   }
 });
 
-Deno.test("diffcov: pager-mode ctrl-l measures a selection's hunk from the selection", () => {
+test("diffcov: pager-mode ctrl-l measures a selection's hunk from the selection", () => {
   // Tall enough that both of the hunk's edges are on screen, so which one is
   // nearest is a real question rather than the only one left.
   const plain = tallSession(30);
@@ -1998,7 +1999,7 @@ index 0000000..1111111 100644
  line22
 `;
 
-Deno.test("filepicker: opening it after an edit leaves the structure tree current", () => {
+test("filepicker: opening it after an edit leaves the structure tree current", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "m.ts"), TWO_HUNK_FILE);
@@ -2086,7 +2087,7 @@ ${FOLD_SMALL("c.ts", "C")}
 ${FOLD_SMALL("d.ts", "D")}
 `;
 
-Deno.test("diffcov: pager-mode ctrl-l measures nearest in rows, not document lines", () => {
+test("diffcov: pager-mode ctrl-l measures nearest in rows, not document lines", () => {
   const root = Deno.makeTempDirSync();
   try {
     for (
@@ -2196,7 +2197,7 @@ function screenRow(s: Session, text: string): number {
   return line - s.view().top;
 }
 
-Deno.test("diffcov: expanding upwards holds the content before the hunk still", () => {
+test("diffcov: expanding upwards holds the content before the hunk still", () => {
   const { s, done } = pinSession();
   try {
     const held = screenRow(s, "+++ b/a.ts");
@@ -2217,7 +2218,7 @@ Deno.test("diffcov: expanding upwards holds the content before the hunk still", 
   }
 });
 
-Deno.test("diffcov: expanding downwards holds the content after the hunk still", () => {
+test("diffcov: expanding downwards holds the content after the hunk still", () => {
   const { s, done } = pinSession();
   try {
     // Put the quarter-screen target in the hunk's lower half.
@@ -2240,7 +2241,7 @@ Deno.test("diffcov: expanding downwards holds the content after the hunk still",
   }
 });
 
-Deno.test("diffcov: wrapped expansion holds the content after the hunk still", () => {
+test("diffcov: wrapped expansion holds the content after the hunk still", () => {
   for (
     const { width, scroll } of [
       { width: 2, scroll: 144 },
@@ -2277,7 +2278,7 @@ Deno.test("diffcov: wrapped expansion holds the content after the hunk still", (
   }
 });
 
-Deno.test("diffcov: wrapped reveal keeps the next triangle on screen", () => {
+test("diffcov: wrapped reveal keeps the next triangle on screen", () => {
   const { s, done } = tallSession(9);
   try {
     s.resize(20, 9);
@@ -2319,7 +2320,7 @@ function screenOf(s: Session): string[] {
   return rows({ doc: s.displayDoc(), view: s.view() });
 }
 
-Deno.test("diffcov: the reveal frames run from the screen before to the one after", () => {
+test("diffcov: the reveal frames run from the screen before to the one after", () => {
   const { s, done } = pinSession();
   try {
     const before = screenOf(s);
@@ -2344,7 +2345,7 @@ Deno.test("diffcov: the reveal frames run from the screen before to the one afte
   }
 });
 
-Deno.test("diffcov: reveal-frame metadata stays beside its triangle", () => {
+test("diffcov: reveal-frame metadata stays beside its triangle", () => {
   const { s, done } = pinSession();
   try {
     press(s, "ctrl-l");
@@ -2380,7 +2381,7 @@ Deno.test("diffcov: reveal-frame metadata stays beside its triangle", () => {
   }
 });
 
-Deno.test("diffcov: reveal frames land the line meeting the hunk first", () => {
+test("diffcov: reveal frames land the line meeting the hunk first", () => {
   const { s, done } = pinSession();
   try {
     press(s, "ctrl-l"); // upwards: L15..L24 revealed above the body
@@ -2394,7 +2395,7 @@ Deno.test("diffcov: reveal frames land the line meeting the hunk first", () => {
   }
 });
 
-Deno.test("diffcov: reveal frames landing downwards also start at the hunk", () => {
+test("diffcov: reveal frames landing downwards also start at the hunk", () => {
   const { s, done } = pinSession();
   try {
     press(s, "ctrl-d", "ctrl-d", "j", "j", "j", "ctrl-l"); // downwards
@@ -2417,7 +2418,7 @@ Deno.test("diffcov: reveal frames landing downwards also start at the hunk", () 
   }
 });
 
-Deno.test("diffcov: the next key ends the reveal", () => {
+test("diffcov: the next key ends the reveal", () => {
   const { s, done } = pinSession();
   try {
     press(s, "ctrl-l");
@@ -2430,7 +2431,7 @@ Deno.test("diffcov: the next key ends the reveal", () => {
   }
 });
 
-Deno.test("diffcov: pager-mode ctrl-l drops a selection that scrolls out of view", () => {
+test("diffcov: pager-mode ctrl-l drops a selection that scrolls out of view", () => {
   const { s, done } = tallSession(13);
   try {
     // The selected line is nearer the hunk's bottom edge. Scrolling it off the
@@ -2449,7 +2450,7 @@ Deno.test("diffcov: pager-mode ctrl-l drops a selection that scrolls out of view
   }
 });
 
-Deno.test("diffcov: pager-mode ctrl-l with a hidden file reports move-to-a-hunk", () => {
+test("diffcov: pager-mode ctrl-l with a hidden file reports move-to-a-hunk", () => {
   const { s, done } = tallSession(13);
   try {
     press(s, "F"); // hide every file: only the summary row is on screen
@@ -2465,7 +2466,7 @@ Deno.test("diffcov: pager-mode ctrl-l with a hidden file reports move-to-a-hunk"
   }
 });
 
-Deno.test("diffcov: pager-mode ctrl-l with the file node selected uses the quarter-screen target", () => {
+test("diffcov: pager-mode ctrl-l with the file node selected uses the quarter-screen target", () => {
   const { s, done } = tallSession(13);
   try {
     // The file node spans the hunk rather than sitting in it, so it does not
@@ -2481,7 +2482,7 @@ Deno.test("diffcov: pager-mode ctrl-l with the file node selected uses the quart
   }
 });
 
-Deno.test("diffcov: after a revert the cursor snaps to an editable line", () => {
+test("diffcov: after a revert the cursor snaps to an editable line", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -2569,7 +2570,7 @@ function entryText(s: Session): string[] {
   return s.view().overlay?.lines.map((l) => l.text) ?? [];
 }
 
-Deno.test("filepickercov: paging through a long listing scrolls the picker", () => {
+test("filepickercov: paging through a long listing scrolls the picker", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   assert(entryText(s).length > 10, "a long listing");
@@ -2581,7 +2582,7 @@ Deno.test("filepickercov: paging through a long listing scrolls the picker", () 
   assertEquals(s.view().overlay!.selectedLine, 0, "back at the top");
 });
 
-Deno.test("filepickercov: the mouse wheel moves three entries", () => {
+test("filepickercov: the mouse wheel moves three entries", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   assertEquals(s.view().overlay?.selectedLine, 0);
@@ -2591,7 +2592,7 @@ Deno.test("filepickercov: the mouse wheel moves three entries", () => {
   assertEquals(s.view().overlay?.selectedLine, 0);
 });
 
-Deno.test("filepickercov: backspace on an empty filter steps up a directory", () => {
+test("filepickercov: backspace on an empty filter steps up a directory", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   press(s, "down", "enter"); // into sub/
@@ -2600,7 +2601,7 @@ Deno.test("filepickercov: backspace on an empty filter steps up a directory", ()
   assert(entryText(s).includes("sub/"), entryText(s).join(","));
 });
 
-Deno.test("filepickercov: typing a filter then backspacing it narrows and widens", () => {
+test("filepickercov: typing a filter then backspacing it narrows and widens", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   type(s, "file01");
@@ -2609,7 +2610,7 @@ Deno.test("filepickercov: typing a filter then backspacing it narrows and widens
   assert(entryText(s).length >= 1);
 });
 
-Deno.test("filepickercov: tab activates the highlighted entry like enter", () => {
+test("filepickercov: tab activates the highlighted entry like enter", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   press(s, "down"); // select sub/
@@ -2617,7 +2618,7 @@ Deno.test("filepickercov: tab activates the highlighted entry like enter", () =>
   assert(entryText(s).includes("c.ts"), entryText(s).join(","));
 });
 
-Deno.test("filepickercov: opening a typed filename with no highlighted match", () => {
+test("filepickercov: opening a typed filename with no highlighted match", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   type(s, "zzz-nomatch"); // filter to nothing
@@ -2626,7 +2627,7 @@ Deno.test("filepickercov: opening a typed filename with no highlighted match", (
   assert(s.view().message.includes("Cannot open"), s.view().message);
 });
 
-Deno.test("filepickercov: opening an existing file swaps the buffer", () => {
+test("filepickercov: opening an existing file swaps the buffer", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   type(s, "file00");
@@ -2636,7 +2637,7 @@ Deno.test("filepickercov: opening an existing file swaps the buffer", () => {
   assertEquals(s.doc.text, PFILES["/work/file00.ts"]);
 });
 
-Deno.test("filepickercov: opening another file disposes the semantics of the one shown", () => {
+test("filepickercov: opening another file disposes the semantics of the one shown", () => {
   let disposed = 0;
   const path = "/work/file00.ts";
   const s = new Session(
@@ -2660,7 +2661,7 @@ Deno.test("filepickercov: opening another file disposes the semantics of the one
   assertEquals(disposed, 1);
 });
 
-Deno.test("filepickercov: the picker refuses to open with unsaved edits", () => {
+test("filepickercov: the picker refuses to open with unsaved edits", () => {
   const s = pickerSession();
   press(s, "e"); // reveal cursor
   type(s, "X"); // dirty
@@ -2673,7 +2674,7 @@ Deno.test("filepickercov: the picker refuses to open with unsaved edits", () => 
   );
 });
 
-Deno.test("filepickercov: opening with no gateway reports it", () => {
+test("filepickercov: opening with no gateway reports it", () => {
   // A session with a source but no file gateway: C-x C-f is unavailable.
   const path = "/work/file00.ts";
   const doc = parseDocument(PFILES[path], path);
@@ -2689,7 +2690,7 @@ Deno.test("filepickercov: opening with no gateway reports it", () => {
   assertEquals(s.view().message, "Opening files isn't available here.");
 });
 
-Deno.test("filepickercov: the picker opens at the gateway cwd when the source has no path", () => {
+test("filepickercov: the picker opens at the gateway cwd when the source has no path", () => {
   // A source without a path: pickerStartDir falls back to files.cwd().
   const doc = parseDocument("const a = 1;\n");
   const noPathSource: EditableSource = {
@@ -2710,7 +2711,7 @@ Deno.test("filepickercov: the picker opens at the gateway cwd when the source ha
   assert(s.view().inputLine?.includes("/work"), s.view().inputLine ?? "");
 });
 
-Deno.test("filepickercov: a missing directory shows '(no matching files)'", () => {
+test("filepickercov: a missing directory shows '(no matching files)'", () => {
   // A gateway whose list returns null for the start dir.
   const emptyGateway: FileGateway = {
     cwd: () => "/empty",
@@ -2740,7 +2741,7 @@ Deno.test("filepickercov: a missing directory shows '(no matching files)'", () =
   assert(entryText(s).includes("../"), entryText(s).join(","));
 });
 
-Deno.test("filepickercov: escape cancels the picker", () => {
+test("filepickercov: escape cancels the picker", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   press(s, "escape");
@@ -2772,7 +2773,7 @@ function multiTargetSession(height: number): Session {
   return s;
 }
 
-Deno.test("session: stepping the card selection back up scrolls to a higher target", () => {
+test("session: stepping the card selection back up scrolls to a higher target", () => {
   // A short overlay so moving down through the references raises the scroll,
   // and a later up-step brings a target above the current scroll back on
   // screen (the `line < overlayScroll` branch).
@@ -2793,7 +2794,7 @@ Deno.test("session: stepping the card selection back up scrolls to a higher targ
   }
 });
 
-Deno.test("session: a card with many references scrolls down then up across the inner height", () => {
+test("session: a card with many references scrolls down then up across the inner height", () => {
   // Build a document where one binding is used many times, so its card lists a
   // long run of reference lines that exceed a small overlay's inner height.
   const lines = [
@@ -2833,7 +2834,7 @@ Deno.test("session: a card with many references scrolls down then up across the 
 // nodeAtLine, and the off-screen destination column pans the view.
 //
 
-Deno.test("session: revealing a use reference (no def offset) jumps via nodeAtLine and pans", () => {
+test("session: revealing a use reference (no def offset) jumps via nodeAtLine and pans", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -2856,7 +2857,7 @@ Deno.test("session: revealing a use reference (no def offset) jumps via nodeAtLi
   assert(s.view().selected, "a node resolved at the destination");
 });
 
-Deno.test("session: opening a use reference (no def offset) resolves a node via nodeAtLine", () => {
+test("session: opening a use reference (no def offset) resolves a node via nodeAtLine", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -2880,7 +2881,7 @@ Deno.test("session: opening a use reference (no def offset) resolves a node via 
 // following it skips the exact (start+end) lookup and matches on start alone.
 //
 
-Deno.test("session: following a dependency with no end offset matches a node by start offset", () => {
+test("session: following a dependency with no end offset matches a node by start offset", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -2902,7 +2903,7 @@ Deno.test("session: following a dependency with no end offset matches a node by 
 // overlay enter/z with no reference (484, 665-668)
 //
 
-Deno.test("session: Enter on a card with no reference selected closes the overlay", () => {
+test("session: Enter on a card with no reference selected closes the overlay", () => {
   const s = makeSession(100, 24);
   selectByLabel(s, "pattern myPattern");
   press(s, "enter"); // open the card; nothing selected yet (cardSel = -1)
@@ -2911,7 +2912,7 @@ Deno.test("session: Enter on a card with no reference selected closes the overla
   assertEquals(s.view().overlay, null, "Enter with no reference closed it");
 });
 
-Deno.test("session: z on the help overlay (no subject node) does nothing", () => {
+test("session: z on the help overlay (no subject node) does nothing", () => {
   const s = makeSession(100, 12);
   press(s, "?"); // the help overlay has no targets and no subject node
   press(s, "z"); // overlayRevealTarget returns null -> z is a no-op
@@ -2923,7 +2924,7 @@ Deno.test("session: z on the help overlay (no subject node) does nothing", () =>
 // edit-mode search with no editable match (546-547, 560)
 //
 
-Deno.test("diffcov: an edit-mode search whose only matches are non-editable keeps the cursor", () => {
+test("diffcov: an edit-mode search whose only matches are non-editable keeps the cursor", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -2943,7 +2944,7 @@ Deno.test("diffcov: an edit-mode search whose only matches are non-editable keep
   }
 });
 
-Deno.test("diffcov: committing an edit-mode search with no matches is a no-op on the cursor", () => {
+test("diffcov: committing an edit-mode search with no matches is a no-op on the cursor", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -2962,7 +2963,7 @@ Deno.test("diffcov: committing an edit-mode search with no matches is a no-op on
 // escape an empty-query search clears the (empty) match set (599)
 //
 
-Deno.test("session: escaping a search with no query typed clears the match set", () => {
+test("session: escaping a search with no query typed clears the match set", () => {
   const s = makeSession();
   press(s, "/"); // open search
   // No characters typed, so the query stays empty.
@@ -2979,7 +2980,7 @@ Deno.test("session: escaping a search with no query typed clears the match set",
 // every gate reports NOT_EDITABLE and refuses the edit.
 //
 
-Deno.test("diffcov: delete-forward on a removed line is refused (guardForwardEdit)", () => {
+test("diffcov: delete-forward on a removed line is refused (guardForwardEdit)", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -2993,7 +2994,7 @@ Deno.test("diffcov: delete-forward on a removed line is refused (guardForwardEdi
   }
 });
 
-Deno.test("diffcov: backspace on a removed line reports it isn't editable (handleBackspace)", () => {
+test("diffcov: backspace on a removed line reports it isn't editable (handleBackspace)", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3006,7 +3007,7 @@ Deno.test("diffcov: backspace on a removed line reports it isn't editable (handl
   }
 });
 
-Deno.test("diffcov: backspace at the diff marker column is protected (MARKER_MSG)", () => {
+test("diffcov: backspace at the diff marker column is protected (MARKER_MSG)", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3025,7 +3026,7 @@ Deno.test("diffcov: backspace at the diff marker column is protected (MARKER_MSG
   }
 });
 
-Deno.test("diffcov: M-backspace on a removed line is refused (guardBackwardEdit null)", () => {
+test("diffcov: M-backspace on a removed line is refused (guardBackwardEdit null)", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3037,7 +3038,7 @@ Deno.test("diffcov: M-backspace on a removed line is refused (guardBackwardEdit 
   }
 });
 
-Deno.test("diffcov: M-backspace at the marker on an editable line hits the marker guard", () => {
+test("diffcov: M-backspace at the marker on an editable line hits the marker guard", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3050,7 +3051,7 @@ Deno.test("diffcov: M-backspace at the marker on an editable line hits the marke
   }
 });
 
-Deno.test("diffcov: C-w region kill on a removed line is refused (guardRegionEdit null)", () => {
+test("diffcov: C-w region kill on a removed line is refused (guardRegionEdit null)", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3064,7 +3065,7 @@ Deno.test("diffcov: C-w region kill on a removed line is refused (guardRegionEdi
   }
 });
 
-Deno.test("diffcov: C-w whose region reaches into the marker is refused (MARKER_MSG)", () => {
+test("diffcov: C-w whose region reaches into the marker is refused (MARKER_MSG)", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3081,7 +3082,7 @@ Deno.test("diffcov: C-w whose region reaches into the marker is refused (MARKER_
   }
 });
 
-Deno.test("diffcov: a same-line region past the marker is killed (guardRegionEdit success)", () => {
+test("diffcov: a same-line region past the marker is killed (guardRegionEdit success)", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3102,7 +3103,7 @@ Deno.test("diffcov: a same-line region past the marker is killed (guardRegionEdi
 // the mark rides onto the added line when a context edit splits (1109-1111)
 //
 
-Deno.test("diffcov: a mark on a context line rides onto the added line when split", () => {
+test("diffcov: a mark on a context line rides onto the added line when split", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3123,7 +3124,7 @@ Deno.test("diffcov: a mark on a context line rides onto the added line when spli
 // ensureCursorVisible scrolls the cursor into view (1371-1372, 1375-1376) -
 //
 
-Deno.test("session: moving the edit cursor off-screen scrolls it back into view", () => {
+test("session: moving the edit cursor off-screen scrolls it back into view", () => {
   // A tall, wide file so cursor moves cross the viewport edges in both axes.
   const longLine = "const wide = " + "1 + ".repeat(40) + "0;";
   const body = Array.from({ length: 40 }, (_, i) => `line${i} = ${i};`);
@@ -3149,7 +3150,7 @@ Deno.test("session: moving the edit cursor off-screen scrolls it back into view"
 // ensurePickerVisible never lets the scroll go negative (1705)
 //
 
-Deno.test("filepickercov: scrolling the picker selection up keeps the scroll non-negative", () => {
+test("filepickercov: scrolling the picker selection up keeps the scroll non-negative", () => {
   const s = pickerSession();
   press(s, "ctrl-x", "ctrl-f");
   // Page down to advance the scroll, then page up past the top: the scroll is
@@ -3164,7 +3165,7 @@ Deno.test("filepickercov: scrolling the picker selection up keeps the scroll non
 // adjustHunkCounts: removing the last context line above a hunk (1152)
 //
 
-Deno.test("diffcov: removing an added line shrinks the hunk header counts", () => {
+test("diffcov: removing an added line shrinks the hunk header counts", () => {
   const { ws, done } = diffWorkspace();
   try {
     const s = diffSession(ws);
@@ -3254,7 +3255,7 @@ index 0000000..1111111 100644
  line16
 `;
 
-Deno.test("diffcov: a hunk with neither edge on screen offers nothing to expand", () => {
+test("diffcov: a hunk with neither edge on screen offers nothing to expand", () => {
   const { s, done } = tallSession(13);
   try {
     // The hunk runs from row 4 to row 25; twelve rows starting at 6 hold
@@ -3275,7 +3276,7 @@ Deno.test("diffcov: a hunk with neither edge on screen offers nothing to expand"
   }
 });
 
-Deno.test("diffcov: a hunk against the top of its file says so", () => {
+test("diffcov: a hunk against the top of its file says so", () => {
   const { s, done } = edgeSession(AT_TOP_DIFF, 20, 13);
   try {
     // The hunk starts at file line 1, so its top edge — the nearest one to the
@@ -3300,7 +3301,7 @@ Deno.test("diffcov: a hunk against the top of its file says so", () => {
   }
 });
 
-Deno.test("diffcov: a hunk against the bottom of its file says so", () => {
+test("diffcov: a hunk against the bottom of its file says so", () => {
   const diff = `diff --git a/m.ts b/m.ts
 index 0000000..1111111 100644
 --- a/m.ts
@@ -3337,7 +3338,7 @@ index 0000000..1111111 100644
   }
 });
 
-Deno.test("diffcov: metadata is not marked without a Ctrl-L edge", () => {
+test("diffcov: metadata is not marked without a Ctrl-L edge", () => {
   const diff = `diff --git a/m.ts b/m.ts
 old mode 100644
 new mode 100755
@@ -3372,7 +3373,7 @@ index 0000000..1111111 100644
   assertEquals(view.diffMetadataRows, []);
 });
 
-Deno.test("diffcov: wrapped expansion annotations are stable between frames", () => {
+test("diffcov: wrapped expansion annotations are stable between frames", () => {
   const diff = `diff --git a/a.ts b/a.ts
 index 11111111111111111111..222 100644
 --- a/a.ts
@@ -3407,7 +3408,7 @@ index 11111111111111111111..222 100644
   assertEquals(renderFrame(s.displayDoc(), second), firstRows);
 });
 
-Deno.test("diffcov: a wrapped edge labels only its closest connector", () => {
+test("diffcov: a wrapped edge labels only its closest connector", () => {
   const { s, done } = edgeSession(JOINABLE_HUNKS_DIFF, 20, 10);
   try {
     s.resize(4, 10);
@@ -3440,7 +3441,7 @@ Deno.test("diffcov: a wrapped edge labels only its closest connector", () => {
   }
 });
 
-Deno.test("diffcov: a moved annotation reclamps horizontal scrolling", () => {
+test("diffcov: a moved annotation reclamps horizontal scrolling", () => {
   const diff = `diff --git a/a.ts b/a.ts
 index 111..222 100644
 --- a/a.ts
@@ -3485,7 +3486,7 @@ index 111..222 100644
   assertEquals(s.view().left, 36, "right does not move the view backwards");
 });
 
-Deno.test("diffcov: repeated frames reuse the widest-line calculation", () => {
+test("diffcov: repeated frames reuse the widest-line calculation", () => {
   const parsed = parseDocument(
     "ordinary line\n" +
       "a much longer ordinary line that sets the horizontal limit\n",
@@ -3529,7 +3530,7 @@ Deno.test("diffcov: repeated frames reuse the widest-line calculation", () => {
   assertEquals(iterations, 2, "the new display mode is cached too");
 });
 
-Deno.test("diffcov: revealing the last line between two hunks joins them", () => {
+test("diffcov: revealing the last line between two hunks joins them", () => {
   const { s, done } = edgeSession(JOINABLE_HUNKS_DIFF, 20, 10);
   try {
     lastFullPage(s);
@@ -3565,7 +3566,7 @@ Deno.test("diffcov: revealing the last line between two hunks joins them", () =>
   }
 });
 
-Deno.test("diffcov: a hunk that does not match the file is not joined to one that does", () => {
+test("diffcov: a hunk that does not match the file is not joined to one that does", () => {
   // The second hunk's new side says DIFFERENT15 where the file says line15, so
   // it is not known to match. Joining it to the first would put lines of
   // unknown provenance into a range that a save writes.
@@ -3603,7 +3604,7 @@ index 0000000..1111111 100644
   }
 });
 
-Deno.test("diffcov: a one-line hunk still grows the edge it was asked for", () => {
+test("diffcov: a one-line hunk still grows the edge it was asked for", () => {
   // `git diff -U0` emits hunks with no context. A pure insertion is one body
   // line, so the hunk's midpoint falls exactly on its bottom edge — reading the
   // direction off the midpoint alone would send this one upwards.
@@ -3632,7 +3633,7 @@ index 0000000..1111111 100644
   }
 });
 
-Deno.test("diffcov: a header-only hunk expands without putting its triangle on the header", () => {
+test("diffcov: a header-only hunk expands without putting its triangle on the header", () => {
   const diff = `diff --git a/m.ts b/m.ts
 index 0000000..1111111 100644
 --- a/m.ts
@@ -3662,7 +3663,7 @@ index 0000000..1111111 100644
   }
 });
 
-Deno.test("diffcov: a header-only hunk at file top expands downward", () => {
+test("diffcov: a header-only hunk at file top expands downward", () => {
   const diff = `diff --git a/m.ts b/m.ts
 index 0000000..1111111 100644
 --- a/m.ts
@@ -3693,7 +3694,7 @@ index 0000000..1111111 100644
   }
 });
 
-Deno.test("diffcov: a reveal says which way it reached and what it brought back", () => {
+test("diffcov: a reveal says which way it reached and what it brought back", () => {
   const { s, done } = tallSession(13);
   try {
     // One run of context looks like any other, so the file's own line numbers
@@ -3706,7 +3707,7 @@ Deno.test("diffcov: a reveal says which way it reached and what it brought back"
   }
 });
 
-Deno.test("diffcov: a reveal downwards counts from the hunk's last line", () => {
+test("diffcov: a reveal downwards counts from the hunk's last line", () => {
   const { s, done } = tallSession(13);
   try {
     press(s, "G", "ctrl-l");
@@ -3716,7 +3717,7 @@ Deno.test("diffcov: a reveal downwards counts from the hunk's last line", () => 
   }
 });
 
-Deno.test("diffcov: a reveal that joins two hunks says that too", () => {
+test("diffcov: a reveal that joins two hunks says that too", () => {
   const diff = `diff --git a/m.ts b/m.ts
 index 0000000..1111111 100644
 --- a/m.ts
@@ -3746,7 +3747,7 @@ index 0000000..1111111 100644
   }
 });
 
-Deno.test("diffcov: a reveal of a single line does not say lines 15-15", () => {
+test("diffcov: a reveal of a single line does not say lines 15-15", () => {
   const diff = `diff --git a/m.ts b/m.ts
 index 0000000..1111111 100644
 --- a/m.ts
@@ -3767,7 +3768,7 @@ index 0000000..1111111 100644
   }
 });
 
-Deno.test("diffcov: expanding upwards in edit mode leaves a cursor on the header alone", () => {
+test("diffcov: expanding upwards in edit mode leaves a cursor on the header alone", () => {
   // The revealed lines go in below the hunk's header, so the header does not
   // move — and the text cursor can rest on one, where it cannot type.
   const lines = Array.from(
@@ -3827,7 +3828,7 @@ index 0000000..1111111 100644
 // reveal-frame remapping and room-less hunks
 //
 
-Deno.test("diffcov: a reveal frame carries a selected node to its shifted place", () => {
+test("diffcov: a reveal frame carries a selected node to its shifted place", () => {
   const { s, done } = tallSession(13);
   try {
     // Select the hunk, then reveal: the animation frames redraw the structure,
@@ -3843,7 +3844,7 @@ Deno.test("diffcov: a reveal frame carries a selected node to its shifted place"
   }
 });
 
-Deno.test("diffcov: a reveal frame carries surviving search matches to their shifted rows", () => {
+test("diffcov: a reveal frame carries surviving search matches to their shifted rows", () => {
   const { s, done } = tallSession(13);
   try {
     // A search on a line low in the hunk leaves a match below the revealed
@@ -3867,7 +3868,7 @@ Deno.test("diffcov: a reveal frame carries surviving search matches to their shi
   }
 });
 
-Deno.test("diffcov: a hunk backing no file offers no edge to expand", () => {
+test("diffcov: a hunk backing no file offers no edge to expand", () => {
   // A deleted file's hunk has no workspace file, so expandRoom records nothing
   // for it; visibleEdges must skip it rather than read a missing room. The
   // second file's hunk still offers its edges.
@@ -3930,7 +3931,7 @@ diff --git a/keep.ts b/keep.ts
   }
 });
 
-Deno.test("diffcov: a cursor on a header that a join removes moves to the merged header", () => {
+test("diffcov: a cursor on a header that a join removes moves to the merged header", () => {
   // Two hunks close enough that revealing the second one upward closes the gap
   // and joins them. The cursor rests on the second hunk's header — the header
   // the join removes — so it must land on the surviving merged header rather

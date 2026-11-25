@@ -6,6 +6,7 @@ import {
   stillDeclared,
   stripWithheldGlobals,
 } from "./strip-withheld-globals.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * Tests for the type-library global stripper.
@@ -20,7 +21,7 @@ import {
 
 const names = new Set(["Withheld", "AlsoWithheld"]);
 
-Deno.test("removes a one-line declaration and keeps its interface", () => {
+test("removes a one-line declaration and keeps its interface", () => {
   const { text, removed } = stripWithheldGlobals(
     [
       "interface Withheld {",
@@ -52,7 +53,7 @@ Deno.test("removes a one-line declaration and keeps its interface", () => {
   );
 });
 
-Deno.test("removes a braced declaration block", () => {
+test("removes a braced declaration block", () => {
   const { text, removed } = stripWithheldGlobals(
     [
       "declare var Withheld: {",
@@ -71,7 +72,7 @@ Deno.test("removes a braced declaration block", () => {
   assertEquals(text, ["interface Body {", "}", ""].join("\n"));
 });
 
-Deno.test("leaves declarations that are not withheld alone", () => {
+test("leaves declarations that are not withheld alone", () => {
   const source = [
     "declare var Kept: KeptConstructor;",
     "declare var AlsoWithheld: AlsoWithheldConstructor;",
@@ -95,7 +96,7 @@ Deno.test("leaves declarations that are not withheld alone", () => {
   );
 });
 
-Deno.test("removes a declare function global", () => {
+test("removes a declare function global", () => {
   const { text, removed } = stripWithheldGlobals(
     [
       "declare function Withheld(handler: TimerHandler, timeout?: number): number;",
@@ -112,7 +113,7 @@ Deno.test("removes a declare function global", () => {
   );
 });
 
-Deno.test("preserves CRLF line endings", () => {
+test("preserves CRLF line endings", () => {
   const { text } = stripWithheldGlobals(
     "interface Kept {\r\n}\r\ndeclare var Withheld: W;\r\ndeclare var Kept: K;\r\n",
     names,
@@ -121,7 +122,7 @@ Deno.test("preserves CRLF line endings", () => {
   assertEquals(text, "interface Kept {\r\n}\r\ndeclare var Kept: K;\r\n");
 });
 
-Deno.test("does not match a name that merely starts the same", () => {
+test("does not match a name that merely starts the same", () => {
   const { text, removed } = stripWithheldGlobals(
     "declare var WithheldExtra: X;\n",
     names,
@@ -131,7 +132,7 @@ Deno.test("does not match a name that merely starts the same", () => {
   assertEquals(text, "declare var WithheldExtra: X;\n");
 });
 
-Deno.test("is idempotent", () => {
+test("is idempotent", () => {
   const source = "declare var Withheld: W;\n\ninterface Kept {\n}\n";
   const once = stripWithheldGlobals(source, names).text;
   const twice = stripWithheldGlobals(once, names);
@@ -140,7 +141,7 @@ Deno.test("is idempotent", () => {
   assertEquals(twice.text, once);
 });
 
-Deno.test("throws when a declaration never closes", () => {
+test("throws when a declaration never closes", () => {
   assertThrows(
     () => stripWithheldGlobals("declare var Withheld: {\n    a: 1;\n", names),
     Error,
@@ -148,7 +149,7 @@ Deno.test("throws when a declaration never closes", () => {
   );
 });
 
-Deno.test("throws when a declaration closes more braces than it opens", () => {
+test("throws when a declaration closes more braces than it opens", () => {
   assertThrows(
     () => stripWithheldGlobals("declare var Withheld: };\n", names),
     Error,
@@ -164,11 +165,11 @@ Deno.test("throws when a declaration closes more braces than it opens", () => {
 // finds nothing to remove and rewrites nothing.
 //
 
-Deno.test("runCli --check passes on the stripped libraries", async () => {
+test("runCli --check passes on the stripped libraries", async () => {
   assertEquals(await runCli(["--check"]), 0);
 });
 
-Deno.test("runCli without --check leaves up-to-date libraries unchanged", async () => {
+test("runCli without --check leaves up-to-date libraries unchanged", async () => {
   const path = new URL("../assets/types/es2023.d.ts", import.meta.url);
   const before = await Deno.readTextFile(path);
   assertEquals(await runCli([]), 0);
@@ -179,13 +180,13 @@ Deno.test("runCli without --check leaves up-to-date libraries unchanged", async 
 // The entry-point gate
 //
 
-Deno.test("cliMain does nothing unless this module is the entry point", async () => {
+test("cliMain does nothing unless this module is the entry point", async () => {
   let called: number | undefined;
   await cliMain(["--check"], false, (code) => called = code);
   assertEquals(called, undefined);
 });
 
-Deno.test("cliMain exits with the CLI status when it is the entry point", async () => {
+test("cliMain exits with the CLI status when it is the entry point", async () => {
   let code: number | undefined;
   await cliMain(["--check"], true, (c) => code = c);
   assertEquals(code, 0);
@@ -198,7 +199,7 @@ Deno.test("cliMain exits with the CLI status when it is the entry point", async 
 // kept clean.
 //
 
-Deno.test("runCli --check fails when a library still declares a withheld global", async () => {
+test("runCli --check fails when a library still declares a withheld global", async () => {
   const status = await runCli(["--check"], {
     files: ["injected.d.ts"],
     readFile: () =>
@@ -207,7 +208,7 @@ Deno.test("runCli --check fails when a library still declares a withheld global"
   assertEquals(status, 1);
 });
 
-Deno.test("runCli fails when a withheld global is declared in an unstrippable form", async () => {
+test("runCli fails when a withheld global is declared in an unstrippable form", async () => {
   const status = await runCli(["--check"], {
     files: ["injected.d.ts"],
     readFile: () =>
@@ -216,7 +217,7 @@ Deno.test("runCli fails when a withheld global is declared in an unstrippable fo
   assertEquals(status, 1);
 });
 
-Deno.test("runCli without --check writes the stripped text back", async () => {
+test("runCli without --check writes the stripped text back", async () => {
   const writes: Array<[string, string]> = [];
   const status = await runCli([], {
     files: ["injected.d.ts"],
@@ -240,7 +241,7 @@ Deno.test("runCli without --check writes the stripped text back", async () => {
 // declaration split across blocks.
 //
 
-Deno.test("strips a namespace's value members and keeps its types", () => {
+test("strips a namespace's value members and keeps its types", () => {
   const { text, removed } = stripWithheldGlobals(
     [
       "declare namespace Withheld {",
@@ -271,7 +272,7 @@ Deno.test("strips a namespace's value members and keeps its types", () => {
   );
 });
 
-Deno.test("strips a braced namespace value member, keeping the interface", () => {
+test("strips a braced namespace value member, keeping the interface", () => {
   const { text, removed } = stripWithheldGlobals(
     [
       "declare namespace Withheld {",
@@ -301,7 +302,7 @@ Deno.test("strips a braced namespace value member, keeping the interface", () =>
   );
 });
 
-Deno.test("ignores braces inside a namespace member's JSDoc", () => {
+test("ignores braces inside a namespace member's JSDoc", () => {
   const { text, removed } = stripWithheldGlobals(
     [
       "declare namespace Withheld {",
@@ -331,7 +332,7 @@ Deno.test("ignores braces inside a namespace member's JSDoc", () => {
   );
 });
 
-Deno.test("leaves a non-withheld namespace's members alone", () => {
+test("leaves a non-withheld namespace's members alone", () => {
   const source = [
     "declare namespace Kept {",
     "    var Value: ValueConstructor;",
@@ -344,7 +345,7 @@ Deno.test("leaves a non-withheld namespace's members alone", () => {
   assertEquals(text, source);
 });
 
-Deno.test("re-stripping an emptied namespace removes nothing", () => {
+test("re-stripping an emptied namespace removes nothing", () => {
   const source = [
     "declare namespace Withheld {",
     "    var Collator: CollatorConstructor;",
@@ -358,7 +359,7 @@ Deno.test("re-stripping an emptied namespace removes nothing", () => {
   assertEquals(twice.text, once);
 });
 
-Deno.test("reports a namespace split across blocks once", () => {
+test("reports a namespace split across blocks once", () => {
   const { removed } = stripWithheldGlobals(
     [
       "declare namespace Withheld {",
@@ -375,7 +376,7 @@ Deno.test("reports a namespace split across blocks once", () => {
   assertEquals(removed, ["Withheld"]);
 });
 
-Deno.test("throws when a namespace member's braces never close", () => {
+test("throws when a namespace member's braces never close", () => {
   assertThrows(
     () =>
       stripWithheldGlobals(
@@ -392,7 +393,7 @@ Deno.test("throws when a namespace member's braces never close", () => {
   );
 });
 
-Deno.test("strips a namespace member whose signature wraps across lines", () => {
+test("strips a namespace member whose signature wraps across lines", () => {
   const { text, removed } = stripWithheldGlobals(
     [
       "declare namespace Withheld {",
@@ -420,7 +421,7 @@ Deno.test("strips a namespace member whose signature wraps across lines", () => 
   );
 });
 
-Deno.test("throws when a wrapped namespace member never terminates", () => {
+test("throws when a wrapped namespace member never terminates", () => {
   assertThrows(
     () =>
       stripWithheldGlobals(
@@ -437,7 +438,7 @@ Deno.test("throws when a wrapped namespace member never terminates", () => {
   );
 });
 
-Deno.test("drops a namespace value member's trailing blank line", () => {
+test("drops a namespace value member's trailing blank line", () => {
   const { text, removed } = stripWithheldGlobals(
     [
       "declare namespace Withheld {",
@@ -472,7 +473,7 @@ Deno.test("drops a namespace value member's trailing blank line", () => {
 // so its namespace branch is exercised directly here.
 //
 
-Deno.test("stillDeclared flags a withheld namespace that still declares a value", () => {
+test("stillDeclared flags a withheld namespace that still declares a value", () => {
   const text = [
     "declare namespace Withheld {",
     "    var Collator: C;",
@@ -485,7 +486,7 @@ Deno.test("stillDeclared flags a withheld namespace that still declares a value"
   assertEquals(stillDeclared(text, names), ["Withheld"]);
 });
 
-Deno.test("stillDeclared ignores an emptied or types-only withheld namespace", () => {
+test("stillDeclared ignores an emptied or types-only withheld namespace", () => {
   assertEquals(stillDeclared("declare namespace Withheld {\n}\n", names), []);
   assertEquals(
     stillDeclared(

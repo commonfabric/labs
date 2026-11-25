@@ -8,6 +8,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import type { Ctx } from "../types.ts";
 import { dau } from "./dau.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const DAY_MS = 86_400_000;
 const TODAY = Math.floor(Date.now() / DAY_MS) * DAY_MS;
@@ -73,7 +74,7 @@ const json = (payload: unknown) =>
 const ok = (aggregations: { series: Ser[] }[] | null, exported?: number[]) => () =>
   json(envelope(aggregations, exported));
 
-Deno.test("dau: the headline is the last complete UTC day, not the part-day in progress", async () => {
+test("dau: the headline is the last complete UTC day, not the part-day in progress", async () => {
   const series = [
     ser("did:key:alice", [[day(2), 10], [day(1), 10], [day(0), 4]]),
     ser("did:key:bob", [[day(1), 7], [day(0), 2]]),
@@ -90,7 +91,7 @@ Deno.test("dau: the headline is the last complete UTC day, not the part-day in p
   assert((v.extra ?? "").startsWith("<svg"), "a sparkline is drawn for the observed days");
 });
 
-Deno.test("dau: named service names itself in the query and in the sub line", async () => {
+test("dau: named service names itself in the query and in the sub line", async () => {
   const { result: v, requests } = await withFetch(
     ok([{ series: [ser("did:key:alice", [[day(1), 5]])] }]),
     () =>
@@ -122,7 +123,7 @@ Deno.test("dau: named service names itself in the query and in the sub line", as
   assertEquals(body.end - body.start, 15 * DAY_MS);
 });
 
-Deno.test("dau: an unsafe PROD_SERVICE cannot reach the query expression", async () => {
+test("dau: an unsafe PROD_SERVICE cannot reach the query expression", async () => {
   const { result: v, requests } = await withFetch(
     ok([{ series: [ser("did:key:alice", [[day(1), 5]])] }]),
     () =>
@@ -137,7 +138,7 @@ Deno.test("dau: an unsafe PROD_SERVICE cannot reach the query expression", async
   assertEquals(v.sub, "active users · toolshed-production");
 });
 
-Deno.test("dau: a service that exports nothing -> gray, not zero", async () => {
+test("dau: a service that exports nothing -> gray, not zero", async () => {
   // SigNoz answers a query that matched no spans with no aggregations at all. Reading
   // that as a count would put a false green zero on the dashboard for a deployment whose
   // tracing is simply switched off.
@@ -156,7 +157,7 @@ Deno.test("dau: a service that exports nothing -> gray, not zero", async () => {
   assertEquals(v.extra, undefined);
 });
 
-Deno.test("dau: only a part-day so far -> gray, and says so rather than claiming no spans", async () => {
+test("dau: only a part-day so far -> gray, and says so rather than claiming no spans", async () => {
   // A service that started exporting today has sent plenty of spans; it just has no
   // day that ran to the end. Reporting the part-day would read as a drop, and saying
   // there are no spans would be false — this is the state of a deployment whose
@@ -170,7 +171,7 @@ Deno.test("dau: only a part-day so far -> gray, and says so rather than claiming
   assertEquals(v.sub, "insufficient data");
 });
 
-Deno.test("dau: without SIGNOZ_URL + SIGNOZ_API_KEY the tile grays out and asks nothing", async () => {
+test("dau: without SIGNOZ_URL + SIGNOZ_API_KEY the tile grays out and asks nothing", async () => {
   const { result: v, requests } = await withFetch(
     () => {
       throw new Error("the tile must not call out without its env");
@@ -184,7 +185,7 @@ Deno.test("dau: without SIGNOZ_URL + SIGNOZ_API_KEY the tile grays out and asks 
   assertEquals(v.href, undefined); // no drill-down without a base to drill into
 });
 
-Deno.test("dau: SigNoz unreachable -> gray carrying the reason, never a count", async () => {
+test("dau: SigNoz unreachable -> gray carrying the reason, never a count", async () => {
   const refused = await withFetch(
     () => {
       throw new TypeError("connection refused");
@@ -205,7 +206,7 @@ Deno.test("dau: SigNoz unreachable -> gray carrying the reason, never a count", 
   assertEquals(rejected.result.sub, "SigNoz HTTP 401");
 });
 
-Deno.test("dau: a thrown non-Error still reads as SigNoz being unavailable", async () => {
+test("dau: a thrown non-Error still reads as SigNoz being unavailable", async () => {
   const { result: v } = await withFetch(
     () => {
       throw "kaput";
@@ -216,7 +217,7 @@ Deno.test("dau: a thrown non-Error still reads as SigNoz being unavailable", asy
   assertEquals(v.sub, "SigNoz unavailable");
 });
 
-Deno.test("dau: a quiet day inside the observed range is a zero, and the grid starts at the first day seen", async () => {
+test("dau: a quiet day inside the observed range is a zero, and the grid starts at the first day seen", async () => {
   // Activity on day-4 and day-1 only. The days between are absent from the response
   // rather than zero, and the 14-day lookback stretches well before day-4. Alice's
   // day-3 bucket is present but carries no spans, which is not alice being active.
@@ -241,7 +242,7 @@ Deno.test("dau: a quiet day inside the observed range is a zero, and the grid st
   assert(y[1] > y[0] && y[1] > y[3], "a quiet day is drawn below the days either side");
 });
 
-Deno.test("dau: the drill link comes from SIGNOZ_UI_URL, and a non-https base gets no link", async () => {
+test("dau: the drill link comes from SIGNOZ_UI_URL, and a non-https base gets no link", async () => {
   const named = await withFetch(
     ok([{ series: [ser("did:key:alice", [[day(1), 5]])] }]),
     () =>
@@ -264,7 +265,7 @@ Deno.test("dau: the drill link comes from SIGNOZ_UI_URL, and a non-https base ge
   assertEquals(internal.result.value, "1"); // the count still lands
 });
 
-Deno.test("dau: a response with no results at all -> gray", async () => {
+test("dau: a response with no results at all -> gray", async () => {
   const { result: v } = await withFetch(
     () => json({}),
     () => dau.collect(ctx({ SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" })),
@@ -273,7 +274,7 @@ Deno.test("dau: a response with no results at all -> gray", async () => {
   assertEquals(v.sub, "no toolshed-production spans");
 });
 
-Deno.test("dau: a single complete day is a number with no chart and no span", async () => {
+test("dau: a single complete day is a number with no chart and no span", async () => {
   // The first day after a deployment starts exporting. One point cannot be a line, so
   // there is no chart — and then there is no chart corner for a span to label either.
   const { result: v } = await withFetch(
@@ -286,7 +287,7 @@ Deno.test("dau: a single complete day is a number with no chart and no span", as
   assertEquals(v.duration, undefined);
 });
 
-Deno.test("dau: history that stops before yesterday -> gray, naming the last day seen", async () => {
+test("dau: history that stops before yesterday -> gray, naming the last day seen", async () => {
   // A deployment that stopped exporting three days ago still has its history in
   // retention. That history is not yesterday's count, and reading it as one would put
   // a green number on the dashboard for a service nobody can see.
@@ -300,7 +301,7 @@ Deno.test("dau: history that stops before yesterday -> gray, naming the last day
   assertEquals(v.duration, 3 * DAY_MS); // the chart still shows the history it has
 });
 
-Deno.test("dau: a yesterday the service exported with nobody in it is a zero", async () => {
+test("dau: a yesterday the service exported with nobody in it is a zero", async () => {
   // Query B shows the service sending spans every day, so nobody being seen yesterday
   // means nobody was there.
   const { result: v } = await withFetch(
@@ -312,7 +313,7 @@ Deno.test("dau: a yesterday the service exported with nobody in it is a zero", a
   assertEquals(v.duration, 3 * DAY_MS); // day-3 through yesterday
 });
 
-Deno.test("dau: a service exporting only spans nobody stands for counts zero, not stale", async () => {
+test("dau: a service exporting only spans nobody stands for counts zero, not stale", async () => {
   // Serving loops and service principals send spans without enduser.id. A quiet
   // deployment is still a deployment that exports.
   const { result: v } = await withFetch(
@@ -324,7 +325,7 @@ Deno.test("dau: a service exporting only spans nobody stands for counts zero, no
   assertEquals(v.extra, "");
 });
 
-Deno.test("dau: spans today do not stand in for a yesterday the service did not export", async () => {
+test("dau: spans today do not stand in for a yesterday the service did not export", async () => {
   // Tracing was off yesterday and came back today. Yesterday is unknown, not quiet.
   const { result: v } = await withFetch(
     ok([{ series: [ser("did:key:alice", [[day(3), 2], [day(0), 1]])] }]),
@@ -334,7 +335,7 @@ Deno.test("dau: spans today do not stand in for a yesterday the service did not 
   assertEquals(v.sub, `no toolshed-production spans since ${new Date(day(3)).toISOString().slice(0, 10)}`);
 });
 
-Deno.test("dau: a response without the service-wide series reads as not exporting", async () => {
+test("dau: a response without the service-wide series reads as not exporting", async () => {
   // Query A's people alone cannot say the service exported yesterday, so the tile
   // does not claim a count it cannot vouch for.
   const { result: v } = await withFetch(

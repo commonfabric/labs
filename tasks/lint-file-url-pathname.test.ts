@@ -1,8 +1,8 @@
 /// <reference lib="deno.unstable" />
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import plugin from "./lint-file-url-pathname.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The source text of each `pathname` read the rule reports in `source`. */
 function reported(source: string): string[] {

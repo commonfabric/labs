@@ -25,13 +25,18 @@
 
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { createTestSpace, env } from "@commonfabric/integration";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { type MemorySpace, sendEvent } from "@commonfabric/runner";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   initializePiecesController,
   type PieceController,

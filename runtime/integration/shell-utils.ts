@@ -1,5 +1,3 @@
-import { afterAll, afterEach, beforeAll, beforeEach } from "@std/testing/bdd";
-
 import { ConsoleEvent, PageErrorEvent } from "@astral/astral";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
@@ -12,6 +10,12 @@ import {
   AppStateSerialized,
   type SerializedIdentity,
 } from "@commonfabric/shell/app-state";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+} from "@commonfabric/test-support/test";
 
 import { Browser } from "./browser.ts";
 import { describeThrown } from "./describe-thrown.ts";

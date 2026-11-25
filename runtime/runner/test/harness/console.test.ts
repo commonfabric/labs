@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   Console,
   ConsoleEvent,
   ConsoleMethod,
 } from "../../src/harness/console.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ALL_METHODS = Object.values(ConsoleMethod);
 

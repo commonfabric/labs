@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
 import { basename, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { HarnessJobOptions, HarnessJobSpec } from "../src/harness-job.ts";
 import { runHarnessJob } from "../src/harness-job.ts";
 import {

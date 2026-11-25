@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { resolveLinkScope } from "../src/scope.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("scope", () => {
   describe("resolveLinkScope()", () => {

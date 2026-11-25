@@ -4,7 +4,6 @@
 // itself, and a format whose containers do the least a container can do is
 // what makes those decisions observable.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type FabricValue, isDeepFrozen } from "@";
@@ -30,6 +29,7 @@ import {
   Tagged,
   TERMINAL_HOST,
 } from "./probe-engine.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ENV = NULL_LIVE_ENVIRONMENT;
 

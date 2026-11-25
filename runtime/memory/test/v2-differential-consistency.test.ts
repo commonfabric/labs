@@ -33,6 +33,7 @@ import {
   read,
 } from "../v2/engine.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import { test } from "@commonfabric/test-support/test";
 import {
   type ClientCommit,
   type EntityDocument,
@@ -490,7 +491,7 @@ const runSchedule = async (seed: number): Promise<ScheduleStats> => {
   return stats;
 };
 
-Deno.test("memory v2 differential: engine admission refines the naive model across seeded schedules", async () => {
+test("memory v2 differential: engine admission refines the naive model across seeded schedules", async () => {
   const totals: ScheduleStats = {
     accepted: 0,
     rejected: 0,

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 
@@ -13,6 +12,12 @@ import type {
   ProcessRunResult,
 } from "../src/sandbox/process-runner.ts";
 import { writesDespiteMode } from "./support/runsc-privilege.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Names of the entries in the directory at `path`. */
 const entriesOf = async (path: string): Promise<string[]> => {

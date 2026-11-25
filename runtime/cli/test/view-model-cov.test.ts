@@ -6,6 +6,7 @@
 
 import { assertEquals } from "@std/assert";
 import { flattenStructure, type StructureNode } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function node(label: string, children: StructureNode[] = []): StructureNode {
   return {
@@ -22,7 +23,7 @@ function node(label: string, children: StructureNode[] = []): StructureNode {
   };
 }
 
-Deno.test("flattenStructure: pre-order, depth-first", () => {
+test("flattenStructure: pre-order, depth-first", () => {
   const tree = [
     node("a", [node("b", [node("c")]), node("d")]),
     node("e"),
@@ -33,11 +34,11 @@ Deno.test("flattenStructure: pre-order, depth-first", () => {
   );
 });
 
-Deno.test("flattenStructure: an empty forest flattens to nothing", () => {
+test("flattenStructure: an empty forest flattens to nothing", () => {
   assertEquals(flattenStructure([]), []);
 });
 
-Deno.test("flattenStructure: a tree deeper than the call stack flattens in order", () => {
+test("flattenStructure: a tree deeper than the call stack flattens in order", () => {
   let tree = node("leaf");
   for (let depth = 0; depth < 50_000; depth++) tree = node("inner", [tree]);
   const flat = flattenStructure([tree, node("next")]);

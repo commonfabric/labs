@@ -12,7 +12,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   FabricInstance,
@@ -30,6 +29,7 @@ import {
   FabricDurationNsec,
   FabricEpochDay,
 } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("FabricDurationDay", () => {
   // Pure type-identity / supertype checks: cross-cutting carve-out per the

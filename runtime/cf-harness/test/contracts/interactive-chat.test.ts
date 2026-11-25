@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -8,6 +7,7 @@ import {
   type HarnessChatStructuredEvent,
   reduceHarnessChatSessionStatus,
 } from "../../src/contracts/interactive-chat.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CREATED_AT = "2026-05-22T00:00:00.000Z";
 const EMITTED_AT = "2026-05-22T00:05:00.000Z";

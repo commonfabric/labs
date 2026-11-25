@@ -14,6 +14,8 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import type { Cell } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
@@ -37,7 +39,7 @@ function createOpsCollector() {
   };
 }
 
-Deno.test("worker reconciler - $alias records in child position", async (t) => {
+test("worker reconciler - $alias records in child position", async (t) => {
   // Setup minimal runtime to get CellImpl
   const signer = await Identity.fromPassphrase("test reconciler alias child");
   const storageManager = StorageManager.emulate({ as: signer });
@@ -107,7 +109,7 @@ Deno.test("worker reconciler - $alias records in child position", async (t) => {
       let cancel: (() => void) | undefined;
       try {
         cancel = reconciler.mount(rootCell as unknown as Cell<unknown>);
-        await t.settle();
+        await clock.settle();
 
         const textOps = collector.getOpsOfType("create-text");
         assertEquals(

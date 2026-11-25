@@ -12,6 +12,7 @@ import { assert, assertEquals } from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 
 const packageDir = dirname(fromFileUrl(import.meta.url));
 const repoRoot = join(packageDir, "..", "..");
@@ -65,7 +66,7 @@ function lastReadinessLine(stdout: string): SupervisorStatus | null {
   return last;
 }
 
-Deno.test(
+test(
   "daemon announces and records a startup failure through the supervisor status path",
   async () => {
     const tmp = Deno.makeTempDirSync({ prefix: "cf-fuse-status-test-" });

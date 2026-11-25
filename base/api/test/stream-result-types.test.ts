@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import type { CELL_RESULT_TYPE, Stream } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 
 // Value-position guards, not `MustBeTrue<...>` type aliases. `MustBeTrue<T
 // extends true>` does NOT catch a failed assertion: a failing
@@ -113,7 +114,7 @@ const _FlatCommitsEveryName: AssertAssignable<
 // compile error rather than a quiet schema break.
 const _EnvelopeIsNotFlat: AssertNotAssignable<EnvelopedVerb, FlatVerb> = true;
 
-Deno.test("Stream result type parameter is structural", () => {
+test("Stream result type parameter is structural", () => {
   // The assertions above are compile-time; this keeps the module a test file
   // and fails loudly if it ever stops being type-checked.
   assertEquals(typeof "compile-time", "string");

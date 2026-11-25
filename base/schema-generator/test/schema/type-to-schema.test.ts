@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("Schema: type-to-schema parity", () => {
   it("generates schemas for inputs/outputs structures", async () => {

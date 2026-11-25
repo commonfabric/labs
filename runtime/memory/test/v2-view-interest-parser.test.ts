@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseViewInterests, parseViewQuery } from "../v2/view-interest.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const query = { roots: [{ id: "of:visible", selector: { path: [] } }] };
 const view = {

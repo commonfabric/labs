@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
@@ -6,6 +5,12 @@ import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { RoutedMemoryHost } from "@commonfabric/memory/v2/routed-host";
 import { Server } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { identity } from "@/lib/identity.ts";
 import { connects } from "@/test/support/connects.ts";
 import {

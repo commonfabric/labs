@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import {
   findCommitHeaders,
   findCommitMessages,
@@ -13,13 +14,13 @@ import {
   shellQuote,
 } from "./view-commitmsg-test-helpers.ts";
 
-Deno.test("findCommitMessages: a commit with no message body yields no region", () => {
+test("findCommitMessages: a commit with no message body yields no region", () => {
   const lines = ["commit deadbeef", "Author: A", "", "diff --git a/f b/f"];
   assertEquals(findCommitMessages(lines).length, 0);
   assertEquals(findCommitHeaders(lines), [{ sha: "deadbeef", line: 0 }]);
 });
 
-Deno.test("sameCommit: matches Git's four-character minimum abbreviation", () => {
+test("sameCommit: matches Git's four-character minimum abbreviation", () => {
   assert(sameCommit("0123456", "0123456789abcdef"), "7-char abbrev matches");
   assert(sameCommit("0123", "0123456789abcdef"), "4-char abbrev matches");
   assert(sameCommit("0123456789abcdef", "0123456"), "either side may be short");
@@ -27,7 +28,7 @@ Deno.test("sameCommit: matches Git's four-character minimum abbreviation", () =>
   assert(!sameCommit("012", "0123456"), "under four chars never matches");
 });
 
-Deno.test("realGit: accepts an amend that reproduces the same commit object", async () => {
+test("realGit: accepts an amend that reproduces the same commit object", async () => {
   const root = await Deno.makeTempDir();
   const authorDate = Deno.env.get("GIT_AUTHOR_DATE");
   const committerDate = Deno.env.get("GIT_COMMITTER_DATE");
@@ -63,7 +64,7 @@ Deno.test("realGit: accepts an amend that reproduces the same commit object", as
   }
 });
 
-Deno.test({
+test({
   name: "realGit: rolls back without a reflog when hook validation fails",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -114,7 +115,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: merges content through a staged executable mode change", async () => {
+test("realGit: merges content through a staged executable mode change", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -147,7 +148,7 @@ Deno.test("realGit: merges content through a staged executable mode change", asy
   }
 });
 
-Deno.test({
+test({
   name: "realGit: refuses to overwrite a selected path staged during hooks",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -189,7 +190,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: amendCommit throws when git fails (not a repository)", () => {
+test("realGit: amendCommit throws when git fails (not a repository)", () => {
   const root = Deno.makeTempDirSync();
   try {
     let threw = false;
@@ -204,7 +205,7 @@ Deno.test("realGit: amendCommit throws when git fails (not a repository)", () =>
   }
 });
 
-Deno.test("realGit: fallback merge rejects a deletion inside a pager replacement", async () => {
+test("realGit: fallback merge rejects a deletion inside a pager replacement", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -225,7 +226,7 @@ Deno.test("realGit: fallback merge rejects a deletion inside a pager replacement
   }
 });
 
-Deno.test({
+test({
   name: "realGit: rolls back when the real index is locked after hooks",
   ignore: Deno.build.os === "windows",
   async fn() {

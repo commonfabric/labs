@@ -17,11 +17,11 @@
  * the grouped arms are local conveniences, free to hold any subset.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
 import { loadCliSuites } from "../../../tasks/test-topology/cli.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The integration script, whose tail holds the dispatch table. */
 const SCRIPT = await Deno.readTextFile(

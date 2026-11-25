@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
@@ -9,6 +8,12 @@ import {
 } from "@commonfabric/memory/space-invites";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   createStorageAddressResolver,

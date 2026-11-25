@@ -1,9 +1,14 @@
 /** Exercises modal focus policy with DOM-boundary doubles; Chrome tests own layout. */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { CFModal } from "./index.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Supplies only the DOM observations consumed by the focus policy. */
 class FocusNode extends EventTarget {

@@ -6,7 +6,6 @@
 
 import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { Server } from "../v2/server.ts";
 import {
   connect,
@@ -43,6 +42,7 @@ import {
 } from "../v2/message-parts.ts";
 import type { JSONSchema } from "@commonfabric/api";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { compressServerMessageSchemas } from "../v2/sync-schema-table.ts";
 import { countValues } from "./support/routed-slots.ts";
 import {
@@ -92,7 +92,7 @@ const join = (parts: ServerMessage[]): ServerMessage => {
 const valueCount = (message: ServerMessage): number =>
   countValues(JSON.parse(encodeMemoryBoundary(message).slice("fvj1:".length)));
 
-Deno.test("a split sync's parts fit their bounds and join to the sync", () => {
+test("a split sync's parts fit their bounds and join to the sync", () => {
   const limits: PartLimits = { bytes: 2048, values: 60 };
   const message = responseWith(syncOf(30));
   const parts = splitSyncMessage(message, SESSION, limits);
@@ -126,7 +126,7 @@ Deno.test("a split sync's parts fit their bounds and join to the sync", () => {
   assertEquals(join(parts), message);
 });
 
-Deno.test("a split effect joins to the effect", () => {
+test("a split effect joins to the effect", () => {
   const message: SessionEffectMessage = {
     type: "session/effect",
     ...SESSION,
@@ -143,7 +143,7 @@ Deno.test("a split effect joins to the effect", () => {
   assertEquals(join(parts), message);
 });
 
-Deno.test("an entry larger than a part goes alone, and a lone entry is not split", () => {
+test("an entry larger than a part goes alone, and a lone entry is not split", () => {
   const sync = syncOf(3);
   sync.upserts[1] = upsert(1, 5000);
   const parts = splitSyncMessage(responseWith(sync), SESSION, {
@@ -178,7 +178,7 @@ describe("halveSyncPart()", () => {
   });
 });
 
-Deno.test("a halved part keeps its place in the sequence", () => {
+test("a halved part keeps its place in the sequence", () => {
   const parts = splitSyncMessage(responseWith(syncOf(8)), SESSION, {
     bytes: 1500,
     values: null,
@@ -192,7 +192,7 @@ Deno.test("a halved part keeps its place in the sequence", () => {
   );
 });
 
-Deno.test("a split part that says more follow keeps saying so on its last part", () => {
+test("a split part that says more follow keeps saying so on its last part", () => {
   const parts = splitSyncMessage(
     responseWith(syncOf(30, { more: true })),
     SESSION,
@@ -395,7 +395,7 @@ describe("encodeSyncParts()", () => {
   });
 });
 
-Deno.test("the assembler passes other sessions' messages between a split sync's parts", () => {
+test("the assembler passes other sessions' messages between a split sync's parts", () => {
   const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
     bytes: 1500,
     values: null,
@@ -418,7 +418,7 @@ Deno.test("the assembler passes other sessions' messages between a split sync's 
   );
 });
 
-Deno.test("the assembler passes a message for the session that carries no sync between its sync's parts", () => {
+test("the assembler passes a message for the session that carries no sync between its sync's parts", () => {
   const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
     bytes: 1500,
     values: null,
@@ -452,7 +452,7 @@ Deno.test("the assembler passes a message for the session that carries no sync b
   );
 });
 
-Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
+test("the assembler refuses a split sync's parts out of sequence", () => {
   const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
     bytes: 1500,
     values: null,
@@ -522,7 +522,7 @@ describe("encodeUnlessTooLong()", () => {
   });
 });
 
-Deno.test("payloadFits counts the UTF-8 bytes of characters of every width", () => {
+test("payloadFits counts the UTF-8 bytes of characters of every width", () => {
   // Two-, three- and four-byte characters, and lone surrogates, which the
   // encoder writes as U+FFFD in three bytes, alone and among the others.
   for (
@@ -543,7 +543,7 @@ Deno.test("payloadFits counts the UTF-8 bytes of characters of every width", () 
   }
 });
 
-Deno.test("payloadFits counts the values of text long enough to exceed the bound", () => {
+test("payloadFits counts the values of text long enough to exceed the bound", () => {
   const values = 100;
   const numbers = (n: number) => `fvj1:[${"0,".repeat(n - 1)}0]`;
   // Text of at most 201 characters cannot hold more than 100 values: 97
@@ -657,7 +657,7 @@ const watchThroughParts = async (
   }
 };
 
-Deno.test("a server splits a watch set's sync for a client that takes a sync in parts", async () => {
+test("a server splits a watch set's sync for a client that takes a sync in parts", async () => {
   const limits = { bytes: 2048, values: 400 };
   const messages = await watchThroughParts("sync-parts-split", limits);
   const response = messages.findIndex((message) =>
@@ -693,7 +693,7 @@ Deno.test("a server splits a watch set's sync for a client that takes a sync in 
   );
 });
 
-Deno.test("a server sends a sync whole to a client that does not take one in parts", async () => {
+test("a server sends a sync whole to a client that does not take one in parts", async () => {
   const messages = await watchThroughParts(
     "sync-parts-unnegotiated",
     { bytes: 2048, values: 400 },
@@ -789,7 +789,7 @@ const watchedThrough = async (
   }
 };
 
-Deno.test("a server sends a sync whole within the bounds of a whole message, and splits only one past them", async () => {
+test("a server sends a sync whole within the bounds of a whole message, and splits only one past them", async () => {
   const values = Array.from({ length: 24 }, (_, n) => ({
     n,
     text: "w".repeat(300),
@@ -814,7 +814,7 @@ Deno.test("a server sends a sync whole within the bounds of a whole message, and
   }
 });
 
-Deno.test("a server cuts a sync's parts by what its entries take once compacted", async () => {
+test("a server cuts a sync's parts by what its entries take once compacted", async () => {
   // Forty documents link with one large schema. Inline, each document is
   // about 2 KB and the sync about 80 KB; compacted, each is about 200 bytes
   // and the schema goes once in a table. Cut by the compacted entries, with
@@ -840,7 +840,7 @@ Deno.test("a server cuts a sync's parts by what its entries take once compacted"
   }
 });
 
-Deno.test("a server halves a sync whose own tables take it past its bounds", async () => {
+test("a server halves a sync whose own tables take it past its bounds", async () => {
   // Two documents, each linking with a large schema of its own. Compacted,
   // each document is small, and by their own sizes both fit one part; but
   // the message carries both schemas in its table, which takes it past the
@@ -941,7 +941,7 @@ Deno.test("a server halves a sync whose own tables take it past its bounds", asy
   }
 });
 
-Deno.test("a client applies a watch set and a commit that arrive in parts", async () => {
+test("a client applies a watch set and a commit that arrive in parts", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://sync-parts-client"),
@@ -1042,7 +1042,7 @@ const watchSet = (count: number): WatchSetRequest => ({
   views: [],
 });
 
-Deno.test("a staged watch set's parts are numbered, fit their bounds and join to the set", () => {
+test("a staged watch set's parts are numbered, fit their bounds and join to the set", () => {
   const limits = { bytes: 1024, values: 80 };
   const message = watchSet(20);
   const parts = splitWatchSetRequest(message, limits);
@@ -1150,7 +1150,7 @@ const rawSession = async (storeName: string) => {
   return { server, send, watch, open };
 };
 
-Deno.test("a server holds a watch set's staged parts and applies them as one set", async () => {
+test("a server holds a watch set's staged parts and applies them as one set", async () => {
   const { server, send, watch } = await rawSession("staged-set-applied");
   try {
     for (let part = 0; part < 3; part++) {
@@ -1180,7 +1180,7 @@ Deno.test("a server holds a watch set's staged parts and applies them as one set
   }
 });
 
-Deno.test("a server refuses a staged part that does not follow the parts of its set it holds, and the rest of the set", async () => {
+test("a server refuses a staged part that does not follow the parts of its set it holds, and the rest of the set", async () => {
   const { server, send, watch } = await rawSession("staged-set-gap");
   const part = (
     requestId: string,
@@ -1241,7 +1241,7 @@ Deno.test("a server refuses a staged part that does not follow the parts of its 
   }
 });
 
-Deno.test("a client stages a watch set past its connection's bounds", async () => {
+test("a client stages a watch set past its connection's bounds", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://staged-set-client"),
@@ -1305,7 +1305,7 @@ Deno.test("a client stages a watch set past its connection's bounds", async () =
   }
 });
 
-Deno.test("a client restores a watch set past its connection's bounds in staged parts, and the server applies all of it", async () => {
+test("a client restores a watch set past its connection's bounds in staged parts, and the server applies all of it", async () => {
   const server = (phase: string) =>
     new Server({
       ...testSessionOpenServerOptions,
@@ -1411,7 +1411,7 @@ Deno.test("a client restores a watch set past its connection's bounds in staged 
   }
 });
 
-Deno.test("a server holds at most 64 parts of a staged set before its last", async () => {
+test("a server holds at most 64 parts of a staged set before its last", async () => {
   const { server, send, watch } = await rawSession("staged-set-bound");
   try {
     for (let part = 0; part < 64; part++) {
@@ -1448,7 +1448,7 @@ Deno.test("a server holds at most 64 parts of a staged set before its last", asy
   }
 });
 
-Deno.test("a connection's staged sets hold at most 64 Mi characters together", async () => {
+test("a connection's staged sets hold at most 64 Mi characters together", async () => {
   const { server, send, watch, open } = await rawSession("staged-set-chars");
   // Parts of just under 8 Mi characters: eight fit the bound together.
   const pad = "x".repeat(8 * 1024 * 1024 - 1024);
@@ -1512,7 +1512,7 @@ Deno.test("a connection's staged sets hold at most 64 Mi characters together", a
   }
 });
 
-Deno.test("a client handles a message for the session that carries no sync between its sync's parts", async () => {
+test("a client handles a message for the session that carries no sync between its sync's parts", async () => {
   // A router answers some of a session's requests itself, between the parts
   // of the session's sync; here a presence notice stands in for its answer.
   // The client handles it and completes the sync, on the one connection.

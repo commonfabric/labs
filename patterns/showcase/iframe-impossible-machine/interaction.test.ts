@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   createActionRunner,
   createSelectionRequestTracker,
@@ -9,6 +8,7 @@ import {
   stopNodeControlPropagation,
   updateLatestValue,
 } from "./model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("Impossible Machine interaction lifecycle", () => {
   it("exposes the interaction boundary through the guest model", () => {

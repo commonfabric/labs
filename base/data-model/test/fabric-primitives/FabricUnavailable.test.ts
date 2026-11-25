@@ -16,7 +16,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   FabricInstance,
@@ -51,6 +50,7 @@ import {
   UNAVAILABLE_REASONS,
   UNAVAILABLE_SYNCING,
 } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * One instance per reason, each built afresh, keyed by reason. The return

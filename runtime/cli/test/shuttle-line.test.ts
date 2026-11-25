@@ -19,7 +19,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   quoteToken,
@@ -28,6 +27,7 @@ import {
   splitLine,
   tailOfLine,
 } from "../lib/shuttle/line.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Helper for the cases below, which divides every code point into the ones

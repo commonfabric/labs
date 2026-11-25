@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Runtime } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { servedConsequences, settleServed } from "../lib/served-settle.ts";
 
 type Overlay = NonNullable<Runtime["speculationOverlay"]>;

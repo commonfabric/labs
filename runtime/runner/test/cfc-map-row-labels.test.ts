@@ -14,7 +14,6 @@
  * query's parameter is read from a cell labeled `S`.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
@@ -30,6 +29,12 @@ import {
 } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { FactoryInput } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";

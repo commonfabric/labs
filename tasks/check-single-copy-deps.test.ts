@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 import {
   copiesOf,
   findProblems,
@@ -46,7 +47,7 @@ function singleCopyLock(): { npm: Record<string, unknown> } {
   };
 }
 
-Deno.test("packageNameOf splits the name from the version and peer suffix", () => {
+test("packageNameOf splits the name from the version and peer suffix", () => {
   assertEquals(packageNameOf("ai@7.0.30_zod@3.25.76"), "ai");
   assertEquals(
     packageNameOf("@ai-sdk/provider-utils@5.0.10_zod@3.25.76"),
@@ -59,17 +60,17 @@ Deno.test("packageNameOf splits the name from the version and peer suffix", () =
   assertEquals(packageNameOf("gaxios@6.7.1"), "gaxios");
 });
 
-Deno.test("copiesOf groups every entry under its package name", () => {
+test("copiesOf groups every entry under its package name", () => {
   const copies = copiesOf(singleCopyLock());
   assertEquals(copies.get("ai"), ["ai@7.0.30_zod@3.25.76"]);
   assertEquals(copies.get("gaxios"), ["gaxios@6.7.1", "gaxios@7.2.0"]);
 });
 
-Deno.test("findProblems reports nothing when each package resolves once", () => {
+test("findProblems reports nothing when each package resolves once", () => {
   assertEquals(findProblems(singleCopyLock()), []);
 });
 
-Deno.test("findProblems reports a package resolved twice", () => {
+test("findProblems reports a package resolved twice", () => {
   // The shape of the bug this check exists for: rolling the arizeai packages
   // alone leaves the AI SDK resolved twice, once for toolshed and once for
   // @ai-sdk/otel.
@@ -84,7 +85,7 @@ Deno.test("findProblems reports a package resolved twice", () => {
   assertStringIncludes(problems[0], "ai@7.0.30_zod@3.25.76");
 });
 
-Deno.test("findProblems reports a package missing from the lockfile", () => {
+test("findProblems reports a package missing from the lockfile", () => {
   // A package that disappears from the lockfile would otherwise pass silently,
   // which would make this check quietly stop covering it.
 
@@ -93,15 +94,15 @@ Deno.test("findProblems reports a package missing from the lockfile", () => {
   assertStringIncludes(problems[0], "not in deno.lock at all");
 });
 
-Deno.test("findProblems does not report packages outside the list", () => {
+test("findProblems does not report packages outside the list", () => {
   assertEquals(findProblems(singleCopyLock(), {}), []);
 });
 
-Deno.test("the repository's own lockfile passes", async () => {
+test("the repository's own lockfile passes", async () => {
   assertEquals(await main(REPO_ROOT), 0);
 });
 
-Deno.test("main reports the duplicate and returns 1", async () => {
+test("main reports the duplicate and returns 1", async () => {
   // main() reads deno.lock from the root it is given, so a temp tree with a
   // duplicated lockfile drives the reporting path the passing repo never does:
   // the message, the per-copy listing, and the non-zero exit.
@@ -127,7 +128,7 @@ Deno.test("main reports the duplicate and returns 1", async () => {
   }
 });
 
-Deno.test("running the script as a command reports single copies", async () => {
+test("running the script as a command reports single copies", async () => {
   // Runs the script the way `deno task check-single-copy-deps` does, which the
   // calls to main() above do not: they would still pass if the entry point
   // never ran it, or if the task's declared permissions were too narrow to read
@@ -153,7 +154,7 @@ Deno.test("running the script as a command reports single copies", async () => {
   );
 });
 
-Deno.test("every guarded package names what breaks when it is duplicated", () => {
+test("every guarded package names what breaks when it is duplicated", () => {
   for (const [name, reason] of Object.entries(SINGLE_COPY_PACKAGES)) {
     assertEquals(typeof reason, "string", `${name} has no reason`);
     assertEquals(reason.length > 0, true, `${name} has an empty reason`);

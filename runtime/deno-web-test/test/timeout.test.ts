@@ -2,8 +2,9 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 
 import { applyDefaults, DEFAULT_TEST_TIMEOUT_MS } from "../config.ts";
 import { runDenoWebTest } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("a stuck test fails by name and the run continues", async function () {
+test("a stuck test fails by name and the run continues", async function () {
   // A test that waits on something which never arrives used to take the whole
   // run down: astral's own deadline on `page.evaluate` eventually threw a
   // `RetryError` that named no test, printed no summary, and skipped every test
@@ -42,7 +43,7 @@ Deno.test("a stuck test fails by name and the run continues", async function () 
   );
 });
 
-Deno.test("the default fires before astral's retries run out", function () {
+test("the default fires before astral's retries run out", function () {
   // The detector is only worth having while it fires before astral does. Astral
   // gives each `page.evaluate` five retried 10-second deadlines and throws a
   // `RetryError` once they run out, measured at 53 to 57 seconds; past that the
@@ -56,7 +57,7 @@ Deno.test("the default fires before astral's retries run out", function () {
   );
 });
 
-Deno.test("testTimeout must be a usable number", function () {
+test("testTimeout must be a usable number", function () {
   assertEquals(applyDefaults({}).testTimeout, DEFAULT_TEST_TIMEOUT_MS);
   assertEquals(applyDefaults({ testTimeout: 5000 }).testTimeout, 5000);
 

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type JobNews,
@@ -9,6 +8,7 @@ import {
   type RunNews,
   runNewsOf,
 } from "./runner-jobs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const CREATED = "2026-11-24T10:00:00Z";

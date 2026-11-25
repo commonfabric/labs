@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type ErrorNotification,

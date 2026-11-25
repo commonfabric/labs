@@ -4,7 +4,6 @@
  * is observed before clone creation can begin.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   Cell,
@@ -13,6 +12,7 @@ import type {
 } from "@commonfabric/runner";
 import { FabricInstance, FabricPrimitive } from "@commonfabric/data-model";
 import { commitPreconditionValueHash } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   assertNoCloneFabricInstance,
   cloneCellKey,

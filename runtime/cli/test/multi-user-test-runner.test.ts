@@ -29,7 +29,6 @@
  * captures, and a press step it runs.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
@@ -37,6 +36,7 @@ import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 import {
   assertParticipantRung,

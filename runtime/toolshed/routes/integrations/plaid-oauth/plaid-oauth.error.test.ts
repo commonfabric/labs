@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { plaidErrorFrom } from "./plaid-oauth.error.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("plaid-oauth.error", () => {
   describe("plaidErrorFrom()", () => {

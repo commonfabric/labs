@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { expect } from "@std/expect";
 import {
@@ -18,6 +17,7 @@ import {
 import { EditorView } from "@codemirror/view";
 import { NAME } from "@commonfabric/runner/shared";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   createMockCellHandle,
   holdReads,

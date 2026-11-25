@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { SupersededOutput } from "../../src/executor/wave.ts";
 import { createSigilLinkFromParsedLink } from "../../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../../src/meta-seam.ts";

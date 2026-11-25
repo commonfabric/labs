@@ -6,7 +6,6 @@
  * container it is, so a view riding one is neither attached nor redacted here.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
@@ -14,6 +13,7 @@ import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { convertCellsToLinks } from "../src/cell.ts";
 import type { CfcLabelView } from "../src/cfc/label-view.ts";

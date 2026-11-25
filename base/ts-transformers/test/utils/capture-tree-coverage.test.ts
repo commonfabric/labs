@@ -10,6 +10,7 @@ import {
   groupCapturesByRoot,
   parseCaptureExpression,
 } from "../../src/utils/capture-tree.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const factory = ts.factory;
 
@@ -60,14 +61,14 @@ function parseExpression(source: string): ts.Expression {
   return expr;
 }
 
-Deno.test("parseCaptureExpression reads a bare identifier as an empty-path root", () => {
+test("parseCaptureExpression reads a bare identifier as an empty-path root", () => {
   const info = parseCaptureExpression(parseExpression("entry"));
   assert(info);
   assertEquals(info.root, "entry");
   assertEquals(info.path, []);
 });
 
-Deno.test("parseCaptureExpression flattens a key() call chain into path segments", () => {
+test("parseCaptureExpression flattens a key() call chain into path segments", () => {
   const info = parseCaptureExpression(
     parseExpression('entry.key("piece").key("title")'),
   );
@@ -76,41 +77,41 @@ Deno.test("parseCaptureExpression flattens a key() call chain into path segments
   assertEquals(info.path, ["piece", "title"]);
 });
 
-Deno.test("parseCaptureExpression rejects a key() call whose receiver is not a capture", () => {
+test("parseCaptureExpression rejects a key() call whose receiver is not a capture", () => {
   // The receiver `foo()` is a call, not an identifier/property access, so the
   // recursive parse returns undefined and the key() branch bails out.
   const info = parseCaptureExpression(parseExpression('foo().key("piece")'));
   assertEquals(info, undefined);
 });
 
-Deno.test("parseCaptureExpression rejects a key() call with a non-literal argument", () => {
+test("parseCaptureExpression rejects a key() call with a non-literal argument", () => {
   // A dynamic key argument cannot be reduced to a static path segment.
   const info = parseCaptureExpression(parseExpression("entry.key(dynamic)"));
   assertEquals(info, undefined);
 });
 
-Deno.test("parseCaptureExpression stops at an optional chain and captures the pre-chain identifier", () => {
+test("parseCaptureExpression stops at an optional chain and captures the pre-chain identifier", () => {
   const info = parseCaptureExpression(parseExpression("entry?.name"));
   assert(info);
   assertEquals(info.root, "entry");
   assertEquals(info.path, []);
 });
 
-Deno.test("parseCaptureExpression rejects an optional chain rooted in a non-identifier, non-property expression", () => {
+test("parseCaptureExpression rejects an optional chain rooted in a non-identifier, non-property expression", () => {
   // `foo()?.name` has a call expression before the `?.`, which is neither an
   // identifier nor a property access, so parsing fails.
   const info = parseCaptureExpression(parseExpression("foo()?.name"));
   assertEquals(info, undefined);
 });
 
-Deno.test("parseCaptureExpression collects a plain property-access chain into a path", () => {
+test("parseCaptureExpression collects a plain property-access chain into a path", () => {
   const info = parseCaptureExpression(parseExpression("entry.a.b.c"));
   assert(info);
   assertEquals(info.root, "entry");
   assertEquals(info.path, ["a", "b", "c"]);
 });
 
-Deno.test("groupCapturesByRoot skips expressions that do not parse as captures", () => {
+test("groupCapturesByRoot skips expressions that do not parse as captures", () => {
   // A non-capture expression (element access on a call) is ignored; only the
   // parseable capture survives in the resulting tree.
   const skipped = parseExpression("foo()[0]");
@@ -119,7 +120,7 @@ Deno.test("groupCapturesByRoot skips expressions that do not parse as captures",
   assertEquals([...tree.keys()], ["entry"]);
 });
 
-Deno.test("groupCapturesByRoot builds nested property nodes and collapses whole-root captures", () => {
+test("groupCapturesByRoot builds nested property nodes and collapses whole-root captures", () => {
   const tree = groupCapturesByRoot([
     parseExpression("entry.a.b"),
     parseExpression("other"),
@@ -139,7 +140,7 @@ Deno.test("groupCapturesByRoot builds nested property nodes and collapses whole-
   assertEquals(other.properties.size, 0);
 });
 
-Deno.test("createCaptureAccessExpression returns a key() template unchanged via the fast path", () => {
+test("createCaptureAccessExpression returns a key() template unchanged via the fast path", () => {
   const template = parseExpression('entry.key("piece")');
   const result = createCaptureAccessExpression(
     "__cf_entry",
@@ -151,7 +152,7 @@ Deno.test("createCaptureAccessExpression returns a key() template unchanged via 
   assertEquals(print(result, fileOf(template)), 'entry.key("piece")');
 });
 
-Deno.test("createCaptureAccessExpression rebuilds a property access rerooted at the new name", () => {
+test("createCaptureAccessExpression rebuilds a property access rerooted at the new name", () => {
   const template = parseExpression("entry.name");
   const result = createCaptureAccessExpression(
     "__cf_entry",
@@ -162,7 +163,7 @@ Deno.test("createCaptureAccessExpression rebuilds a property access rerooted at 
   assertEquals(print(result), "__cf_entry.name");
 });
 
-Deno.test("createCaptureAccessExpression preserves optional-chain property access when rebuilding", () => {
+test("createCaptureAccessExpression preserves optional-chain property access when rebuilding", () => {
   const template = parseExpression("entry?.name");
   const result = createCaptureAccessExpression(
     "__cf_entry",
@@ -173,7 +174,7 @@ Deno.test("createCaptureAccessExpression preserves optional-chain property acces
   assertEquals(print(result), "__cf_entry?.name");
 });
 
-Deno.test("createCaptureAccessExpression rebuilds an element access rerooted at the new name", () => {
+test("createCaptureAccessExpression rebuilds an element access rerooted at the new name", () => {
   const template = parseExpression('entry["name"]');
   const result = createCaptureAccessExpression(
     "__cf_entry",
@@ -184,7 +185,7 @@ Deno.test("createCaptureAccessExpression rebuilds an element access rerooted at 
   assertEquals(print(result, fileOf(template)), '__cf_entry["name"]');
 });
 
-Deno.test("createCaptureAccessExpression preserves optional-chain element access when rebuilding", () => {
+test("createCaptureAccessExpression preserves optional-chain element access when rebuilding", () => {
   const template = parseExpression('entry?.["name"]');
   const result = createCaptureAccessExpression(
     "__cf_entry",
@@ -195,7 +196,7 @@ Deno.test("createCaptureAccessExpression preserves optional-chain element access
   assertEquals(print(result, fileOf(template)), '__cf_entry?.["name"]');
 });
 
-Deno.test("createCaptureAccessExpression falls back when an optional element-access chain cannot be rebuilt", () => {
+test("createCaptureAccessExpression falls back when an optional element-access chain cannot be rebuilt", () => {
   // `foo()?.["name"]` is an element access chain, but its inner expression is a
   // call that does not rebuild, so the whole rebuild fails and the function
   // synthesizes the access from rootName plus path segments instead.
@@ -209,7 +210,7 @@ Deno.test("createCaptureAccessExpression falls back when an optional element-acc
   assertEquals(print(result, fileOf(template)), "__cf_entry.items");
 });
 
-Deno.test("createCaptureAccessExpression falls back to path segments when the template cannot rebuild", () => {
+test("createCaptureAccessExpression falls back to path segments when the template cannot rebuild", () => {
   // A template that bottoms out on a call expression is not rebuildable, so the
   // function synthesizes the access from rootName plus the path segments.
   const template = parseExpression("foo().bar");
@@ -222,7 +223,7 @@ Deno.test("createCaptureAccessExpression falls back to path segments when the te
   assertEquals(print(result), "__cf_entry.a.b");
 });
 
-Deno.test("createCaptureAccessExpression with no template builds access purely from path segments", () => {
+test("createCaptureAccessExpression with no template builds access purely from path segments", () => {
   const result = createCaptureAccessExpression(
     "root",
     ["one", "two"],
@@ -231,14 +232,14 @@ Deno.test("createCaptureAccessExpression with no template builds access purely f
   assertEquals(print(result), "root.one.two");
 });
 
-Deno.test("buildHierarchicalParamsValue emits a leaf access when a node holds only an expression", () => {
+test("buildHierarchicalParamsValue emits a leaf access when a node holds only an expression", () => {
   const node: CaptureTreeNode = createCaptureTreeNode(["name"]);
   node.expression = parseExpression("entry.name");
   const result = buildHierarchicalParamsValue(node, "__cf_entry", factory);
   assertEquals(print(result), "__cf_entry.name");
 });
 
-Deno.test("buildHierarchicalParamsValue emits an object literal for a node with child properties", () => {
+test("buildHierarchicalParamsValue emits an object literal for a node with child properties", () => {
   const tree = groupCapturesByRoot([
     parseExpression("entry.a"),
     parseExpression("entry.b"),
@@ -252,7 +253,7 @@ Deno.test("buildHierarchicalParamsValue emits an object literal for a node with 
   assert(text.includes("b: __cf_entry.b"));
 });
 
-Deno.test("buildCapturePropertyAssignments applies renames to the root property name", () => {
+test("buildCapturePropertyAssignments applies renames to the root property name", () => {
   const tree = groupCapturesByRoot([parseExpression("entry.name")]);
   const assignments = buildCapturePropertyAssignments(
     tree,

@@ -13,7 +13,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { JSONSchema } from "@commonfabric/api";
@@ -36,6 +35,12 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import type { SpaceReplica } from "@commonfabric/runner/storage/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createCellRef } from "@/backends/utils.ts";
 import { RequestType } from "@/protocol/mod.ts";

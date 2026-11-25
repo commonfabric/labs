@@ -6,7 +6,6 @@
  * either at-rest form.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -16,6 +15,7 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import { buildAllDetails, type EntityDetail } from "../detail.ts";

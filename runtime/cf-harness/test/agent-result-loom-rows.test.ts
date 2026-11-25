@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -14,6 +13,12 @@ import { isLink, Runtime } from "@commonfabric/runner";
 import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
 import type { NormalizedFullLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,

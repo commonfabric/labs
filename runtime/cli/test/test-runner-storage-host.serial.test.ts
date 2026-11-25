@@ -21,12 +21,12 @@
  * is no store, observer or hook here to check.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { withEnv } from "./utils.ts";
 import {
   runTestPattern,

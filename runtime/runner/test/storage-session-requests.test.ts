@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
@@ -19,6 +18,12 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { PatternLifecycleCall } from "@commonfabric/memory/v2/server";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { StorageManager } from "../src/storage/v2.ts";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";

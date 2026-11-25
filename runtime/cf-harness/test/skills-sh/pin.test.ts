@@ -5,7 +5,6 @@
  * never reaches the network.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
@@ -15,6 +14,7 @@ import {
   resolveSkillsShSkillIdPin,
   SkillsShPinResolutionError,
 } from "../../src/skills-sh/pin.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HIT: SkillsShSearchHit = {
   id: "vercel-labs/agent-skills/vercel-react-native-skills",

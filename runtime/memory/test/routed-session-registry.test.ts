@@ -1,7 +1,8 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { SessionRegistry } from "../v2/session-registry.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("a direct connection cannot take over a routed session with its resume token", () => {
+test("a direct connection cannot take over a routed session with its resume token", () => {
   const registry = new SessionRegistry();
   const opened = registry.open(
     "space",

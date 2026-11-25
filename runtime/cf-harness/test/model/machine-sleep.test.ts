@@ -3,13 +3,13 @@
  * hand, so nothing here waits on a timer.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   SLEEP_CHECK_EVERY_MS,
   SLEEP_GAP_MS,
   watchMachineSleep,
 } from "../../src/model/machine-sleep.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Two clocks the test moves, and the watch's check, which it runs. */
 const clocks = () => {

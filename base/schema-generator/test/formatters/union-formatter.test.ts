@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { SchemaGenerationDiagnostic } from "../../src/interface.ts";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DEFAULT = `interface Default<T, V extends T = T> {}`;
 const DEEP_DEFAULT = `interface DeepDefault<V> {}`;

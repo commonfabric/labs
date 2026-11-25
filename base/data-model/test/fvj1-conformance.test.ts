@@ -7,7 +7,6 @@
  * what is re-encoded there is the value the case makes.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { fabricInstanceClassesByName } from "@/fabric-instances";
@@ -30,6 +29,7 @@ import {
   type ValuePath,
   type ValueProbe,
 } from "@/for-testing-only.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURE_URL = new URL(
   "./fixtures/fvj1-conformance.json",

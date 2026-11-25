@@ -15,7 +15,6 @@
  * primitive has, a private field assigned after `super()`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FabricPrimitive } from "@";
@@ -25,6 +24,7 @@ import {
   FabricEpochDay,
   fabricPrimitiveClassesByName,
 } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A `BaseFabricPrimitive` subclass defined outside the `data-model`, which has

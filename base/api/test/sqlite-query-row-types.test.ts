@@ -1,6 +1,6 @@
 import type { SqliteQueryRow } from "../index.ts";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("SQLite query row types", () => {
   it("exposes reserved aliases as entry rows", () => {

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 /**
@@ -20,6 +19,7 @@ import { stub } from "@std/testing/mock";
  *    dropped or mis-mapped.
  */
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   adoptServerExperimentalOptions,

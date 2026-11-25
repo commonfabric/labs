@@ -286,13 +286,15 @@ We modify tests constantly but often can't say _why_ a given test exists. For
 each touched or added test, name the principle it guards; if you can't, that's a
 finding (likely incidental, or testing an implementation detail). A good test
 exposes the intended behavior and reads like a sentence — a user story, not an
-assertion on internals; prefer BDD style (`@std/testing/bdd` `describe` / `it`
-that read as sentences) and `expect()` over `assert*()` — a direction we apply
-inconsistently today, so nudge toward it rather than treat it as a gate. Check
-the cases cover the actual semantic change and its edge / empty / error states,
-and that a removed test dropped dead coverage, not real coverage. Follow the
-repo's testing conventions (`docs/common/ai/pattern-testing-guide.md`); run
-targeted tests while reviewing.
+assertion on internals; prefer BDD style (`describe` / `it` from
+`@commonfabric/test-support/test`, read as sentences) and `expect()` over
+`assert*()` — a direction we apply inconsistently today, so nudge toward it
+rather than treat it as a gate. A test registered with `Deno.test` or through
+`@std/testing/bdd` is a finding: no lane can skip or record it, and the
+`cf-test/registration` lint rule reports it. Check the cases cover the actual
+semantic change and its edge / empty / error states, and that a removed test
+dropped dead coverage, not real coverage. Follow the repo's testing conventions
+(`docs/common/ai/pattern-testing-guide.md`); run targeted tests while reviewing.
 
 ---
 

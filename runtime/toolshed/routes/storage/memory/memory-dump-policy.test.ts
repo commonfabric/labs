@@ -3,8 +3,9 @@
 
 import { assertEquals } from "@std/assert";
 import { dumpAllowSet, isDumpEnabled } from "./memory-dump-policy.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("isDumpEnabled: off unless explicitly enabled", () => {
+test("isDumpEnabled: off unless explicitly enabled", () => {
   assertEquals(
     isDumpEnabled({ enabled: undefined, env: "development" }),
     false,
@@ -17,7 +18,7 @@ Deno.test("isDumpEnabled: off unless explicitly enabled", () => {
   assertEquals(isDumpEnabled({ enabled: true, env: "Staging" }), true);
 });
 
-Deno.test("isDumpEnabled: production (and any alias/unknown env) is a hard no", () => {
+test("isDumpEnabled: production (and any alias/unknown env) is a hard no", () => {
   // No override exists — enabled or not, production never mounts the endpoint.
   assertEquals(isDumpEnabled({ enabled: true, env: "production" }), false);
   assertEquals(isDumpEnabled({ enabled: false, env: "production" }), false);
@@ -31,7 +32,7 @@ Deno.test("isDumpEnabled: production (and any alias/unknown env) is a hard no", 
   assertEquals(isDumpEnabled({ enabled: true, env: "rapids" }), false);
 });
 
-Deno.test("dumpAllowSet: union of MEMORY_DUMP_DIDS and MEMORY_SERVICE_DIDS", () => {
+test("dumpAllowSet: union of MEMORY_DUMP_DIDS and MEMORY_SERVICE_DIDS", () => {
   const set = dumpAllowSet({
     dumpDids: "did:key:zDump1, did:key:zDump2",
     serviceDids: "did:key:zService",
@@ -43,7 +44,7 @@ Deno.test("dumpAllowSet: union of MEMORY_DUMP_DIDS and MEMORY_SERVICE_DIDS", () 
   assertEquals(set.has("did:key:zStranger"), false);
 });
 
-Deno.test("dumpAllowSet: empty config trusts nobody", () => {
+test("dumpAllowSet: empty config trusts nobody", () => {
   const set = dumpAllowSet({ dumpDids: "", serviceDids: "" });
   assertEquals(set.size, 0);
 });

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { urlToAppView } from "@commonfabric/navigation";
+import { describe, it } from "@commonfabric/test-support/test";
 import { pieceUrl } from "../src/piece-url.ts";
 
 const SPACE = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";

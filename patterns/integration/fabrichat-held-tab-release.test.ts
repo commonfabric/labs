@@ -27,7 +27,6 @@
 import { expect } from "@std/expect";
 import { walk } from "@std/fs";
 import { dirname, fromFileUrl, join, relative } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import type { Identity } from "@commonfabric/identity";
 import { env, type Page } from "@commonfabric/integration";
@@ -35,6 +34,12 @@ import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { type Cell, getPatternIdentityRef } from "@commonfabric/runner";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { settleView, waitForSettledText } from "./cfc-browser-helpers.ts";
 import {

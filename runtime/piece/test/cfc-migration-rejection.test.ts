@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON } from "@commonfabric/runner/cfc/migration-reason";
+import { describe, it } from "@commonfabric/test-support/test";
 import { isCfcMigrationRejection } from "../src/ops/cfc-migration-rejection.ts";
 
 const REJECTION_PREFIX =

@@ -9,8 +9,9 @@ import {
   getBuiltinTool,
 } from "../src/tools/registry.ts";
 import { WRITE_FILE_MODES } from "../src/tools/write-file.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("builtin tool registry includes the agreed first-pass tool floor", () => {
+test("builtin tool registry includes the agreed first-pass tool floor", () => {
   assertEquals(BUILTIN_TOOLS.map((tool) => tool.descriptor.toolId), [
     "bash",
     "browser",
@@ -70,7 +71,7 @@ Deno.test("builtin tool registry includes the agreed first-pass tool floor", () 
   );
 });
 
-Deno.test("edit_file descriptor exposes exact replacement edits", () => {
+test("edit_file descriptor exposes exact replacement edits", () => {
   const editFileTool = getBuiltinTool("edit_file");
   assert(editFileTool);
   assertEquals(editFileTool.descriptor.effectClass, "write");
@@ -102,13 +103,13 @@ Deno.test("edit_file descriptor exposes exact replacement edits", () => {
   );
 });
 
-Deno.test("builtin tool registry exposes invoke functions for all built-ins", () => {
+test("builtin tool registry exposes invoke functions for all built-ins", () => {
   for (const tool of BUILTIN_TOOLS) {
     assertEquals(typeof tool.invoke, "function");
   }
 });
 
-Deno.test("write_file descriptor includes append support", () => {
+test("write_file descriptor includes append support", () => {
   const writeFileTool = getBuiltinTool("write_file");
   assert(writeFileTool);
   assertEquals(WRITE_FILE_MODES, ["replace", "append"]);
@@ -121,7 +122,7 @@ Deno.test("write_file descriptor includes append support", () => {
   );
 });
 
-Deno.test("builtin tool registry registers each tool under its own descriptor's id", () => {
+test("builtin tool registry registers each tool under its own descriptor's id", () => {
   for (const [toolId, tool] of BUILTIN_TOOL_REGISTRY) {
     assertEquals(tool.descriptor.toolId, toolId);
   }

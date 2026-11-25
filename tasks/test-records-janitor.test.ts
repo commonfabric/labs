@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -8,6 +7,7 @@ import {
   leaseAction,
   runJanitor,
 } from "./test-records-janitor.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function searchFetch(payload: unknown): typeof fetch {
   return (() =>

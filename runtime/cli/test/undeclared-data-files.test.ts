@@ -5,11 +5,11 @@
  * out loud.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { join } from "@std/path";
 import { decodeDataFile } from "@commonfabric/text/data-file";
+import { describe, it } from "@commonfabric/test-support/test";
 import { writeSourcePackage } from "../lib/piece.ts";
 import {
   undeclaredDataFiles,

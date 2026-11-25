@@ -33,6 +33,7 @@ import {
   read,
 } from "../v2/engine.ts";
 import { type EntityDocument, toDocumentPath } from "../v2.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const createEngine = async (): Promise<{ engine: Engine; path: string }> => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
@@ -114,7 +115,7 @@ const seedSchedule = (engine: Engine): void => {
   });
 };
 
-Deno.test("memory v2 engine: CT-1910 — pending-read staleness scan misses a foreign write between the reader's confirmed basis and its resolution basis", async () => {
+test("memory v2 engine: CT-1910 — pending-read staleness scan misses a foreign write between the reader's confirmed basis and its resolution basis", async () => {
   const { engine, path } = await createEngine();
   try {
     seedSchedule(engine);
@@ -168,7 +169,7 @@ Deno.test("memory v2 engine: CT-1910 — pending-read staleness scan misses a fo
   }
 });
 
-Deno.test("memory v2 engine: CT-1910 counterfactual — the same observation at its true confirmed basis is rejected as stale", async () => {
+test("memory v2 engine: CT-1910 counterfactual — the same observation at its true confirmed basis is rejected as stale", async () => {
   const { engine, path } = await createEngine();
   try {
     seedSchedule(engine);
@@ -207,7 +208,7 @@ Deno.test("memory v2 engine: CT-1910 counterfactual — the same observation at 
   }
 });
 
-Deno.test("memory v2 engine: CT-1910 repair — a pending read declaring its true basis is scanned over the full interval and rejects", async () => {
+test("memory v2 engine: CT-1910 repair — a pending read declaring its true basis is scanned over the full interval and rejects", async () => {
   const { engine, path } = await createEngine();
   try {
     seedSchedule(engine);
@@ -251,7 +252,7 @@ Deno.test("memory v2 engine: CT-1910 repair — a pending read declaring its tru
   }
 });
 
-Deno.test("memory v2 engine: CT-1910 repair — own-session exclusion admits a reader whose interval contains only its own writes", async () => {
+test("memory v2 engine: CT-1910 repair — own-session exclusion admits a reader whose interval contains only its own writes", async () => {
   const { engine, path } = await createEngine();
   try {
     seedSchedule(engine);
@@ -297,7 +298,7 @@ Deno.test("memory v2 engine: CT-1910 repair — own-session exclusion admits a r
   }
 });
 
-Deno.test("memory v2 engine: CT-1910 repair — a reader that integrated the foreign write commits coherently from its later basis", async () => {
+test("memory v2 engine: CT-1910 repair — a reader that integrated the foreign write commits coherently from its later basis", async () => {
   const { engine, path } = await createEngine();
   try {
     seedSchedule(engine);
@@ -339,7 +340,7 @@ Deno.test("memory v2 engine: CT-1910 repair — a reader that integrated the for
   }
 });
 
-Deno.test("memory v2 engine: CT-1910 repair — an own-session write accepted out of submission order is not excluded from the scan", async () => {
+test("memory v2 engine: CT-1910 repair — an own-session write accepted out of submission order is not excluded from the scan", async () => {
   const { engine, path } = await createEngine();
   try {
     // session:1 localSeq 1: A = {x: 1} -> seq 1.
@@ -414,7 +415,7 @@ Deno.test("memory v2 engine: CT-1910 repair — an own-session write accepted ou
   }
 });
 
-Deno.test("memory v2 engine: CT-1910 repair — basisSeq validation", async () => {
+test("memory v2 engine: CT-1910 repair — basisSeq validation", async () => {
   const { engine, path } = await createEngine();
   try {
     seedSchedule(engine);

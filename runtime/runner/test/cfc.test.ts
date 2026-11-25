@@ -18,7 +18,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
@@ -27,6 +26,7 @@ import {
   formatExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { cfcAtom, ContextualFlowControl } from "../src/cfc.ts";

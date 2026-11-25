@@ -9,10 +9,11 @@
 
 import { assert } from "@std/assert";
 import { buildView } from "../lib/view/mod.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SRC = "export const x = 1;\nconst y = x + 1;\n";
 
-Deno.test("buildView: safeCwd falls back to '.' when Deno.cwd() throws", () => {
+test("buildView: safeCwd falls back to '.' when Deno.cwd() throws", () => {
   // Build the source-path view while the cwd is still valid; semantics are lazy.
   const r = buildView(SRC, "transformed.ts");
   assert(r.doc.lines.length > 0);

@@ -28,7 +28,6 @@
  * membership admits, and fixing the `PlusType` in the type system.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type {
@@ -36,6 +35,7 @@ import type {
   Same,
 } from "@commonfabric/js-values/types";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type ConvertibleJsValueTag,

@@ -14,6 +14,7 @@ import {
   operationBaselineHash,
 } from "@commonfabric/memory/v2/operation-codec";
 import { toValuePath } from "@commonfabric/memory/v2";
+import { test } from "@commonfabric/test-support/test";
 import { toFileUrl } from "@std/path";
 
 import { main } from "../cli.ts";
@@ -94,7 +95,7 @@ function run(argv: string[]): { code: number; out: string; err: string } {
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
-Deno.test("cli: single-space commands dispatch over a seeded DB", async (t) => {
+test("cli: single-space commands dispatch over a seeded DB", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-cli-" });
   const db = `${dir}/space.sqlite`;
   try {

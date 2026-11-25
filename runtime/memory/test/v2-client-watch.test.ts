@@ -12,8 +12,9 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("memory v2 watch view keeps same id snapshots in different scopes", () => {
+test("memory v2 watch view keeps same id snapshots in different scopes", () => {
   const view = WatchView.fromSync({
     type: "sync",
     fromSeq: 0,
@@ -57,7 +58,7 @@ Deno.test("memory v2 watch view keeps same id snapshots in different scopes", ()
   );
 });
 
-Deno.test("memory v2 watch view keys KEYED entries by instance: two instances of one (branch, id, scope) stay apart, a keyed remove drops exactly the named one, and an unkeyed frame keys by scope name as before (fan-out stage A's wire leg; mutation: key ignores scopeKey → red)", () => {
+test("memory v2 watch view keys KEYED entries by instance: two instances of one (branch, id, scope) stay apart, a keyed remove drops exactly the named one, and an unkeyed frame keys by scope name as before (fan-out stage A's wire leg; mutation: key ignores scopeKey → red)", () => {
   const aliceKey = "user:did%3Akey%3Aalice";
   const bobKey = "user:did%3Akey%3Abob";
   const view = WatchView.fromSync({
@@ -159,7 +160,7 @@ Deno.test("memory v2 watch view keys KEYED entries by instance: two instances of
   ]);
 });
 
-Deno.test("memory v2 client installs a watch set and receives live updates", async () => {
+test("memory v2 client installs a watch set and receives live updates", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-client-watch"),
@@ -287,7 +288,7 @@ Deno.test("memory v2 client installs a watch set and receives live updates", asy
  * that watched the wire would pass whether or not the session still schedules
  * the ack.
  */
-Deno.test("memory v2 session closed mid-watch-set arms no ack timer", async () => {
+test("memory v2 session closed mid-watch-set arms no ack timer", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://watch-set-close-before-apply"),

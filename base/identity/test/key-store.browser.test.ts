@@ -3,8 +3,9 @@ import { assert } from "@std/assert";
 import { isNativeEd25519Supported } from "../src/ed25519/utils.ts";
 import { Identity } from "../src/identity.ts";
 import { KeyStore } from "../src/key-store.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("KeyStore can store and recover keys", async () => {
+test("KeyStore can store and recover keys", async () => {
   const store = await KeyStore.open("test-key-store-concurrent");
   await store.clear();
 
@@ -16,7 +17,7 @@ Deno.test("KeyStore can store and recover keys", async () => {
   assert(recovered && did === recovered.verifier.did());
 });
 
-Deno.test("KeyStore.open() with no name opens `common-key-store`", async () => {
+test("KeyStore.open() with no name opens `common-key-store`", async () => {
   // The database name is persisted browser state, so it is pinned to its
   // literal here rather than to the constant: reading the constant on both
   // sides of the comparison would agree with itself no matter what the name
@@ -45,7 +46,7 @@ Deno.test("KeyStore.open() with no name opens `common-key-store`", async () => {
 // than it was stored as.
 //
 
-Deno.test("KeyStore recovers a key pair holding material as one", async () => {
+test("KeyStore recovers a key pair holding material as one", async () => {
   const store = await KeyStore.open("test-key-store-material");
   await store.clear();
 
@@ -61,7 +62,7 @@ Deno.test("KeyStore recovers a key pair holding material as one", async () => {
   );
 });
 
-Deno.test("KeyStore recovers a key pair holding handles as one", async () => {
+test("KeyStore recovers a key pair holding handles as one", async () => {
   if (!await isNativeEd25519Supported()) return;
 
   const store = await KeyStore.open("test-key-store-handles");

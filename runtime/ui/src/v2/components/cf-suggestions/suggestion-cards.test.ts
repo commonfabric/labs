@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
@@ -11,6 +10,7 @@ import {
   RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { MessagePortRuntimeTransport } from "@commonfabric/runtime-client/transports/message-port";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { RuntimeClients } from "../../../../../runtime-client/src/backends/client-registry.ts";
 import type { RuntimeProcessor } from "../../../../../runtime-client/src/backends/runtime-processor.ts";

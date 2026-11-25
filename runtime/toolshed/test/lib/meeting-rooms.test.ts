@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Database } from "@db/sqlite";
@@ -13,6 +12,12 @@ import { Server } from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   loomSpaceCreator,

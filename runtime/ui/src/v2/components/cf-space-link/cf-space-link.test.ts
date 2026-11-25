@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { NAVIGATE_EVENT } from "@commonfabric/navigation";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import { CFSpaceLink } from "./index.ts";
 

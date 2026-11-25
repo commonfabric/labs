@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import type {
@@ -6,6 +5,7 @@ import type {
   PieceSourceRevisionView,
   PieceSourceView,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { withOlderSteps, withPatternChanges } from "../src/space-history.ts";
 

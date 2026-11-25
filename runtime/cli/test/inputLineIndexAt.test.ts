@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type DialogState, inputLineIndexAt } from "../lib/view/render.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("inputLineIndexAt()", () => {
   const dialog: DialogState = {

@@ -1,11 +1,11 @@
 // First, so that the document it installs is there when Lit loads.
 import { internalsOf, mount } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { ContextProvider } from "@lit/context";
 import type { CellRef } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   createMockCellHandle,
   writesSent,

@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import {
   createSinkRequestPolicyInput,

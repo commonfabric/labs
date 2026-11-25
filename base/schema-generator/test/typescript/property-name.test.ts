@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { getPropertyNameText } from "../../src/typescript/property-name.ts";
 import { createTestProgramFromFiles } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FILES = {
   "/keys.d.ts":

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { RuntimeDiagnosticsSnapshot } from "../integration/multi-runtime-harness.ts";
 import {
   type CaseConfig,

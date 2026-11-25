@@ -5,10 +5,10 @@
  * label, and its run under `enforce-strict` completes.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { IFCLabel } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";

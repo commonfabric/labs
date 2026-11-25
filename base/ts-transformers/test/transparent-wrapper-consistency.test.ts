@@ -11,7 +11,6 @@
  * wrong on its own.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -27,6 +26,7 @@ import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { normalizeDataFlows } from "../src/ast/normalize.ts";
 import type { DataFlowGraph, DataFlowNode } from "../src/ast/dataflow.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Every spelling available in a `.tsx` source. `<T>x` is JSX there, so it is
  * exercised separately against a `.ts` module. */

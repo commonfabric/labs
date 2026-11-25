@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
@@ -7,6 +6,12 @@ import {
   storeCurrencyRecords,
 } from "@commonfabric/memory/v2/currency-index";
 import { close, open } from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { currencyCycles, type CurrencyReadEdge } from "../currency.ts";
 import { openSpaces, type SpaceRef } from "../multispace.ts";

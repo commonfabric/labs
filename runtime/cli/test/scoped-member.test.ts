@@ -6,7 +6,6 @@
  * space-wide instance of the same id instead.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { resolvePieceReference, setSlugLink } from "@commonfabric/piece";
@@ -14,6 +13,12 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, entityIdFrom, Runtime } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { getCellValue, setCellValue } from "../lib/piece.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";
 import { captureStderr } from "./utils.ts";

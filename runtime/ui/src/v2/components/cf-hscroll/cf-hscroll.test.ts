@@ -1,10 +1,10 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount, settle } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CFHScroll } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Mounts a scroller with `properties` whose content is 500 pixels wide in a

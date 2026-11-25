@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { valueEqual } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
@@ -11,6 +10,12 @@ import {
 } from "@commonfabric/memory/v2/currency-index";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { stub } from "@std/testing/mock";
 import { ExecutorHost } from "../../src/executor/host.ts";

@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { decode } from "@commonfabric/text/utf8";
+import { test } from "@commonfabric/test-support/test";
 import {
   listPiecesFromCommand,
   piece,
@@ -31,7 +32,7 @@ function captureStdout(fn: () => void): string {
   return captured;
 }
 
-Deno.test("piece summaries render human and JSON output", () => {
+test("piece summaries render human and JSON output", () => {
   const reference = createLLMFriendlyLink({
     space: "did:key:z6MkjchhfUsD6JcKaEBBHXC8mYtTBhQtTBFbGHqCRJRaqF6J",
     id: "of:notes",
@@ -91,7 +92,7 @@ Deno.test("piece summaries render human and JSON output", () => {
   expect(captureStdout(() => renderPieceSummaries([], false))).toBe("");
 });
 
-Deno.test("piece registers its list and search command handlers", () => {
+test("piece registers its list and search command handlers", () => {
   const actionHandler = (name: string): unknown =>
     (piece.getCommand(name) as unknown as
       | { actionHandler?: unknown }
@@ -103,7 +104,7 @@ Deno.test("piece registers its list and search command handlers", () => {
   );
 });
 
-Deno.test("piece search command parses options and renders matches", async () => {
+test("piece search command parses options and renders matches", async () => {
   const matches = [{
     id: "of:notes",
     reference: referenceFor("of:notes"),
@@ -187,7 +188,7 @@ Deno.test("piece search command parses options and renders matches", async () =>
   });
 });
 
-Deno.test("piece list command parses options and renders pieces", async () => {
+test("piece list command parses options and renders pieces", async () => {
   const pieces = [{
     id: "of:tasks",
     reference: referenceFor("of:tasks"),

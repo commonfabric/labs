@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   buildMountStatusRows,
@@ -10,6 +9,12 @@ import {
   verifyIsFuseProcess,
 } from "../commands/fuse.ts";
 import type { MountStateEntry, MountTableState } from "../lib/fuse.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const MOUNTPOINT = "/tmp/fuse-unmount";
 

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 // deno-lint-ignore no-external-import -- Deno types this builtin by its node: specifier.
 import { Socket } from "node:net";
@@ -8,6 +7,7 @@ import {
   createMemorySocket,
   type MemorySocket,
 } from "../../src/storage/memory-socket.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Resolves once `socket` opens, and rejects with its error if it fails. */
 function opened(socket: MemorySocket): Promise<void> {

@@ -5,9 +5,9 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A projected survey row, including its canonical source address. */
 interface Row {

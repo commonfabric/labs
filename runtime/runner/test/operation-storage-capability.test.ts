@@ -16,8 +16,8 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import { defer } from "@commonfabric/async/defer";
 import { hashStringOf } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { hasOperationStorageCapability } from "../src/storage/interface.ts";
 import {
   type SessionFactory,

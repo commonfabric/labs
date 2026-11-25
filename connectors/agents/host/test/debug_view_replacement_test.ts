@@ -27,8 +27,9 @@ import {
   sourceDescriptor,
 } from "./debug_view_support.ts";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("debug replacement stops every superseded local runner", async () => {
+test("debug replacement stops every superseded local runner", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -122,7 +123,7 @@ Deno.test("debug replacement stops every superseded local runner", async () => {
   }
 });
 
-Deno.test("debug replacement preserves a piece owned by another runtime", async () => {
+test("debug replacement preserves a piece owned by another runtime", async () => {
   const server = newSharedServer();
   const spaceDid = (await Identity.generate()).did();
   const firstSession = createSession({ identity, spaceDid });

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -11,6 +10,12 @@ import {
   type ServingThreadFailure,
   startServingThread,
 } from "../../src/executor/serving-thread.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const ECHO = new URL("../fixtures/serving-thread-echo.ts", import.meta.url);
 const HOG = new URL("../fixtures/serving-thread-hog.ts", import.meta.url);

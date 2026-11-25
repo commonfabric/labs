@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
 import { dirname, resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ROOT = resolve(import.meta.dirname!, "..");
 const SCRIPT = resolve(import.meta.dirname!, "write-iframe-wrapper.ts");

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -9,6 +8,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { callableCommandSpec, CyclicResultError } from "../lib/callable.ts";
 import { callPieceHandler } from "../lib/piece.ts";

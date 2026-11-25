@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { assertAcyclicFabricValue, deepFreeze, type FabricValue } from "@";
 import { UnknownValue } from "@/codec-common";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("assertAcyclicFabricValue", () => {
   it("accepts shared frozen subtrees without changing them", () => {

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import type { FabricPlainObject } from "@commonfabric/api";
@@ -6,6 +5,12 @@ import { stripAnsi } from "@commonfabric/cli/view/ansi";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { legacySpaceDid } from "@commonfabric/identity";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { boardFile } from "./sync.ts";
 import {

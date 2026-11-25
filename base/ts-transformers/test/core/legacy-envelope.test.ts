@@ -26,6 +26,7 @@ import {
   injectCfHelpers,
   isLegacyInjectedEnvelope,
 } from "../../src/core/cf-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const REAL_DUMP = await Deno.readTextFile(
   new URL(
@@ -40,7 +41,7 @@ const TS_TRAILER = "// @ts-ignore: Internals\n" +
 const JS_TRAILER = "// @ts-ignore: Internals\n" +
   "function h(...args) { return __cfHelpers.h.apply(null, args); }\n";
 
-Deno.test("real poisoned production doc: shape assumptions hold byte-exactly", () => {
+test("real poisoned production doc: shape assumptions hold byte-exactly", () => {
   // First line is exactly HELPERS_STMT.
   assertEquals(REAL_DUMP.split("\n")[0], HELPERS_STMT);
   // Trailer is "\n" + HELPERS_USED_STMT, INCLUDING the used-stmt's own
@@ -51,16 +52,16 @@ Deno.test("real poisoned production doc: shape assumptions hold byte-exactly", (
   assert(REAL_DUMP.includes(";\n\n// @ts-ignore: Internals\nfunction h("));
 });
 
-Deno.test("accepts the real poisoned production doc", () => {
+test("accepts the real poisoned production doc", () => {
   assert(isLegacyInjectedEnvelope(REAL_DUMP));
 });
 
-Deno.test("accepts the real doc with the final newline stripped", () => {
+test("accepts the real doc with the final newline stripped", () => {
   assert(REAL_DUMP.endsWith("\n"));
   assert(isLegacyInjectedEnvelope(REAL_DUMP.slice(0, -1)));
 });
 
-Deno.test("round-trip: injectCfHelpers output is recognized (ts and js)", () => {
+test("round-trip: injectCfHelpers output is recognized (ts and js)", () => {
   const authored = 'import { pattern } from "commonfabric";\n' +
     "export default pattern<{ v: number }>(({ v }) => ({ v }));\n";
   assert(isLegacyInjectedEnvelope(injectCfHelpers(authored, "/main.tsx")));
@@ -69,26 +70,26 @@ Deno.test("round-trip: injectCfHelpers output is recognized (ts and js)", () => 
   assert(isLegacyInjectedEnvelope(injectCfHelpers(authoredJs, "/main.jsx")));
 });
 
-Deno.test("accepts a hand-built envelope with the JS trailer", () => {
+test("accepts a hand-built envelope with the JS trailer", () => {
   const doc = HELPERS_STMT + "\n" + "export const x = 1;\n" + "\n" +
     JS_TRAILER;
   assert(isLegacyInjectedEnvelope(doc));
   assert(isLegacyInjectedEnvelope(doc.slice(0, -1)));
 });
 
-Deno.test("rejects authored source without the envelope", () => {
+test("rejects authored source without the envelope", () => {
   assertFalse(isLegacyInjectedEnvelope(
     'import { pattern } from "commonfabric";\nexport default 1;\n',
   ));
 });
 
-Deno.test("rejects when the helper import is not on line 1", () => {
+test("rejects when the helper import is not on line 1", () => {
   assertFalse(isLegacyInjectedEnvelope("\n" + REAL_DUMP));
   assertFalse(isLegacyInjectedEnvelope("// hi\n" + REAL_DUMP));
   assertFalse(isLegacyInjectedEnvelope(" " + REAL_DUMP));
 });
 
-Deno.test("rejects a tampered trailer", () => {
+test("rejects a tampered trailer", () => {
   // Flip one byte in the trailer body.
   assertFalse(
     isLegacyInjectedEnvelope(REAL_DUMP.slice(0, -3) + "X}\n"),
@@ -97,19 +98,19 @@ Deno.test("rejects a tampered trailer", () => {
   assertFalse(isLegacyInjectedEnvelope(REAL_DUMP + "\n// extra\n"));
 });
 
-Deno.test("rejects prefix-only and trailer-only documents", () => {
+test("rejects prefix-only and trailer-only documents", () => {
   assertFalse(isLegacyInjectedEnvelope(HELPERS_STMT + "\n"));
   assertFalse(isLegacyInjectedEnvelope("\n" + TS_TRAILER));
   // Degenerate: too short for prefix + trailer to coexist without overlap.
   assertFalse(isLegacyInjectedEnvelope(HELPERS_STMT + "\n" + "x"));
 });
 
-Deno.test("accepts the minimal legal envelope (empty authored body)", () => {
+test("accepts the minimal legal envelope (empty authored body)", () => {
   // injectCfHelpers("") === [stmt, "", trailer].join("\n")
   assert(isLegacyInjectedEnvelope(injectCfHelpers("", "/main.tsx")));
 });
 
-Deno.test("interior __cfHelpers inside a VALID envelope matches (chosen behavior)", () => {
+test("interior __cfHelpers inside a VALID envelope matches (chosen behavior)", () => {
   // Prefix+suffix only, deliberately: `__cfHelpers` grants nothing beyond
   // what injection gives every pattern, and the runner applies tolerance
   // only to Merkle-verified stored input. Pinned so the behavior is chosen,
@@ -119,13 +120,13 @@ Deno.test("interior __cfHelpers inside a VALID envelope matches (chosen behavior
   assert(isLegacyInjectedEnvelope(doc));
 });
 
-Deno.test("interior __cfHelpers WITHOUT the envelope does not match", () => {
+test("interior __cfHelpers WITHOUT the envelope does not match", () => {
   assertFalse(isLegacyInjectedEnvelope(
     "const steal = __cfHelpers;\nexport const x = 1;\n",
   ));
 });
 
-Deno.test("the fallback-shim trailer for sources binding `h` at top level is not a legacy envelope", () => {
+test("the fallback-shim trailer for sources binding `h` at top level is not a legacy envelope", () => {
   // Such sources get the shim under the name `__cfHelpersShim`; that form
   // postdates #4158 and is never persisted, so the detector must not widen
   // to it.

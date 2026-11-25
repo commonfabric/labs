@@ -15,6 +15,7 @@ import { staticGitHubCredential } from "../github-auth.ts";
 import { dashboardCacheFile } from "../history-files.ts";
 import type { Ctx } from "../types.ts";
 import { createGithubMembers, organizationUserIds } from "./github-members.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -120,7 +121,7 @@ async function withWire(
   }
 }
 
-Deno.test("github users: organization rosters read every page and deduplicate ids", async () => {
+test("github users: organization rosters read every page and deduplicate ids", async () => {
   await withWire({
     reply: (url) => {
       const page = url.searchParams.get("page");
@@ -151,7 +152,7 @@ Deno.test("github users: organization rosters read every page and deduplicate id
   });
 });
 
-Deno.test("github users: shared history cache loads once across collections", async () => {
+test("github users: shared history cache loads once across collections", async () => {
   const key = "DASHBOARD_CACHE_DIR";
   const saved = Deno.env.get(key);
   const directory = "/configured/dashboard-cache";
@@ -192,7 +193,7 @@ Deno.test("github users: shared history cache loads once across collections", as
   }
 });
 
-Deno.test("github users: transitional overlap counts once and draws retained history", async () => {
+test("github users: transitional overlap counts once and draws retained history", async () => {
   clock = T0;
   const persisted = [
     { t: T0 - 90 * DAY, members: 8, collaborators: 2 },
@@ -250,7 +251,7 @@ Deno.test("github users: transitional overlap counts once and draws retained his
   });
 });
 
-Deno.test("github users: a non-finite persisted timestamp is discarded", async () => {
+test("github users: a non-finite persisted timestamp is discarded", async () => {
   clock = T0;
   await withWire({
     reply: (url) =>
@@ -270,7 +271,7 @@ Deno.test("github users: a non-finite persisted timestamp is discarded", async (
   });
 });
 
-Deno.test("github users: a new history window shows both counts without a chart", async () => {
+test("github users: a new history window shows both counts without a chart", async () => {
   clock = T0 + 90 * DAY;
   await withWire({
     reply: (url) =>
@@ -295,7 +296,7 @@ Deno.test("github users: a new history window shows both counts without a chart"
   });
 });
 
-Deno.test("github users: a history write failure does not hide the current count", async () => {
+test("github users: a history write failure does not hide the current count", async () => {
   clock = T0 + 90 * DAY + HOUR;
   await withWire({
     reply: (url) =>
@@ -322,7 +323,7 @@ Deno.test("github users: a history write failure does not hide the current count
   });
 });
 
-Deno.test("github users: unavailable or malformed organization data stays gray", async () => {
+test("github users: unavailable or malformed organization data stays gray", async () => {
   const cases: {
     reply(url: URL): unknown | Response;
     sub: string;

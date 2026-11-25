@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { applyCommit, createBranch, open as openEngine } from "../v2/engine.ts";
@@ -16,6 +15,12 @@ import {
   toDocumentPath,
   type TransactRequest,
 } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const TEST_AUDIENCE = "did:key:z6Mk-memory-v2-slow-query-test-audience";
 

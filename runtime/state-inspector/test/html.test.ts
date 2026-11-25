@@ -10,6 +10,7 @@ import { Database } from "@db/sqlite";
 import { openSpace } from "../db.ts";
 import { buildInspectorBundle, renderInspectorHtml } from "../html.ts";
 import type { EntityDetail } from "../detail.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -201,7 +202,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("html explorer: rich bundle + self-contained render", async (t) => {
+test("html explorer: rich bundle + self-contained render", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-html-" });
   const dbPath = `${dir}/space.sqlite`;
   try {
@@ -402,7 +403,7 @@ Deno.test("html explorer: rich bundle + self-contained render", async (t) => {
   }
 });
 
-Deno.test("html explorer: no pass over the log for stale reads when no cell is multi-user", async () => {
+test("html explorer: no pass over the log for stale reads when no cell is multi-user", async () => {
   // The seed's writes all come from one session, so no cell gets a stale-read
   // analysis and nothing needs the log's read coverage.
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-html-" });

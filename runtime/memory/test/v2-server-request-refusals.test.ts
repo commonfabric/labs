@@ -8,7 +8,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { Database } from "@db/sqlite";
 
 import { aclDocId } from "../acl.ts";
@@ -16,6 +15,7 @@ import * as Engine from "../v2/engine.ts";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
 import type { WatchSpec } from "../v2.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A session the registry opened, with the token that resumes it. */
 type OpenSessionState = ReturnType<SessionRegistry["open"]>;

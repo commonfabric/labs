@@ -21,9 +21,9 @@
 
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { ensureColumnOriginAvailable } from "../v2/sqlite/column-origin.ts";
 import { ReadConnectionPool } from "../v2/sqlite/read-pool.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // `queryWithOrigins()` resolves column origins over FFI, so it cannot run at
 // all without it (production binds it once before issuing one).

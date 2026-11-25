@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { staticGitHubCredential } from "./github-auth.ts";
 import { GitHubAnswers, GITHUB_ORGANIZATION } from "./lib.ts";
 import { organizationRepos } from "./organization-repos.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const credential = staticGitHubCredential("organization-repos-test");
 

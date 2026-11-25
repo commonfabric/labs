@@ -4,7 +4,6 @@
  * `run: false` returns what the store holds.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
@@ -21,6 +20,12 @@ import {
   startServingMemoryServer,
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { parseCellSelectionOptions } from "../lib/cell-selection.ts";
 import {

@@ -16,7 +16,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 /**
  * The variable the trip reads its editor's name from, named here as the module
@@ -25,6 +24,7 @@ import { describe, it } from "@std/testing/bdd";
 const EDITOR = "EDITOR";
 
 import { type EditorDeps, openEditor } from "../lib/shuttle/editor.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The file every case's `makeTempFile` hands back. */
 const FILE = "/tmp/shuttle-abc.json";

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { TransactionCommitReceipt } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { waitForMarkerCommit } from "../lib/multi-user-marker-commit.ts";
 
 const failure = {

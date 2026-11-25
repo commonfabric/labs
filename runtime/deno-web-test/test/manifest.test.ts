@@ -7,10 +7,10 @@
 
 import { existsSync } from "@std/fs/exists";
 import { basename, dirname } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Manifest, RUN_DIRECTORY_PREFIX } from "../manifest.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A directory with no `deno-web-test.config.ts`, so the run takes defaults. */
 const PROJECT_DIR = import.meta.dirname as string;

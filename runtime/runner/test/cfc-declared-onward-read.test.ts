@@ -16,12 +16,17 @@
  * carries what it consumed at the slots onto its container's slots.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { FactoryInput } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";

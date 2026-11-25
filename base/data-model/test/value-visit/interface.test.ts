@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   DO_RECURSE_VALUES,
   type RecurseForm,
 } from "@/value-visit";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("value-visit/interface", () => {
   describe("the `DO_*` constants", () => {

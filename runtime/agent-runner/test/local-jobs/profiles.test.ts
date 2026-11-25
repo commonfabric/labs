@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type LocalJobNarrowing,
@@ -7,6 +6,7 @@ import {
   narrowLocalJobProfile,
   readLocalJobProfiles,
 } from "../../src/local-jobs/profiles.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A profile as a host file states it. */
 const ASK = {

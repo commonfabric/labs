@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Hono } from "@hono/hono";
 import { forwardOtlp, type OtlpForwarding } from "./telemetry.handlers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const MAX_TELEMETRY_BYTES = 1024 * 1024;
 

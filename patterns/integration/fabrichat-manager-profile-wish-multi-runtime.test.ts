@@ -14,12 +14,12 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,

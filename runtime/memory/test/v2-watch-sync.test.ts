@@ -12,6 +12,7 @@ import {
   type SessionSync,
 } from "../v2.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const HELLO = {
   type: "hello",
@@ -80,7 +81,7 @@ const authInvocation = (sessionOpen: SessionOpenAuthMetadata) => ({
   challenge: sessionOpen.challenge.value,
 });
 
-Deno.test("memory v2 server replaces watch sets and emits session sync effects", async () => {
+test("memory v2 server replaces watch sets and emits session sync effects", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-watch-sync"),

@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { copy } from "@std/fs";
 import * as path from "@std/path";
 
 import ports from "@commonfabric/ports" with { type: "json" };
+import { describe, it } from "@commonfabric/test-support/test";
 
 const repoRoot = path.resolve(import.meta.dirname!, "..");
 

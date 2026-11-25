@@ -7,10 +7,10 @@
  * into a temporary directory and names a file inside it.
  */
 
-import { afterAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import plugin from "./lint-self-import.ts";
+import { afterAll, describe, it } from "@commonfabric/test-support/test";
 
 /** A package written to disk, ready for the rule to read. */
 interface Fixture {

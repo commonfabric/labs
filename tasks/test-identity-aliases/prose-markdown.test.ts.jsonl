@@ -1,0 +1,1 @@
+{"date": "2026-12-31", "from": {"k": "unit", "s": "ui", "n": "buildProseDecorations > blockquotes > hides > marker when inactive but always applies line decoration"}, "to": {"k": "unit", "s": "ui", "n": "buildProseDecorations > blockquotes > hides the `>` marker when inactive but always applies line decoration"}}

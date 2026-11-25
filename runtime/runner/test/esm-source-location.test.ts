@@ -1,9 +1,9 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { getComposeBundleSourceMapCallsForTesting } from "@commonfabric/js-compiler/source-map";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import type { Module, Pattern } from "../src/builder/types.ts";
 import { resolvePolicyFacingImplementationIdentity } from "../src/cfc/implementation-identity.ts";

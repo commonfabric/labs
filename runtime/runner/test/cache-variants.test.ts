@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   cacheVariantName,
@@ -9,6 +8,7 @@ import {
   PERSISTED_CACHE_VARIANTS,
   storedSourceByteCacheVersion,
 } from "../src/compilation-cache/cache-variants.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cache-variants", () => {
   const plain = { patternCoverage: false, instanceNames: false };

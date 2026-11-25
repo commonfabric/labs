@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -8,6 +7,7 @@ import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
 import { decomposeSchema, type JSONSchema } from "@commonfabric/runner";
 import type { IfcKey } from "@commonfabric/runner/cfc";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { schemaForSelection } from "../lib/cell-selection.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";

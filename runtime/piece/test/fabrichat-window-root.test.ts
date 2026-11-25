@@ -6,7 +6,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
@@ -20,6 +19,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const owner = await Identity.fromPassphrase("FabriChat window root");

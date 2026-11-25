@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { CellBridgeOptions } from "../cell-bridge.ts";
 import {
@@ -17,6 +16,12 @@ import type {
 } from "../platform.ts";
 import type { FsTree } from "../tree.ts";
 import { FakeBridge } from "./fake-bridge.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** What `exit` was asked to do, thrown so that `main()` stops there. */
 class Exited extends Error {

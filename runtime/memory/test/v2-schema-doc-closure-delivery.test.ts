@@ -34,7 +34,6 @@
 
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import type { JSONSchema } from "@commonfabric/api";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
@@ -44,6 +43,12 @@ import {
 } from "@commonfabric/data-model-schema/schema-refs";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { mapLinkSchemas } from "../v2/schema-table-links.ts";
 import { Server } from "../v2/server.ts";
 import {

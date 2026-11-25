@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { VERIFIED_BINDING_METADATA_FIELD } from "@commonfabric/pattern-contract/sandbox-contract";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   getVerifiedProvenance,

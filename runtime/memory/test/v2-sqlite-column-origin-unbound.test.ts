@@ -7,8 +7,9 @@
 
 import { assertThrows } from "@std/assert";
 import { columnOrigins } from "../v2/sqlite/column-origin.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("columnOrigins throws before the FFI is bound", () => {
+test("columnOrigins throws before the FFI is bound", () => {
   // Nothing has bound the FFI and no reason has been recorded: columnOrigins
   // must refuse rather than read through a null library handle, and the
   // message names the call the caller skipped.

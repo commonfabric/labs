@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
@@ -14,6 +13,7 @@ import { GITHUB_ORGANIZATION, GitHubStatusError } from "./lib.ts";
 import type { GitHubRun } from "./github-runs.ts";
 import { RELAY_QUIET_MS, RELAY_VOUCH_MS } from "./github-webhooks.ts";
 import { FakeRelay, pushPayload, workflowRunPayload } from "./test/webhook-relay.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const REPO = "example/repo";
 const VERSION = "feed-test-version";

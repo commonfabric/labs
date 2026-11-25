@@ -1,15 +1,16 @@
 import { assert, assertEquals } from "@std/assert";
 import { CSI, paint, RESET, sgr, stripAnsi, term } from "../lib/view/ansi.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("sgr emits the italic code (3)", () => {
+test("sgr emits the italic code (3)", () => {
   assertEquals(sgr({ italic: true }), `${CSI}3m`);
 });
 
-Deno.test("sgr emits the underline code (4)", () => {
+test("sgr emits the underline code (4)", () => {
   assertEquals(sgr({ underline: true }), `${CSI}4m`);
 });
 
-Deno.test("sgr combines bold/dim/italic/underline in order", () => {
+test("sgr combines bold/dim/italic/underline in order", () => {
   // Codes are pushed in declaration order: bold(1), dim(2), italic(3),
   // underline(4), then any fg/bg.
   assertEquals(
@@ -22,14 +23,14 @@ Deno.test("sgr combines bold/dim/italic/underline in order", () => {
   );
 });
 
-Deno.test("paint round-trips through italic/underline styling", () => {
+test("paint round-trips through italic/underline styling", () => {
   const out = paint("hi", { italic: true, underline: true });
   assertEquals(out, `${CSI}3;4mhi${RESET}`);
   // The visible text survives stripping the escapes.
   assertEquals(stripAnsi(out), "hi");
 });
 
-Deno.test("term.moveTo builds a 1-based cursor-position escape", () => {
+test("term.moveTo builds a 1-based cursor-position escape", () => {
   assertEquals(term.moveTo(1, 1), `${CSI}1;1H`);
   assertEquals(term.moveTo(12, 40), `${CSI}12;40H`);
   // Row precedes column in the CSI ... H sequence.

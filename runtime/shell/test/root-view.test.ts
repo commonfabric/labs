@@ -2,7 +2,6 @@
 // graph reaches @commonfabric/ui, whose components extend a bare HTMLElement as
 // they load, so it can only load once the test has installed one.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Task } from "@lit/task";
@@ -13,6 +12,7 @@ import {
   NotificationType,
   RuntimeErrorCode,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 import { templateBindings, templateMarkup } from "./lit-template-markup.ts";
 
 // XRootView is a Lit element; load and exercise it under a minimal browser

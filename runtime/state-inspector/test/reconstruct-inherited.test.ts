@@ -1,8 +1,8 @@
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { openSpace, type SpaceDb } from "../db.ts";
 import { reconstructOutcome } from "../reconstruct.ts";

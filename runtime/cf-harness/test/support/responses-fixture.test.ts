@@ -6,6 +6,7 @@ import {
 import { OpenAICompatibleGatewayClient } from "../../src/gateway/openai-client.ts";
 import { OpenAICompatibleGatewayModelClient } from "../../src/model/openai-compatible-gateway.ts";
 import type { HarnessModelTurnRequest } from "../../src/model/client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * These suites lean on `responses-fixture.ts` to keep 139 chat-shaped
@@ -74,7 +75,7 @@ const assertPathsAgree = async (chatFixture: Record<string, unknown>) => {
   assertEquals(viaResponses.assistant, viaChat.assistant);
 };
 
-Deno.test("converted fixtures yield the same assistant text as the chat path", async () => {
+test("converted fixtures yield the same assistant text as the chat path", async () => {
   await assertPathsAgree({
     choices: [{
       index: 0,
@@ -83,7 +84,7 @@ Deno.test("converted fixtures yield the same assistant text as the chat path", a
   });
 });
 
-Deno.test("converted fixtures yield the same tool calls as the chat path", async () => {
+test("converted fixtures yield the same tool calls as the chat path", async () => {
   await assertPathsAgree({
     choices: [{
       index: 0,
@@ -103,7 +104,7 @@ Deno.test("converted fixtures yield the same tool calls as the chat path", async
   });
 });
 
-Deno.test("converted fixtures preserve text alongside multiple tool calls", async () => {
+test("converted fixtures preserve text alongside multiple tool calls", async () => {
   await assertPathsAgree({
     choices: [{
       index: 0,
@@ -131,7 +132,7 @@ Deno.test("converted fixtures preserve text alongside multiple tool calls", asyn
 // Conversion details and pass-through rules.
 //
 
-Deno.test("responsesBodyFromChatFixture leaves non-chat bodies untouched", () => {
+test("responsesBodyFromChatFixture leaves non-chat bodies untouched", () => {
   // Model listings and error payloads flow through the same stub boundary.
   const listing = { object: "list", data: [{ id: "gpt-5.6-sol" }] };
   assertEquals(responsesBodyFromChatFixture(listing), listing);
@@ -144,7 +145,7 @@ Deno.test("responsesBodyFromChatFixture leaves non-chat bodies untouched", () =>
   assertEquals(responsesBodyFromChatFixture([1, 2]), [1, 2]);
 });
 
-Deno.test("responsesBodyFromChatFixture keeps the chat shape for chat requests", () => {
+test("responsesBodyFromChatFixture keeps the chat shape for chat requests", () => {
   // One stub serves both APIs across turns (the web_search profile switches to
   // a Gemini model mid-run), so the request decides which shape to return.
   const fixture = {
@@ -177,7 +178,7 @@ Deno.test("responsesBodyFromChatFixture keeps the chat shape for chat requests",
   assertEquals(fallback.status, "completed");
 });
 
-Deno.test("responsesBodyFromChatFixture emits no message item for empty content", () => {
+test("responsesBodyFromChatFixture emits no message item for empty content", () => {
   const converted = responsesBodyFromChatFixture({
     choices: [{
       index: 0,
@@ -198,7 +199,7 @@ Deno.test("responsesBodyFromChatFixture emits no message item for empty content"
   assertEquals(converted.output[0].id, undefined);
 });
 
-Deno.test("responsesBodyFromChatFixture carries id and usage through", () => {
+test("responsesBodyFromChatFixture carries id and usage through", () => {
   const converted = responsesBodyFromChatFixture({
     id: "chatcmpl-1",
     usage: { input_tokens: 5, output_tokens: 7, total_tokens: 12 },
@@ -216,7 +217,7 @@ Deno.test("responsesBodyFromChatFixture carries id and usage through", () => {
 // Request projection.
 //
 
-Deno.test("chatViewOfRequest projects a Responses request to the chat view", () => {
+test("chatViewOfRequest projects a Responses request to the chat view", () => {
   const view = chatViewOfRequest({
     model: "gpt-5.6-terra",
     instructions: "Be brief.",
@@ -264,7 +265,7 @@ Deno.test("chatViewOfRequest projects a Responses request to the chat view", () 
   assertEquals(view.tools, ["read_file"]);
 });
 
-Deno.test("chatViewOfRequest reads user turns in either legal item shape", () => {
+test("chatViewOfRequest reads user turns in either legal item shape", () => {
   // `{role, content}` and the fully-qualified `{type:"message", role, content}`
   // are both legal Responses input items. Keying on `type` projected the
   // qualified form as an empty string, which would have silently emptied the
@@ -285,7 +286,7 @@ Deno.test("chatViewOfRequest reads user turns in either legal item shape", () =>
   }
 });
 
-Deno.test("chatViewOfRequest joins multi-part assistant text", () => {
+test("chatViewOfRequest joins multi-part assistant text", () => {
   const view = chatViewOfRequest({
     input: [{
       type: "message",
@@ -299,7 +300,7 @@ Deno.test("chatViewOfRequest joins multi-part assistant text", () => {
   assertEquals(view.messages[0].content, "Part one. Part two.");
 });
 
-Deno.test("chatViewOfRequest omits the system turn when there are no instructions", () => {
+test("chatViewOfRequest omits the system turn when there are no instructions", () => {
   const view = chatViewOfRequest({
     input: [
       { role: "user", content: [{ type: "input_text", text: "Hi." }] },
@@ -309,7 +310,7 @@ Deno.test("chatViewOfRequest omits the system turn when there are no instruction
   assertEquals(view.tools, []);
 });
 
-Deno.test("chatViewOfRequest keeps multimodal turns as content parts", () => {
+test("chatViewOfRequest keeps multimodal turns as content parts", () => {
   const view = chatViewOfRequest({
     input: [{
       role: "user",
@@ -333,7 +334,7 @@ Deno.test("chatViewOfRequest keeps multimodal turns as content parts", () => {
   });
 });
 
-Deno.test("chatViewOfRequest passes chat requests through unchanged", () => {
+test("chatViewOfRequest passes chat requests through unchanged", () => {
   // Turns that stay on Chat Completions are already in this shape.
   const messages = [
     { role: "system", content: "Be brief." },
@@ -352,7 +353,7 @@ Deno.test("chatViewOfRequest passes chat requests through unchanged", () => {
   assertEquals(view.tools, ["read_file"]);
 });
 
-Deno.test("chatViewOfRequest tolerates malformed bodies", () => {
+test("chatViewOfRequest tolerates malformed bodies", () => {
   assertEquals(chatViewOfRequest(null), { messages: [], tools: [] });
   assertEquals(chatViewOfRequest("nonsense"), { messages: [], tools: [] });
   assertEquals(chatViewOfRequest({}), { messages: [], tools: [] });

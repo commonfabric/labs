@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
@@ -9,6 +8,7 @@ import {
   getTypeFromCode,
   getTypeFromFiles,
 } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const f = ts.factory;
 

@@ -2,8 +2,13 @@
 // worker registers its handlers on `self` as it loads, so it can only load once
 // the test has put a stand-in there.
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** What the service worker did to its global scope as it ran. */
 const calls: string[] = [];

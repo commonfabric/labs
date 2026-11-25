@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { PropertyValues } from "lit";
 
 import {
@@ -9,6 +8,7 @@ import {
   TILE_UI,
 } from "@commonfabric/runtime-client";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { providePieceBoundary } from "../../../../../html/src/main/space-context.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";

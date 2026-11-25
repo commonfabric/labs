@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { validateSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The closure stage's report of a captured spread it cannot write out. */
 const CAPTURED_SPREAD_MESSAGE = "copies nothing";

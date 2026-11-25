@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { test } from "@commonfabric/test-support/test";
 
 type ShellEnvGlobals = typeof globalThis & Record<string, string | undefined>;
 
@@ -29,7 +30,7 @@ function withPatchedGlobals<T>(
   });
 }
 
-Deno.test({
+test({
   name: "shell env reads the modern experimental globals",
   permissions: { read: true },
   async fn() {
@@ -46,7 +47,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "shell env preserves the agent builtin rollback override",
   permissions: { read: true },
   async fn() {
@@ -64,7 +65,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "serverExecution: the build define selects the OFF arm (rollback lever) or forces ON, and the first-party default governs where nothing says",
   permissions: { read: true },
@@ -92,7 +93,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "syncCidReferences: the build define opts the runtime in, and a deployment's posture does not",
   permissions: { read: true },
@@ -189,7 +190,7 @@ const publishing = () =>
     experimental: { sharedMemoryConnection: true },
   });
 
-Deno.test({
+test({
   name: "shellDeployment reads the page it runs in, once",
   permissions: { read: true },
   async fn() {
@@ -203,7 +204,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "shellDeployment gives the first runtime the read the page started, even one that failed",
   permissions: { read: true },
@@ -224,7 +225,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "shellDeployment keeps a failure that would come out the same, and warns once",
   permissions: { read: true },
@@ -243,7 +244,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "shellDeployment reads again for the next runtime after a transient failure, and keeps what it then reads",
   permissions: { read: true },
@@ -296,7 +297,7 @@ for (
     ],
   ] as const
 ) {
-  Deno.test({
+  test({
     name: `${flag}: the deployment's value governs where no define pins it`,
     permissions: { read: true },
     async fn() {
@@ -321,7 +322,7 @@ for (
     },
   });
 
-  Deno.test({
+  test({
     name:
       `${flag}: the shell's default governs where the deployment says nothing`,
     permissions: { read: true },
@@ -352,7 +353,7 @@ for (
     },
   });
 
-  Deno.test({
+  test({
     name: `${flag}: an explicit define overrides the deployment either way`,
     permissions: { read: true },
     async fn() {
@@ -381,7 +382,7 @@ for (
   });
 }
 
-Deno.test({
+test({
   name:
     "experimentalForDeployment adopts only the flags the deployment decides for the shell",
   permissions: { read: true },

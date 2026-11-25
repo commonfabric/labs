@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -15,6 +14,12 @@ import {
 } from "../src/compilation-cache/cell-cache.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { URI } from "../src/sigil-types.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,

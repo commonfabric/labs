@@ -1,12 +1,12 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
 import { analyzeFunctionCapabilities } from "../../src/policy/mod.ts";
 import type { CapabilityAnalysisOptions } from "../../src/policy/capability-analysis.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 // These cases drive `analyzeFunctionCapabilities` through branches that
 // otherwise run only when a pattern happens to compile cold through the
@@ -132,7 +132,7 @@ type Cell<T> = {
   push(...items: unknown[]): number;
 };`;
 
-Deno.test(
+test(
   "identity call on a dynamic alias reads the static prefix above the key",
   () => {
     // Branch: the final `trackReadRef(resolvedSource)` of a call argument.
@@ -156,7 +156,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "equals() on a dynamic alias also reads the static prefix above the key",
   () => {
     const input = getPaths(
@@ -173,7 +173,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a single map .set() lets a later .get().member resolve through the value binding",
   () => {
     // Branch: with a single `.set()`, the tracked map-value binding survives,
@@ -196,7 +196,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "map .set() values from different sources each reach a .get().member read",
   () => {
     // Branch: `mergeAliasBinding` merges two `.set()` calls that store
@@ -224,7 +224,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "push() of an array-element alias reads the element path",
   () => {
     // Branch: an array-identity writer (`push`) whose argument aliases an array
@@ -265,7 +265,7 @@ export declare function notify(target: Stream<string>): void;
 export declare function assign(target: Writable<string>): void;`,
 };
 
-Deno.test(
+test(
   "a stream argument is recorded opaque while a writable argument is read and written",
   () => {
     // Branch: `Stream<T>` is the wrapper whose capability is neither read nor
@@ -296,7 +296,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "map values of different binding shapes drop the value binding",
   () => {
     // Branch: `aliasBindingEquals` falls through to `false` when the two

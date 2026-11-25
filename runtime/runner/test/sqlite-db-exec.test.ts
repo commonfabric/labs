@@ -5,7 +5,6 @@
 // atomically with sibling cell writes; throws on undefined params (null ok);
 // encodes _cf_link cell params; SQL failure aborts the whole commit.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -17,6 +16,12 @@ import {
 } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { createCell } from "../src/cell.ts";
 import { encodeSqliteParams } from "../src/index.ts";

@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   createSealLiveness,
   type SealLivenessClient,
   type SealLivenessWindow,
 } from "./seal-liveness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A window whose animation frames run when the test says, whose pointer the

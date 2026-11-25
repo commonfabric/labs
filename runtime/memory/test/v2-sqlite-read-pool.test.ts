@@ -1,8 +1,13 @@
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { ensureColumnOriginAvailable } from "../v2/sqlite/column-origin.ts";
 import { ReadConnectionPool } from "../v2/sqlite/read-pool.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // `queryWithOrigins()` resolves column origins over FFI, which production
 // binds once before issuing one.

@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import type { FabricValue } from "@commonfabric/data-model";
+import { test } from "@commonfabric/test-support/test";
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
@@ -119,7 +120,7 @@ const openAuthError = (
   },
 });
 
-Deno.test(
+test(
   "a permanent authorization denial on reopen terminates only that session",
   async () => {
     const transport = new ScriptedOpenTransport((count, requestId) =>
@@ -156,7 +157,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a retriable authorization race on reopen does not terminate the session",
   async () => {
     const transport = new ScriptedOpenTransport((count, requestId) =>
@@ -254,7 +255,7 @@ class DenyWatchSetOnRestoreTransport implements Transport {
   }
 }
 
-Deno.test(
+test(
   "a permanent denial re-establishing the watch on reopen terminates only that session",
   async () => {
     const transport = new DenyWatchSetOnRestoreTransport();
@@ -347,7 +348,7 @@ class FlagMismatchOnReconnectTransport implements Transport {
   }
 }
 
-Deno.test(
+test(
   "a permanent handshake mismatch on reconnect fails fast instead of looping",
   async () => {
     const transport = new FlagMismatchOnReconnectTransport();

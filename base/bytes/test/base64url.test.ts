@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fromBase64Polyfill,
@@ -7,6 +6,7 @@ import {
   toUnpaddedBase64url,
   toUnpaddedBase64urlFromText,
 } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEST_PAIRS: { arr: readonly number[]; b64: string }[] = [
   { arr: [], b64: "" },

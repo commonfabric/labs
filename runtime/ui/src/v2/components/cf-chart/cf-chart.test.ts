@@ -2,7 +2,6 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   createMockCellHandle,
   pushUpdate,
@@ -16,6 +15,12 @@ import {
   type ChartHoverDetail,
   type MarkConfig,
 } from "./index.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /**
  * A `ResizeObserver` whose observations the test delivers, since the

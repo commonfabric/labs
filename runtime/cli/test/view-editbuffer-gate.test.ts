@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { EditBuffer } from "../lib/view/editbuffer.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function at(b: EditBuffer): [number, number] {
   return [b.row, b.col];
@@ -14,7 +15,7 @@ function at(b: EditBuffer): [number, number] {
 // at least one line, and the cursor placement that follows stays in range.
 //
 
-Deno.test("editbuffer: constructor splits every input into at least one line", () => {
+test("editbuffer: constructor splits every input into at least one line", () => {
   // The empty string still produces a single empty line — the split, not the
   // guard, is what supplies it.
   assertEquals(new EditBuffer("").lines, [""]);
@@ -25,7 +26,7 @@ Deno.test("editbuffer: constructor splits every input into at least one line", (
   assertEquals(new EditBuffer("a\n").lines, ["a", ""]);
 });
 
-Deno.test("editbuffer: setText on the empty string still leaves one empty line", () => {
+test("editbuffer: setText on the empty string still leaves one empty line", () => {
   const b = new EditBuffer("seed text");
   b.setText("");
   assertEquals(b.lines, [""], "empty replacement is one empty line");
@@ -36,7 +37,7 @@ Deno.test("editbuffer: setText on the empty string still leaves one empty line",
   assertEquals(b.baseline(), "seed text");
 });
 
-Deno.test("editbuffer: setText splits multi-line text and clamps the cursor", () => {
+test("editbuffer: setText splits multi-line text and clamps the cursor", () => {
   const b = new EditBuffer("x");
   b.setText("one\ntwo\nthree", 99, 99);
   assertEquals(b.lines, ["one", "two", "three"]);

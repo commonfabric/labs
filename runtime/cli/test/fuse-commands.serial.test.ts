@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { fuse, fuseDaemon, fuseSupervisor } from "../commands/fuse.ts";
 import { withEnv } from "./utils.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 class ExitCalled extends Error {
   constructor(readonly code: number | undefined) {

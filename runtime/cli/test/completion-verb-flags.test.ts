@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { shapeVerbFlagCandidates } from "../lib/completion/verb-flags.ts";
 import { type ExecCommandSpec, parseExecArgs } from "../lib/exec-schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The `inputSchema` of one verb, in the shape `cf piece verbs --json` reports

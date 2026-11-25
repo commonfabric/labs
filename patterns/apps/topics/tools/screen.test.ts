@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { unicodeWidth } from "@std/cli/unicode-width";
 import { stripAnsi } from "@commonfabric/cli/view/ansi";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { TopicEvent } from "./events.ts";
 import type { Topic, TopicComment } from "./mirror.ts";

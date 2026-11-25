@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -66,6 +65,7 @@ import { refuseAtCommitBoundary } from "./refused-commit.ts";
 import { prepareStatusAtSettlement } from "./prepare-status-at-settlement.ts";
 import { labelsReached } from "./support/reached-labels.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,

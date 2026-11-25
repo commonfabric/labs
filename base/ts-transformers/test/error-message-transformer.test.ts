@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createReactiveErrorTransformer } from "../src/diagnostics/mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("createReactiveErrorTransformer", () => {
   it("transforms .get() on OpaqueCell error to clear message", () => {

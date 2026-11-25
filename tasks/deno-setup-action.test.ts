@@ -5,6 +5,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { dirname, fromFileUrl, globToRegExp, join } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 const ACTION_PATH = join(
@@ -30,7 +31,7 @@ function shellScript(step: string): string {
   return step.slice(start + marker.length).split("\n", 1)[0];
 }
 
-Deno.test(
+test(
   "Deno setup removes a partial toolchain after cache extraction fails",
   async () => {
     const root = await Deno.makeTempDir({
@@ -94,7 +95,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Deno setup snapshots the dependency hash before registering the cache",
   async () => {
     const action = await Deno.readTextFile(ACTION_PATH);
@@ -128,7 +129,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Deno setup keeps the compiler runtime in a versioned cache",
   async () => {
     const action = await Deno.readTextFile(ACTION_PATH);
@@ -154,7 +155,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Deno setup leaves V8's code cache out of the dependency cache",
   async () => {
     // A process that loads a module from V8's code cache reports that module's

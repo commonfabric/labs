@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
+import type * as clientModule from "./client.ts";
 import {
   addMockObjectResponse,
   addMockResponse,
@@ -32,6 +32,7 @@ import {
   type LLMRequest,
   type LLMResponse,
 } from "./types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const GUARD_MESSAGE =
   "LLMClient: live LLM calls are blocked in test environments.";
@@ -1287,9 +1288,65 @@ describe("initialLLMUrl()", () => {
     ).toBe("http://api.example/api/ai/llm");
   });
 
-  it("returns a host-relative endpoint without a page or a usable API URL", () => {
+  it("returns no endpoint without a page or a usable API URL", () => {
     for (const apiUrl of [undefined, "", "not a url"]) {
-      expect(initialLLMUrl(undefined, apiUrl)).toBe("//api/ai/llm");
+      expect(initialLLMUrl(undefined, apiUrl)).toBeUndefined();
     }
+  });
+});
+
+describe("a process with no LLM endpoint", () => {
+  // A fresh copy of the module, loaded with no `API_URL`, starts with no
+  // endpoint the way a Deno host that has not yet opened a runtime does.
+  async function freshClientModule(): Promise<typeof clientModule> {
+    const apiUrl = Deno.env.get("API_URL");
+    Deno.env.delete("API_URL");
+    try {
+      return await import(`./client.ts?no-endpoint=${crypto.randomUUID()}`);
+    } finally {
+      if (apiUrl !== undefined) Deno.env.set("API_URL", apiUrl);
+    }
+  }
+
+  it("refuses a call that names no endpoint, before sending anything", async () => {
+    const llm = await freshClientModule();
+    expect(llm.getLLMUrl()).toBeUndefined();
+    const sent: string[] = [];
+    const client = new llm.LLMClient((input) => {
+      sent.push(String(input));
+      return Promise.resolve(Response.json({ object: {} }));
+    });
+
+    await expect(
+      client.generateObject({
+        messages: [{ role: "user", content: "hello" }],
+        schema: { type: "object" },
+      }),
+    ).rejects.toThrow("this process has no LLM endpoint");
+    await expect(
+      client.sendRequest({
+        messages: [{ role: "user", content: "hello" }],
+        model: "test-model",
+        stream: false,
+      }),
+    ).rejects.toThrow("this process has no LLM endpoint");
+    expect(sent).toEqual([]);
+  });
+
+  it("sends a call that names its own endpoint", async () => {
+    const llm = await freshClientModule();
+    const sent: string[] = [];
+    const client = new llm.LLMClient((input) => {
+      sent.push(String(input));
+      return Promise.resolve(Response.json({ object: {} }));
+    });
+
+    await client.generateObject(
+      { messages: [{ role: "user", content: "hello" }], schema: {} },
+      undefined,
+      { endpoint: "http://127.0.0.1:9/api/ai/llm" },
+    );
+
+    expect(sent).toEqual(["http://127.0.0.1:9/api/ai/llm/generateObject"]);
   });
 });

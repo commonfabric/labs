@@ -48,8 +48,9 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "@commonfabric/runner/cfc/trust-authority";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("debug pattern accepts empty target cells before collection", async () => {
+test("debug pattern accepts empty target cells before collection", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -131,7 +132,7 @@ Deno.test("debug pattern accepts empty target cells before collection", async ()
   }
 });
 
-Deno.test("debug pattern renders sessions published after deployment", async () => {
+test("debug pattern renders sessions published after deployment", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -192,7 +193,7 @@ Deno.test("debug pattern renders sessions published after deployment", async () 
   }
 });
 
-Deno.test("debug pattern submits commands and links row data to separate views", async () => {
+test("debug pattern submits commands and links row data to separate views", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -787,7 +788,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
   }
 });
 
-Deno.test("debug pattern bounds raw-data links to one session page", async () => {
+test("debug pattern bounds raw-data links to one session page", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -1131,7 +1132,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
   }
 });
 
-Deno.test("debug pattern resumes sessions published while it was stopped", async () => {
+test("debug pattern resumes sessions published while it was stopped", async () => {
   const server = newSharedServer();
   const spaceDid = (await Identity.generate()).did();
   let debugPieceId = "";
@@ -1220,7 +1221,7 @@ Deno.test("debug pattern resumes sessions published while it was stopped", async
   }
 });
 
-Deno.test("debug pattern loads connector child cells on a cold replica", async () => {
+test("debug pattern loads connector child cells on a cold replica", async () => {
   const server = newSharedServer();
   const spaceDid = (await Identity.generate()).did();
   const sessionCount = SESSION_PAGE_SIZE + 1;

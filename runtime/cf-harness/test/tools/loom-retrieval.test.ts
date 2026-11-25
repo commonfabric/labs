@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { CFC_LABEL_READ_FAILED_ATOM } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { createCfHarnessCliCapabilities } from "../../src/cli.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";

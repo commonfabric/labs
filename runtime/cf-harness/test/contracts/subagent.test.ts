@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   asHarnessSubagentFailureReport,
@@ -6,6 +5,7 @@ import {
   SUBAGENT_FAILURE_REASON_CODES,
 } from "../../src/contracts/subagent.ts";
 import { validateAndSanitizeSubagentReturn } from "../../src/subagent-return.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The schema and the value a real `pattern-author` delegation produced, where

@@ -50,7 +50,7 @@ about one aspect of the runtime, are indexed in
 - Collate a package's imports. Every specifier naming the same top-level
   package, or the same namespace-and-package pair, sits in one contiguous run:
   `@commonfabric/bytes/base64url` next to `@commonfabric/bytes/buffers`,
-  `@std/testing/bdd` next to `@std/testing/time`. A package that appears in two
+  `@std/testing/mock` next to `@std/testing/time`. A package that appears in two
   places in the list reads as two dependencies, and the second appearance hides
   from anyone scanning for what the file rests on.
 - Alpha-sorting each run is strongly suggested. Sorting is what makes a list
@@ -1145,9 +1145,9 @@ space and an emoji, which catches what the rule misses.
   which name the pattern has to match. A bare
   `deno test --no-check path/to/test.ts` drops the `--preload` and
   permissions that the package's `deno-test` task passes. In
-  `runtime/runner`, for example, the preload installs the global fake
-  `clock`, and without it a test that calls `clock.settle()` fails with
-  `ReferenceError: clock is not defined`.
+  `runtime/runner`, for example, the preload installs the fake clock, and
+  without it a test that calls `clock.settle()` fails with "clock is only
+  available inside a test running under the fake clock".
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 
@@ -1174,7 +1174,7 @@ suite will break.
    the package's `"deno-test"` task, which runs the tests themselves — a
    `deno test` for most packages, or a runner of the package's own; see
    [TESTING.md](TESTING.md) for why. The `--allow-env` names the two variables
-   the test-records preload reads, as `docs/development/test-records.md`
+   the test module `@commonfabric/test-support/test` reads, as `docs/development/test-records.md`
    explains. A package without tests yet uses `"echo 'No tests defined.'"`.
 
 3. **Minimal `deno.jsonc` example:**

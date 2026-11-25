@@ -5,7 +5,6 @@
  * reported rather than named.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { HARNESS_WELL_KNOWN_GRANT_NAMES } from "../../src/contracts/well-known-grants.ts";
@@ -18,6 +17,7 @@ import {
   parseConnectorGrants,
   resolveConnectorGrants,
 } from "../../console/connector-grants.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HANDLES_PATH = "/loom/instances/loom/sqlite-injection/handles.json";
 const PIECES_PATH = "/loom/instances/loom/pieces.json";

@@ -1,6 +1,5 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
@@ -11,8 +10,9 @@ import {
 } from "../../src/policy/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { createInMemoryProgram } from "../utils.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("Rewrite policy: JSX logical lowering matrix", () => {
+test("Rewrite policy: JSX logical lowering matrix", () => {
   assertEquals(
     shouldLowerLogicalExpression(
       "pattern",
@@ -55,7 +55,7 @@ Deno.test("Rewrite policy: JSX logical lowering matrix", () => {
   );
 });
 
-Deno.test("Rewrite policy: collection rewrite matrix", () => {
+test("Rewrite policy: collection rewrite matrix", () => {
   for (
     const method of ["map", "filter", "flatMap", "count", "minBy", "maxBy"]
   ) {

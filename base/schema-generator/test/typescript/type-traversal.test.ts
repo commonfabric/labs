@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -7,6 +6,7 @@ import {
   type TypeTraversalOptions,
 } from "../../src/typescript/type-traversal.ts";
 import { createTestProgram } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SOURCE = `
 interface Marked { mark: true }

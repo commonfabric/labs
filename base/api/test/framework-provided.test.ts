@@ -4,8 +4,9 @@ import { assert, assertEquals } from "@std/assert";
 // module to actually load, so its public surface is exercised under coverage.
 import { CFC_CANONICAL_ALIAS_NAMES } from "commonfabric";
 import type { FrameworkProvided, PatternToolResult } from "commonfabric";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("FrameworkProvided is a compile-time brand, transparent at runtime", () => {
+test("FrameworkProvided is a compile-time brand, transparent at runtime", () => {
   // A `FrameworkProvided<T>` value carries no runtime brand — it is just a `T`,
   // so a tool body (e.g. the bash tool reading `sandboxId`) can use it as the
   // bare value. The annotation below compiles only if the brand stays
@@ -17,13 +18,13 @@ Deno.test("FrameworkProvided is a compile-time brand, transparent at runtime", (
   assertEquals(typeof branded, "string");
 });
 
-Deno.test("commonfabric exposes its runtime surface", () => {
+test("commonfabric exposes its runtime surface", () => {
   // Smoke-check the public entrypoint's one runtime export.
   assert(Array.isArray(CFC_CANONICAL_ALIAS_NAMES));
   assert(CFC_CANONICAL_ALIAS_NAMES.length > 0);
 });
 
-Deno.test("PatternToolResult carries pattern + extraParams", () => {
+test("PatternToolResult carries pattern + extraParams", () => {
   // The shape patternTool() returns; referenced as a type so the public export
   // is part of the checked surface.
   const result: Pick<PatternToolResult<{ a: number }>, "extraParams"> = {

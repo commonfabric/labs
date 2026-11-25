@@ -10,10 +10,11 @@ import {
   versionMismatchWarning,
 } from "../lib/version-check.ts";
 import type { ShaRelation } from "../lib/build-info.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const API = "http://localhost:8000";
 
-Deno.test("versionMismatchWarning", async (t) => {
+test("versionMismatchWarning", async (t) => {
   await t.step("null when either side is unknown", () => {
     assertEquals(versionMismatchWarning(null, "abc", API), null);
     assertEquals(versionMismatchWarning("abc", null, API), null);
@@ -145,7 +146,7 @@ function recordingDeps(
   };
 }
 
-Deno.test("startVersionCheck", async (t) => {
+test("startVersionCheck", async (t) => {
   await t.step(
     "skip env set: resolves nothing and warns nothing, even on mismatch",
     async () => {

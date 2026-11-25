@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { emptyReplyDiagnostic } from "../../src/model/empty-reply.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("empty-reply", () => {
   it("bounds the raw payload and records its original UTF-8 byte count", () => {

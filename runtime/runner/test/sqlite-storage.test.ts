@@ -5,12 +5,17 @@
 // the runner -> server SQLite path end to end, and that the statement guard
 // rejects core-table access on both paths.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { cfLink, table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 
 const signer = await Identity.fromPassphrase("test operator");

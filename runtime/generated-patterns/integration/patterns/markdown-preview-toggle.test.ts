@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const initialContent = "# Welcome\n\n**Bold** move";
 const updatedContent = "# Welcome\n\nNow _italic_ text";

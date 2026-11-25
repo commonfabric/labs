@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   Companion,
   ManifestRow,
 } from "@commonfabric/runner/cfc/kernel/manifest";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { fromFileUrl } from "@std/path";
 

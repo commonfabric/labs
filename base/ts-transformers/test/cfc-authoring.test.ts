@@ -21,6 +21,7 @@ import {
   validateFiles,
   validateSource,
 } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function normalizePrintedNode(
   node: ts.Node,
@@ -209,7 +210,7 @@ function transformWithSchemaInjection(source: string): string {
   return output;
 }
 
-Deno.test("ts-transformers re-exports the canonical CFC alias set", () => {
+test("ts-transformers re-exports the canonical CFC alias set", () => {
   assertEquals(CFC_CANONICAL_ALIAS_NAMES, [
     "Cfc",
     "Confidential",
@@ -233,7 +234,7 @@ Deno.test("ts-transformers re-exports the canonical CFC alias set", () => {
   ]);
 });
 
-Deno.test("static exchange-rule declarations emit a deterministic side-channel manifest", async () => {
+test("static exchange-rule declarations emit a deterministic side-channel manifest", async () => {
   const source = `/// <cts-enable />
     import {
       cfcPattern,
@@ -309,7 +310,7 @@ Deno.test("static exchange-rule declarations emit a deterministic side-channel m
   assertEquals(repeated, manifests);
 });
 
-Deno.test("exchange-rule declarations survive every transparent wrapper spelling", () => {
+test("exchange-rule declarations survive every transparent wrapper spelling", () => {
   // The authoring grammar reads through wrappers that do not change the value a
   // declaration denotes. A spelling left out of that set does not fail as a
   // wrapper problem — the rule binding simply stops resolving, and
@@ -358,7 +359,7 @@ Deno.test("exchange-rule declarations survive every transparent wrapper spelling
   }
 });
 
-Deno.test("exchange-rule authoring rejects dynamic and unguarded declarations", async () => {
+test("exchange-rule authoring rejects dynamic and unguarded declarations", async () => {
   const { diagnostics } = await validateSource(
     `/// <cts-enable />
     import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
@@ -385,7 +386,7 @@ Deno.test("exchange-rule authoring rejects dynamic and unguarded declarations", 
   );
 });
 
-Deno.test("exchange-rule declarations fail closed on invalid export and binding forms", async () => {
+test("exchange-rule declarations fail closed on invalid export and binding forms", async () => {
   const cases = [
     {
       source: `
@@ -469,7 +470,7 @@ Deno.test("exchange-rule declarations fail closed on invalid export and binding 
   }
 });
 
-Deno.test("order-independent policy extraction enforces the authoring invariants", () => {
+test("order-independent policy extraction enforces the authoring invariants", () => {
   const rule = `
     export const release = exchangeRule({
       appliesTo: THIS_POLICY,
@@ -503,7 +504,7 @@ Deno.test("order-independent policy extraction enforces the authoring invariants
   }
 });
 
-Deno.test("order-independent policy extraction covers the full static authoring grammar", () => {
+test("order-independent policy extraction covers the full static authoring grammar", () => {
   const [artifact] = compilePolicySource(`
     export const release = exchangeRule(({
       appliesTo: THIS_POLICY,
@@ -638,7 +639,7 @@ Deno.test("order-independent policy extraction covers the full static authoring 
   }
 });
 
-Deno.test("THIS_POLICY.moduleIdentity lowers to a field reference, not the defining identity", () => {
+test("THIS_POLICY.moduleIdentity lowers to a field reference, not the defining identity", () => {
   const [artifact] = compilePolicySource(`
     export const releaseTally = exchangeRule({
       appliesTo: THIS_POLICY,
@@ -674,7 +675,7 @@ Deno.test("THIS_POLICY.moduleIdentity lowers to a field reference, not the defin
   });
 });
 
-Deno.test("authoring transformer diagnoses every invalid module binding form", async () => {
+test("authoring transformer diagnoses every invalid module binding form", async () => {
   const validRule = `exchangeRule({
     appliesTo: THIS_POLICY,
     pre: { integrity: [{ kind: "evidence" }] },
@@ -729,7 +730,7 @@ Deno.test("authoring transformer diagnoses every invalid module binding form", a
   );
 });
 
-Deno.test("PolicyOf lowers a local exported ruleset to an exact schema marker", async () => {
+test("PolicyOf lowers a local exported ruleset to an exact schema marker", async () => {
   const manifests: unknown[] = [];
   const output = await transformSource(
     `/// <cts-enable />
@@ -767,7 +768,7 @@ Deno.test("PolicyOf lowers a local exported ruleset to an exact schema marker", 
   assertEquals(output.includes("__ctPolicyIdentityOf"), false);
 });
 
-Deno.test("PolicyOf resolves a ruleset binding through each .tsx wrapper spelling", async () => {
+test("PolicyOf resolves a ruleset binding through each .tsx wrapper spelling", async () => {
   // The recognizer looks through wrappers to the `exchangeRules()` call. A
   // spelling it does not strip surfaces as "PolicyOf binding must resolve to an
   // exchangeRules() declaration" — a diagnostic that names the binding rather
@@ -814,7 +815,7 @@ Deno.test("PolicyOf resolves a ruleset binding through each .tsx wrapper spellin
   }
 });
 
-Deno.test("PolicyOf resolves a ruleset binding behind an angle-bracket assertion", async () => {
+test("PolicyOf resolves a ruleset binding behind an angle-bracket assertion", async () => {
   // `<T>x` is JSX in a .tsx source, so the angle-bracket spelling is only
   // reachable from a .ts module — which is where a policy module usually is.
   const { diagnostics } = await validateFiles({
@@ -847,7 +848,7 @@ Deno.test("PolicyOf resolves a ruleset binding behind an angle-bracket assertion
   );
 });
 
-Deno.test("PolicyOf retains the defining identity of an imported ruleset", async () => {
+test("PolicyOf retains the defining identity of an imported ruleset", async () => {
   const outputs = await transformFiles({
     "/policy.ts": `/// <cts-enable />
       import {
@@ -888,7 +889,7 @@ Deno.test("PolicyOf retains the defining identity of an imported ruleset", async
   );
 });
 
-Deno.test("PolicyOf validation receives defining module identities", async () => {
+test("PolicyOf validation receives defining module identities", async () => {
   const { diagnostics } = await validateFiles({
     "/policy.ts": `/// <cts-enable />
       import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
@@ -921,7 +922,7 @@ Deno.test("PolicyOf validation receives defining module identities", async () =>
   );
 });
 
-Deno.test("PolicyOf fallback fails closed when the defining rules are invalid", async () => {
+test("PolicyOf fallback fails closed when the defining rules are invalid", async () => {
   const { diagnostics } = await validateFiles({
     "/main.tsx": `/// <cts-enable />
       import { Confidential, toSchema } from "commonfabric";
@@ -955,7 +956,7 @@ Deno.test("PolicyOf fallback fails closed when the defining rules are invalid", 
   );
 });
 
-Deno.test("PolicyOf does not confuse defining files with the same normalized suffix", async () => {
+test("PolicyOf does not confuse defining files with the same normalized suffix", async () => {
   const policySource = (role: string) =>
     `/// <cts-enable />
     import {
@@ -998,7 +999,7 @@ Deno.test("PolicyOf does not confuse defining files with the same normalized suf
   );
 });
 
-Deno.test("exchangeRules rejects renamed export specifiers", async () => {
+test("exchangeRules rejects renamed export specifiers", async () => {
   const { diagnostics } = await validateSource(
     `/// <cts-enable />
     import {
@@ -1027,7 +1028,7 @@ Deno.test("exchangeRules rejects renamed export specifiers", async () => {
   );
 });
 
-Deno.test("PolicyOf rejects non-ruleset and non-typeof bindings", async () => {
+test("PolicyOf rejects non-ruleset and non-typeof bindings", async () => {
   for (const binding of ["{ forged: true }", "typeof plain"]) {
     const { diagnostics } = await validateSource(
       `/// <cts-enable />
@@ -1048,7 +1049,7 @@ Deno.test("PolicyOf rejects non-ruleset and non-typeof bindings", async () => {
   }
 });
 
-Deno.test("PolicyOf validation ignores unrelated local aliases", async () => {
+test("PolicyOf validation ignores unrelated local aliases", async () => {
   const { diagnostics } = await validateSource(
     `/// <cts-enable />
       import { toSchema } from "commonfabric";
@@ -1064,7 +1065,7 @@ Deno.test("PolicyOf validation ignores unrelated local aliases", async () => {
   );
 });
 
-Deno.test("PolicyOf requires the rules binding to be exported", async () => {
+test("PolicyOf requires the rules binding to be exported", async () => {
   const { diagnostics } = await validateSource(
     `/// <cts-enable />
       import { toSchema } from "commonfabric";
@@ -1093,7 +1094,7 @@ Deno.test("PolicyOf requires the rules binding to be exported", async () => {
   );
 });
 
-Deno.test("WriteAuthorizedBy accepts a local function binding", async () => {
+test("WriteAuthorizedBy accepts a local function binding", async () => {
   const source = `/// <cts-enable />
     import { toSchema, WriteAuthorizedBy } from "commonfabric";
 
@@ -1118,7 +1119,7 @@ Deno.test("WriteAuthorizedBy accepts a local function binding", async () => {
   );
 });
 
-Deno.test(
+test(
   "a direct-root WriteAuthorizedBy claim names an imported writer's declaring module",
   async () => {
     // Renamed, and reached through a re-export. The direct-root path once
@@ -1164,7 +1165,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a direct-root claim on a declaration file's binding is refused, not minted",
   async () => {
     // The minter throws for a defining source with no module identity, and a
@@ -1196,7 +1197,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "WriteAuthorizedBy preserves the local binding identity through schema emission",
   async () => {
     const source = `/// <cts-enable />
@@ -1221,7 +1222,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "WriteAuthorizedBy lowers trusted top-level builder bindings with statement-form identity annotation",
   async () => {
     const source = `/// <cts-enable />
@@ -1261,7 +1262,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "TrustedActionWrite lowers trusted top-level builder bindings",
   async () => {
     const source = `/// <cts-enable />
@@ -1317,7 +1318,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "WriteAuthorizedBy lowers alias-referenced trusted builder bindings",
   async () => {
     const source = `/// <cts-enable />
@@ -1355,7 +1356,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "WriteAuthorizedBy lowers exported trusted builder bindings inline",
   async () => {
     const source = `/// <cts-enable />
@@ -1395,7 +1396,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "WriteAuthorizedBy accepts direct supported builder binding initializers",
   async () => {
     const source = `/// <cts-enable />
@@ -1430,7 +1431,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "WriteAuthorizedBy validates concrete pattern output schemas",
   async () => {
     const source = `/// <cts-enable />
@@ -1467,7 +1468,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "WriteAuthorizedBy validates concrete alias chains without rejecting unused generic aliases",
   async () => {
     const source = `/// <cts-enable />
@@ -1503,7 +1504,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Schema injection keeps explicit and inferred CFC-aware pattern schemas aligned",
   async () => {
     const source = `/// <cts-enable />
@@ -1526,7 +1527,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Schema injection keeps inferred schemas, explicit toSchema<T>(), and explicit output bindings identical",
   async () => {
     const source = `/// <cts-enable />
@@ -1557,7 +1558,7 @@ Deno.test(
   },
 );
 
-Deno.test("WriteAuthorizedBy rejects unsupported binding declarations", async () => {
+test("WriteAuthorizedBy rejects unsupported binding declarations", async () => {
   const source = `/// <cts-enable />
     import { toSchema, WriteAuthorizedBy } from "commonfabric";
 

@@ -30,7 +30,6 @@
 // The fix shape is "an all-no-op wave still commits coverage +
 // annotations", never "defeat the memo".
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -44,6 +43,19 @@ import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, settleServing } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("no-op wave space");
 const space = spaceSigner.did() as MemorySpace;

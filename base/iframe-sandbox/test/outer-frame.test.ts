@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { HOST_ORIGIN } from "../src/csp.ts";
 import outerFrame, { outerFrameDocument } from "../src/outer-frame.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("outer-frame", () => {
   describe("outerFrameDocument()", () => {

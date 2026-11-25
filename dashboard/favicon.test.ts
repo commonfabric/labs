@@ -10,8 +10,9 @@ import {
 import { faviconSvg } from "./favicon-artwork.ts";
 import { FAVICON_FACES } from "./favicon-types.ts";
 import { STATUS_COLOR } from "./palette.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("faviconStatus: red wins, then orange, and gray never replaces green", () => {
+test("faviconStatus: red wins, then orange, and gray never replaces green", () => {
   assertEquals(faviconStatus([]), "good");
   assertEquals(faviconStatus(["unknown"]), "good");
   assertEquals(faviconStatus(["good", "unknown"]), "good");
@@ -20,7 +21,7 @@ Deno.test("faviconStatus: red wins, then orange, and gray never replaces green",
   assertEquals(faviconStatus(["bad", "warn"]), "bad");
 });
 
-Deno.test("favicon artwork: each face has one matching URL-backed raster icon", () => {
+test("favicon artwork: each face has one matching URL-backed raster icon", () => {
   const artwork: Record<
     FaviconFace,
     {
@@ -101,7 +102,7 @@ Deno.test("favicon artwork: each face has one matching URL-backed raster icon", 
   }
 });
 
-Deno.test("faviconPng: each status has a distinct 32-pixel PNG and unsupported statuses stay green", () => {
+test("faviconPng: each status has a distinct 32-pixel PNG and unsupported statuses stay green", () => {
   const signature = new Uint8Array([
     0x89,
     0x50,
@@ -132,7 +133,7 @@ Deno.test("faviconPng: each status has a distinct 32-pixel PNG and unsupported s
   );
 });
 
-Deno.test("favicon cache version is derived from all generated PNGs", async () => {
+test("favicon cache version is derived from all generated PNGs", async () => {
   const encoded = FAVICON_FACES.map((face) =>
     `${face}\0${new Uint8Array(faviconPng(face)).toBase64()}`
   ).join("\0");

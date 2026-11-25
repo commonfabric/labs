@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { asObjectSchema, createTestProgram, getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The object formatter's callable-property branch keeps a property whose call

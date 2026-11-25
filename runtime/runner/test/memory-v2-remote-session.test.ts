@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
@@ -28,6 +27,8 @@ import {
   type MemoryMessageFrame,
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   createStorageAddressResolver,

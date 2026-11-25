@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { decodeFuseComponent, encodeFuseComponent } from "../path-codec.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("path-codec", () => {
   describe("the empty component", () => {

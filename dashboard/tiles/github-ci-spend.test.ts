@@ -9,6 +9,7 @@ import { REPO } from "../config.ts";
 import { projectMonthly } from "../spend.ts";
 import { themedChartSeries } from "../theme.ts";
 import { githubCiSpend } from "./github-ci-spend.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const ORG = "acme";
 const ENTERPRISE = "acme-enterprise";
@@ -156,7 +157,7 @@ async function view(
   }
 }
 
-Deno.test("github spend: without a token the tile is gray and names what it needs", async () => {
+test("github spend: without a token the tile is gray and names what it needs", async () => {
   const v = await githubCiSpend.collect(ctx({}));
   assertEquals(v.status, "unknown");
   assertEquals(v.value, "—");
@@ -164,11 +165,11 @@ Deno.test("github spend: without a token the tile is gray and names what it need
   assertStringIncludes(v.sub ?? "", "GH_TOKEN");
 });
 
-Deno.test("github spend: a projection with no observed rate window preserves the measured total", () => {
+test("github spend: a projection with no observed rate window preserves the measured total", () => {
   assertEquals(projectMonthly(37, 0, 31, []), 37);
 });
 
-Deno.test("github spend: enterprise summary includes all cost centers and enterprise budgets", async () => {
+test("github spend: enterprise summary includes all cost centers and enterprise budgets", async () => {
   const requests: {
     path: string;
     token: string | null;
@@ -277,7 +278,7 @@ Deno.test("github spend: enterprise summary includes all cost centers and enterp
   );
 });
 
-Deno.test("github spend: a GitHub App reads enterprise billing with its enterprise installation's token", async () => {
+test("github spend: a GitHub App reads enterprise billing with its enterprise installation's token", async () => {
   const pair = await crypto.subtle.generateKey(
     {
       name: "RSASSA-PKCS1-v1_5",
@@ -340,7 +341,7 @@ Deno.test("github spend: a GitHub App reads enterprise billing with its enterpri
   );
 });
 
-Deno.test("github spend: an organization's billing is not read through a GitHub App", async () => {
+test("github spend: an organization's billing is not read through a GitHub App", async () => {
   const requests: string[] = [];
   const v = await view(
     "2026-01-20T09:00:00Z",
@@ -358,7 +359,7 @@ Deno.test("github spend: an organization's billing is not read through a GitHub 
   assertEquals(requests, []);
 });
 
-Deno.test("github spend: an unavailable enterprise day leaves a partial, gray projection", async () => {
+test("github spend: an unavailable enterprise day leaves a partial, gray projection", async () => {
   const routes = enterpriseSummaryRoutes(2026, 1, 20, {
     1: [{ product: "actions", netAmount: 18 }],
     2: [{ product: "actions", netAmount: 18 }],
@@ -394,7 +395,7 @@ Deno.test("github spend: an unavailable enterprise day leaves a partial, gray pr
   assertEquals((v.extra ?? "").match(/<polyline/g)?.length, 2);
 });
 
-Deno.test("github spend: one unavailable prior enterprise day preserves the rest of its month", async () => {
+test("github spend: one unavailable prior enterprise day preserves the rest of its month", async () => {
   const december = enterpriseSummaryRoutes(
     2025,
     12,
@@ -428,7 +429,7 @@ Deno.test("github spend: one unavailable prior enterprise day preserves the rest
   assertStringIncludes(v.extra ?? "", "<polyline");
 });
 
-Deno.test("github spend: enterprise scope never falls back to organization minutes", async () => {
+test("github spend: enterprise scope never falls back to organization minutes", async () => {
   const requests: string[] = [];
   const v = await view(
     "2026-01-20T09:00:00Z",
@@ -451,7 +452,7 @@ Deno.test("github spend: enterprise scope never falls back to organization minut
   assertEquals(requests.some((path) => path === classicPath()), false);
 });
 
-Deno.test("github spend: projects the month from the settled daily rate, against the GitHub budget", async () => {
+test("github spend: projects the month from the settled daily rate, against the GitHub budget", async () => {
   // The 20th of a 31-day month. Actions spend of $17/day on the 1st-10th, plus a
   // $10 row the report spells "Actions", plus $500 of Copilot, is $680
   // month-to-date: every product the report bills for lands in the one figure.
@@ -497,7 +498,7 @@ Deno.test("github spend: projects the month from the settled daily rate, against
   assertEquals(v.duration, 45 * D);
 });
 
-Deno.test("github spend: a 200 without a usageItems array grays out rather than reading as $0", async () => {
+test("github spend: a 200 without a usageItems array grays out rather than reading as $0", async () => {
   // A permission-filtered view answers 200 with no usable report. Nothing was
   // measured, so nothing may be claimed — least of all a green "$0/mo".
   for (
@@ -518,7 +519,7 @@ Deno.test("github spend: a 200 without a usageItems array grays out rather than 
   }
 });
 
-Deno.test("github spend: a report that stopped days ago is unreadable, not a run of $0 days", async () => {
+test("github spend: a report that stopped days ago is unreadable, not a run of $0 days", async () => {
   // The report's newest row anywhere is the 10th, ten days before the tile
   // reads it. Reading the 11th onwards as days that cost nothing would take a
   // report that has stopped for a fortnight of thrift.
@@ -536,7 +537,7 @@ Deno.test("github spend: a report that stopped days ago is unreadable, not a run
   );
 });
 
-Deno.test("github spend: every metered product lands in the one GitHub figure", async () => {
+test("github spend: every metered product lands in the one GitHub figure", async () => {
   // The seat licenses GitHub meters bill through this report alongside the
   // usage-priced products, so Copilot seats and Enterprise Cloud licenses count
   // toward the tile's figure exactly as Actions minutes and Codespaces do.
@@ -558,7 +559,7 @@ Deno.test("github spend: every metered product lands in the one GitHub figure", 
   assertStringIncludes(v.extra ?? "", "<polyline");
 });
 
-Deno.test("github spend: a quiet week reads as $0 days while the report is written", async () => {
+test("github spend: a quiet week reads as $0 days while the report is written", async () => {
   // Spend stops on the 10th, but the report keeps being written through the
   // 18th, so the days in between are days the org cost nothing rather than days
   // with no figure.
@@ -576,7 +577,7 @@ Deno.test("github spend: a quiet week reads as $0 days while the report is writt
   assertStringIncludes(v.extra ?? "", "<polyline");
 });
 
-Deno.test("github spend: a report with no row at all is an org that bills nothing here", async () => {
+test("github spend: a report with no row at all is an org that bills nothing here", async () => {
   // An empty report dates nothing, so there is no day to chart and no gap to
   // read as silence. It says the org has no billable usage, and the tile says
   // the same.
@@ -588,7 +589,7 @@ Deno.test("github spend: a report with no row at all is an org that bills nothin
   assertStringIncludes(v.extra ?? "", `${themedSwatch("#58a6ff")} GitHub $0`);
 });
 
-Deno.test("github spend: no product budget in GitHub -> the projection stands, uncompared", async () => {
+test("github spend: no product budget in GitHub -> the projection stands, uncompared", async () => {
   const usage = {
     usageItems: [...days(2026, 1, 1, 10, 18), stillReporting("2026-01-18")],
   };
@@ -634,7 +635,7 @@ Deno.test("github spend: no product budget in GitHub -> the projection stands, u
   assertEquals(partial.status, "good");
 });
 
-Deno.test("github spend: a budget carrying no amount is no ceiling, not a $0 one", async () => {
+test("github spend: a budget carrying no amount is no ceiling, not a $0 one", async () => {
   // The endpoint answers with the budget's amount absent, null, or spelled as
   // a string. Reading any of those as a number yields 0, and a $0 ceiling is
   // one that every dollar of spend overruns — a red tile over a budget nobody
@@ -654,7 +655,7 @@ Deno.test("github spend: a budget carrying no amount is no ceiling, not a $0 one
   }
 });
 
-Deno.test("github spend: reads product budgets from every page", async () => {
+test("github spend: reads product budgets from every page", async () => {
   const requests: string[] = [];
   const v = await view(
     "2026-01-20T09:00:00Z",
@@ -688,7 +689,7 @@ Deno.test("github spend: reads product budgets from every page", async () => {
   assert(requests.includes(budgetsPath(ORG, 2)));
 });
 
-Deno.test("github spend: one product budgeted twice sets one ceiling, not two", async () => {
+test("github spend: one product budgeted twice sets one ceiling, not two", async () => {
   // Two organization-wide budgets naming the same product cap that product
   // once. Adding both would compare the projection with twice the ceiling that
   // exists, and hide an overrun.
@@ -709,7 +710,7 @@ Deno.test("github spend: one product budgeted twice sets one ceiling, not two", 
   assertEquals(v.status, "warn"); // $310 against a $300 ceiling
 });
 
-Deno.test("github spend: a product with no budget of its own never trips the light", async () => {
+test("github spend: a product with no budget of its own never trips the light", async () => {
   // Actions runs at $18/day against a $400 Actions budget, well inside it.
   // Copilot spends $2000 and nobody has budgeted Copilot at all. Holding the
   // combined figure against the Actions ceiling would turn the tile red over
@@ -751,7 +752,7 @@ Deno.test("github spend: a product with no budget of its own never trips the lig
   assertStringIncludes(budgeted.extra ?? "", "Budget $500");
 });
 
-Deno.test("github spend: an undated row weighs on the comparison as it does on the headline", async () => {
+test("github spend: an undated row weighs on the comparison as it does on the headline", async () => {
   // A row the report dates unreadably still names an amount, and the headline
   // counts it. A budgeted product's undated row has to reach the comparison
   // too, or spend would go into the figure while staying out of the ceiling it
@@ -774,7 +775,7 @@ Deno.test("github spend: an undated row weighs on the comparison as it does on t
   assertStringIncludes(v.extra ?? "", "Budget $400");
 });
 
-Deno.test("github spend: a date that names no day reads as no date at all", async () => {
+test("github spend: a date that names no day reads as no date at all", async () => {
   // Each of these reaches the report as a date and names no calendar day: not
   // text, a month past twelve, a day past thirty-one, and the thirtieth of
   // February, which a lenient parser would roll into March. Each must read
@@ -800,7 +801,7 @@ Deno.test("github spend: a date that names no day reads as no date at all", asyn
   }
 });
 
-Deno.test("github spend: the headline sits under the shown budget exactly when the tile is green", async () => {
+test("github spend: the headline sits under the shown budget exactly when the tile is green", async () => {
   // The color comes from the budgeted products while the headline carries
   // every product, so the two are only readable together if the ceiling shown
   // moves with them. Walk Actions' spend across its budget and check the pair
@@ -830,7 +831,7 @@ Deno.test("github spend: the headline sits under the shown budget exactly when t
   }
 });
 
-Deno.test("github spend: a projection over budget goes amber, and well over goes red", async () => {
+test("github spend: a projection over budget goes amber, and well over goes red", async () => {
   const spend = (perDay: number) => ({
     usageItems: [
       ...days(2026, 1, 1, 10, perDay),
@@ -848,7 +849,7 @@ Deno.test("github spend: a projection over budget goes amber, and well over goes
   assertEquals((await at(18, 100)).status, "bad"); // more than 25% over
 });
 
-Deno.test("github spend: early in the month the rate comes from last month's tail", async () => {
+test("github spend: early in the month the rate comes from last month's tail", async () => {
   // The 3rd. Two days of this month is not a rate: $20/day here against $10/day
   // through December means the fortnight-long window has to reach back.
   const v = await view("2026-01-03T09:00:00Z", {
@@ -866,7 +867,7 @@ Deno.test("github spend: early in the month the rate comes from last month's tai
   assertEquals(v.duration, 45 * D);
 });
 
-Deno.test("github spend: a prior month we can't read shortens the chart, it doesn't break the tile", async () => {
+test("github spend: a prior month we can't read shortens the chart, it doesn't break the tile", async () => {
   // December 404s. This month has more than a fortnight of settled days, so the
   // projection never needed it; the chart just covers less.
   const v = await view("2026-01-20T09:00:00Z", {
@@ -879,7 +880,7 @@ Deno.test("github spend: a prior month we can't read shortens the chart, it does
   assertEquals(v.duration, 18 * D); // January 1st to the settled 18th only
 });
 
-Deno.test("github spend: optional billing failures log while current data remains usable", async () => {
+test("github spend: optional billing failures log while current data remains usable", async () => {
   const realError = console.error;
   const errors: string[] = [];
   console.error = (...parts: unknown[]) =>
@@ -907,7 +908,7 @@ Deno.test("github spend: optional billing failures log while current data remain
   }
 });
 
-Deno.test("github spend: an unavailable prior month is not zero-spend history", async () => {
+test("github spend: an unavailable prior month is not zero-spend history", async () => {
   const v = await view("2026-01-03T09:00:00Z", {
     [usagePath(2026, 1)]: { usageItems: days(2026, 1, 1, 2, 20) },
     [budgetsPath()]: { budgets: [productBudget("actions", 400)] },
@@ -918,7 +919,7 @@ Deno.test("github spend: an unavailable prior month is not zero-spend history", 
   assertEquals(v.duration, 1 * D); // the settled 1st only
 });
 
-Deno.test("github spend: with no settled day and no prior month, the projection is the month to date", async () => {
+test("github spend: with no settled day and no prior month, the projection is the month to date", async () => {
   // The 2nd, with December unreadable. The 2-day lag has settled no January
   // day, so there is no rate to project from and no day to chart.
   const v = await view("2026-01-02T09:00:00Z", {
@@ -933,7 +934,7 @@ Deno.test("github spend: with no settled day and no prior month, the projection 
   assertEquals(v.duration, 0);
 });
 
-Deno.test("github spend: a day still being reported is left out of the chart and the rate", async () => {
+test("github spend: a day still being reported is left out of the chart and the rate", async () => {
   // The report already carries rows for the 19th and for today, the 20th,
   // while both days are still being written: today has so far reached $3 of a
   // $20 day.
@@ -956,7 +957,7 @@ Deno.test("github spend: a day still being reported is left out of the chart and
   assertEquals(new Set(heights).size, 1);
 });
 
-Deno.test("github spend: a prior month that 404s leaves a hole in the chart, not zeros", async () => {
+test("github spend: a prior month that 404s leaves a hole in the chart, not zeros", async () => {
   // December's report is missing between two months that answered. The 45-day
   // window still reaches back to 20 November, and December is left undrawn.
   const v = await view("2026-01-05T09:00:00Z", {
@@ -970,7 +971,7 @@ Deno.test("github spend: a prior month that 404s leaves a hole in the chart, not
   assertEquals((v.extra ?? "").match(/<polyline/g)?.length, 3);
 });
 
-Deno.test("github spend: one day of data is not a chart, but it is still a projection", async () => {
+test("github spend: one day of data is not a chart, but it is still a projection", async () => {
   const v = await view("2026-01-20T09:00:00Z", {
     [usagePath(2026, 1)]: {
       usageItems: [item("2026-01-01", 180), stillReporting("2026-01-18")],
@@ -982,7 +983,7 @@ Deno.test("github spend: one day of data is not a chart, but it is still a proje
   assertEquals(v.duration, 0);
 });
 
-Deno.test("github spend: a row whose date is unreadable leaves the chart out", async () => {
+test("github spend: a row whose date is unreadable leaves the chart out", async () => {
   const v = await view("2026-01-20T09:00:00Z", {
     [usagePath(2026, 1)]: {
       usageItems: [
@@ -999,7 +1000,7 @@ Deno.test("github spend: a row whose date is unreadable leaves the chart out", a
   assertEquals(v.duration, 0);
 });
 
-Deno.test("github spend: the classic plan falls back to minutes against the included allowance", async () => {
+test("github spend: the classic plan falls back to minutes against the included allowance", async () => {
   // No enhanced billing platform: the usage report 404s and the old actions
   // endpoint answers in minutes.
   const classic = (used: number, included: number, paid: number) =>
@@ -1023,7 +1024,7 @@ Deno.test("github spend: the classic plan falls back to minutes against the incl
   assertEquals((await classic(0, 0, 0)).status, "good");
 });
 
-Deno.test("github spend: enhanced billing outages log before classic fallback", async () => {
+test("github spend: enhanced billing outages log before classic fallback", async () => {
   const realError = console.error;
   const errors: string[] = [];
   console.error = (...parts: unknown[]) =>
@@ -1046,7 +1047,7 @@ Deno.test("github spend: enhanced billing outages log before classic fallback", 
   }
 });
 
-Deno.test("github spend: both billing endpoints unreachable -> gray with a calm reason", async () => {
+test("github spend: both billing endpoints unreachable -> gray with a calm reason", async () => {
   const v = await view("2026-01-20T09:00:00Z", {
     [classicPath()]: new TypeError(
       "error sending request for url (https://api.github.com/orgs/acme/…)",
@@ -1065,7 +1066,7 @@ Deno.test("github spend: both billing endpoints unreachable -> gray with a calm 
   );
 });
 
-Deno.test("github spend: a source that rejects without an Error remains unavailable", async () => {
+test("github spend: a source that rejects without an Error remains unavailable", async () => {
   const rejected = new RejectedRoute("billing stopped");
   const result = await view("2026-01-20T09:00:00Z", {
     [usagePath(2026, 1)]: rejected,
@@ -1077,7 +1078,7 @@ Deno.test("github spend: a source that rejects without an Error remains unavaila
   assertEquals(result.sub, "GitHub spend unavailable");
 });
 
-Deno.test("github spend: GITHUB_TOKEN works, and the org defaults to the CI tiles' repo owner", async () => {
+test("github spend: GITHUB_TOKEN works, and the org defaults to the CI tiles' repo owner", async () => {
   const org = REPO.split("/")[0];
   const v = await view(
     "2026-01-20T09:00:00Z",

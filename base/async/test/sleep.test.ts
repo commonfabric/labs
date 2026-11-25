@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import {
@@ -8,6 +7,7 @@ import {
   unrefTimer,
   yieldToEventLoop,
 } from "@commonfabric/async/sleep";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // `sleep` and `timeout` are delay utilities, so their tests want controlled
 // time rather than a padded real-time bound. Each opens a `FakeTime` (from

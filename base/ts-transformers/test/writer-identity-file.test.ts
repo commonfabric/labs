@@ -2,6 +2,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { normalizeWriterIdentityFile } from "../src/utils/writer-identity-file.ts";
 import { transformFiles } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The claim-minting + provenance-stamping source used across the cases: the
 // `typeof saver` type-query mints an `__ctWriterIdentityOf` marker carrying
@@ -39,7 +40,7 @@ function bindingSourceFile(output: string): string {
   return match[1]!;
 }
 
-Deno.test("writer-identity file spelling is verbatim without a canonicalizer", () => {
+test("writer-identity file spelling is verbatim without a canonicalizer", () => {
   // Direct compiles (HTTP resolver, piece manifests) hand authored paths
   // straight through; nothing may be guessed away from them. The historical
   // first-segment strip turned this name into "/patterns/system/x.tsx",
@@ -55,7 +56,7 @@ Deno.test("writer-identity file spelling is verbatim without a canonicalizer", (
   assertEquals(normalizeWriterIdentityFile("/main.ts"), "/main.ts");
 });
 
-Deno.test("canonicalizer runs on the separator-normalized name", () => {
+test("canonicalizer runs on the separator-normalized name", () => {
   const seen: string[] = [];
   const result = normalizeWriterIdentityFile(
     "\\load-1\\api\\x.tsx",
@@ -68,7 +69,7 @@ Deno.test("canonicalizer runs on the separator-normalized name", () => {
   assertEquals(result, "/api/x.tsx");
 });
 
-Deno.test("claim spelling: direct absolute compile records the authored path", async () => {
+test("claim spelling: direct absolute compile records the authored path", async () => {
   const fileName = "/api/patterns/system/profile-embed/profile-embed.tsx";
   const output = await transformFiles({ [fileName]: CLAIM_SOURCE }, {
     types: COMMONFABRIC_TYPES,
@@ -83,7 +84,7 @@ Deno.test("claim spelling: direct absolute compile records the authored path", a
   );
 });
 
-Deno.test("nested claim spelling keeps a direct compile's authored path", async () => {
+test("nested claim spelling keeps a direct compile's authored path", async () => {
   const fileName = "/api/patterns/system/profile-home/profile-home.tsx";
   const output = await transformFiles({ [fileName]: NESTED_CLAIM_SOURCE }, {
     types: COMMONFABRIC_TYPES,
@@ -91,7 +92,7 @@ Deno.test("nested claim spelling keeps a direct compile's authored path", async 
   assertEquals(markerFile(output[fileName]!), fileName);
 });
 
-Deno.test("claim spelling: engine-prefixed compile canonicalizes to the same authored path", async () => {
+test("claim spelling: engine-prefixed compile canonicalizes to the same authored path", async () => {
   // The engine compiles under a per-load `/<id>` prefix and passes its
   // unmapping (storedFilenameFor) as the canonicalizer. The recorded spelling
   // must equal the direct compile's — load-independent and shear-free.
@@ -110,7 +111,7 @@ Deno.test("claim spelling: engine-prefixed compile canonicalizes to the same aut
   );
 });
 
-Deno.test("claim minting: born stamped with the module's identity when the compiler knows it", async () => {
+test("claim minting: born stamped with the module's identity when the compiler knows it", async () => {
   // Mint-time identity binding (labs#4772 follow-up): with moduleIdentities
   // supplied (the engine computes them from pristine sources before the TS
   // compile), the emitted claim carries its own module's content-addressed
@@ -128,7 +129,7 @@ Deno.test("claim minting: born stamped with the module's identity when the compi
   assertEquals(match[1], "profile-embed-module-identity");
 });
 
-Deno.test("nested claims share canonical spelling and stamp with binding provenance", async () => {
+test("nested claims share canonical spelling and stamp with binding provenance", async () => {
   const fileName =
     "/load-abc123/api/patterns/system/profile-home/profile-home.tsx";
   const authoredName = "/api/patterns/system/profile-home/profile-home.tsx";
@@ -152,7 +153,7 @@ Deno.test("nested claims share canonical spelling and stamp with binding provena
   );
 });
 
-Deno.test("claim minting: stays unstamped when no module identities are supplied", async () => {
+test("claim minting: stays unstamped when no module identities are supplied", async () => {
   // Direct compiles without an identity map (older callers, unit harnesses)
   // keep minting unstamped claims; the runner's reconcile-adoption remains
   // their healing path.
@@ -168,7 +169,7 @@ Deno.test("claim minting: stays unstamped when no module identities are supplied
   );
 });
 
-Deno.test("claim minting: rejects an incomplete supplied identity map", async () => {
+test("claim minting: rejects an incomplete supplied identity map", async () => {
   const fileName = "/api/patterns/system/profile-embed/profile-embed.tsx";
   await assertRejects(
     () =>

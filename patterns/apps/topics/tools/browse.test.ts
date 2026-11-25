@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -10,6 +9,12 @@ import {
   systemPrograms,
 } from "./browse.ts";
 import type { Saved } from "./browser.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** What the browser remembers, with `since` as given. */
 function state(since: number): Saved {

@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   formatCfHarnessCliResult,
   formatCfHarnessTranscriptEvent,
 } from "../src/cli.ts";
 import { createHarnessRunState } from "../src/run-state.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("research-cli-output", () => {
   it("prints the task of an explicit research call", () => {

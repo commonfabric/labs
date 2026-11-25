@@ -8,6 +8,7 @@ import {
   cfcObservationFitsCeiling,
 } from "@commonfabric/runner/cfc";
 import { presetCfcOptions } from "@commonfabric/runner";
+import { test } from "@commonfabric/test-support/test";
 import {
   DEFAULT_GATEWAY_BASE_URL,
   DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE,
@@ -22,7 +23,7 @@ import {
   resolveHarnessConfig,
 } from "../src/config.ts";
 
-Deno.test("HarnessConfig preserves legacy gateway object literals", () => {
+test("HarnessConfig preserves legacy gateway object literals", () => {
   const legacy: HarnessConfig = {
     gatewayBaseUrl: "https://gateway.example/",
     gatewayAuthMode: "bearer",
@@ -33,7 +34,7 @@ Deno.test("HarnessConfig preserves legacy gateway object literals", () => {
   assertEquals(legacy.modelProvider, undefined);
 });
 
-Deno.test("parseCfcEnforcementMode accepts runner-aligned values", () => {
+test("parseCfcEnforcementMode accepts runner-aligned values", () => {
   assertEquals(parseCfcEnforcementMode("observe"), "observe");
   assertEquals(
     parseCfcEnforcementMode("enforce-explicit"),
@@ -42,13 +43,13 @@ Deno.test("parseCfcEnforcementMode accepts runner-aligned values", () => {
   assertEquals(parseCfcEnforcementMode("bogus"), undefined);
 });
 
-Deno.test("parseHarnessGatewayAuthMode accepts supported values", () => {
+test("parseHarnessGatewayAuthMode accepts supported values", () => {
   assertEquals(parseHarnessGatewayAuthMode("bearer"), "bearer");
   assertEquals(parseHarnessGatewayAuthMode("none"), "none");
   assertEquals(parseHarnessGatewayAuthMode("bogus"), undefined);
 });
 
-Deno.test("resolveCfcEnforcementMode prefers explicit override", () => {
+test("resolveCfcEnforcementMode prefers explicit override", () => {
   assertEquals(
     resolveCfcEnforcementMode({
       cfcEnforcementModeOverride: "observe",
@@ -59,7 +60,7 @@ Deno.test("resolveCfcEnforcementMode prefers explicit override", () => {
   );
 });
 
-Deno.test("resolveCfcEnforcementMode falls back through config and inherited values", () => {
+test("resolveCfcEnforcementMode falls back through config and inherited values", () => {
   assertEquals(
     resolveCfcEnforcementMode({
       cfcEnforcementMode: "enforce-explicit",
@@ -79,7 +80,7 @@ Deno.test("resolveCfcEnforcementMode falls back through config and inherited val
   );
 });
 
-Deno.test("resolveCfcEnforcementMode can inherit from a run manifest", () => {
+test("resolveCfcEnforcementMode can inherit from a run manifest", () => {
   assertEquals(
     resolveCfcEnforcementMode({
       runManifest: {
@@ -93,7 +94,7 @@ Deno.test("resolveCfcEnforcementMode can inherit from a run manifest", () => {
   );
 });
 
-Deno.test("resolveCfcEnforcementMode ignores malformed in-memory run manifest modes", () => {
+test("resolveCfcEnforcementMode ignores malformed in-memory run manifest modes", () => {
   const manifest = {
     type: "cf-harness.loom-run-manifest",
     version: 1,
@@ -116,7 +117,7 @@ Deno.test("resolveCfcEnforcementMode ignores malformed in-memory run manifest mo
   );
 });
 
-Deno.test("resolveCfcEnforcementModeSource identifies the winning mode source", () => {
+test("resolveCfcEnforcementModeSource identifies the winning mode source", () => {
   assertEquals(
     resolveCfcEnforcementModeSource({
       cfcEnforcementModeOverride: "observe",
@@ -157,7 +158,7 @@ Deno.test("resolveCfcEnforcementModeSource identifies the winning mode source", 
   assertEquals(resolveCfcEnforcementModeSource({}), "default");
 });
 
-Deno.test("resolveCfcEnforcementModeSource treats null like absent mode values", () => {
+test("resolveCfcEnforcementModeSource treats null like absent mode values", () => {
   assertEquals(
     resolveCfcEnforcementMode({
       cfcEnforcementModeOverride: null as unknown as CfcEnforcementMode,
@@ -181,7 +182,7 @@ Deno.test("resolveCfcEnforcementModeSource treats null like absent mode values",
   );
 });
 
-Deno.test("resolveCfcEnforcementMode follows a fabric session raised to strict", () => {
+test("resolveCfcEnforcementMode follows a fabric session raised to strict", () => {
   const strictSession = {
     apiUrl: "https://fabric.test",
     identityKeyPath: "/keys/identity.pkcs8",
@@ -234,7 +235,7 @@ Deno.test("resolveCfcEnforcementMode follows a fabric session raised to strict",
   );
 });
 
-Deno.test("resolveCfcEnforcementMode leaves the loop alone under a session nobody stated a mode on", () => {
+test("resolveCfcEnforcementMode leaves the loop alone under a session nobody stated a mode on", () => {
   const unstatedSession = {
     apiUrl: "https://fabric.test",
     identityKeyPath: "/keys/identity.pkcs8",
@@ -255,7 +256,7 @@ Deno.test("resolveCfcEnforcementMode leaves the loop alone under a session nobod
   );
 });
 
-Deno.test("the harness loop's own default matches the rung an unstated fabric session enforces at", () => {
+test("the harness loop's own default matches the rung an unstated fabric session enforces at", () => {
   const unstatedSession = {
     apiUrl: "https://fabric.test",
     identityKeyPath: "/keys/identity.pkcs8",
@@ -280,7 +281,7 @@ Deno.test("the harness loop's own default matches the rung an unstated fabric se
   );
 });
 
-Deno.test("resolveCfcEnforcementMode refuses a harness dial weaker than a strict session", () => {
+test("resolveCfcEnforcementMode refuses a harness dial weaker than a strict session", () => {
   assertThrows(
     () =>
       resolveCfcEnforcementMode({
@@ -297,7 +298,7 @@ Deno.test("resolveCfcEnforcementMode refuses a harness dial weaker than a strict
   );
 });
 
-Deno.test("resolveGatewayAuthMode prefers explicit override", () => {
+test("resolveGatewayAuthMode prefers explicit override", () => {
   assertEquals(
     resolveGatewayAuthMode({
       gatewayAuthModeOverride: "none",
@@ -307,11 +308,11 @@ Deno.test("resolveGatewayAuthMode prefers explicit override", () => {
   );
 });
 
-Deno.test("resolveGatewayAuthMode defaults to bearer", () => {
+test("resolveGatewayAuthMode defaults to bearer", () => {
   assertEquals(resolveGatewayAuthMode({}), "bearer");
 });
 
-Deno.test("resolveHarnessConfig normalizes the gateway base URL", () => {
+test("resolveHarnessConfig normalizes the gateway base URL", () => {
   const config = resolveHarnessConfig({
     gatewayBaseUrl: "https://llm.stage.commontools.dev",
   });
@@ -321,7 +322,7 @@ Deno.test("resolveHarnessConfig normalizes the gateway base URL", () => {
   assertEquals(config.cfcEnforcementModeSource, "default");
 });
 
-Deno.test("resolveHarnessConfig preserves legacy gateway fields for openai-codex callers", () => {
+test("resolveHarnessConfig preserves legacy gateway fields for openai-codex callers", () => {
   const config = resolveHarnessConfig({
     modelProvider: "openai-codex",
     credentialOwnerKey: "loom:user-1",
@@ -360,7 +361,7 @@ Deno.test("resolveHarnessConfig preserves legacy gateway fields for openai-codex
   );
 });
 
-Deno.test("resolveHarnessConfig requires exact explicit and manifest credential owners", () => {
+test("resolveHarnessConfig requires exact explicit and manifest credential owners", () => {
   const runManifest = {
     type: "cf-harness.loom-run-manifest" as const,
     version: 1 as const,
@@ -395,7 +396,7 @@ Deno.test("resolveHarnessConfig requires exact explicit and manifest credential 
   );
 });
 
-Deno.test("resolveHarnessConfig accepts an explicit mode override string", () => {
+test("resolveHarnessConfig accepts an explicit mode override string", () => {
   const config = resolveHarnessConfig({
     inheritedCfcEnforcementMode: "disabled",
     cfcEnforcementModeOverride: "enforce-strict",
@@ -404,14 +405,14 @@ Deno.test("resolveHarnessConfig accepts an explicit mode override string", () =>
   assertEquals(config.cfcEnforcementModeSource, "override");
 });
 
-Deno.test("resolveHarnessConfig preserves explicit artifact root config", () => {
+test("resolveHarnessConfig preserves explicit artifact root config", () => {
   const config = resolveHarnessConfig({
     artifactRoot: "/tmp/cf-harness-artifacts",
   });
   assertEquals(config.artifactRoot, "/tmp/cf-harness-artifacts");
 });
 
-Deno.test("resolveHarnessConfig carries a pattern index alongside a fabric session", () => {
+test("resolveHarnessConfig carries a pattern index alongside a fabric session", () => {
   const config = resolveHarnessConfig({
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -424,7 +425,7 @@ Deno.test("resolveHarnessConfig carries a pattern index alongside a fabric sessi
   assertEquals(config.patternIndex, { baseUrl: "https://index.example/" });
 });
 
-Deno.test("resolveHarnessConfig carries deliberate discoverable publishing", () => {
+test("resolveHarnessConfig carries deliberate discoverable publishing", () => {
   const config = resolveHarnessConfig({
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -443,7 +444,7 @@ Deno.test("resolveHarnessConfig carries deliberate discoverable publishing", () 
   });
 });
 
-Deno.test("resolveHarnessConfig rejects a pattern index with no fabric session", () => {
+test("resolveHarnessConfig rejects a pattern index with no fabric session", () => {
   assertThrows(
     () =>
       resolveHarnessConfig({
@@ -455,7 +456,7 @@ Deno.test("resolveHarnessConfig rejects a pattern index with no fabric session",
   );
 });
 
-Deno.test("resolveHarnessConfig carries a pattern index the run does not publish to", () => {
+test("resolveHarnessConfig carries a pattern index the run does not publish to", () => {
   const config = resolveHarnessConfig({
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -471,7 +472,7 @@ Deno.test("resolveHarnessConfig carries a pattern index the run does not publish
   });
 });
 
-Deno.test("resolveHarnessConfig carries a skills.sh discovery registry", () => {
+test("resolveHarnessConfig carries a skills.sh discovery registry", () => {
   const config = resolveHarnessConfig({
     skillsSh: { baseUrl: "https://registry.example/" },
     skillScriptExecutionTarget: "sandbox",
@@ -479,7 +480,7 @@ Deno.test("resolveHarnessConfig carries a skills.sh discovery registry", () => {
   assertEquals(config.skillsSh, { baseUrl: "https://registry.example/" });
 });
 
-Deno.test("resolveHarnessConfig bounds the fabric session by the run manifest's read ceiling", () => {
+test("resolveHarnessConfig bounds the fabric session by the run manifest's read ceiling", () => {
   const config = resolveHarnessConfig({
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -509,7 +510,7 @@ Deno.test("resolveHarnessConfig bounds the fabric session by the run manifest's 
   });
 });
 
-Deno.test("resolveHarnessConfig meets the run manifest's read ceiling with the session's own", () => {
+test("resolveHarnessConfig meets the run manifest's read ceiling with the session's own", () => {
   const config = resolveHarnessConfig({
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -539,7 +540,7 @@ Deno.test("resolveHarnessConfig meets the run manifest's read ceiling with the s
   assertEquals(config.fabricSession?.cfcReadOnExceed, "fail");
 });
 
-Deno.test("resolveHarnessConfig leaves a session with no ceiling unbounded when the manifest declares none", () => {
+test("resolveHarnessConfig leaves a session with no ceiling unbounded when the manifest declares none", () => {
   const config = resolveHarnessConfig({
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -562,7 +563,7 @@ Deno.test("resolveHarnessConfig leaves a session with no ceiling unbounded when 
   });
 });
 
-Deno.test("resolveHarnessConfig refuses a run manifest read ceiling with no fabric session to apply it", () => {
+test("resolveHarnessConfig refuses a run manifest read ceiling with no fabric session to apply it", () => {
   assertThrows(
     () =>
       resolveHarnessConfig({
@@ -579,7 +580,7 @@ Deno.test("resolveHarnessConfig refuses a run manifest read ceiling with no fabr
   );
 });
 
-Deno.test("resolveHarnessConfig folds the run manifest's read ceiling once: a resolved session passes through unchanged", () => {
+test("resolveHarnessConfig folds the run manifest's read ceiling once: a resolved session passes through unchanged", () => {
   const runManifest = {
     type: "cf-harness.loom-run-manifest" as const,
     version: 1 as const,
@@ -612,7 +613,7 @@ Deno.test("resolveHarnessConfig folds the run manifest's read ceiling once: a re
   assertEquals(child.fabricSession, parent.fabricSession);
 });
 
-Deno.test("resolveHarnessConfig meets onExceed toward the stricter mode", () => {
+test("resolveHarnessConfig meets onExceed toward the stricter mode", () => {
   const session = {
     apiUrl: "https://toolshed.example/",
     identityKeyPath: "/keys/agent.pkcs8",
@@ -660,7 +661,7 @@ Deno.test("resolveHarnessConfig meets onExceed toward the stricter mode", () => 
   );
 });
 
-Deno.test("resolveHarnessConfig refuses a resolved session beside a manifest ceiling it did not fold", () => {
+test("resolveHarnessConfig refuses a resolved session beside a manifest ceiling it did not fold", () => {
   const session = {
     apiUrl: "https://toolshed.example/",
     identityKeyPath: "/keys/agent.pkcs8",
@@ -717,7 +718,7 @@ Deno.test("resolveHarnessConfig refuses a resolved session beside a manifest cei
   );
 });
 
-Deno.test("resolveHarnessConfig snapshots the run manifest's read ceiling rather than holding it by reference", () => {
+test("resolveHarnessConfig snapshots the run manifest's read ceiling rather than holding it by reference", () => {
   const ceiling: string[] = ["did:key:zOwner"];
   const runManifest = {
     type: "cf-harness.loom-run-manifest" as const,
@@ -745,7 +746,7 @@ Deno.test("resolveHarnessConfig snapshots the run manifest's read ceiling rather
   ]);
 });
 
-Deno.test("readCeilingsEqual is a multiset match with order-insensitive alternatives, never a string compare", () => {
+test("readCeilingsEqual is a multiset match with order-insensitive alternatives, never a string compare", () => {
   const A = "did:key:zA";
   const B = "did:key:zB";
   const O = "did:key:zO";
@@ -760,7 +761,7 @@ Deno.test("readCeilingsEqual is a multiset match with order-insensitive alternat
   assertEquals(readCeilingsEqual([O], undefined), false);
 });
 
-Deno.test("resolveHarnessConfig refuses a resolved session beside a manifest that dropped its ceiling, and passes through the same ceiling respelled", () => {
+test("resolveHarnessConfig refuses a resolved session beside a manifest that dropped its ceiling, and passes through the same ceiling respelled", () => {
   const session = {
     apiUrl: "https://toolshed.example/",
     identityKeyPath: "/keys/agent.pkcs8",

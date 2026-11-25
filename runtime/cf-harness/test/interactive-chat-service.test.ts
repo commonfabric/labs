@@ -5,12 +5,12 @@ import {
   assertThrows,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { unattachedTurnContext } from "./support/session-store-fixtures.ts";
 import {
   createPatternSkillsFixture,
@@ -100,7 +100,7 @@ const browserAccess: HarnessChatBrowserAccessLease = {
   owner: "loom",
 };
 
-Deno.test("interactive service starts sessions and completes non-streaming turns", async () => {
+test("interactive service starts sessions and completes non-streaming turns", async () => {
   const loopOptions: unknown[] = [];
   const createPromptLoop: HarnessInteractivePromptLoopFactory = (options) => {
     loopOptions.push(options);
@@ -217,7 +217,7 @@ Deno.test("interactive service starts sessions and completes non-streaming turns
   });
 });
 
-Deno.test("interactive service preserves an owner-bound Codex client across turns", async () => {
+test("interactive service preserves an owner-bound Codex client across turns", async () => {
   const modelClient = {
     providerId: "openai-codex",
     credentialOwner: {
@@ -289,7 +289,7 @@ Deno.test("interactive service preserves an owner-bound Codex client across turn
   );
 });
 
-Deno.test("interactive Codex services require one matching process owner", () => {
+test("interactive Codex services require one matching process owner", () => {
   const modelClient = {
     providerId: "openai-codex",
     credentialOwner: {
@@ -349,7 +349,7 @@ Deno.test("interactive Codex services require one matching process owner", () =>
   );
 });
 
-Deno.test("interactive service refuses a turn run-id mapper with an injected engine", () => {
+test("interactive service refuses a turn run-id mapper with an injected engine", () => {
   assertThrows(
     () =>
       new HarnessInteractiveChatService({
@@ -365,7 +365,7 @@ Deno.test("interactive service refuses a turn run-id mapper with an injected eng
   );
 });
 
-Deno.test("interactive service refuses a turn run-id mapper with an injected run state", () => {
+test("interactive service refuses a turn run-id mapper with an injected run state", () => {
   assertThrows(
     () =>
       new HarnessInteractiveChatService({
@@ -379,7 +379,7 @@ Deno.test("interactive service refuses a turn run-id mapper with an injected run
   );
 });
 
-Deno.test("Loom-local interactive services require an explicit matching provider", () => {
+test("Loom-local interactive services require an explicit matching provider", () => {
   const credentialOwner = {
     type: "cf-harness.credential-owner-ref" as const,
     version: 1 as const,
@@ -410,7 +410,7 @@ Deno.test("Loom-local interactive services require an explicit matching provider
   );
 });
 
-Deno.test("Loom-local interactive services reject mismatched binding fields", () => {
+test("Loom-local interactive services reject mismatched binding fields", () => {
   const credentialOwner = {
     type: "cf-harness.credential-owner-ref" as const,
     version: 1 as const,
@@ -472,7 +472,7 @@ Deno.test("Loom-local interactive services reject mismatched binding fields", ()
   }
 });
 
-Deno.test("Loom-local interactive sessions require a matching durable model", async () => {
+test("Loom-local interactive sessions require a matching durable model", async () => {
   const credentialOwner = {
     type: "cf-harness.credential-owner-ref" as const,
     version: 1 as const,
@@ -542,7 +542,7 @@ Deno.test("Loom-local interactive sessions require a matching durable model", as
   assertEquals(missingModelService.status().sessions, []);
 });
 
-Deno.test("interactive service forces comment-thread turns to read-only prompt-loop options", async () => {
+test("interactive service forces comment-thread turns to read-only prompt-loop options", async () => {
   const loopOptions: unknown[] = [];
   const createPromptLoop: HarnessInteractivePromptLoopFactory = (options) => {
     loopOptions.push(options);
@@ -599,7 +599,7 @@ Deno.test("interactive service forces comment-thread turns to read-only prompt-l
   });
 });
 
-Deno.test("interactive service passes Browser Access leases to browser-profile turns", async () => {
+test("interactive service passes Browser Access leases to browser-profile turns", async () => {
   const loopOptions: unknown[] = [];
   const createPromptLoop: HarnessInteractivePromptLoopFactory = (options) => {
     loopOptions.push(options);
@@ -643,7 +643,7 @@ Deno.test("interactive service passes Browser Access leases to browser-profile t
   });
 });
 
-Deno.test("interactive service rejects browser-profile turns without Browser Access leases", async () => {
+test("interactive service rejects browser-profile turns without Browser Access leases", async () => {
   let createdLoop = false;
   const service = new HarnessInteractiveChatService({
     createPromptLoop: () => {
@@ -688,7 +688,7 @@ Deno.test("interactive service rejects browser-profile turns without Browser Acc
   );
 });
 
-Deno.test("interactive service maps tool transcript messages to tool and file events", async () => {
+test("interactive service maps tool transcript messages to tool and file events", async () => {
   const createPromptLoop: HarnessInteractivePromptLoopFactory = () => ({
     runTranscript: async (runOptions) => {
       const assistantMessage = {
@@ -789,7 +789,7 @@ Deno.test("interactive service maps tool transcript messages to tool and file ev
   });
 });
 
-Deno.test("interactive service aborts canceled turns without closing the session", async () => {
+test("interactive service aborts canceled turns without closing the session", async () => {
   let runCount = 0;
   let firstSignal: AbortSignal | undefined;
   let finishFirstTurn: (() => void) | undefined;
@@ -893,7 +893,7 @@ Deno.test("interactive service aborts canceled turns without closing the session
   );
 });
 
-Deno.test("a canceled turn keeps its request and completed work for the next turn", async () => {
+test("a canceled turn keeps its request and completed work for the next turn", async () => {
   const lookup = {
     role: "assistant" as const,
     content: "Looking up the forecast.",
@@ -992,7 +992,7 @@ Deno.test("a canceled turn keeps its request and completed work for the next tur
   ]);
 });
 
-Deno.test("waiting for a canceled turn includes its checkpoint commit", async () => {
+test("waiting for a canceled turn includes its checkpoint commit", async () => {
   const ready = Promise.withResolvers<void>();
   const committing = Promise.withResolvers<void>();
   const commit = Promise.withResolvers<void>();
@@ -1051,7 +1051,7 @@ Deno.test("waiting for a canceled turn includes its checkpoint commit", async ()
   );
 });
 
-Deno.test("a canceled turn ignores checkpoints it cannot resume from or that arrive after the cancel", async () => {
+test("a canceled turn ignores checkpoints it cannot resume from or that arrive after the cancel", async () => {
   const declared = {
     role: "assistant" as const,
     content: "Reading both files.",
@@ -1139,7 +1139,7 @@ Deno.test("a canceled turn ignores checkpoints it cannot resume from or that arr
   ]);
 });
 
-Deno.test("interactive service aborts active turns when closing a session", async () => {
+test("interactive service aborts active turns when closing a session", async () => {
   const ready = Promise.withResolvers<void>();
   let activeSignal: AbortSignal | undefined;
   const createPromptLoop: HarnessInteractivePromptLoopFactory = () => ({
@@ -1196,7 +1196,7 @@ Deno.test("interactive service aborts active turns when closing a session", asyn
   );
 });
 
-Deno.test("interactive service closes sessions and filters status", async () => {
+test("interactive service closes sessions and filters status", async () => {
   const service = new HarnessInteractiveChatService({
     createPromptLoop: () => ({
       runTranscript: (options) => Promise.resolve(makeResult(options, "Done.")),
@@ -1231,7 +1231,7 @@ Deno.test("interactive service closes sessions and filters status", async () => 
   );
 });
 
-Deno.test("interactive service releases a late runtime after a closed turn unwinds", async () => {
+test("interactive service releases a late runtime after a closed turn unwinds", async () => {
   const constructing = Promise.withResolvers<void>();
   const constructed = Promise.withResolvers<void>();
   const acquired = Promise.withResolvers<void>();
@@ -1299,7 +1299,7 @@ Deno.test("interactive service releases a late runtime after a closed turn unwin
   expect(disposed).toBe(1);
 });
 
-Deno.test("interactive service releases runtimes when closed-event delivery fails", async () => {
+test("interactive service releases runtimes when closed-event delivery fails", async () => {
   let disposed = 0;
   const fabric = {
     pieces: {
@@ -1348,7 +1348,7 @@ Deno.test("interactive service releases runtimes when closed-event delivery fail
   expect(disposed).toBe(1);
 });
 
-Deno.test("interactive service rejects duplicate session ids", async () => {
+test("interactive service rejects duplicate session ids", async () => {
   const service = new HarnessInteractiveChatService({
     createPromptLoop: () => ({
       runTranscript: (options) => Promise.resolve(makeResult(options, "Done.")),
@@ -1377,7 +1377,7 @@ Deno.test("interactive service rejects duplicate session ids", async () => {
   );
 });
 
-Deno.test("interactive service rejects concurrent duplicate session creation after durable checks", async () => {
+test("interactive service rejects concurrent duplicate session creation after durable checks", async () => {
   let releaseDurableCheck: (() => void) | undefined;
   const durableCheck = new Promise<undefined>((resolve) => {
     releaseDurableCheck = () => resolve(undefined);
@@ -1430,7 +1430,7 @@ Deno.test("interactive service rejects concurrent duplicate session creation aft
   );
 });
 
-Deno.test("interactive service serializes concurrent emitted event sequences", async () => {
+test("interactive service serializes concurrent emitted event sequences", async () => {
   const persistedSequences: number[] = [];
   const store: HarnessChatSessionStore = {
     saveSession: () => {},
@@ -1515,7 +1515,7 @@ Deno.test("interactive service serializes concurrent emitted event sequences", a
   );
 });
 
-Deno.test("interactive service rolls back in-memory turn state when start persistence fails", async () => {
+test("interactive service rolls back in-memory turn state when start persistence fails", async () => {
   let failTurnPersistence = true;
   const store: HarnessChatSessionStore = {
     saveSession: () => {},
@@ -1577,7 +1577,7 @@ Deno.test("interactive service rolls back in-memory turn state when start persis
   );
 });
 
-Deno.test("interactive service reserves turn start before durable duplicate checks", async () => {
+test("interactive service reserves turn start before durable duplicate checks", async () => {
   let releaseDurableTurnCheck: (() => void) | undefined;
   const durableTurnCheck = new Promise<undefined>((resolve) => {
     releaseDurableTurnCheck = () => resolve(undefined);
@@ -1629,7 +1629,7 @@ Deno.test("interactive service reserves turn start before durable duplicate chec
   await service.waitForTurn("session-1", "turn-1");
 });
 
-Deno.test("interactive service handles replay requests from durable store", async () => {
+test("interactive service handles replay requests from durable store", async () => {
   const session = createHarnessChatSessionStatus({
     sessionId: "durable-session",
     createdAt: "2026-05-22T00:00:00.000Z",
@@ -1732,7 +1732,7 @@ Deno.test("interactive service handles replay requests from durable store", asyn
   });
 });
 
-Deno.test("interactive service rejects missing sessions and concurrent turns", async () => {
+test("interactive service rejects missing sessions and concurrent turns", async () => {
   const service = new HarnessInteractiveChatService({
     createPromptLoop: () => ({
       runTranscript: (options) => Promise.resolve(makeResult(options, "Done.")),
@@ -1804,7 +1804,7 @@ Deno.test("interactive service rejects missing sessions and concurrent turns", a
   await busyService.waitForTurn("session-1", "turn-1");
 });
 
-Deno.test("interactive service terminalizes failed turns without closing the session", async () => {
+test("interactive service terminalizes failed turns without closing the session", async () => {
   const service = new HarnessInteractiveChatService({
     createPromptLoop: () => ({
       runTranscript: () => Promise.reject(new Error("gateway unavailable")),
@@ -1853,7 +1853,7 @@ Deno.test("interactive service terminalizes failed turns without closing the ses
   await service.waitForTurn("session-1", "turn-2");
 });
 
-Deno.test("interactive service terminalizes prompt-loop setup failures", async () => {
+test("interactive service terminalizes prompt-loop setup failures", async () => {
   let createCount = 0;
   const service = new HarnessInteractiveChatService({
     createPromptLoop: () => {
@@ -1901,7 +1901,7 @@ Deno.test("interactive service terminalizes prompt-loop setup failures", async (
   assertEquals(service.status("session-1").sessions[0].status, "idle");
 });
 
-Deno.test("interactive service preserves every typed provider blocker", async () => {
+test("interactive service preserves every typed provider blocker", async () => {
   for (
     const code of [
       "provider-configuration-required",
@@ -1937,7 +1937,7 @@ Deno.test("interactive service preserves every typed provider blocker", async ()
   }
 });
 
-Deno.test("a completed turn promotes its transcript independently of the loop's array", async () => {
+test("a completed turn promotes its transcript independently of the loop's array", async () => {
   const returnedTranscripts: HarnessTranscriptMessage[][] = [];
   const seenTranscripts: (readonly HarnessTranscriptMessage[])[] = [];
   const createPromptLoop: HarnessInteractivePromptLoopFactory = () => ({
@@ -1992,7 +1992,7 @@ Deno.test("a completed turn promotes its transcript independently of the loop's 
   ]);
 });
 
-Deno.test("a completed turn whose transcript is unpaired is failed, not promoted", async () => {
+test("a completed turn whose transcript is unpaired is failed, not promoted", async () => {
   const { store, snapshots } = recordingStore();
   const service = new HarnessInteractiveChatService({
     createPromptLoop: () => ({
@@ -2034,7 +2034,7 @@ Deno.test("a completed turn whose transcript is unpaired is failed, not promoted
   assertEquals(turn.turn.error?.code, "incomplete_transcript");
 });
 
-Deno.test("a completion whose persistence fails leaves the previous checkpoint durable", async () => {
+test("a completion whose persistence fails leaves the previous checkpoint durable", async () => {
   const snapshots: HarnessTranscriptMessage[][] = [];
   let failCompletion = false;
   const store: HarnessChatSessionStore = {
@@ -2103,7 +2103,7 @@ Deno.test("a completion whose persistence fails leaves the previous checkpoint d
 // beats asserting over the last.
 for (const resultsBeforeFault of FAULT_POINTS) {
   for (const fault of FAULT_KINDS) {
-    Deno.test(`a turn that hits ${fault} after ${resultsBeforeFault} of two tool results keeps the checkpoint provider-safe`, async () => {
+    test(`a turn that hits ${fault} after ${resultsBeforeFault} of two tool results keeps the checkpoint provider-safe`, async () => {
       let release: (() => void) | undefined;
       const held = new Promise<void>((resolve) => {
         release = () => resolve();
@@ -2224,7 +2224,7 @@ for (const resultsBeforeFault of FAULT_POINTS) {
   }
 }
 
-Deno.test("a session stays reusable after a turn fails mid-tool", async () => {
+test("a session stays reusable after a turn fails mid-tool", async () => {
   const { store } = recordingStore();
   const service = new HarnessInteractiveChatService({
     createPromptLoop: faultingToolLoop(1, "error"),
@@ -2251,7 +2251,7 @@ Deno.test("a session stays reusable after a turn fails mid-tool", async () => {
   );
 });
 
-Deno.test("a normalization whose write fails leaves the record on the stored history", async () => {
+test("a normalization whose write fails leaves the record on the stored history", async () => {
   const corrupt: HarnessTranscriptMessage[] = [
     { role: "user", content: "Read both files" },
     {
@@ -2319,7 +2319,7 @@ const directPromptSlotBinding: PromptSlotBinding = {
   eventId: "event-interactive-chat",
 };
 
-Deno.test("an interactive turn scans its configured skills root into the run and a pattern-author child inherits it", async () => {
+test("an interactive turn scans its configured skills root into the run and a pattern-author child inherits it", async () => {
   await using fixture = await createPatternSkillsFixture();
   const skillsRoot = fixture.skillsRoot;
   const loopOptions: CreateHarnessPromptLoopOptions[] = [];
@@ -2503,7 +2503,7 @@ class StubSandboxRuntime implements SandboxRuntime {
   }
 }
 
-Deno.test("an interactive turn scans a skills root carried on an injected engine's config", async () => {
+test("an interactive turn scans a skills root carried on an injected engine's config", async () => {
   // The console passes the skills root on the options directly; an injected
   // engine carries it on `engine.config` instead, with no top-level
   // `skillsRoot`. Both must scan — reading the options alone would miss this.
@@ -2580,7 +2580,7 @@ Deno.test("an interactive turn scans a skills root carried on an injected engine
   assertEquals(registry?.skillsRoot, fixture.skillsRoot);
 });
 
-Deno.test("a listener that throws does not turn a completed turn into a failed one", async () => {
+test("a listener that throws does not turn a completed turn into a failed one", async () => {
   const delivered: string[] = [];
   const deliveryFailures: [number, unknown][] = [];
   const service = new HarnessInteractiveChatService({

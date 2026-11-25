@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -7,6 +6,12 @@ import { applySqliteCommitWrite } from "../v2/sqlite/commit-eval.ts";
 import { ensureTables, runQuery } from "../v2/sqlite/exec.ts";
 import { all, dbOwner, match, principal } from "../v2/sqlite/row-label.ts";
 import { table } from "../v2/sqlite/schema.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
 

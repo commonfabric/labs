@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isPatternCoverageEnabled,
@@ -6,6 +5,7 @@ import {
   runtimeHostFlags,
   setupHostToggles,
 } from "../src/lib/host-toggles.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 class FakeStorage {
   map = new Map<string, string>();

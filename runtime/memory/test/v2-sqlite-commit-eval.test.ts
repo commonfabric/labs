@@ -35,6 +35,7 @@ import {
   whenMatches,
 } from "../v2/sqlite/row-label.ts";
 import { table } from "../v2/sqlite/schema.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
 
@@ -157,7 +158,7 @@ const sqliteOp = (sql: string, params?: SqliteParamsWire): Operation => ({
   params,
 });
 
-Deno.test("INSERT…SELECT with a violating committed row rolls back the WHOLE commit", async () => {
+test("INSERT…SELECT with a violating committed row rolls back the WHOLE commit", async () => {
   await withAttached((engine, commitSqlite) => {
     // Stage one valid and one violating row (staging is rule-less: plain path).
     commitSqlite(1, [
@@ -196,7 +197,7 @@ Deno.test("INSERT…SELECT with a violating committed row rolls back the WHOLE c
   });
 });
 
-Deno.test("INSERT…SELECT whose committed rows all satisfy the rule lands with its cell op", async () => {
+test("INSERT…SELECT whose committed rows all satisfy the rule lands with its cell op", async () => {
   await withAttached((engine, commitSqlite) => {
     commitSqlite(1, [
       sqliteOp(
@@ -221,7 +222,7 @@ Deno.test("INSERT…SELECT whose committed rows all satisfy the rule lands with 
   });
 });
 
-Deno.test("upsert re-derives from the POST-IMAGE: violating flip rolls back, valid flip lands", async () => {
+test("upsert re-derives from the POST-IMAGE: violating flip rolls back, valid flip lands", async () => {
   await withAttached((engine, commitSqlite) => {
     commitSqlite(1, [
       sqliteOp(
@@ -254,7 +255,7 @@ Deno.test("upsert re-derives from the POST-IMAGE: violating flip rolls back, val
   });
 });
 
-Deno.test("UPDATE of a rule-input column is judged by the committed value", async () => {
+test("UPDATE of a rule-input column is judged by the committed value", async () => {
   await withAttached((engine, commitSqlite) => {
     commitSqlite(1, [
       sqliteOp(
@@ -290,7 +291,7 @@ Deno.test("UPDATE of a rule-input column is judged by the committed value", asyn
   });
 });
 
-Deno.test("integrity stays unique: a display-name bait post-image fails closed", async () => {
+test("integrity stays unique: a display-name bait post-image fails closed", async () => {
   await withAttached((_engine, commitSqlite) => {
     // Two address-shaped tokens in from_addr + dmarc=pass: >1 match in an
     // integrity-bearing position must refuse (forged provenance subject).
@@ -313,7 +314,7 @@ Deno.test("integrity stays unique: a display-name bait post-image fails closed",
   });
 });
 
-Deno.test("dbOwner() rule: owner present on the op passes, absent fails closed", async () => {
+test("dbOwner() rule: owner present on the op passes, absent fails closed", async () => {
   await withAttached((engine, commitSqlite) => {
     commitSqlite(1, [
       sqliteOp("INSERT INTO ownerOnly (note) SELECT ?", ["hello"]),
@@ -338,7 +339,7 @@ Deno.test("dbOwner() rule: owner present on the op passes, absent fails closed",
   });
 });
 
-Deno.test("a violating write hidden behind an unterminated comment still rolls back", async () => {
+test("a violating write hidden behind an unterminated comment still rolls back", async () => {
   // SQLite tolerates an unterminated trailing block comment (whitespace to
   // EOF), which SWALLOWS the appended RETURNING suffix: the DML applies but
   // returns no rows. The returned-count === changes invariant catches it and
@@ -362,7 +363,7 @@ Deno.test("a violating write hidden behind an unterminated comment still rolls b
   });
 });
 
-Deno.test("a pre-3.c op without owner backfills dbOwner() from the handle doc", async () => {
+test("a pre-3.c op without owner backfills dbOwner() from the handle doc", async () => {
   await withAttached((engine, commitSqlite) => {
     const ownerlessOp: Operation = {
       op: "sqlite",
@@ -388,7 +389,7 @@ Deno.test("a pre-3.c op without owner backfills dbOwner() from the handle doc", 
   });
 });
 
-Deno.test("a pre-3.c op against a USER-scoped handle backfills dbOwner() at that scope", async () => {
+test("a pre-3.c op against a USER-scoped handle backfills dbOwner() at that scope", async () => {
   // The db handle cell is `user`-scoped, so its doc lives under the commit's
   // user scope key — a default-scope backfill read would miss it and the op
   // would wrongly fail closed. The backfill must resolve the handle at the op's
@@ -430,7 +431,7 @@ Deno.test("a pre-3.c op against a USER-scoped handle backfills dbOwner() at that
   });
 });
 
-Deno.test('a quoted identifier named "returning" does not trip the RETURNING scan', async () => {
+test('a quoted identifier named "returning" does not trip the RETURNING scan', async () => {
   await withAttached((engine, commitSqlite) => {
     commitSqlite(1, [
       sqliteOp('INSERT INTO rtab ("returning") VALUES (?)', ["x"]),
@@ -442,7 +443,7 @@ Deno.test('a quoted identifier named "returning" does not trip the RETURNING sca
   });
 });
 
-Deno.test("DELETE and rule-less-table writes stay plain on a rule-bearing db", async () => {
+test("DELETE and rule-less-table writes stay plain on a rule-bearing db", async () => {
   await withAttached((engine, commitSqlite) => {
     commitSqlite(1, [
       sqliteOp(
@@ -493,7 +494,7 @@ const bareOp = (
   params,
 });
 
-Deno.test("a CTE-fronted write to a RULE-LESS table of a mixed db keeps the plain path", () => {
+test("a CTE-fronted write to a RULE-LESS table of a mixed db keeps the plain path", () => {
   // The target resolves BEFORE any shape check (mirroring the runner gate's
   // order), so only rule-bearing targets pay the recognized-keyword rule.
   const db = bareDb();
@@ -511,7 +512,7 @@ Deno.test("a CTE-fronted write to a RULE-LESS table of a mixed db keeps the plai
   }
 });
 
-Deno.test("commit eval fails closed on the shapes it cannot attribute", () => {
+test("commit eval fails closed on the shapes it cannot attribute", () => {
   const db = bareDb();
   try {
     // CTE-fronted write TARGETING the rule-bearing table.
@@ -616,7 +617,7 @@ Deno.test("commit eval fails closed on the shapes it cannot attribute", () => {
   }
 });
 
-Deno.test("commit eval judges an INTEGER column by its stored digits", () => {
+test("commit eval judges an INTEGER column by its stored digits", () => {
   // 4294967303 is 7 in the low 32 bits, which is exactly the id the rule
   // admits. Read as 7 the violating row commits; read as itself it refuses.
   const db = bareDb();
@@ -645,7 +646,7 @@ Deno.test("commit eval judges an INTEGER column by its stored digits", () => {
   }
 });
 
-Deno.test("commit eval reads back the row it wrote, whatever its rowid", () => {
+test("commit eval reads back the row it wrote, whatever its rowid", () => {
   // The affected row is identified by rowid, and a rowid past 2^31 truncates
   // into the range of one already stored: rowid 4294967303 collides with 7.
   // Reading back the wrong row judges a violating write by a valid row's
@@ -673,7 +674,7 @@ Deno.test("commit eval reads back the row it wrote, whatever its rowid", () => {
   }
 });
 
-Deno.test("commit eval evaluates the columnless-INSERT default row", () => {
+test("commit eval evaluates the columnless-INSERT default row", () => {
   const db = bareDb();
   try {
     // All-defaults row: from_addr is NULL, which the min:1 anchor refuses.
@@ -688,7 +689,7 @@ Deno.test("commit eval evaluates the columnless-INSERT default row", () => {
   }
 });
 
-Deno.test("commit eval caps the affected-row count (fail closed, not silent)", () => {
+test("commit eval caps the affected-row count (fail closed, not silent)", () => {
   const db = bareDb();
   try {
     // Seed staging beyond the cap directly (test-side; no guard involved).
@@ -714,7 +715,7 @@ Deno.test("commit eval caps the affected-row count (fail closed, not silent)", (
   }
 });
 
-Deno.test("a no-op write (UPDATE matching nothing) passes without evaluation", () => {
+test("a no-op write (UPDATE matching nothing) passes without evaluation", () => {
   const db = bareDb();
   try {
     const result = applySqliteCommitWrite(
@@ -727,7 +728,7 @@ Deno.test("a no-op write (UPDATE matching nothing) passes without evaluation", (
   }
 });
 
-Deno.test("the sqlite barrel re-exports the shared parser and the 3.c surface", () => {
+test("the sqlite barrel re-exports the shared parser and the 3.c surface", () => {
   // `mod.ts` is the server-side aggregation point; keep the shared modules
   // reachable through it (and their identities intact).
   assertEquals(sqliteBarrel.MAX_ROW_LABEL_EVAL_ROWS, MAX_ROW_LABEL_EVAL_ROWS);

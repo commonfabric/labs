@@ -4,7 +4,6 @@
  * `runReap()` with a stand-in check.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import { Database } from "@db/sqlite";
@@ -12,6 +11,12 @@ import { toFileUrl } from "@std/path";
 import { close, open } from "@commonfabric/memory/v2/engine";
 import { ReapRefused } from "@commonfabric/memory/v2/reap";
 import { verifyReap } from "@commonfabric/state-inspector";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { runReap, space } from "../commands/space.ts";
 import { REAP_OWNER, REAP_SPACE, reapSpaceStore } from "./space-reap-store.ts";

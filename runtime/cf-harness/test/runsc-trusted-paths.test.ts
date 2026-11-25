@@ -7,7 +7,6 @@
  * filesystem takes it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -22,6 +21,12 @@ import type {
   ProcessRunResult,
   ProcessSpawnRequest,
 } from "../src/sandbox/process-runner.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The three settings under test, by the option that carries each. */
 const TRUSTED = [

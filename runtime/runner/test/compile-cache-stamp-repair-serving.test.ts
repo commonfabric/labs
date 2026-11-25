@@ -7,7 +7,6 @@
 // one a racing commit changes, one a handler's run reaches, and one in a space
 // the runtime does not serve, where a direct commit may not write.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
@@ -20,6 +19,12 @@ import {
   read,
   selectDocHead,
 } from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";

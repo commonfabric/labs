@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { verifyCompiledModuleBody } from "../src/sandbox/module-record-verifier.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Accept/reject corpus for the module-body verifier. These are crafted
 // compiled-CommonJS module bodies that mimic CF-transformed output, pinning the

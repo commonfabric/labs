@@ -5,7 +5,6 @@
  * that none of them has initialized yet.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -14,6 +13,7 @@ import {
   type TreeSitterGrammar,
 } from "../../../../../lib/view/languages/treesitter/adapter.ts";
 import { pythonGrammar } from "../../../../../lib/view/languages/python/python.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("adapter", () => {
   it("parses with every grammar that loads while the runtime initializes", async () => {

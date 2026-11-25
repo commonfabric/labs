@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import plugin from "../lint-plugins/no-node-get-text.ts";
+import { test } from "@commonfabric/test-support/test";
 
 interface Report {
   node: unknown;
@@ -16,7 +17,7 @@ function createRule(filename: string, reports: Report[]) {
   } as never);
 }
 
-Deno.test("no-node-get-text lint plugin reports bare getText calls", () => {
+test("no-node-get-text lint plugin reports bare getText calls", () => {
   const reports: Report[] = [];
   const rule = createRule("/src/transformer.ts", reports);
   const visitCall = rule.CallExpression;
@@ -42,7 +43,7 @@ Deno.test("no-node-get-text lint plugin reports bare getText calls", () => {
   );
 });
 
-Deno.test("no-node-get-text lint plugin ignores allowed forms", () => {
+test("no-node-get-text lint plugin ignores allowed forms", () => {
   const reports: Report[] = [];
   const rule = createRule("/src/transformer.ts", reports);
   const visitCall = rule.CallExpression;
@@ -76,7 +77,7 @@ Deno.test("no-node-get-text lint plugin ignores allowed forms", () => {
   assertEquals(reports, []);
 });
 
-Deno.test("no-node-get-text lint plugin skips test files", () => {
+test("no-node-get-text lint plugin skips test files", () => {
   const reports: Report[] = [];
   const rule = createRule("/src/test/transformer.test.ts", reports);
 

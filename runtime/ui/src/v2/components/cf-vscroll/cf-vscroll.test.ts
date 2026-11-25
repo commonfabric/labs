@@ -2,9 +2,9 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFVScroll } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A resize observer the test reports through, since happy-dom's never

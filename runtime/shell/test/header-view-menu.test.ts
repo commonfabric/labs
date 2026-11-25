@@ -2,11 +2,16 @@
 // graph reaches @commonfabric/ui, whose components extend a bare HTMLElement as
 // they load, so it can only load once the test has installed one.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import type { DID } from "@commonfabric/identity";
 import { type AppView, NAVIGATE_EVENT } from "@commonfabric/navigation";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { PieceItem } from "../src/components/PieceList.ts";
 import type { Command } from "../src/views/BaseView.ts";

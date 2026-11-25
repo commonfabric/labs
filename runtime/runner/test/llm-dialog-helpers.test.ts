@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { spliceAll } from "@commonfabric/collections/splice";
+import { test } from "@commonfabric/test-support/test";
 import type { BuiltInLLMMessage, BuiltInLLMToolCallPart } from "commonfabric";
 
 import {
@@ -71,7 +72,7 @@ function makeDocumentationCell(params: {
   return cell;
 }
 
-Deno.test("parseTargetString recognizes handle format", () => {
+test("parseTargetString recognizes handle format", () => {
   const parsed = parseLLMFriendlyLink(
     "/of:bafyreihqwsfjfvsr6zbmwhk7fo4hcxqaihmqqzv3ohfyv5gfdjt5jnzqai/foo/bar",
     "did:test:123",
@@ -86,7 +87,7 @@ Deno.test("parseTargetString recognizes handle format", () => {
   }
 });
 
-Deno.test("parseTargetString preserves trailing whitespace in handle paths", () => {
+test("parseTargetString preserves trailing whitespace in handle paths", () => {
   const parsed = parseLLMFriendlyLink(
     "  /of:bafyreihqwsfjfvsr6zbmwhk7fo4hcxqaihmqqzv3ohfyv5gfdjt5jnzqai/foo ",
     "did:test:123",
@@ -98,7 +99,7 @@ Deno.test("parseTargetString preserves trailing whitespace in handle paths", () 
   assertEquals(parsed.path, ["foo "]);
 });
 
-Deno.test("parseTargetString recognizes ~ encoded path elements", () => {
+test("parseTargetString recognizes ~ encoded path elements", () => {
   const parsed = parseLLMFriendlyLink(
     "/of:baedreidptbmcghfoqcb2xa3l3qsvype5gjcfuektmzdjalfb7yqztjda5q/foo~1bar/~0/",
     "did:test:123",
@@ -110,7 +111,7 @@ Deno.test("parseTargetString recognizes ~ encoded path elements", () => {
   assertEquals(parsed.path, ["foo/bar", "~", ""]);
 });
 
-Deno.test("parseTargetString parses cross-space link with embedded space DID", () => {
+test("parseTargetString parses cross-space link with embedded space DID", () => {
   const parsed = parseLLMFriendlyLink(
     "/@did:key:z6MkrX123abc/of:bafyreihqwsfjfvsr6zbmwhk7fo4hcxqaihmqqzv3ohfyv5gfdjt5jnzqai/foo/bar",
     "did:test:fallback",
@@ -123,7 +124,7 @@ Deno.test("parseTargetString parses cross-space link with embedded space DID", (
   assertEquals(parsed.space, "did:key:z6MkrX123abc");
 });
 
-Deno.test("parseTargetString uses fallback space for standard link format", () => {
+test("parseTargetString uses fallback space for standard link format", () => {
   const parsed = parseLLMFriendlyLink(
     "/of:bafyreihqwsfjfvsr6zbmwhk7fo4hcxqaihmqqzv3ohfyv5gfdjt5jnzqai/foo",
     "did:test:fallback",
@@ -131,17 +132,17 @@ Deno.test("parseTargetString uses fallback space for standard link format", () =
   assertEquals(parsed.space, "did:test:fallback");
 });
 
-Deno.test("parseTargetString errors on human name", () => {
+test("parseTargetString errors on human name", () => {
   expect(() => parseLLMFriendlyLink("PieceName/foo/bar", "did:test:123"))
     .toThrow("must include");
 });
 
-Deno.test("parseTargetString errors when path is empty", () => {
+test("parseTargetString errors when path is empty", () => {
   expect(() => parseLLMFriendlyLink("   ", "did:test:123"))
     .toThrow("must include");
 });
 
-Deno.test("extractStringField returns value from string input", () => {
+test("extractStringField returns value from string input", () => {
   const testPath =
     "/of:bafyreihqwsfjfvsr6zbmwhk7fo4hcxqaihmqqzv3ohfyv5gfdjt5jnzqai/path";
   assertEquals(
@@ -150,7 +151,7 @@ Deno.test("extractStringField returns value from string input", () => {
   );
 });
 
-Deno.test("extractStringField returns value from object field", () => {
+test("extractStringField returns value from object field", () => {
   const value = extractStringField(
     { piece: "Piece" },
     "piece",
@@ -159,11 +160,11 @@ Deno.test("extractStringField returns value from object field", () => {
   assertEquals(value, "Piece");
 });
 
-Deno.test("extractStringField throws on missing field", () => {
+test("extractStringField throws on missing field", () => {
   assertThrows(() => extractStringField({ wrong: "Piece" }, "piece", "Piece"));
 });
 
-Deno.test("extractRunArguments prioritizes nested args object", () => {
+test("extractRunArguments prioritizes nested args object", () => {
   const args = extractRunArguments({
     path: "/of:bafyreihqwsfjfvsr6zbmwhk7fo4hcxqaihmqqzv3ohfyv5gfdjt5jnzqai/run",
     args: { foo: "bar" },
@@ -172,7 +173,7 @@ Deno.test("extractRunArguments prioritizes nested args object", () => {
   assertEquals(args, { foo: "bar" });
 });
 
-Deno.test("extractRunArguments removes path key when no args provided", () => {
+test("extractRunArguments removes path key when no args provided", () => {
   const args = extractRunArguments({
     path: "/of:bafyreihqwsfjfvsr6zbmwhk7fo4hcxqaihmqqzv3ohfyv5gfdjt5jnzqai/run",
     mode: "test",
@@ -180,12 +181,12 @@ Deno.test("extractRunArguments removes path key when no args provided", () => {
   assertEquals(args, { mode: "test" });
 });
 
-Deno.test("extractRunArguments defaults to empty object for non-object input", () => {
+test("extractRunArguments defaults to empty object for non-object input", () => {
   const args = extractRunArguments(undefined);
   assertEquals(args, {});
 });
 
-Deno.test("extractToolCallParts returns tool-call entries from content array", () => {
+test("extractToolCallParts returns tool-call entries from content array", () => {
   const toolPart: BuiltInLLMToolCallPart = {
     type: "tool-call",
     toolCallId: "call-1",
@@ -200,11 +201,11 @@ Deno.test("extractToolCallParts returns tool-call entries from content array", (
   assertEquals(extractToolCallParts(content), [toolPart]);
 });
 
-Deno.test("extractToolCallParts returns empty array for string content", () => {
+test("extractToolCallParts returns empty array for string content", () => {
   assertEquals(extractToolCallParts("just text"), []);
 });
 
-Deno.test("buildAssistantMessage preserves text and appends tool calls", () => {
+test("buildAssistantMessage preserves text and appends tool calls", () => {
   const toolCall: BuiltInLLMToolCallPart = {
     type: "tool-call",
     toolCallId: "call-1",
@@ -219,7 +220,7 @@ Deno.test("buildAssistantMessage preserves text and appends tool calls", () => {
   ]);
 });
 
-Deno.test("createToolResultMessages converts execution results into tool messages", () => {
+test("createToolResultMessages converts execution results into tool messages", () => {
   const messages = createToolResultMessages([{
     id: "call-1",
     toolName: "demo",
@@ -245,19 +246,19 @@ Deno.test("createToolResultMessages converts execution results into tool message
   assertEquals(failurePart.output, { type: "error-text", value: "boom" });
 });
 
-Deno.test("hasValidContent returns true for non-empty text", () => {
+test("hasValidContent returns true for non-empty text", () => {
   assert(hasValidContent("Hello"));
   assert(hasValidContent([{ type: "text", text: "Hello" }]));
 });
 
-Deno.test("hasValidContent returns false for empty text", () => {
+test("hasValidContent returns false for empty text", () => {
   assert(!hasValidContent(""));
   assert(!hasValidContent("   \n  "));
   assert(!hasValidContent([{ type: "text", text: "" }]));
   assert(!hasValidContent([{ type: "text", text: "  " }]));
 });
 
-Deno.test("hasValidContent returns true for tool calls", () => {
+test("hasValidContent returns true for tool calls", () => {
   const content: BuiltInLLMMessage["content"] = [
     { type: "text", text: "" },
     { type: "tool-call", toolCallId: "1", toolName: "test", input: {} },
@@ -265,7 +266,7 @@ Deno.test("hasValidContent returns true for tool calls", () => {
   assert(hasValidContent(content));
 });
 
-Deno.test("hasValidContent returns true for tool results", () => {
+test("hasValidContent returns true for tool results", () => {
   const content: BuiltInLLMMessage["content"] = [
     {
       type: "tool-result",
@@ -277,7 +278,7 @@ Deno.test("hasValidContent returns true for tool results", () => {
   assert(hasValidContent(content));
 });
 
-Deno.test("hasValidContent returns false for only empty text parts", () => {
+test("hasValidContent returns false for only empty text parts", () => {
   const content: BuiltInLLMMessage["content"] = [
     { type: "text", text: "" },
     { type: "text", text: "  " },
@@ -285,7 +286,7 @@ Deno.test("hasValidContent returns false for only empty text parts", () => {
   assert(!hasValidContent(content));
 });
 
-Deno.test("createToolResultMessages handles undefined result with explicit null", () => {
+test("createToolResultMessages handles undefined result with explicit null", () => {
   const messages = createToolResultMessages([{
     id: "call-1",
     toolName: "empty",
@@ -302,7 +303,7 @@ Deno.test("createToolResultMessages handles undefined result with explicit null"
   });
 });
 
-Deno.test("createToolResultMessages handles null result with explicit null", () => {
+test("createToolResultMessages handles null result with explicit null", () => {
   const messages = createToolResultMessages([{
     id: "call-1",
     toolName: "empty",
@@ -314,7 +315,7 @@ Deno.test("createToolResultMessages handles null result with explicit null", () 
   assertEquals(outputPart.output, { type: "json", value: null });
 });
 
-Deno.test("serializeForLLMObservation keeps below-ceiling data inline", () => {
+test("serializeForLLMObservation keeps below-ceiling data inline", () => {
   const rootLink: NormalizedFullLink = {
     id: "of:test-inline",
     space: "did:test:inline",
@@ -341,7 +342,7 @@ Deno.test("serializeForLLMObservation keeps below-ceiling data inline", () => {
   assertEquals(result.observedConfidentiality, ["internal"]);
 });
 
-Deno.test("serializeForLLMObservation redacts above-ceiling fields to links", () => {
+test("serializeForLLMObservation redacts above-ceiling fields to links", () => {
   const rootLink: NormalizedFullLink = {
     id: "of:test-redacted",
     space: "did:test:redacted",
@@ -372,7 +373,7 @@ Deno.test("serializeForLLMObservation redacts above-ceiling fields to links", ()
   assertEquals(result.observedConfidentiality, []);
 });
 
-Deno.test("serializeForLLMObservation exposes injection-safe booleans but links free strings", () => {
+test("serializeForLLMObservation exposes injection-safe booleans but links free strings", () => {
   const promptRisk = {
     type: "https://commonfabric.org/cfc/atom/Caveat",
     kind:
@@ -418,7 +419,7 @@ Deno.test("serializeForLLMObservation exposes injection-safe booleans but links 
   assertEquals(result.observedConfidentiality, [promptInfluence]);
 });
 
-Deno.test("serializeForLLMObservation does not taint from redacted nested values", () => {
+test("serializeForLLMObservation does not taint from redacted nested values", () => {
   const rootLink: NormalizedFullLink = {
     id: "of:test-mixed",
     space: "did:test:mixed",
@@ -467,7 +468,7 @@ Deno.test("serializeForLLMObservation does not taint from redacted nested values
   assertEquals(result.observedConfidentiality, ["internal"]);
 });
 
-Deno.test("serializeForLLMObservation stops at the maximum depth", () => {
+test("serializeForLLMObservation stops at the maximum depth", () => {
   const result = serializeForLLMObservation({
     value: { too: "deep" },
     depth: 101,
@@ -477,7 +478,7 @@ Deno.test("serializeForLLMObservation stops at the maximum depth", () => {
   assertEquals(result.observedConfidentiality, []);
 });
 
-Deno.test("serializeForLLMObservation serializes arrays", () => {
+test("serializeForLLMObservation serializes arrays", () => {
   const rootLink: NormalizedFullLink = {
     id: "of:test-array",
     space: "did:test:array",
@@ -503,7 +504,7 @@ Deno.test("serializeForLLMObservation serializes arrays", () => {
   assertEquals(result.observedConfidentiality, []);
 });
 
-Deno.test("traverseAndCellify converts LLM-friendly links inside strings and objects", () => {
+test("traverseAndCellify converts LLM-friendly links inside strings and objects", () => {
   const parsedLinks: unknown[] = [];
   const runtime = {
     getCellFromLink(link: unknown) {
@@ -536,7 +537,7 @@ Deno.test("traverseAndCellify converts LLM-friendly links inside strings and obj
   assertEquals(parsedLinks.length, 2);
 });
 
-Deno.test("traverseAndCellify passes a nested FabricPrimitive through intact", () => {
+test("traverseAndCellify passes a nested FabricPrimitive through intact", () => {
   // A `FabricBytes` (a `FabricPrimitive`) keeps its state in private fields and
   // exposes zero enumerable own-props, so the `Object.fromEntries(Object.
   // entries(...))` rebuild flattens it to `{}`, silently dropping its bytes. It
@@ -558,7 +559,7 @@ Deno.test("traverseAndCellify passes a nested FabricPrimitive through intact", (
   assert(result.payload === bytes, "FabricBytes instance must survive intact");
 });
 
-Deno.test("buildToolCatalog normalizes dynamic legacy tools", () => {
+test("buildToolCatalog normalizes dynamic legacy tools", () => {
   const childValues = new Map<string, unknown>([
     [
       "fromChildPattern",
@@ -653,7 +654,7 @@ Deno.test("buildToolCatalog normalizes dynamic legacy tools", () => {
   );
 });
 
-Deno.test("buildToolCatalog adds built-in tools by default", () => {
+test("buildToolCatalog adds built-in tools by default", () => {
   const toolsCell = {
     get: () => undefined,
     key: () => ({ get: () => undefined }),
@@ -671,7 +672,7 @@ Deno.test("buildToolCatalog adds built-in tools by default", () => {
   assertEquals(catalog.dynamicToolCells.size, 0);
 });
 
-Deno.test("buildAvailableCellsDocumentation documents context and pinned cells", () => {
+test("buildAvailableCellsDocumentation documents context and pinned cells", () => {
   const space = "did:test:docs";
   const nestedCell = makeDocumentationCell({
     id: "of:bafyreihqwsfjfvsr6zbmwhk7fo4hcxqaihmqqzv3ohfyv5gfdjt5jnzqai",
@@ -732,7 +733,7 @@ Deno.test("buildAvailableCellsDocumentation documents context and pinned cells",
   assertEquals(empty, { docs: "", observedConfidentiality: [] });
 });
 
-Deno.test("executeToolCalls wraps denied, present-result, pin, and error results", async () => {
+test("executeToolCalls wraps denied, present-result, pin, and error results", async () => {
   const space = "did:test:tools";
   const emptyToolsCell = {
     get: () => undefined,
@@ -916,7 +917,7 @@ Deno.test("executeToolCalls wraps denied, present-result, pin, and error results
   }
 });
 
-Deno.test("toolAllowsObservedConfidentiality denies tools above maxConfidentiality", () => {
+test("toolAllowsObservedConfidentiality denies tools above maxConfidentiality", () => {
   const allowed = toolAllowsObservedConfidentiality(
     {
       llmTools: {
@@ -937,7 +938,7 @@ Deno.test("toolAllowsObservedConfidentiality denies tools above maxConfidentiali
   assertEquals(allowed, false);
 });
 
-Deno.test("toolAllowsObservedConfidentiality permits tools within maxConfidentiality", () => {
+test("toolAllowsObservedConfidentiality permits tools within maxConfidentiality", () => {
   const allowed = toolAllowsObservedConfidentiality(
     {
       llmTools: {
@@ -963,7 +964,7 @@ Deno.test("toolAllowsObservedConfidentiality permits tools within maxConfidentia
 // Note: We cast schemas to `any` to avoid strict type checking on `type` field literals
 //
 
-Deno.test("simplifySchemaForContext preserves asCell stream marker", () => {
+test("simplifySchemaForContext preserves asCell stream marker", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -975,7 +976,7 @@ Deno.test("simplifySchemaForContext preserves asCell stream marker", () => {
   assertEquals(result.properties?.events?.type, "string");
 });
 
-Deno.test("simplifySchemaForContext preserves asCell marker with nested properties", () => {
+test("simplifySchemaForContext preserves asCell marker with nested properties", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -997,7 +998,7 @@ Deno.test("simplifySchemaForContext preserves asCell marker with nested properti
   assertEquals(result.properties?.user?.required, ["name", "age"]);
 });
 
-Deno.test("simplifySchemaForContext preserves small enums", () => {
+test("simplifySchemaForContext preserves small enums", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -1008,7 +1009,7 @@ Deno.test("simplifySchemaForContext preserves small enums", () => {
   assertEquals(result.properties?.status?.enum, ["open", "closed", "pending"]);
 });
 
-Deno.test("simplifySchemaForContext truncates large enums", () => {
+test("simplifySchemaForContext truncates large enums", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -1023,7 +1024,7 @@ Deno.test("simplifySchemaForContext truncates large enums", () => {
   assertEquals(result.properties?.country?.enum?.[10], "...");
 });
 
-Deno.test("simplifySchemaForContext removes $defs and $ref", () => {
+test("simplifySchemaForContext removes $defs and $ref", () => {
   const schema: any = {
     $defs: { Foo: { type: "string" } },
     type: "object",
@@ -1036,7 +1037,7 @@ Deno.test("simplifySchemaForContext removes $defs and $ref", () => {
   assertEquals(result.properties?.foo?.$ref, undefined);
 });
 
-Deno.test("simplifySchemaForContext skips $-prefixed properties", () => {
+test("simplifySchemaForContext skips $-prefixed properties", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -1051,7 +1052,7 @@ Deno.test("simplifySchemaForContext skips $-prefixed properties", () => {
   assertEquals(result.properties?.name?.type, "string");
 });
 
-Deno.test("simplifySchemaForContext limits recursion depth", () => {
+test("simplifySchemaForContext limits recursion depth", () => {
   const deepSchema: any = {
     type: "object",
     properties: {
@@ -1084,7 +1085,7 @@ Deno.test("simplifySchemaForContext limits recursion depth", () => {
   assertEquals(deep?.properties, undefined); // nested properties dropped at max depth
 });
 
-Deno.test("simplifySchemaForContext preserves required array", () => {
+test("simplifySchemaForContext preserves required array", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -1097,7 +1098,7 @@ Deno.test("simplifySchemaForContext preserves required array", () => {
   assertEquals(result.required, ["name"]);
 });
 
-Deno.test("simplifySchemaForContext preserves items schema for arrays", () => {
+test("simplifySchemaForContext preserves items schema for arrays", () => {
   const schema: any = {
     type: "array",
     items: {
@@ -1115,7 +1116,7 @@ Deno.test("simplifySchemaForContext preserves items schema for arrays", () => {
   assertEquals(result.items?.required, ["id"]);
 });
 
-Deno.test("simplifySchemaForContext preserves and simplifies prefixItems tuple slots", () => {
+test("simplifySchemaForContext preserves and simplifies prefixItems tuple slots", () => {
   // Tuple slots go through the same simplification as any subschema. Without
   // them the LLM would see a bare `{ type: "array" }` for this schema.
   const schema: any = {
@@ -1133,7 +1134,7 @@ Deno.test("simplifySchemaForContext preserves and simplifies prefixItems tuple s
   assertEquals(result.prefixItems?.[1]?.$ref, undefined);
 });
 
-Deno.test("simplifySchemaForContext simplifies subschemas under not and additionalProperties", () => {
+test("simplifySchemaForContext simplifies subschemas under not and additionalProperties", () => {
   // Both are in the emitted keyword tier, and both go through the same
   // simplification as any subschema.
   const schema: any = {
@@ -1148,7 +1149,7 @@ Deno.test("simplifySchemaForContext simplifies subschemas under not and addition
   assertEquals(result.additionalProperties?.$defs, undefined);
 });
 
-Deno.test("simplifySchemaForContext still drops never-emitted keywords", () => {
+test("simplifySchemaForContext still drops never-emitted keywords", () => {
   // `contains`/`if`/`then`/`else` are in schema-walk's unused tier — passing
   // them through would make those paths look supported.
   const schema: any = {
@@ -1163,7 +1164,7 @@ Deno.test("simplifySchemaForContext still drops never-emitted keywords", () => {
   assertEquals(result.then, undefined);
 });
 
-Deno.test("simplifySchemaForContext applies the depth cap inside prefixItems", () => {
+test("simplifySchemaForContext applies the depth cap inside prefixItems", () => {
   const schema: any = {
     type: "array", // depth 0
     prefixItems: [{
@@ -1189,7 +1190,7 @@ Deno.test("simplifySchemaForContext applies the depth cap inside prefixItems", (
   assertEquals(capped?.properties, undefined);
 });
 
-Deno.test("simplifySchemaForContext handles Stream with nested detail structure", () => {
+test("simplifySchemaForContext handles Stream with nested detail structure", () => {
   // The `editContent` property is a `Stream<{ detail: { value: string } }>`.
   const schema: any = {
     type: "object",
@@ -1217,7 +1218,7 @@ Deno.test("simplifySchemaForContext handles Stream with nested detail structure"
   );
 });
 
-Deno.test("simplifySchemaForContext handles primitive and composed schemas", () => {
+test("simplifySchemaForContext handles primitive and composed schemas", () => {
   assertEquals(simplifySchemaForContext("plain" as any), "plain" as any);
 
   const result = simplifySchemaForContext({
@@ -1238,19 +1239,19 @@ Deno.test("simplifySchemaForContext handles primitive and composed schemas", () 
 // Tests for resolveRefsForLLM
 //
 
-Deno.test("resolveRefsForLLM converts boolean true schema to empty object", () => {
+test("resolveRefsForLLM converts boolean true schema to empty object", () => {
   const result = resolveRefsForLLM(true as any);
   assertEquals(result, {});
 });
 
-Deno.test("resolveRefsForLLM converts boolean false schema to permissive object", () => {
+test("resolveRefsForLLM converts boolean false schema to permissive object", () => {
   const result = resolveRefsForLLM(false as any);
   // false schemas are mapped to a permissive object instead of { not: true }
   // since LLMs don't handle JSON Schema `not` well
   assertEquals(result, { type: "object", properties: {} });
 });
 
-Deno.test("resolveRefsForLLM converts boolean sub-schemas in properties to objects", () => {
+test("resolveRefsForLLM converts boolean sub-schemas in properties to objects", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -1263,7 +1264,7 @@ Deno.test("resolveRefsForLLM converts boolean sub-schemas in properties to objec
   assertEquals(result.properties?.nothing, { type: "object", properties: {} });
 });
 
-Deno.test("resolveRefsForLLM resolves simple $ref", () => {
+test("resolveRefsForLLM resolves simple $ref", () => {
   const schema: any = {
     type: "object",
     $defs: {
@@ -1278,7 +1279,7 @@ Deno.test("resolveRefsForLLM resolves simple $ref", () => {
   assertEquals(result.$defs, undefined);
 });
 
-Deno.test("resolveRefsForLLM resolves nested $ref chains", () => {
+test("resolveRefsForLLM resolves nested $ref chains", () => {
   const schema: any = {
     type: "object",
     $defs: {
@@ -1300,7 +1301,7 @@ Deno.test("resolveRefsForLLM resolves nested $ref chains", () => {
   assertEquals(result.$defs, undefined);
 });
 
-Deno.test("resolveRefsForLLM truncates circular $ref", () => {
+test("resolveRefsForLLM truncates circular $ref", () => {
   const schema: any = {
     type: "object",
     $defs: {
@@ -1328,7 +1329,7 @@ Deno.test("resolveRefsForLLM truncates circular $ref", () => {
   assertEquals(result.$defs, undefined);
 });
 
-Deno.test("resolveRefsForLLM truncates unresolved $ref", () => {
+test("resolveRefsForLLM truncates unresolved $ref", () => {
   const result = resolveRefsForLLM({
     type: "object",
     properties: {
@@ -1342,7 +1343,7 @@ Deno.test("resolveRefsForLLM truncates unresolved $ref", () => {
   });
 });
 
-Deno.test("resolveRefsForLLM passes through schema with no $ref unchanged", () => {
+test("resolveRefsForLLM passes through schema with no $ref unchanged", () => {
   const schema: any = {
     type: "object",
     properties: {
@@ -1358,7 +1359,7 @@ Deno.test("resolveRefsForLLM passes through schema with no $ref unchanged", () =
   assertEquals(result.required, ["name"]);
 });
 
-Deno.test("resolveRefsForLLM preserves sibling properties alongside $ref", () => {
+test("resolveRefsForLLM preserves sibling properties alongside $ref", () => {
   const schema: any = {
     type: "object",
     $defs: {
@@ -1374,7 +1375,7 @@ Deno.test("resolveRefsForLLM preserves sibling properties alongside $ref", () =>
   assertEquals(result.properties?.list?.items, { type: "string" });
 });
 
-Deno.test("resolveRefsForLLM handles mutually recursive types", () => {
+test("resolveRefsForLLM handles mutually recursive types", () => {
   const schema: any = {
     type: "object",
     $defs: {
@@ -1405,12 +1406,12 @@ Deno.test("resolveRefsForLLM handles mutually recursive types", () => {
 // Tests for prepareSchemaForLLM
 //
 
-Deno.test("prepareSchemaForLLM returns primitive schemas unchanged", () => {
+test("prepareSchemaForLLM returns primitive schemas unchanged", () => {
   assertEquals(prepareSchemaForLLM("plain" as any), "plain" as any);
   assertEquals(prepareSchemaForLLM(null as any), null as any);
 });
 
-Deno.test("prepareSchemaForLLM strips internal markers and resolves $ref", () => {
+test("prepareSchemaForLLM strips internal markers and resolves $ref", () => {
   const schema: any = {
     type: "object",
     $defs: {
@@ -1432,7 +1433,7 @@ Deno.test("prepareSchemaForLLM strips internal markers and resolves $ref", () =>
   assertEquals(result.$defs, undefined);
 });
 
-Deno.test("prepareSchemaForLLM handles recursive TodoItem schema", () => {
+test("prepareSchemaForLLM handles recursive TodoItem schema", () => {
   // This mirrors the writable-recursive-todoitem.expected.json fixture
   const schema: any = {
     $defs: {

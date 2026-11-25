@@ -21,7 +21,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { NormalizedFullLink } from "@commonfabric/runner";
@@ -31,6 +30,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const BOARD_PATH = fromFileUrl(
   new URL("../product/collection-naming/board.tsx", import.meta.url),

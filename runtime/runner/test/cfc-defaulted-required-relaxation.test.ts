@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
@@ -6,6 +5,7 @@ import {
   relaxDefaultedRequired,
   validateSchemaValue,
 } from "../src/cfc/schema-sanitization.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The composition the CLI's pre-dispatch verb gate applies to a present
  * payload (`verbInputSchemaError`, `runtime/piece/src/verb-input.ts`), and the

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { createCfHarnessCliCapabilities } from "../src/cli.ts";
 import { createHarnessChatSessionStatus } from "../src/contracts/interactive-chat.ts";
@@ -21,6 +20,7 @@ import {
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const model = "gpt-5.6-terra";
 const provider = "openai-codex";

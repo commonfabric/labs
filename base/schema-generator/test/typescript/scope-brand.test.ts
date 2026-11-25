@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { getScopeBrand } from "../../src/typescript/scope-brand.ts";
 import { getTypeFromCode, getTypeFromFiles } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("scope-brand", () => {
   /** The brand `getScopeBrand` reads on the type `Subject` in `code`. */

@@ -9,6 +9,7 @@ import { Database } from "@db/sqlite";
 
 import type { DiscoveredSpace } from "../discover.ts";
 import { groupDiscoveredSpaces, principalFromSession } from "../grouping.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -60,7 +61,7 @@ function disc(path: string): DiscoveredSpace {
   return { did, path, sizeBytes: 0, mtimeMs: 0 };
 }
 
-Deno.test("space grouping recovers a user's world", async (t) => {
+test("space grouping recovers a user's world", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-group-" });
   const homePath = `${dir}/${HOME}.sqlite`;
   const profilePath = `${dir}/${PROFILE}.sqlite`;

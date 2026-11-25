@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { toFileUrl } from "@std/path";
@@ -34,6 +33,7 @@ import type {
 } from "@commonfabric/piece/ops";
 import { DEFAULT_CURRENCY_EPOCH } from "@commonfabric/runner/executor/space-server";
 import type { CurrencyIndexMode } from "@commonfabric/runner/executor/store-currency";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const envOf = (values: Record<string, string | undefined>) => (name: string) =>
   values[name];

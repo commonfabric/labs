@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { JSONValue } from "@commonfabric/api";
@@ -14,6 +13,7 @@ import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
+import { describe, it } from "@commonfabric/test-support/test";
 import { externalizeSchema } from "../src/link-utils.ts";
 import { labelsReached } from "./support/reached-labels.ts";
 import { Runtime } from "../src/runtime.ts";

@@ -9,13 +9,12 @@
  * that a future validator change could expose.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import {
   scrubHandleSkillText,
   scrubHandleSkillTextDeep,
 } from "../src/prompt-loop.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PAYLOAD = 'CANARY-SKILL-9f4e2: the "whole"\nskill body';
 const MARKER = "[handle-delivered skill text withheld]";

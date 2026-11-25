@@ -5,6 +5,7 @@ import {
   updateIcon,
   updateMain,
 } from "./live-page-client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The `<main>` of a page holding `html`.
 function mainOf(html: string): Element {
@@ -12,7 +13,7 @@ function mainOf(html: string): Element {
     .querySelector("main")!;
 }
 
-Deno.test("a rendering changing one part of main replaces only that part", () => {
+test("a rendering changing one part of main replaces only that part", () => {
   const main = mainOf(
     "<main><div id=top>1h ago</div><table id=rows><tr><td>a</td></tr></table></main><p id=around>kept</p>",
   );
@@ -31,13 +32,13 @@ Deno.test("a rendering changing one part of main replaces only that part", () =>
   expect(page.getElementById("top")?.textContent).toBe("2h ago");
 });
 
-Deno.test("an unchanged rendering leaves main in place", () => {
+test("an unchanged rendering leaves main in place", () => {
   const main = mainOf("<main><b>same</b></main>");
   expect(reconcileMain(main, mainOf("<main><b>same</b></main>"))).toBe(false);
   expect(main.ownerDocument.querySelector("main")).toBe(main);
 });
 
-Deno.test("a rendering with other parts, or other text between them, replaces main whole", () => {
+test("a rendering with other parts, or other text between them, replaces main whole", () => {
   for (
     const next of [
       "<main><p>one</p><p>two</p></main>",
@@ -52,7 +53,7 @@ Deno.test("a rendering with other parts, or other text between them, replaces ma
   }
 });
 
-Deno.test("the header's age changing leaves focus on the link beside it", () => {
+test("the header's age changing leaves focus on the link beside it", () => {
   const main = document.createElement("main");
   main.innerHTML = `<div class="top"><a href="/">← dashboard</a><span>1h ago</span></div>`;
   document.body.append(main);
@@ -72,7 +73,7 @@ Deno.test("the header's age changing leaves focus on the link beside it", () => 
   }
 });
 
-Deno.test("an update is announced with the fresh rendering, which the page may arrange first", () => {
+test("an update is announced with the fresh rendering, which the page may arrange first", () => {
   const main = document.createElement("main");
   // The page shows its list in the reverse of the order it is served in.
   main.innerHTML = `<ol><li id="b">b</li><li id="a">1h</li></ol>`;
@@ -99,7 +100,7 @@ Deno.test("an update is announced with the fresh rendering, which the page may a
   }
 });
 
-Deno.test("a rendering's favicon image replaces the page's", () => {
+test("a rendering's favicon image replaces the page's", () => {
   const rendering = (href: string) =>
     new DOMParser().parseFromString(
       `<head><link rel="icon" href="${href}"></head><body><main></main></body>`,

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { connect, loopback } from "../v2/client.ts";
 import { applyCommit, applyWaveCommit, serverSeq } from "../v2/engine.ts";
@@ -11,6 +10,12 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const space = "did:key:z6Mk-memory-v2-server-commit-rates-space";
 

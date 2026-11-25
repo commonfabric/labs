@@ -15,8 +15,8 @@ import {
   type RuntimeTransport,
   type RuntimeTransportEvents,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { PropertyValues } from "lit";
 
 import { CFOwnerView } from "./index.ts";

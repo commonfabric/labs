@@ -6,13 +6,18 @@ import {
   withWaitForConditionTimeout,
 } from "@commonfabric/integration";
 import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   assert,
   assertEquals,
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import {
   armSenderEcho,
   type CfInputProbe,

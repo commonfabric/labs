@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type FabricValue, hashOf } from "@commonfabric/data-model";
@@ -25,6 +24,12 @@ import { cfcLabelViewForResolvedTarget } from "@commonfabric/runner/cfc";
 import { representsPrincipalSubjects } from "@commonfabric/runner/cfc/represents-principal";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../../runner/src/storage/v2-emulate.ts";
 import { newSharedServer } from "../../runner/test/memory-v2-test-utils.ts";
 

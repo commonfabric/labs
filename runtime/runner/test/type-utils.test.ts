@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type FactoryInput,
@@ -8,6 +7,7 @@ import {
 } from "../src/builder/types.ts";
 import { isWriteRedirectLink } from "../src/link-utils.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("value type", () => {
   it("can destructure a value without TS errors", () => {

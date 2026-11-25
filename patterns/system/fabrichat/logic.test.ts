@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   attachRequests,
@@ -12,6 +11,7 @@ import {
   windowCount,
   windowSlice,
 } from "./logic.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("logic", () => {
   describe("isSingleEmoji()", () => {

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { CapabilityParamSummary } from "../src/core/mod.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
@@ -7,6 +6,7 @@ import { narrowEventCapabilities } from "../src/transformers/contract-capabiliti
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, parseModule } from "./transformed-ast.ts";
 import { transformFiles } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("contract-capabilities", () => {
   /**

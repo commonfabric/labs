@@ -1,10 +1,10 @@
 import { assertThrows } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { assertValidSyntheticComputeOwnedArrayMethodContext } from "../../src/closures/strategies/array-method-strategy.ts";
 import type { ReactiveContextInfo } from "../../src/ast/mod.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function parseMapCall(source: string): {
   methodCall: ts.CallExpression;
@@ -54,7 +54,7 @@ function createSyntheticComputeLookup(
   };
 }
 
-Deno.test(
+test(
   "synthetic compute-owned array method context guardrail rejects stale pattern ownership",
   () => {
     const { methodCall, sourceFile } = parseMapCall(
@@ -80,7 +80,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "synthetic compute-owned array method context guardrail allows compute and array-method contexts",
   () => {
     const { methodCall, sourceFile } = parseMapCall(
@@ -111,7 +111,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "synthetic compute-owned array method context guardrail ignores non-synthetic nodes",
   () => {
     const { methodCall, sourceFile } = parseMapCall(

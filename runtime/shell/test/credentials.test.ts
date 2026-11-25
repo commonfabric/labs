@@ -1,5 +1,6 @@
 import { assertEquals, assertExists } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   AUTH_METHOD_KEYFILE,
@@ -53,7 +54,7 @@ function withMockLocalStorage(fn: () => void | Promise<void>): Promise<void> {
   });
 }
 
-Deno.test("keyfile credentials persist the imported DID and auth method", () =>
+test("keyfile credentials persist the imported DID and auth method", () =>
   withMockLocalStorage(() => {
     const did = "did:key:z6MkTest";
     const credential = createKeyFileCredential(did);
@@ -69,7 +70,7 @@ Deno.test("keyfile credentials persist the imported DID and auth method", () =>
     assertEquals(getStoredCredential(), null);
   }));
 
-Deno.test("PKCS8 keyfile import primitives round-trip into stored keyfile credential", () =>
+test("PKCS8 keyfile import primitives round-trip into stored keyfile credential", () =>
   withMockLocalStorage(async () => {
     const identity = await Identity.generate({ implementation: "noble" });
     const imported = await Identity.fromPkcs8(identity.toPkcs8());

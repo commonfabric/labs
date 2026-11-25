@@ -3,7 +3,6 @@
  * shape under test is the one the artifact carries.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -19,6 +18,7 @@ import {
   MOVED_PACKAGES,
   parseBenchmarkReport,
 } from "./bench-report.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const NAVIGATION =
   "patterns/integration/topic-board-navigation.bench.ts";

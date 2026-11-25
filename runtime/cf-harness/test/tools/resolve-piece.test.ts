@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -7,6 +6,12 @@ import { assignSlug, setSlugLink } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { entityIdFrom, Runtime, slugIdForSpace } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { parseCfHarnessCliArgs } from "../support/on-linux.ts";
 import { PATTERN_AUTHOR_SUBAGENT_ALLOWED_TOOL_IDS } from "../../src/contracts/subagent.ts";

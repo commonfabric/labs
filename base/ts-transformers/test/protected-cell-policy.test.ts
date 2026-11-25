@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -12,6 +11,7 @@ import {
 } from "./transformed-ast.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { transformFiles, transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("protected cell policy", () => {
   it("accepts a computed read of a wished profile's defaulted owner-protected field", async () => {

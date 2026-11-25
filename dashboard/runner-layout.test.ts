@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Board, Box, Pool, Slot, Token } from "./runner-board.ts";
 import {
@@ -11,6 +10,7 @@ import {
   type LayoutText,
   type Rect,
 } from "./runner-layout.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const measure = (text: string) => text.length * 6;
 

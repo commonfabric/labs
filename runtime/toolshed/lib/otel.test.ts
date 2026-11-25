@@ -1,6 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { ROOT_CONTEXT } from "@opentelemetry/api";
 import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks";
@@ -19,8 +18,9 @@ import {
   provider,
   shutdownOpenTelemetry,
 } from "@/lib/otel.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("spans carry both the service attributes and the SDK defaults", () => {
+test("spans carry both the service attributes and the SDK defaults", () => {
   // The provider takes the configured resource as given, so the service
   // attributes and the SDK's own defaults have to be merged before it is handed
   // over. Both halves are read off a span the real provider produced, since a
@@ -118,7 +118,7 @@ describe("otel", () => {
 // the answer.
 //
 
-Deno.test("the OpenInference processor extends the tracer SDK in use", () => {
+test("the OpenInference processor extends the tracer SDK in use", () => {
   assert(
     OpenInferenceBatchSpanProcessor.prototype instanceof BatchSpanProcessor,
     "OpenInferenceBatchSpanProcessor resolved a different copy of " +
@@ -126,7 +126,7 @@ Deno.test("the OpenInference processor extends the tracer SDK in use", () => {
   );
 });
 
-Deno.test("spans pass through the OpenInference processor to the exporter", async () => {
+test("spans pass through the OpenInference processor to the exporter", async () => {
   const exporter = new InMemorySpanExporter();
   const spanProcessor = new OpenInferenceBatchSpanProcessor({
     exporter,
@@ -155,7 +155,7 @@ Deno.test("spans pass through the OpenInference processor to the exporter", asyn
 // has run and after.
 //
 
-Deno.test("importing the module registers an AI SDK telemetry integration", () => {
+test("importing the module registers an AI SDK telemetry integration", () => {
   // The `ai` package collects no spans until a telemetry integration is
   // registered, and it reports nothing when none is: the LLM spans simply stop
   // being produced. Importing this module is what registers ours.
@@ -166,13 +166,13 @@ Deno.test("importing the module registers an AI SDK telemetry integration", () =
   );
 });
 
-Deno.test("shutdownOpenTelemetry is a no-op before init", async () => {
+test("shutdownOpenTelemetry is a no-op before init", async () => {
   assertEquals(getTracerProvider(), undefined);
   await shutdownOpenTelemetry();
   assertEquals(getTracerProvider(), undefined);
 });
 
-Deno.test(
+test(
   "registers a provider when enabled, then flushes and tears it down on shutdown",
   // The batch processor keeps a flush timer until shutdown; we tear it down
   // below via shutdownOpenTelemetry(), so disable the leak sanitizer here.

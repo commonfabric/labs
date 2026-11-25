@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   appendLineToFile,
@@ -9,6 +8,7 @@ import {
   logOutgoingFrame,
   readEnvironmentVariable,
 } from "./frame-log.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("frame log", () => {
   const collect = () => {

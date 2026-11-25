@@ -137,6 +137,11 @@ interface SlugReference {
   readonly member: string | undefined;
 }
 
+/** Reports a deep link the view could not deliver to the piece it opened. */
+function reportUndeliveredOpenPath(error: unknown): void {
+  console.error("[AppView] Failed to deliver the deep link:", error);
+}
+
 /** Whether `a` and `b` are the same reference. */
 function sameSlugReference(a: SlugReference, b: SlugReference): boolean {
   return a.space === b.space && a.slug === b.slug && a.member === b.member;
@@ -514,9 +519,7 @@ export class XAppView extends BaseView {
       if (signal.aborted || this.#openPathDelivered) return false;
       this.#openPathDelivered = true;
       return true;
-    }).catch((error) => {
-      console.error("[AppView] Failed to deliver the deep link:", error);
-    });
+    }).catch(reportUndeliveredOpenPath);
   }
 
   _selectedPattern = new Task(this, {

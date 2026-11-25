@@ -3,7 +3,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import { renderInProcess } from "@commonfabric/html/in-process";
@@ -14,6 +13,7 @@ import { componentReadContracts } from "@commonfabric/runner/component-read-cont
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { $conn, isCellHandle } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
 import { CFPicker } from "./index.ts";

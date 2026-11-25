@@ -2,12 +2,12 @@
 import { settle } from "../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import {
   type CellHandle,
   NotificationType,
 } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import { createRenderableCellHandle } from "../test-utils/mock-vdom-connection.ts";
 import { createDragPreview, suppressClickAfterDrag } from "./drag-state.ts";

@@ -1,9 +1,9 @@
 /** Reader isolation for the actual invitation across independent runtime realms. */
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { fromFileUrl } from "@std/path";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";
 
 const rootPath = fromFileUrl(new URL("../", import.meta.url));

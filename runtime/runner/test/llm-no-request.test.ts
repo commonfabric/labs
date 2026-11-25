@@ -25,7 +25,6 @@
  * second copy. The queued cases hold that line.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -35,6 +34,12 @@ import {
   resetMockMode,
 } from "@commonfabric/llm/client";
 import { LLMClient, type LLMResponse } from "@commonfabric/llm";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { Runtime } from "../src/runtime.ts";

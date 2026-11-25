@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { GenerationContext } from "../src/interface.ts";
 import { unionFoldedFrom } from "../src/schema-origins.ts";
 

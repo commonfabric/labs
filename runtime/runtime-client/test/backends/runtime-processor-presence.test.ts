@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   DEFAULT_BRANCH,
   resolveScopeKey,
@@ -11,6 +10,7 @@ import type {
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { WorkerClient } from "@/backends/worker-client.ts";
 import {

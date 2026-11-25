@@ -1,7 +1,6 @@
 // Tests for table()/cfLink() schema helpers and DDL generation
 // (spec docs/specs/sqlite-builtin/01 + Phase 2 additive DDL).
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -11,6 +10,7 @@ import {
   linkColumnsOf,
   table,
 } from "../v2/sqlite/schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cfLink", () => {
   it("emits a string column marked as a cf link", () => {

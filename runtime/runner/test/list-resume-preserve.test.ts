@@ -1,9 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
@@ -16,6 +17,17 @@ import {
   newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
+
+// This file runs on the real clock because it holds the resume's per-element
+// documents in the transport so the coordinator reconciles while they are
+// absent. A commit carrying a read of a withheld document is rejected as stale,
+// and the catch-up the rejection waits on cannot arrive while the hold is on,
+// so the retry cycle repeats. Real time paces it until the test releases the
+// hold; auto-advance fires each cycle's timer as soon as it is armed, and the
+// loop allocates until the process runs out of heap. The hold spans a
+// reconcile, which is the state this file exists to observe. It waits on
+// transport edges, never on a delay.
+useRealClock();
 
 // Resume preservation guard for the list builtins (filter/flatMap).
 //

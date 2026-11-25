@@ -7,11 +7,17 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { type DIDKey, Identity, issueDelegation } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import {
   createStorageAddressResolver,
@@ -19,6 +25,13 @@ import {
 } from "../src/storage/v2-remote-session.ts";
 import { StorageManager } from "../src/storage/v2.ts";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
+
+// This file runs on the real clock because it uses real WebSockets.
+// Auto-advance treats I/O in flight as idle time and can jump to the next lease
+// renewal, 58 minutes away, which can expire a challenge or an authenticated
+// principal before the request reaches the server. The tests wait on socket
+// events and round trips.
+useRealClock();
 
 const owner = await Identity.fromPassphrase("delegation-chain owner");
 const guest = await Identity.fromPassphrase("delegation-chain guest");

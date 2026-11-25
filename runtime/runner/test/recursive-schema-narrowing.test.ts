@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
@@ -8,6 +7,7 @@ import {
   internSchema,
   internSchemaAsTaggedHashString,
 } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { ContextualFlowControl as C } from "../src/cfc.ts";
 import { externalizeSchema } from "../src/link-utils.ts";

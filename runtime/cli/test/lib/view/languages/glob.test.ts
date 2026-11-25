@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { colorGlob } from "../../../../lib/view/languages/glob.ts";
 import type { TokenClass } from "../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The runs of one class that `colorGlob` gives `pattern`. */
 function runs(

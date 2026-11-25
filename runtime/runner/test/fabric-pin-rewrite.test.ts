@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { rewriteFabricPins } from "../src/fabric-pin-rewrite.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ENTRY_A = "Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c";
 const ENTRY_B = "Bvcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c";

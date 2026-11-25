@@ -3,12 +3,12 @@
  * hunk, as a diff document shows it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import type { StructureNode } from "../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("diffremap", () => {
   it("places every key of a long one-line JSON file at its diff offset and column", () => {
