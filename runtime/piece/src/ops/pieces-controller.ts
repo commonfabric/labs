@@ -18,6 +18,7 @@ import {
 } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import { setLLMUrl } from "@commonfabric/llm";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { CfcPosture } from "@commonfabric/runner";
@@ -400,6 +401,7 @@ export class PiecesController<T = unknown> {
     },
   ): Promise<PiecesController> {
     const api = new URL(apiUrl);
+    setLLMUrl(api.toString());
     const session = createSession({
       identity,
       spaceDid: isDID(space) ? space : await legacySpaceDid(space),

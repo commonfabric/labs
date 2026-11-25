@@ -26,6 +26,7 @@ import {
   type IndexedProgram,
 } from "@commonfabric/pattern-index/deploy";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
+import { setLLMUrl } from "@commonfabric/llm";
 import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
 import {
   findIndexedPiece,
@@ -769,15 +770,16 @@ export function navigateReporter(
  * needs the complete space record before this returns.
  *
  * Throws when this process is already connected to a different deployment.
- * The settings a connection writes — the LLM endpoint its runtime sets among
- * them — are the process's rather than the connection's, so a process serves
- * one deployment; `process-deployment.ts` carries what that costs.
+ * The settings a connection writes — the LLM endpoint below among them — are
+ * the process's rather than the connection's, so a process serves one
+ * deployment; `process-deployment.ts` carries what that costs.
  */
 export async function loadPieces(
   config: SpaceConfig,
   output: ConnectionOutput = {},
 ): Promise<PiecesController> {
   claimProcessDeployment(config.apiUrl);
+  setLLMUrl(config.apiUrl);
   // The navigate callback's designed line and its two failure reports both
   // go to the caller's sink where there is one, and keep the streams they
   // have where there is not: the designed line is prose except under

@@ -4674,15 +4674,13 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
     messages: visibleMessages.messages,
   };
 
-  const mappedLlmHost = runtime.mappedHostFor(space);
+  const endpoint = runtime.llmEndpointFor(space);
   const doWork = () =>
     client.sendRequest(
       llmParams,
       undefined,
       abortSignal,
-      mappedLlmHost
-        ? { endpoint: new URL("/api/ai/llm", mappedLlmHost) }
-        : undefined,
+      endpoint ? { endpoint } : undefined,
     );
 
   const resultPromise = queueName
