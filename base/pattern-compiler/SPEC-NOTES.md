@@ -28579,3 +28579,311 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 3. Note 1114: the receipt of a compiled handling stores the handler's result
    under the handler transaction's join, as the runner's receipt does; the
    receipt document's label was not checked.
+
+## Round thirty: a topic hidden from its creator, and a returned value stored as a link
+
+Round thirty (2026-11-25), on the branch `claude/compiled-pattern-scoped-rows`
+from `dcaad56391`. The notes are numbered from 1119, the provisional decisions
+from P491. The logs and scripts are in the folder
+`r30-hidden-topic-returned-links/` of the session. No browser was launched. The
+round's own toolshed ran at port 8400 with its store in the session's scratch
+folder; the coordinator's store at port 8300 was read from a copy, never
+written. Whenever a note says `map`, it names the case.
+
+1119. **Findings, first.**
+      - _Soundness, fixed (P491 to P493): a document of the space, and through
+        it a principal's own scope instances, stored the `User` clause of the
+        principal whose run of the serving loop wrote it._ Three channels, each
+        a write or a read of one scope key's run that reached a document every
+        principal reads (note 1120). The clause, not the value: no value of one
+        principal was found in a document another principal reads (the documents
+        of the space that held a foreign clause hold links, the empty record,
+        row records of the crossref table and the counts of the executor). The
+        fix stores less label at the positions named in note 1120, said here
+        first: a position of a document of the space that holds the reference to
+        a scoped place no longer joins the value's label for the key whose run
+        stored it; the root of a made instance's result takes the label of the
+        transaction that made the instance and not of its first derivation; and
+        a run no longer joins the labels of the unconfirmed documents its basis
+        affirms.
+      - _Not fixed, the same class: the minted document, the parts of the basis,
+        and the markers of streams with no element key are written under no
+        record of the plan and take the join of the run that writes them._ On
+        the coordinator's store, the minted document of the board carries the
+        creator's or the CLI identity's clause, whichever wrote it last, and 18
+        of 992 stream markers carry the CLI identity's clause. After P493 no run
+        reads them through the basis, so the clause no longer spreads from them;
+        a run that writes the minted document still reads it. What label such
+        internal documents owe is CFC question 1 of the round.
+      - _Liveness, open: an instance a handler made whose only value of a scope
+        is a place held by reference (P451) is never evaluated for a second
+        principal._ In `fixtures/hidden-made.tsx` before its view read the
+        byline, Bob's run never evaluated the item, and Bob read no byline. A
+        settle of a made instance for a key it has pulls due for (tried, not
+        kept) evaluates it, and then the runs of one pass for two principals
+        conflict on the basis document: `made-session.test.ts` is refused once.
+        That is the open item "the runs of one pass do not see each other's
+        writes".
+      - _Correctness, fixed (P494): a body that returned an element of an array
+        of references it read for its identity alone stored `{}`_, and one that
+        read the elements' members and returned them stored copies. Both now
+        store the link (note 1122). The board's crossrefs list the sources of
+        each mentioned topic on the compiled path as on today's.
+      - _Correctness, open: a `lift` that spreads an element of an array of
+        references (`{ ...items[0] }`) returns `{}` on the compiled path_, where
+        today's path returns the members. The crate's footprint reads a spread
+        as the identity of its argument (`footprint.rs`, `SpreadProperty`, "A
+        spread reads no child"), which is right for the plan's own code and
+        wrong for a body that runs the spread in JavaScript. Older than this
+        round; listed as open in `both-paths.test.ts`.
+      - _CFC, the owner's remark on event inputs:_ the clause on the hidden
+        topic was not of the creator and not of an event input (note 1121).
+
+1120. **The hidden topic (step 1; P491 to P493).**
+      - _Where the clause was, on the coordinator's store_ (a copy of the space
+        `z6MkpXAL…` of the 8300 toolshed; `label-dump.ts`, `walk-links.ts`,
+        `writers.ts` of the session's folder; the principal of a clause found by
+        hashing each DID with `hashStringOf`, since the stored subject is a
+        `digestOf` commitment). A is the browser identity (`z6Mks7qf…`, digest
+        `KgTZSRwa`), B the CLI identity (`z6MkokVM…`, digest `E4OAgXqp`). The
+        topic "Browser check after round 29" (`dU6teSso…`) has no `User` clause
+        in its result document; its view is a link of the scope `session` to its
+        scoped outputs, whose instance for A's session (`o6-H4a2s…`) carries B's
+        clause at `/` and at 17 positions of `$UI`, beside A's. That instance
+        was written in A's own run (commit 854, op 222), so A's run had read
+        something under B's clause. What it read: the board's result
+        (`omkHTaAf…`) at `/crossrefs` and `/crossrefIndex`, which carries B's
+        clause since commit 854, op 38, the run for B's session in the commit
+        that handled A's click; the rows of the crossref table (`bbRg4H0A…` and
+        the others), each written by `Writable.for(topic).set` in the board's
+        `crossrefTable` in B's run, with B's clause at `/`; the second topic A
+        created (`b2_95b1T…`, "Second check via Enter"), whose result in the
+        space carries B's clause at `/` and at the positions of `$UI` that held
+        references, written in B's run (commit 860, ops 7 and 133); the minted
+        document of the board (`SlNt46pn…`), B's clause at `/`. In all, 464
+        documents of the scope `space` in that store carry a `User` clause of
+        some principal (`coord-8300-space-user-clauses.txt`; the space holds
+        FabriChat rooms and Home besides the board). Error states: none, at the
+        current revision or any revision.
+      - _Where B's clause came from._ B's own runs read B's profile through the
+        `#profile` wish, whose inbox's offers carry B's clause (`OwnerPrivate`,
+        the space `z6MkjuZC…`); every value B's run derived from it is under B's
+        clause. That is right in B's own instances. What carried it into the
+        space was each write of B's run that took a label its content did not
+        depend on:
+        1. A position of a document of the space that holds the reference to a
+           place of a value of a scope key (P451, P455) or to the rows of a
+           scoped collection below a row (P474) took the record of the value,
+           resolved with the inputs of the run that stored it
+           (`Instance.#outputRecord`, the template `output n` that note 997 and
+           1020 chose). The reference is the same for every key and depends on
+           nothing a key reads.
+        2. The result of an instance a body makes was created undefined
+           (`#heldResult()`) and written whole at `[]` by its first derivation
+           (`Instance.#place`), a write no record of the plan covers, which
+           therefore took the join of that run. The derivation that came first
+           for a new topic was B's (commit 860, op 7).
+        3. The basis of a piece affirms each document a run of the piece wrote
+           that the storage has not confirmed (`PieceBasis`, `affirm`,
+           `RuntimeTransactions.readWhole`) with a read the flow label consumed.
+           In a pass of the serving loop the runs for several keys affirm what
+           each other wrote, the minted document and the parts of the basis
+           among it, each under the join of its writer. The display then
+           refuses: A's display ceiling admits `User(A)` and not `User(B)`
+           ("Content hidden by policy").
+      - _The leads of the coordinator, checked._ `#describeAsPiece`,
+        `#describeResult` and `#linkToResult` write the `argument`, `schema` and
+        `result` members of a made instance's documents in the transaction of
+        the handler that made it (commit 854, op 4, A's handler): no clause
+        there on the coordinator's store, and the root label of the reduced
+        fixture stayed when `#describeAsPiece` was switched off. Not a cause.
+        The P474 lead is channel 1 for a row of another collection; the board
+        has no such row, FabriChat has (`canEdit` and the other members of a
+        message's rights, note 1123), and the fix covers it by the same test of
+        the held link (a document named of a scope); not tested apart. The P476
+        lead holds: 18 stream markers carry B's clause; not fixed (note 1119).
+      - _Two principals, or two sessions of one?_ Two principals: the clause is
+        the principal's (`User`); two sessions of one principal carry the same
+        clause. A made instance or a root piece: channel 1 applies to a root
+        piece as well (any position of a document of the space that holds a
+        scoped reference); channel 2 to a made instance alone, since a root
+        piece's result is created at its setup; channel 3 to any piece served
+        for several keys.
+      - _Reproduction._ `runtime/runner/test/compiled/hidden-made.test.ts` over
+        `compare/fixtures/hidden-made.tsx` (an `Item` a handler makes, whose
+        view reads `nickname`, a `Writable.perUser` of the board whose type
+        declares `User(CurrentPrincipal)`, as a profile's offers do; a view of
+        the board that shows each item's byline; a table written by
+        `Writable.for` as `crossrefTable` writes), two principals under the
+        serving loop, each naming itself: "stores no `User` clause in a document
+        of the space" failed with the item's result carrying Ann's clause at
+        `/`, `/byline` and `/$UI/children/1/children/0`; "stores the `User`
+        clause of each principal in that principal's instances alone" failed the
+        same way. On the round's toolshed the defect does not show with two CLI
+        identities: a profile `cf profile
+        create` makes stores no `User`
+        clause (its inbox's offers carry none), so no run reads a clause
+        (`two-principals.sh`; 0 documents with a `User` clause before and after,
+        on both paths).
+      - _What was built._ P491: a position of a document of the space whose held
+        value is a link to a document named of a scope takes a record whose
+        inputs give no label (`Instance.#withoutLabel`, the form
+        `#heldByReference` already used for a bucket, now shared); the place
+        keeps the value's record (`#valueWrites`, `#rowsWrites`), and a reader
+        consumes it there. P492: the result of an instance a body makes is the
+        empty record from its creation, in the transaction the body runs in, as
+        today's runtime writes a child's result cell where the child is made;
+        its first derivation writes each member at its own path (`#place`).
+        P493: the basis affirms with `labelBasisRead`, a read that is a
+        dependency of the commit and adds no flow label. Commits `6009eb07af`
+        and, for note 1122, `f0f1485847`.
+      - _Labels, before and after, at each position._ The made item's result:
+        `/` from the join of the first derivation's run (a principal's clause)
+        to that of the creating handler's transaction (none in the fixture);
+        `/byline` and `/$UI/children/1/children/0` from the value's clause to
+        none; the scoped places keep the value's clause. A run's writes under no
+        record after an affirmation: from the join including what other runs
+        wrote to the join of the run's own reads.
+      - _Classification_ (`docs/development/cfc-spec-correspondence.md`). P491
+        is conforming implementation: a stored reference takes the label of what
+        decided it, and the content read through it is labeled where it is
+        stored (the reading of a reference in today's runtime); note 997's
+        choice to join the value's label at the position is withdrawn. P492 and
+        P493 are host arrangements: when a container is written, and whether a
+        bookkeeping read of the runtime enters the flow label. No kernel
+        function changed; no `SPEC-PENDING` marker. All three store less label
+        than before at the positions above.
+
+1121. **Event inputs (the owner's remark relayed by the coordinator).** Every
+      place a `User` clause could enter the commit that handled A's click
+      (commit 854 on the coordinator's store, ops 0 to 8, acting A): the event's
+      payload in the stream's entries document (no stamp, Z99 and P485); the
+      draft `newTitle` of A's session (`FV6SLoUJ…`, written by the client at
+      commit 851, no clause); the acting principal's stamp (no clause minted
+      from it on this path); the board's `topics` (`am3mpiqw…`), the topic's
+      argument (`uDF4iTUz…`), its result created with its metadata
+      (`dU6teSso…`), the receipt and the minted document: none carries a `User`
+      clause in A's handler's ops. A's `wish` result is read in A's own
+      derivation, and its clause lands in A's instances, as it should. So the
+      owner's reading, an over-labeled event input of A, does not explain the
+      hidden topic: the clause was B's and came from B's run (note 1120).
+      Today's path for the same click was not traced: on the round's toolshed no
+      profile carries a clause (note 1120), and no browser was used. What would
+      be stored if a value typed into a space took the space's label alone is
+      CFC question 2 of the round.
+
+1122. **A returned value stored as the link (step 2; P494).**
+      - _The cause._ A body is handed its argument by the entries of
+        `Body.reads`. An entry at `*` with no handle declared was skipped
+        (`Host.#invoke`), so an element the body reads for its identity alone
+        reached it as the empty record the shape read left (`{}`, no address),
+        and an element whose members it reads reached it as the object the store
+        holds for the item's document, with no address (`Store.holds`, not noted
+        in `Store.handed`). `Instance.returned` then found no address, and the
+        store kept `{}` or a copy. P482's `returned` was right; it was given
+        nothing to find.
+      - _The rule built._ For an entry at `*` with no handle, where the element
+        is a document of its own, reached through the link the array holds at
+        its position: where every entry at the element observes its identity and
+        no entry reads below it, the body is handed a reference stand-in with
+        the address of the position, as for a reference at a position of no
+        handle type (`Instance.handleOf`); otherwise it is handed the value,
+        noted with that address (`HandedValues.at`). A body that returns the
+        element, or a record or array it builds that holds it, unchanged stores
+        the link. A spread, a `structuredClone` or a record with a member
+        changed is a new object with no address and is stored as the value. A
+        value the body only read members of and did not return is not stored at
+        all. The declared type `unknown` changes nothing: the elements of
+        `unknown[]` and of `Item[]` are handed alike (case a in both).
+      - _(d) An element of an array of plain values in place_ has no document of
+        its own: it is handed as the read gave it and stored as a copy, as
+        today's path renders it (P494; today's raw stored form was not checked).
+        A link to the position in the argument would change under its reader
+        with every write of that array.
+      - _Tests_, each named by its case. `exec/test/returned-links.test.ts` over
+        `compare/fixtures/returned-links.tsx` (nine cases on the executor): (a)
+        `unknown` and typed, (c), (e) in a record and through a `filter` failed
+        before with `{}` or copies; (b), (c), the new values and the member read
+        passed before too.
+        `runtime/runner/test/
+        compiled/returned-links.test.ts` (four
+        cases on a compiled piece): (a) and (e) failed before with no link, (c)
+        and (d) passed. `compare/both-paths.ts` scenario
+        `fixtures/returned-links` (items of `fixtures/returned-item.tsx`, whose
+        title declares no clause, since a compiled start that reads a clause is
+        refused, note 1079): before, `element`, `typedElement`, `picked` and
+        `kept` differed from today's path; after, only `spread` (the crate
+        defect of note 1119) and the `flow` atoms that differ by construction.
+        The labels are equal on both paths before and after; with no clause on
+        the items that says little, and round twenty-eight's deferred questions
+        1 to 3 were not resolved.
+      - _A defect of the first form, found by the tests:_ handing a stand-in
+        where an entry at `*` observes identity and another entry reads below
+        the element (`items.filter((item) => !item.done)`) lost the read of
+        `done`, and `unit-resume-derived.test.ts` kept a finished item. The test
+        of entries below the element was added.
+      - _The board._ `topics-walk.sh` (one principal, three topics, topics 2 and
+        3 mention 1, topic 3 mentions 2): `crossrefs` gives 1 ← {2, 3}, 2 ← {3},
+        3 ← {} on the compiled path, as on today's; before, none on the compiled
+        path (note 1110). Error states 0 of 764 documents compiled, 0 of 735
+        today; no document of the space with a `User` clause.
+
+1123. **FabriChat's second member.** Not run with two principals: the room needs
+      a profile a `wish` resolves under the serving loop and a send gesture
+      (notes 890, 1112), and the round did not build that harness. On the
+      coordinator's store the message rights rows of the FabriChat room
+      (`175e0iN0…` and others) carry A's clause at `canEdit`, `canDelete`,
+      `canObliterate` (links of the scope `user` to scoped places, P455) and at
+      `message` (a link of the space to the message). The first three are
+      channel 1 of note 1120 and are fixed by P491 for every reader; why
+      `message` carries the clause was not traced. So the cause is the same for
+      the rights; whether the fix closes what a second member sees, and what a
+      second member reads as each message's author (the handoff's `user`-scope
+      link of `authorProfile`), was not verified.
+
+1124. **Planned, not built; provisional decisions; not verified.**
+      - _Planned:_ a record for every internal document the executor or the
+        adapter writes (the minted document, the parts of the basis, a stream
+        marker with no element key), once CFC question 1 is ruled; a made
+        instance evaluated for a key it has pulls due for, once the runs of one
+        pass see each other's writes (note 1119); the footprint of a spread in a
+        body; FabriChat with two principals.
+      - _Provisional decisions:_ P491, note 1120: a position of a document of
+        the space that holds the reference to a scoped place takes a label that
+        depends on no input, since the reference is the same for every key.
+        P492: the result of a made instance is the empty record from its
+        creation, in the creating transaction. P493: the basis affirms with
+        `labelBasisRead`. P494, note 1122: an element of an array of references
+        is handed with the address of its position, and one of an array of plain
+        values in place is stored as a copy.
+      - _Not verified:_ anything in a browser; the hidden topic on the real
+        board with two principals whose profiles carry a clause (no such profile
+        on the round's toolshed); today's path on the same click; FabriChat with
+        two principals; the P474 case apart; the smaller items of step 3, not
+        started.
+
+### CFC questions deferred, round thirty
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Note 1119: the minted document, the parts of the basis and a stream marker
+   with no element key are written under no record and take the join of the run
+   that writes them, a principal's clause in a document of the space. What label
+   such internal state owes (none, as Z99 ruled for the stream sidecar, or the
+   membership of the instance) is open.
+2. Note 1121 and the owner's remark: a value a client types into a document of a
+   space, and an event's payload, carry no `User` clause on the compiled path in
+   the traced click; a handler that reads the typed value joins only what the
+   document's stored label holds. If a value typed into a space took the space's
+   label alone, a made topic's creation would store at `/` of its result and at
+   its argument the space's clause, where a handler that read a profile today
+   stores the profile's clause. Not traced on today's path.
+3. Note 1120, P491: the position that holds a reference to a scoped place now
+   takes no label from the value; a reader that does not follow the link learns
+   only that a place exists for the instance. Whether the existence of a scoped
+   place is to carry the label of what decided that the value is of a scope (the
+   read of the scoped input) is open.
+4. Note 1122: storing a link where a copy stood stores the link's label at the
+   output (the record of the body's inputs) and leaves the content's label in
+   the item's document. With items that declare no clause the comparison with
+   today's path shows no difference; with a clause it is blocked by note 1079.
