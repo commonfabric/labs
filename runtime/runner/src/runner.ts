@@ -18328,6 +18328,31 @@ export function setPatternSource(
 }
 
 /**
+ * Stamp `origin` on a piece that `tx` creates from it, with the record that
+ * the piece follows that origin: the piece runs what the origin offered,
+ * which is what a later follow that finds the same source concludes. That
+ * follow then writes nothing (`samePieceReconciliation()`), so the piece's
+ * result document gets no new revision on its account. `pattern` is the
+ * pattern the piece was created running, or `undefined` where the caller
+ * cannot name one, which stamps the origin alone.
+ */
+export function stampCreatedFromOrigin(
+  resultCell: Cell<unknown>,
+  tx: IExtendedStorageTransaction,
+  origin: string,
+  pattern: { identity: string; symbol: string } | undefined,
+): void {
+  setPatternSource(resultCell, tx, origin);
+  if (pattern === undefined) return;
+  setPieceReconciliation(resultCell, tx, {
+    outcome: "followed",
+    at: Date.now(),
+    origin,
+    offered: { identity: pattern.identity, symbol: pattern.symbol },
+  });
+}
+
+/**
  * The entries of one list of {@link PieceSourceDelegations}, or `undefined`
  * where it is malformed: anything but an array of entries each naming a
  * module once, with at least one predecessor, none of them the module.
@@ -18758,7 +18783,7 @@ function initializePieceSourceHistory(
     throw new Error("piece source history exists without a pattern identity");
   }
   if (origin !== undefined) {
-    candidate.setMetaRaw("patternSource", origin, rawMetaWriteAuthorization);
+    stampCreatedFromOrigin(resultCell, tx, origin, pattern);
   }
   // The creation revision links the retained source, so it waits for a space
   // that holds it: a cross-space child's closure replicates after its run.

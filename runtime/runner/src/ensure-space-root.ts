@@ -45,7 +45,7 @@ import {
   resolveSystemPatternSource,
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
-import { getPatternIdentityRef, setPatternSource } from "./runner.ts";
+import { getPatternIdentityRef, stampCreatedFromOrigin } from "./runner.ts";
 import type { Runtime, RuntimeFetch, SpaceCellContents } from "./runtime.ts";
 import { type NameSchema, nameSchema } from "./schemas.ts";
 import type {
@@ -244,8 +244,13 @@ export async function createSpaceRootIfAbsent(
         // Run pattern setup within the same transaction.
         runtime.run(tx, pattern, config.argument ?? {}, pieceCell);
         // Stamp the provenance the piece tracks for updates (the source it
-        // was born from) — same transaction, one extra meta write.
-        setPatternSource(pieceCell, tx, config.source);
+        // was born from), and that it follows it, in the same transaction.
+        stampCreatedFromOrigin(
+          pieceCell,
+          tx,
+          config.source,
+          getPatternIdentityRef(pieceCell.withTx(tx)),
+        );
         // Link as the default pattern within the same transaction.
         defaultPatternCell.set(pieceCell.withTx(tx));
         return true;
