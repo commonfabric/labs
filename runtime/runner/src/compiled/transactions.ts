@@ -4732,13 +4732,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * a document the executor named from one that exists outside it.
    */
   #linkToResult(tx: IExtendedStorageTransaction, doc: string): void {
-    if (this.#owner === undefined) return;
-    if (doc === this.#owner) {
-      if (this.#artifact !== undefined) {
-        this.#describeResult(tx, doc, this.#artifact);
-      }
-      return;
-    }
+    if (this.#owner === undefined || doc === this.#owner) return;
     // The argument document of an instance a body made belongs to that
     // instance, as a piece's argument belongs to the piece, so a client
     // that writes it through the instance's result finds the contract of
