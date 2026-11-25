@@ -26495,3 +26495,145 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    the named output's cone instance would be reached by what the named output
    reads now. Which of the two a record owes is the question; the second would
    form again labels the first leaves as they were.
+
+## Round nineteen, fourth continuation: writes and reads through a cell another document holds
+
+The owner's questions of 2026-11-24: whether a compiled `.set()` is right for a
+cell whose position holds a write redirect; what a write through a state cell a
+pattern returns does, where today's runtime stores the cell as a write redirect;
+that a write rule that follows every link is wrong, as the chain of
+`runtime/runner/test/schema-links.test.ts` shows; and what a handler stores with
+`kept.set({ current: selected.get() })` and `selected.resolveAsCell()` when
+`selected` holds a link to the item chosen now. The owner then proposed that a
+read follow exactly one link past the write redirects and point at what it
+reached, so that each read of a cell of cells gives one level. Notes from 1060,
+the provisional decisions P470 and P471. The test is
+`runtime/runner/test/compiled/cell-writes.test.ts` over the fixture
+`compare/fixtures/cell-writes.tsx`: `Writer`'s handlers write cells that are
+inputs and store what an input is into another cell, `Selector` holds the item
+its handlers choose in a state cell, `Reader` returns a read of its input from
+value code, and `Owner` returns two state cells it makes. Each pattern runs on
+today's path, compiled from the same source, or as a compiled piece.
+
+1060. **Findings, first.**
+      - _Soundness of writes, fixed: a write of a value followed every link._
+        Today's runtime follows the write redirects at the position and replaces
+        the first plain link it reaches. Over
+        `start => redir => first -> second -> data` (`=>` a write redirect, `->`
+        a plain link) a compiled handler's `chain.set(v)` wrote `data`; today's
+        replaces the link of `first`.
+      - _Today's runtime, not copied: choosing a second item writes into the
+        first._ It makes the cell of every handle one link past its position,
+        after the write redirects (`validateAndTransform`), so a handler given a
+        state cell that holds a link to an item is given the item, and
+        `selected.set(second)` writes a link to the second item into the first
+        item's document.
+      - _Soundness of values, fixed: `resolveAsCell()` followed no link_, and a
+        value `get()` gave carried the address at the end of all links.
+      - _A stored link that names no entity, a link within its own document, was
+        decoded to the document `""`_ (`#decode` of the adapter), so a read
+        through `holder.selected` to `holder.items[0]` gave `undefined`.
+      - _A result held a state cell as a plain link with no schema_; a write of
+        a compiled piece into a document that no place of it declares and that
+        has none yet was dropped (ruling Z3 leaves such a state cell without a
+        document); an owner did not take another writer's first write of its
+        state cell; and a schema the storage holds by reference (`cid:`) reached
+        the executor unresolved, so a reader got no default.
+      - _Soundness of labels, fixed: places that decided where a write lands
+        still followed every link._ With writes no longer following every link,
+        `compare/test/stored-labels.test.ts` found values of `set-over-link` and
+        `value-identity` that depend on an input and store no clause of it.
+        `Instance.detached` decided what a write replaces by following every
+        link, so a handler that stored again the record its cell linked to
+        stored a copy in the cell. Under the old rule that copy went back into
+        the input, and in `value-identity` it overwrote one element with
+        another's values. `#declaredWrite` named the position a write policy is
+        checked at the same way. And the result held an input it passes on as a
+        plain link: in `writer-policy`, the forger's write through `room.frozen`
+        replaced the room's result link, where today's runtime writes the
+        protected input and its policy refuses the write.
+
+1061. **What was built (P470).** The result stores a reference to a state cell
+      of the instance as a write redirect with the cell's schema, and a
+      reference to a position of the argument that it, or a row of it, returns
+      as a member or whole as a write redirect (`Instance.stored` with
+      `ofResult`); a link inside a member, as a child of a view node, stays
+      plain. The adapter keeps the redirect both ways (`#encodeOnce`,
+      `#decode`), decodes a link that names no entity to the document it is of,
+      resolves a link's schema held by reference, and applies another writer's
+      change of a document the executor declared and has not written. A write
+      into an absent document no place declares makes it, kind `external`. A
+      reference by key whose key no position holds reads as nothing, also where
+      a link on the way declares a default (ES §2.5; ruling Z24). ES §4.2 and
+      question 86 state the decision.
+
+1062. **What was built (P471).** Where a write lands is one function,
+      `Store.landing`: past the write redirects at the position, replacing any
+      other link there; a redirect written replaces what the position holds.
+      `Store.write`, `Instance.detached` and `#declaredWrite` use it. A handle
+      for an input names the cell the instance was given, past the link the
+      argument holds to it (`Store.pastBinding`, `Instance.#givenCell` in
+      `handleOf`), for a handler and for value code; a link another position
+      holds is part of what the cell holds. `get()` and `sample()` give a value
+      that carries the position one link past the write redirects
+      (`Store.oneLinkPast`, `Handle.#fromPosition`), and a plain value in place
+      reached that way stays a copy (ruling Z25). `resolveAsCell()` follows
+      every link and reads the positions that hold them and no member.
+      `Instance.writeThrough`, a write of a member bound both ways, passes the
+      link that binds the attribute. ES §2.4 ("What a handle names, and where
+      its reads and writes go") and questions 84 and 85 state it.
+
+1063. **Tests.** `cell-writes.test.ts` has 98 steps on both paths: a handler
+      writing through a holder of write redirects, through the chain, and
+      through the state cells `Owner` returns, from either path to either path;
+      and a handler storing `selected.get()`, `selected.resolveAsCell()` and
+      `selected` itself, for a holder's position that holds a link to an item
+      document, one that holds a link to an item in place in the holder's list,
+      `Selector`'s state cell, an item document passed whole, and a state cell
+      `Owner` returns. Where P471 differs from today's path each path has its
+      own case:
+
+      | case                                                   | today's path                       | compiled                             |
+      | ------------------------------------------------------ | ---------------------------------- | ------------------------------------ |
+      | `get()` through a holder's link to a document          | the holder's position              | the item                             |
+      | `get()` through a holder's link to an element in place | the holder's position              | a copy                               |
+      | `resolveAsCell()` to an element in place               | a copy (a snapshot)                | the element's position               |
+      | `Selector` stores `selected` itself                    | the item                           | the state cell                       |
+      | `Selector` chooses a second item                       | a link written into the first item | the first item as it was             |
+      | `Reader` returns `{ current: selected.get() }`         | the item                           | the input's position in the argument |
+
+      The last one is the crate's: it emits a read that value code returns as
+      the input itself. The owner judged it right for value code, which is
+      evaluated again when what the position leads to changes. In
+      `exec/test/executor.test.ts`, `set-over-link`'s plain value written to a
+      cell that holds a link replaces the link, and "keeps the link when the
+      same record is stored again" was seen failing first. The comparison of
+      values of `set-over-link` stops before `replace`. Three assertions of
+      `value-code.test.ts` read the cell's default, `""`, through the redirect.
+
+1064. **Gates.** `exec/test/` 135 files and `compare/test/` 80 files pass;
+      `runtime/runner/test/compiled/` 59 files pass; `deno task check`,
+      `deno task check-docs`, `deno fmt --check` and `deno lint` pass.
+
+1065. **Not covered.** `get()` of a handle whose declared type is a cell of a
+      cell, `Writable<Writable<T>>`, gives a value and not a handle. `push`
+      appends to the list where every link at the position leads, as a write at
+      a path below the cell does. A redirect a rewrite of a container by the
+      executor re-encodes keeps its flag only where the executor's copy holds
+      it: a link the executor forms again (`Store.current`, a re-key) is stored
+      plain. A write through an output the crate emits as an input, as
+      `computed(() => x.get())`, lands in the argument (question 86).
+
+### CFC questions deferred, round nineteen, fourth continuation
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. Note 1060: the label check covers the events of the fixtures. A copy of a
+   plain value in place that a handler reads with `get()` and writes to another
+   cell, as `kept.set({ current: selected.get() })` over an element in place,
+   was not run through it; the stored label of the copy has to carry the clause
+   of the input it was read from.
+2. Note 1061: a reader through the result's redirect to the argument reads the
+   argument's label there. Whether the result's path carries a label of its own
+   that the redirect has to join, as for the redirect to a state cell of P470,
+   is open.
