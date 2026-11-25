@@ -1034,6 +1034,46 @@ describe("SpaceServer", () => {
           });
         });
 
+        it("loads it, and brings it into the serving replica, where syncing it for the park fails, under `skip`", async () => {
+          host = newHost("skip");
+          const data = await writeData();
+          await awaitEach(cycles, () => host?.spaceServer(space) !== undefined);
+          // The first sync of the document on the serving runtime fails, as
+          // the pull before the pass's loads makes it.
+          const runtime = servingRuntime!;
+          const cellFor = runtime.getCellFromLink.bind(runtime);
+          let failed = false;
+          using _sync = stub(
+            runtime,
+            "getCellFromLink",
+            ((...args: Parameters<typeof runtime.getCellFromLink>) => {
+              const cell = cellFor(...args);
+              if (failed || cell.getAsNormalizedFullLink().id !== data.id) {
+                return cell;
+              }
+              failed = true;
+              return new Proxy(cell, {
+                get: (target, property, receiver) =>
+                  property === "sync"
+                    ? () => Promise.reject(new Error("sync failed"))
+                    : Reflect.get(target, property, receiver),
+              });
+            }) as typeof runtime.getCellFromLink,
+          );
+
+          await demand({ link: data, root: true });
+          await awaitEach(
+            cycles,
+            () => host!.stats().structureLoadTerminal === 1,
+          );
+
+          expect(failed).toBe(true);
+          expect(host.stats().currency.plainRoots).toBe(1);
+          expect(runtime.getCellFromLink(data).getRaw()).toEqual({
+            title: "typed",
+          });
+        });
+
         it("parks it unloaded where the space holds no instance of it, under `skip`", async () => {
           host = newHost("skip");
           const absent = {

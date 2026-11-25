@@ -326,7 +326,8 @@ the document, so that a commit to it, one that gives it a back-link or a
 pattern pointer among them, brings the load. The pass still syncs the
 document into the serving replica with the roots it loads, as the load's
 first step would, since a read on the serving runtime that does not sync
-finds only what the replica holds. A commit admitted while the
+finds only what the replica holds; a root whose sync fails is loaded in the
+same pass. A commit admitted while the
 judgment ran leaves it to be loaded at once. Under `record` it is loaded.
 `currency.plainRoots` counts such roots under every mode. A root demanded
 at a scope narrower than the space is not judged so and is loaded, since its

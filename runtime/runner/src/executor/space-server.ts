@@ -6869,12 +6869,16 @@ export class SpaceServer implements TransactionSealDestination {
    * The roots of `parked`, which this pass parked as plain without a load,
    * are pulled too: the sync is the one step of the load that is not about
    * finding a piece, and it is what puts a demanded document in the
-   * replica, where a later read of it that does not sync finds it.
+   * replica, where a later read of it that does not sync finds it. A parked
+   * root has no traversal to sync it again, so one whose sync rejects, and
+   * that no commit re-armed meanwhile, is taken out of its park and added to
+   * `rootKeys`, owed a load: this pass loads it, and its traversal's sync
+   * and failure arm then treat it as any other root's.
    */
   async #loadStructureRootDocs(
     runtime: Runtime,
-    rootKeys: ReadonlyMap<string, { id: string; scope?: CellScope }>,
-    parked: ReadonlyMap<string, { id: string; scope?: CellScope }>,
+    rootKeys: Map<string, { id: string; scope: CellScope }>,
+    parked: ReadonlyMap<string, { id: string; scope: CellScope }>,
   ): Promise<void> {
     const pending: Promise<unknown>[] = [];
     for (const [key, root] of [...rootKeys, ...parked]) {
@@ -6897,8 +6901,17 @@ export class SpaceServer implements TransactionSealDestination {
         });
         // A sync that rejects is not this pass's to report: the root's own
         // traversal issues the same sync a moment later and its failure arm
-        // counts and logs what went wrong.
-        pending.push(cell.sync().catch(() => {}));
+        // counts and logs what went wrong. A parked root is loaded for that.
+        pending.push(
+          cell.sync().catch(() => {
+            if (!parked.has(key) || !this.#terminalStructureLoads.has(key)) {
+              return;
+            }
+            this.#terminalStructureLoads.delete(key);
+            this.#pendingStructureLoads.add(key);
+            rootKeys.set(key, root);
+          }),
+        );
       }
     }
     if (pending.length === 0) return;
