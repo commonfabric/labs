@@ -12,8 +12,7 @@
  *
  * It also holds each `main.tsx` under `patterns/` to the standalone floor: a
  * `main.tsx` entry is offered to people to place alone, so one that requires
- * an input with no default fails, unless `PENDING_STANDALONE_RENAMES` names it
- * as an entry still waiting to be renamed out of `main.tsx`.
+ * an input with no default fails.
  *
  *   deno task pattern-compat             # check (what CI runs)
  *   deno task pattern-compat --update    # record contracts that have no baseline
