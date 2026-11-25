@@ -16626,6 +16626,22 @@ export class Runner {
       setCfcImplementationIdentity(tx, builtinIdentity);
     }
 
+    // The node's identity: the cause the builtin's stores derive from, and the
+    // cause of the frame each of its runs carries (below).
+    const nodeCause: RawNodeCause = {
+      inputs: inputsCell,
+      parents: resultCell.entityId,
+      ...(resolvedOutputSpot
+        ? {
+          outputSpot: {
+            space: resolvedOutputSpot.space,
+            id: resolvedOutputSpot.id,
+            path: [...resolvedOutputSpot.path],
+          },
+        }
+        : {}),
+    };
+
     const builtinFrame = builtinIdentity
       ? pushFrameFromCause(undefined, {
         runtime: this.#runtime,
@@ -16670,19 +16686,7 @@ export class Runner {
           );
         },
         addCancel,
-        {
-          inputs: inputsCell,
-          parents: resultCell.entityId,
-          ...(resolvedOutputSpot
-            ? {
-              outputSpot: {
-                space: resolvedOutputSpot.space,
-                id: resolvedOutputSpot.id,
-                path: [...resolvedOutputSpot.path],
-              },
-            }
-            : {}),
-        } satisfies RawNodeCause,
+        nodeCause,
         // The parent cell under the pattern's result schema, whatever schema
         // the caller started the piece with: builtins copy it into the
         // `result` back-links of the cells they mint, and every runtime
@@ -16773,23 +16777,50 @@ export class Runner {
     );
     const rawName = schedulerRawActionName(rawTargetName, rawInstanceKey);
 
-    const action: Action = (tx: IExtendedStorageTransaction) => {
+    // Each run carries a frame of its own whose cause is the node's identity,
+    // in a frame context of its own, as a lift's run does. The ids the run
+    // mints come from that frame: an object it writes as an array element
+    // becomes a document whose id derives from the node's cause and from what
+    // the write writes (`frameAnchorIds()`), so every runtime running this
+    // node mints the same documents for the same write. Drawn from the
+    // runtime's own frame instead, they
+    // differ from runtime to runtime, and a client's speculative echo of the
+    // run then waits for documents the served run never writes
+    // (speculation.md §2, "A speculative run mints the ids the served run
+    // mints").
+    const action: Action = (tx: IExtendedStorageTransaction) =>
+      runInFrameContext(() => runBuiltin(tx));
+    const runBuiltin = (tx: IExtendedStorageTransaction) => {
       if (schedulerRehydration.implementationSelection?.matches(tx) === false) {
         return;
       }
+      const frame = pushFrameFromCause(nodeCause, {
+        builtinRun: true,
+        runtime: this.#runtime,
+        tx,
+        space: nodeResultCell.space,
+        ...(builtinIdentity ? { implementationIdentity: builtinIdentity } : {}),
+      });
       logger.timeStart("raw", "run", rawTargetName);
+      let popFrameAfterReturn = true;
       try {
         const result = builtinAction(tx);
         if (result instanceof Promise) {
-          return result.finally(() =>
-            logger.timeEnd("raw", "run", rawTargetName)
-          );
+          // The frame stays pushed until the run settles, in this run's own
+          // frame context, where nothing else running meanwhile sees it.
+          popFrameAfterReturn = false;
+          return result.finally(() => {
+            popFrame(frame);
+            logger.timeEnd("raw", "run", rawTargetName);
+          });
         }
         logger.timeEnd("raw", "run", rawTargetName);
         return result;
       } catch (error) {
         logger.timeEnd("raw", "run", rawTargetName);
         throw error;
+      } finally {
+        if (popFrameAfterReturn) popFrame(frame);
       }
     };
     setRunnableName(action, rawName, { setSrc: true });

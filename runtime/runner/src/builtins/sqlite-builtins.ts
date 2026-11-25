@@ -996,9 +996,8 @@ export function sqliteDatabase(
       // bake nulls over a good prior value. The prior handle stays; a runtime
       // that resolves fully (the creator, at least) writes the inline form.
       if (prior === undefined || dbTablesResolved(tables)) {
-        // RAW write, not `.set()`: this first action run can execute inside
-        // the pattern's builder frame, where `set` anchors every object
-        // in an array — splitting a rule's term list into per-element entity
+        // RAW write, not `.set()`: this action run carries the builtin's run
+        // frame, under which `set` anchors every object in an array — splitting a rule's term list into per-element entity
         // docs (the very shape the materialization above exists to avoid).
         // The raw write stores the subtree verbatim; `onlyIfDifferent` keeps
         // an unchanged re-derivation write-free (no hash churn per runtime).
