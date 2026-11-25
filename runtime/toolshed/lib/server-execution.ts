@@ -7,7 +7,8 @@
 // runtimes' storage sessions are in-process loopback connections with the
 // SAME signed session-open production clients present (plane a). OFF,
 // whether selected by the default or an explicit override, nothing here
-// runs and toolshed is byte-identical to the pre-v2 behavior.
+// runs, and `indexed-collection-host.ts` keeps the spaces' indexed
+// collections current instead.
 
 import {
   type EnvReader,

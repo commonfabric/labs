@@ -28,6 +28,7 @@ import {
   isCapable,
   isDeletionTombstone,
 } from "../acl.ts";
+import { asPatternIdentityRef } from "../../runner/src/meta-seam.ts";
 import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   type BranchCreateRequest,
@@ -418,6 +419,23 @@ const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
  * (`MAX_RESULT_LINK_DEPTH` in the runner's `ensure-piece-running.ts`).
  */
 const CURRENCY_ROOT_HOPS_MAX = 10;
+
+/** Whether `id` is that of a document a computation derives. */
+const isComputedId = (id: string): boolean => id.startsWith("computed:");
+
+/**
+ * Whether `document`, the stored space instance of a document, is one a
+ * structure load of it starts no piece from and finishes reading at: it is
+ * absent, or it carries no `result` field and no pattern pointer. The
+ * pattern pointer is tested with `asPatternIdentityRef()`, the test the
+ * load itself applies. A `result` field counts whatever it holds, so a
+ * document whose `result` holds no link is not plain, though a load of it
+ * may start nothing.
+ */
+const isPlainDocument = (document: EntityDocument | null): boolean =>
+  document === null ||
+  (!("result" in document) &&
+    asPatternIdentityRef(document.patternIdentity) === undefined);
 
 /**
  * How many times the change behind a trigger may come back to a space before
@@ -2862,6 +2880,9 @@ class Connection {
       );
       if (response.type === "hello.ok") {
         response.sessionOpen = this.issueSessionOpenAuth();
+        if (this.#slotLimit !== MAX_UNTRUSTED_MESSAGE_SLOTS) {
+          response.messageSlots = this.#slotLimit;
+        }
       }
       this.#send(response);
       if (response.type !== "hello.ok") {
@@ -4183,10 +4204,13 @@ export class Server {
        * is). It bounds the work one message can cost the server, so a
        * higher one is for a bounded operation that needs it, such as moving
        * the source of a holder with thousands of members, whose update
-       * sends one watch per member document. It may only raise the default,
-       * and construction throws for one below it: a direct client sizes the
-       * parts it stages a watch set in by the default, and nothing tells it
-       * of a lower limit, so a set it would send in parts would be refused. */
+       * sends one watch per member document. A connection's `hello.ok`
+       * carries a limit other than the default (`messageSlots`), and a
+       * direct client holds its requests to it. It may only raise the
+       * default, and construction throws for one below it: a client that
+       * does not read `messageSlots` sizes the parts it stages a watch set
+       * in by the default, so a set it would send in parts would be
+       * refused. */
       untrustedMessageSlots?: number;
 
       authorizeSessionOpen: (
@@ -13530,6 +13554,11 @@ export class Server {
    * being read, so one a session names at an instance narrower than the
    * space, which the space may hold no instance of, is judged too.
    *
+   * A root that is no `computed:` document and whose stored space instance
+   * is absent or carries neither a `result` field nor a pattern pointer
+   * (`isPlainDocument()`) is one a structure load starts no piece from,
+   * whatever writes it. It is judged as no piece and returned in `plain`.
+   *
    * A root may rest on a slice that read another space. Each space read by
    * a slice the demand rows are resolved under is followed first: one that
    * `space` is armed with is not asked, and any other is pulled from.
@@ -13541,12 +13570,13 @@ export class Server {
    * upstream of them alone.
    *
    * @returns The roots that pass, each with the piece it was judged as, the
-   * roots that are held, the reads that keep a held root or a running piece
-   * stale upstream, each with the piece to start for it, how many roots
-   * each reason refused, the slices marked since `space`'s serving loop
-   * last asked, and the earliest time a slice of `space` expires at or its
-   * arming with a space it reads runs out, where either does: the roots are
-   * to be judged again then, since no commit reports it.
+   * roots a load starts no piece from, the roots that are held, the reads
+   * that keep a held root or a running piece stale upstream, each with the
+   * piece to start for it, how many roots each reason refused, the slices
+   * marked since `space`'s serving loop last asked, and the earliest time a
+   * slice of `space` expires at or its arming with a space it reads runs
+   * out, where either does: the roots are to be judged again then, since no
+   * commit reports it.
    */
   async judgeCurrencyRoots(
     space: string,
@@ -13563,6 +13593,13 @@ export class Server {
      * it leaves the root unstarted.
      */
     servable: Array<{ root: string; piece: string; origins: string[] }>;
+
+    /**
+     * The roots a structure load starts no piece from (`isPlainDocument()`),
+     * absent where there is none.
+     */
+    plain?: string[];
+
     held: Array<{ root: string; piece: string; readers: string[] }>;
     upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
@@ -13588,10 +13625,15 @@ export class Server {
       return { servable: [], held: [], upstream: [], ...found() };
     }
 
+    /** The roots a structure load starts no piece from. */
+    const plain = new Set<string>();
+
     /**
      * The recorded piece `root` leads to: the one piece recorded as deriving
      * it where it is a computed document, or else the piece its back-links
-     * reach, if they reach one.
+     * reach, if they reach one. A root that is no computed document and
+     * whose stored space instance is plain leads to none, and is noted in
+     * `plain`.
      */
     const pieceOf = (root: string): string | undefined => {
       const deriver = selectCurrencyDeriver(engine, { space, id: root });
@@ -13605,6 +13647,10 @@ export class Server {
           id,
           scopeKey: "space",
         });
+        if (id === root && !isComputedId(root) && isPlainDocument(document)) {
+          plain.add(root);
+          return undefined;
+        }
         const link = document === null
           ? undefined
           : (document as Record<string, unknown>).result;
@@ -13619,10 +13665,17 @@ export class Server {
     for (const root of roots) {
       const piece = pieceOf(root);
       if (piece !== undefined) pieces.set(root, piece);
-      else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
+      else if (!plain.has(root)) {
+        refused["no-record"] = (refused["no-record"] ?? 0) + 1;
+      }
     }
+    /** What every return carries besides what the index judged. */
+    const unjudged = () => ({
+      ...(plain.size > 0 && { plain: [...plain] }),
+      ...found(),
+    });
     if (pieces.size === 0 && running.length === 0) {
-      return { servable: [], held: [], upstream: [], ...found() };
+      return { servable: [], held: [], upstream: [], ...unjudged() };
     }
     const demand = this.demandForSpace(
       space,
@@ -13697,7 +13750,7 @@ export class Server {
       const reason = reasons.get(piece);
       if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
     }
-    return { servable, held, upstream: judgment.upstream, ...found() };
+    return { servable, held, upstream: judgment.upstream, ...unjudged() };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a

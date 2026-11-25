@@ -246,7 +246,7 @@ Deno.test("shell: the foot of the page links to the repository pages, before the
   const html = shell("", "", 0, 30_000, TEST_VERSION, "good");
   assertStringIncludes(
     html,
-    `<div class="foot"><a class="pill" href="/repos">▤ Repositories</a><button class="theme-toggle"`,
+    `<div class="foot"><a class="pill" href="/repos">▤ Repositories</a><a class="pill" href="/runners">● Runners</a><button class="theme-toggle"`,
   );
   assert(
     html.indexOf(`id="dashboard-wide"`) < html.indexOf(`class="foot"`),

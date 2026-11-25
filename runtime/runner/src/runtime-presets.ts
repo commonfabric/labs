@@ -142,6 +142,16 @@
  * | moduleCompiler             | core-default (unset) — NEVER set by a preset:    |
  * |                            | only that same factory hands its runtimes the    |
  * |                            | compile worker its serving host owns             |
+ * | runBeacon                  | core-default (unset) — NEVER set by a preset:    |
+ * |                            | only that same factory, in a serving worker,     |
+ * |                            | hands its runtimes the worker's run beacon       |
+ * | indexedCollectionMaintenance | pinned `"none"` in productionServer /          |
+ * |                            | remoteClient / browserWorker: the toolshed they  |
+ * |                            | talk to maintains a space's collections, by its  |
+ * |                            | serving runtime or, with server execution off,   |
+ * |                            | its `IndexedCollectionHost`. Constructor default |
+ * |                            | in the single-process presets, which have no     |
+ * |                            | server and maintain their own collections        |
  *
  * One named departure a caller can opt into: `cfcPosture: "max-enforcement"`
  * (a `CoreParams` field) lays the {@link MAX_ENFORCEMENT_CFC_OPTIONS} bundle
@@ -241,6 +251,8 @@ export const RUNTIME_OPTION_KEYS = [
   "servingPosture",
   "compileTurns",
   "moduleCompiler",
+  "runBeacon",
+  "indexedCollectionMaintenance",
 ] as const satisfies readonly (keyof RuntimeOptions)[];
 
 export type RuntimeOptionKey = (typeof RUNTIME_OPTION_KEYS)[number];
@@ -746,6 +758,7 @@ export const runtimePresets = {
         experimental: withServerExecutionDefault(params.experimental),
       }),
       patternEnvironment: { apiUrl: params.patternApiUrl ?? params.apiUrl },
+      indexedCollectionMaintenance: "none",
       ...(params.fetch !== undefined ? { fetch: params.fetch } : {}),
       ...(params.consoleHandler !== undefined
         ? { consoleHandler: params.consoleHandler }
@@ -771,6 +784,7 @@ export const runtimePresets = {
         experimental: withServerExecutionDefault(params.experimental),
       }),
       patternEnvironment: { apiUrl: params.apiUrl },
+      indexedCollectionMaintenance: "none",
       ...(params.memoryHost !== undefined
         ? { memoryUrl: params.memoryHost }
         : {}),
@@ -863,6 +877,7 @@ export const runtimePresets = {
       clientClass: "web",
       ...coreOptions(params),
       patternEnvironment: { apiUrl: params.apiUrl },
+      indexedCollectionMaintenance: "none",
       ...(params.spaceHostMap !== undefined
         ? { spaceHostMap: params.spaceHostMap }
         : {}),

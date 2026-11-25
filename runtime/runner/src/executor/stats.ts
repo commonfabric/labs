@@ -390,6 +390,14 @@ export type ServingLoopStats = {
      * left. */
     servedFromStore: number;
 
+    /** Roots a judgment found to be documents a structure load starts no
+     * piece from: no `computed:` id, and a stored space instance that is
+     * absent or carries neither a `result` field nor a pattern pointer.
+     * Counted at each judgment that found it so, under every mode. The
+     * `skip` and `start-upstream` modes park each one as that load would,
+     * without the load; `record` loads it. */
+    plainRoots: number;
+
     /** Roots a judgment had left unloaded that were then loaded: an input
      * marked the piece, or a session's demand reached an instance the
      * piece does not vouch for. */
@@ -534,6 +542,13 @@ export type ServingLoopStats = {
      * that grows without `processed` settling names a drain copy that
      * never completes. */
     drainInFlightSkips: number;
+
+    /** Events whose handler's run held the thread of a serving worker the
+     * pool ended, which the drain sealed with the error as their
+     * consequence instead of running the handler again (events.md §5).
+     * Counted at the decision, so a seal whose wave is refused counts again
+     * when the next pass seals it. */
+    failedWithWorker: number;
 
     /** OW45 arm-B round: entries stuck at the drain's PRE-QUEUE
      * deferral barrier (a lagging sidecar view, a failing sidecar
@@ -867,13 +882,39 @@ export type ServingLoopStats = {
    * already serving another space because the pool was at its cap, and
    * `heapLimited` the workers, among the `failed` ones, that reached their
    * heap limit. `heapStopped` is how many spaces are on no worker now because
-   * a worker they were alone on reached its heap limit.
+   * a worker they were alone on reached its heap limit. `running` lists the
+   * workers whose run beacon showed a run holding the thread at the
+   * watchdog's last check (serving-loop.md §2, "The watchdog").
    */
   workers: {
     serving: number;
     spare: number;
     parked: number;
     heapUsed: number;
+
+    /** One entry per worker whose thread a run held at the last check. */
+    running: Array<{
+      /** The spaces placed on the worker. */
+      spaces: string[];
+
+      /**
+       * The space whose runtime runs it, the scheduler's id for the action
+       * (the key of its row in `actions`), the action's module or pattern
+       * name and its piece where known, and the event of a served handler's
+       * run; absent until the worker's notice naming the run has arrived.
+       */
+      space?: string;
+      action?: string;
+      name?: string;
+      piece?: string;
+      eventId?: string;
+
+      /** How many of the watchdog's checks in a row have found the run. */
+      checks: number;
+
+      /** The reads the run had made at the last check. */
+      reads: number;
+    }>;
     started: number;
     retired: number;
     evicted: number;
@@ -1010,6 +1051,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     servable: 0,
     refused: {},
     servedFromStore: 0,
+    plainRoots: 0,
     rearmed: 0,
     indexWakes: 0,
     expiryWakes: 0,
@@ -1027,6 +1069,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     coalescedPerWaveMax: 0,
     skippedIdempotent: 0,
     drainInFlightSkips: 0,
+    failedWithWorker: 0,
     preQueueDeferralStuck: 0,
     visibilityBarriers: 0,
     visibilityRecoveries: 0,
@@ -1085,6 +1128,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     spare: 0,
     parked: 0,
     heapUsed: 0,
+    running: [],
     started: 0,
     retired: 0,
     evicted: 0,

@@ -21,15 +21,10 @@
  * targets such as `.PHONY`, and the variables the file assigns.
  */
 
-import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
-import { flattenStructure } from "../../model.ts";
+import type { Document, Line, TokenClass } from "../../model.ts";
 import { linesFromClasses } from "../classes.ts";
 import { shellGrammar } from "../shell/shell.ts";
-import {
-  type LocatedEntry,
-  structureNode,
-  structureSource,
-} from "../structure.ts";
+import { type LocatedEntry, scannedDocument } from "../structure.ts";
 import { tokenClasses } from "../treesitter/adapter.ts";
 
 const CONDITIONALS = new Set([
@@ -809,15 +804,5 @@ export function makeLines(text: string): Line[] {
 /** Colors `text` and lists the targets and variables it defines. */
 export function makeDocument(text: string): Document {
   const scanner = new Scanner(text);
-  const source = structureSource(text);
-  const structure: StructureNode[] = scanner.entries.map((entry) =>
-    structureNode(source, entry, 0, () => [])
-  );
-  return {
-    text,
-    lines: linesFromClasses(text, scanner.classes, source.lineStarts),
-    structure,
-    flatStructure: flattenStructure(structure),
-    definitions: source.definitions,
-  };
+  return scannedDocument(text, scanner.classes, scanner.entries);
 }

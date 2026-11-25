@@ -53,7 +53,10 @@ import type {
   Pattern,
   Schema,
 } from "./builder/types.ts";
-import { IndexedCollectionMaintainer } from "./builtins/indexed-collection/maintainer.ts";
+import {
+  IndexedCollectionMaintainer,
+  type IndexedCollectionMaintenance,
+} from "./builtins/indexed-collection/maintainer.ts";
 import { registerBuiltins } from "./builtins/index.ts";
 import type { Cancel } from "./cancel.ts";
 import {
@@ -118,6 +121,7 @@ import {
   memoryHostForForeignOrigin,
 } from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
+import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
@@ -783,6 +787,27 @@ export interface RuntimeOptions {
    * (speculation.md; the Phase 2 posture). Ignored in the OFF arm.
    */
   servingPosture?: boolean;
+
+  /**
+   * Where this runtime's scheduler marks the body of each action run while it
+   * holds the thread: the run beacon of the serving worker this runtime
+   * serves a space in (`executor/run-beacon.ts`; serving-loop.md §2, "The
+   * watchdog"). Absent, the scheduler marks nothing.
+   */
+  runBeacon?: SpaceRunBeacon;
+
+  /**
+   * Which indexed collections this runtime keeps current: every collection
+   * the registries of the spaces it hears of list, as well as those it
+   * declares or writes (`"listed"`); only those it declares or writes
+   * (`"own"`); or none (`"none"`). Unset, a runtime in the serving posture
+   * maintains `"listed"`, any other runtime under server execution `"none"`,
+   * and the rest `"own"`. One runtime maintains a space's collections, so
+   * the presets for a runtime that talks to a deployed toolshed set
+   * `"none"`: the toolshed's serving runtime, or its `IndexedCollectionHost`
+   * while server execution is off, maintains them.
+   */
+  indexedCollectionMaintenance?: IndexedCollectionMaintenance;
 
   /** Rollout mode for commit-boundary CFC enforcement. Defaults to `enforce-strict`. */
   cfcEnforcementMode?: CfcEnforcementMode;
@@ -1712,6 +1737,9 @@ export class Runtime {
    */
   #serverExecutionRelease: (() => void) | undefined;
 
+  /** Where the scheduler marks each run's body (`RuntimeOptions.runBeacon`). */
+  readonly #runBeacon: SpaceRunBeacon | undefined;
+
   /** Serving posture (RuntimeOptions.servingPosture): true only for the
    * SpaceServer's own runtime. Gates the Phase-2 speculation-overlay
    * default (a serving runtime never speculates). */
@@ -2224,6 +2252,7 @@ export class Runtime {
     this.experimental.serverExecution = this.#explicitServerExecution ??
       getServerExecutionConfig();
     this.servingPosture = options.servingPosture === true;
+    this.#runBeacon = options.runBeacon;
     // Everything below can throw (URL parsing, host validation, engine
     // construction). The enabler claimed above is process-global state,
     // so a THROWING construction must roll it back — a leaked enabler
@@ -2406,7 +2435,15 @@ export class Runtime {
 
       // Register built-in modules with runtime injection
       registerBuiltins(this);
-      this.indexedCollections = new IndexedCollectionMaintainer(this);
+      this.indexedCollections = new IndexedCollectionMaintainer(
+        this,
+        options.indexedCollectionMaintenance ??
+          (this.servingPosture
+            ? "listed"
+            : this.experimental.serverExecution === true
+            ? "none"
+            : "own"),
+      );
 
       // Set this runtime as the current runtime for global cell compatibility
       // Removed setCurrentRuntime call - no longer using singleton pattern
@@ -3231,6 +3268,14 @@ export class Runtime {
     eventId: string,
   ): void {
     this.#speculationDestination()?.trackIntent(space, sidecarId, eventId);
+  }
+
+  /**
+   * Where the scheduler marks the body of each action run while it holds the
+   * thread (`RuntimeOptions.runBeacon`); `undefined` off a serving worker.
+   */
+  get runBeacon(): SpaceRunBeacon | undefined {
+    return this.#runBeacon;
   }
 
   /** The client-effect channel of a flag-ON non-serving runtime

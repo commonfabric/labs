@@ -1,9 +1,9 @@
-import { getLogger } from "@commonfabric/logger";
 import { html, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { HostActivationController } from "../../core/host-activation-controller.ts";
 import { oneOf } from "../../core/property-guards.ts";
 import {
   applyThemeToElement,
@@ -39,8 +39,6 @@ const buttonColors = ["neutral", "primary", "accent", "danger"] as const;
 const buttonSizes = ["xs", "sm", "md", "lg", "xl", "icon"] as const;
 const buttonTypes = ["button", "submit", "reset"] as const;
 
-const logger = getLogger("cf-button", { enabled: false, level: "debug" });
-
 //
 // Accessibility strategy
 //
@@ -48,10 +46,8 @@ const logger = getLogger("cf-button", { enabled: false, level: "debug" });
 // The shadow DOM contains a <button> for styling (part="button") with
 // aria-hidden="true" to prevent a duplicate role in the a11y tree.
 //
-// delegatesFocus is NOT used because browsers refuse to apply
-// aria-hidden on a focused element ("Blocked aria-hidden on an element
-// because its descendant retained focus"). Instead, the host owns
-// tabindex and a keydown listener for Enter/Space activation.
+// The host takes focus and activation keys through
+// HostActivationController, which says why it is the host.
 //
 // aria-hidden also hides the <slot> content from the a11y tree, so the
 // host would lose its computed accessible name. We restore it by syncing
@@ -62,11 +58,6 @@ const logger = getLogger("cf-button", { enabled: false, level: "debug" });
 
 export class CFButton extends BaseElement {
   static override styles = [BaseElement.baseStyles, styles];
-  // No delegatesFocus — the host owns role="button", tabindex, and
-  // keyboard handling. Focus stays on the host; the inner button is
-  // purely visual and aria-hidden. delegatesFocus would send focus to
-  // the inner button, which browsers refuse to hide ("Blocked
-  // aria-hidden on a focused element").
 
   static override properties = {
     color: { type: String, reflect: true },
@@ -93,6 +84,13 @@ export class CFButton extends BaseElement {
   /** The aria-label `_syncAriaLabel()` last wrote, if any. */
   #syncedAriaLabel: string | null = null;
 
+  #activation = new HostActivationController(this, {
+    role: "button",
+    keys: ["Enter", " "],
+    isDisabled: () => this.disabled,
+    activate: (event) => this._handleClick(event),
+  });
+
   constructor() {
     super();
     this.color = "primary";
@@ -100,50 +98,12 @@ export class CFButton extends BaseElement {
     this.size = "md";
     this.disabled = false;
     this.type = "button";
-
-    // Suppress click events on the host element when disabled.
-    // JSX attaches onClick handlers to the host element, but click events
-    // cross the shadow boundary and would fire even when disabled. The drop
-    // is otherwise silent, so it is counted and, with the logger enabled,
-    // logged.
-    this.addEventListener(
-      "click",
-      (e) => {
-        if (this.disabled) {
-          logger.debug("dropped", () => [
-            `cf-button dropped a click while disabled (${
-              JSON.stringify(this.textContent?.trim() ?? "")
-            })`,
-          ]);
-          e.stopImmediatePropagation();
-        }
-      },
-      { capture: true },
-    );
-
-    // Handle submit/reset for clicks from ANY source (mouse click on inner
-    // button bubbles through shadow boundary to host; keyboard Enter/Space
-    // fires this.click() which also reaches here).
-    this.addEventListener("click", (e) => {
-      this._handleClick(e);
-    });
-
-    // The host carries role="button" and tabindex, so it receives keyboard
-    // events directly. Activate on Enter/Space like a native button.
-    this.addEventListener("keydown", (e: KeyboardEvent) => {
-      if (this.disabled) return;
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        this.click();
-      }
-    });
   }
 
   override firstUpdated(
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
     super.firstUpdated(changedProperties);
-    this._updateAccessibilityAttributes();
 
     // Sync the host's aria-label from slotted text content. The inner
     // <button> is aria-hidden, so the slot content is invisible to the
@@ -156,17 +116,16 @@ export class CFButton extends BaseElement {
   }
 
   override connectedCallback() {
+    if (!this.hasAttribute("exportparts")) {
+      this.setAttribute("exportparts", "button");
+    }
     super.connectedCallback();
-    this._updateAccessibilityAttributes();
   }
 
   override updated(
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
     super.updated(changedProperties);
-    if (changedProperties.has("disabled")) {
-      this._updateAccessibilityAttributes();
-    }
     if (changedProperties.has("theme")) {
       applyThemeToElement(this, this.theme);
     }
@@ -185,17 +144,6 @@ export class CFButton extends BaseElement {
       this.size = oneOf(this.size, buttonSizes, "md");
       this.type = oneOf(this.type, buttonTypes, "button");
     }
-  }
-
-  private _updateAccessibilityAttributes() {
-    if (!this.hasAttribute("role")) {
-      this.setAttribute("role", "button");
-    }
-    if (!this.hasAttribute("exportparts")) {
-      this.setAttribute("exportparts", "button");
-    }
-    this.tabIndex = this.disabled ? -1 : 0;
-    this.setAttribute("aria-disabled", String(this.disabled));
   }
 
   /**
@@ -226,9 +174,8 @@ export class CFButton extends BaseElement {
     if (this.size) classes[this.size] = true;
 
     // The inner <button> is aria-hidden so only the host appears in the
-    // a11y tree with role="button". delegatesFocus forwards focus to the
-    // inner button, which handles Enter/Space natively. The host's
-    // aria-label is synced from slotted textContent via slotchange.
+    // a11y tree with role="button", and the host takes focus and keys. The
+    // host's aria-label is synced from slotted textContent via slotchange.
     return html`
       <button
         class="${classMap(classes)}"
@@ -244,8 +191,7 @@ export class CFButton extends BaseElement {
     `;
   }
 
-  // A click while disabled never arrives here: the capture listener the
-  // constructor adds stops it first.
+  // A click while disabled never arrives here: #activation stops it first.
   private _handleClick(e: Event) {
     // For submit/reset types, we need to manually find the ancestor cf-form
     // because the native button in our shadow DOM can't find forms across

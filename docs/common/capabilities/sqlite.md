@@ -402,6 +402,10 @@ export default pattern<{ favorite: Cell<Donut> }, {
   collection" in `docs/features/indexed-collections.md`.
 - A collection can gain columns, relations and indexes later. The runtime
   re-reads every member once to fill them in.
+- The database belongs to the place in the pattern that declares the
+  collection, so an update of the pattern keeps it and its members. An update
+  that renumbers that declaration among the pattern's anonymous cells gives the
+  collection a new, empty database.
 - To join two kinds of cell in one statement, declare them as kinds of one
   collection: `indexedCollections({ donuts: { … }, orders: { … } })`.
 - A field stored per user or per session cannot be mirrored, and `add()`

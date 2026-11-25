@@ -7,9 +7,11 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { join, toFileUrl } from "@std/path";
 
 import {
   createHighlighter,
+  type EmbeddedColoring,
   finishGrammarLoads,
   highlightLines,
   onGrammarLoad,
@@ -59,6 +61,81 @@ describe("adapter", () => {
 
       expect(reads).toBe(1);
       expect(verbatim(highlightLines(counted, "x = 1"))).toBe("x = 1");
+    });
+
+    it("compiles a grammar file that two grammars share once", async () => {
+      // The second grammar loads after the file is gone, from the first's
+      // compilation.
+      const directory = await Deno.makeTempDir();
+      const copy = join(directory, "shared.wasm");
+      await Deno.copyFile(new URL(pythonGrammar.wasmUrl()), copy);
+      const wasmUrl = () => toFileUrl(copy).href;
+      try {
+        await prepareGrammar({
+          ...pythonGrammar,
+          id: "python-shared-a",
+          wasmUrl,
+        });
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+      const second = { ...pythonGrammar, id: "python-shared-b", wasmUrl };
+      await prepareGrammar(second);
+
+      expect(classesOf(highlightLines(second, "x = 1"), "1")).toEqual([
+        "number",
+      ]);
+    });
+
+    it("loads a grammar once what colors its embedded stretches has loaded", async () => {
+      const embedded = Promise.withResolvers<void>();
+      const grammar: TreeSitterGrammar = {
+        ...pythonGrammar,
+        id: "python-embedded-load",
+        prepareEmbedded: () => embedded.promise,
+      };
+      const failures: (string | undefined)[] = [];
+      const stop = onGrammarLoad((failure) => failures.push(failure));
+      try {
+        const prepared = prepareGrammar(grammar);
+        // The parser compiles once for both grammars.
+        await prepareGrammar(pythonGrammar);
+        expect(classesOf(highlightLines(grammar, "x = 1"), "x = 1")).toEqual([
+          "plain",
+        ]);
+        expect(failures).toEqual([]);
+
+        embedded.resolve();
+        await prepared;
+
+        expect(failures).toEqual([undefined]);
+        expect(classesOf(highlightLines(grammar, "x = 1"), "1")).toEqual([
+          "number",
+        ]);
+      } finally {
+        embedded.resolve();
+        stop();
+      }
+    });
+
+    it("reads a shared grammar file again after a failed read", async () => {
+      const directory = await Deno.makeTempDir();
+      const copy = join(directory, "late.wasm");
+      const wasmUrl = () => toFileUrl(copy).href;
+      try {
+        await expect(
+          prepareGrammar({ ...pythonGrammar, id: "python-late-a", wasmUrl }),
+        ).rejects.toThrow(/the python-late-a grammar could not be read/);
+        await Deno.copyFile(new URL(pythonGrammar.wasmUrl()), copy);
+        const second = { ...pythonGrammar, id: "python-late-b", wasmUrl };
+        await prepareGrammar(second);
+
+        expect(classesOf(highlightLines(second, "x = 1"), "1")).toEqual([
+          "number",
+        ]);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
     });
 
     it("names the grammar when its parser cannot be read", async () => {
@@ -468,6 +545,138 @@ describe("adapter", () => {
       const highlighter = createHighlighter(pythonGrammar, "x = 1\n");
 
       expect(highlighter.update("x = 1\n")).toBe(highlighter.lines);
+    });
+  });
+
+  describe("embedded stretches", () => {
+    // A grammar under which another language colors each string's text as
+    // numbers, except text holding "pending", which that language has not
+    // loaded. It records the stretches it colors, whether the highlighter was
+    // editing, and the texts it colored from an earlier coloring.
+
+    const colored: string[] = [];
+    const editing: boolean[] = [];
+    const updated: string[] = [];
+
+    function numbers(text: string): EmbeddedColoring | undefined {
+      // A word after a space is left unclaimed.
+      if (text.includes("pending")) return undefined;
+      const classes = new Array(text.length);
+      return {
+        classes: classes.fill("number", 0, (text + " ").indexOf(" ")),
+        update: (next) => {
+          updated.push(next);
+          return numbers(next)!;
+        },
+      };
+    }
+
+    const grammar: TreeSitterGrammar = {
+      ...pythonGrammar,
+      id: "python-embedded-strings",
+      *embedded(root) {
+        const strings = root.descendantsOfType("string_content");
+        for (const [ordinal, node] of strings.entries()) {
+          const text = node.text;
+          yield {
+            start: node.startIndex,
+            end: node.endIndex,
+            key: text,
+            slot: String(ordinal),
+            color: (whileEditing, earlier) => {
+              colored.push(text);
+              editing.push(whileEditing);
+              return earlier?.update?.(text) ?? numbers(text);
+            },
+          };
+        }
+      },
+    };
+
+    it("gives a stretch the other language's classes over the query's", async () => {
+      await prepareGrammar(grammar);
+      colored.length = 0;
+
+      const lines = highlightLines(grammar, 'a = "one"\nb = "pending"\n');
+
+      expect(classesOf(lines, "one")).toEqual(["number"]);
+      expect(classesOf(lines, '"')).toEqual(["string", "string"]);
+      expect(classesOf(lines, '"pending"')).toEqual(["string"]);
+      expect(colored).toEqual(["one", "pending"]);
+    });
+
+    it("leaves uncolored the characters the other language does not claim", async () => {
+      await prepareGrammar(grammar);
+
+      const lines = highlightLines(grammar, 'a = "one two"\n');
+
+      expect(classesOf(lines, "one")).toEqual(["number"]);
+      expect(classesOf(lines, "two")).toEqual(["plain"]);
+    });
+
+    it("throws when the other language's classes do not fit the stretch", async () => {
+      const misfit: TreeSitterGrammar = {
+        ...pythonGrammar,
+        id: "python-embedded-misfit",
+        *embedded(root) {
+          for (const node of root.descendantsOfType("string_content")) {
+            yield {
+              start: node.startIndex,
+              end: node.endIndex,
+              key: node.text,
+              slot: node.text,
+              color: () => ({
+                classes: new Array(node.text.length + 1).fill("number"),
+              }),
+            };
+          }
+        },
+      };
+      await prepareGrammar(misfit);
+
+      expect(() => highlightLines(misfit, 'a = "one"\n')).toThrow(
+        "gave 4 classes for a stretch of 3 characters",
+      );
+    });
+
+    it("colors stretches with the same key once in a coloring", async () => {
+      await prepareGrammar(grammar);
+      colored.length = 0;
+
+      const lines = highlightLines(
+        grammar,
+        'a = "one"\nb = "one"\nc = "two"\n',
+      );
+
+      expect(classesOf(lines, "one")).toEqual(["number", "number"]);
+      expect(colored).toEqual(["one", "two"]);
+    });
+
+    it("colors again only the stretches an update changed", async () => {
+      await prepareGrammar(grammar);
+      const before = 'a = "one"\nb = "two"\nc = "pending"\n';
+      const after = before.replace('"two"', '"three"');
+      const highlighter = createHighlighter(grammar, before);
+      colored.length = 0;
+
+      const lines = highlighter.update(after);
+
+      expect(colored).toEqual(["three", "pending"]);
+      expect(lines).toEqual(highlightLines(grammar, after));
+    });
+
+    it("colors a changed stretch from its slot's earlier coloring while editing", async () => {
+      await prepareGrammar(grammar);
+      const before = 'a = "one"\nb = "two"\n';
+      editing.length = 0;
+      updated.length = 0;
+
+      highlightLines(grammar, before);
+      const highlighter = createHighlighter(grammar, before);
+      highlighter.update(before.replace('"two"', '"three"'));
+
+      expect(editing).toEqual([false, false, true, true, true]);
+      expect(updated).toEqual(["three"]);
     });
   });
 });

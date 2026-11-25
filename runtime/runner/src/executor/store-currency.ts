@@ -39,10 +39,13 @@ export const CURRENCY_INDEX_MODES = [
  *   every root. A piece that runs and is stale only through what is upstream
  *   of it has the pieces upstream started.
  * - `skip` leaves unloaded each root the judgment says the store can serve,
- *   and does nothing else on the judgment: a root that is stale only through
- *   what is upstream of it is loaded as a refused one is, so its piece
+ *   parks without a load each root the judgment says a load starts no piece
+ *   from, and does nothing else on the judgment: a root that is stale only
+ *   through what is upstream of it is loaded as a refused one is, so its piece
  *   derives from what the store holds of the pieces upstream, and nothing
- *   upstream is started for it or for a piece that runs.
+ *   upstream is started for it or for a piece that runs. It carries no
+ *   demand, into another space or its own, as a loop that keeps no index
+ *   carries none.
  * - `start-upstream` does what `skip` does, and where a root or a running
  *   piece is stale only through what is upstream of it, starts the pieces
  *   upstream and holds the root unloaded meanwhile.
@@ -281,6 +284,15 @@ export class StoreCurrency {
   /** Whether a root the store can serve is left unloaded. */
   get skips(): boolean {
     return this.#mode !== "record";
+  }
+
+  /**
+   * Whether the loop carries demand (serving-loop.md §3b): into the spaces
+   * its runs read, and into its own space for what keeps something stale
+   * upstream or what a withdrawn run waits on. Every mode but `skip`.
+   */
+  get carriesDemand(): boolean {
+    return this.#mode !== "skip";
   }
 
   /** Whether any root is left unloaded on a judgment. */
@@ -681,8 +693,9 @@ export class StoreCurrency {
    * @returns The keys the store can serve, which the caller leaves unloaded
    * where the loop skips (`skips`) and loads anyway under `record`, with the
    * pieces each rests on that record a source origin (`origins`), which the
-   * caller follows first; the keys held because what the store holds of
-   * them is stale only upstream, which the caller leaves unloaded while the
+   * caller follows first; the keys a structure load starts no piece from,
+   * which the caller parks without a load where the loop skips; the keys held because what the store holds of them is
+   * stale only upstream, which the caller leaves unloaded while the
    * pieces upstream are started (`upstreamReads`), and which only a
    * `start-upstream` loop returns any of; and the keys a judgment had left
    * unloaded that an input has since marked, which the caller re-arms at
@@ -697,6 +710,7 @@ export class StoreCurrency {
     {
       servable: string[];
       origins: ReadonlyMap<string, readonly string[]>;
+      plain: string[];
       held: string[];
       rearm: CurrencyRearm[];
     }
@@ -738,6 +752,7 @@ export class StoreCurrency {
       return {
         servable,
         origins: this.#originsOf(servable),
+        plain: [],
         held: [...candidates.keys()].filter((key) => this.#held.has(key)),
         rearm: [],
       };
@@ -795,10 +810,22 @@ export class StoreCurrency {
     const holding = new Map(
       judged.held.map(({ root, piece, readers }) => [root, { piece, readers }]),
     );
+    const plainRoots = new Set(judged.plain);
     const servable: string[] = [];
+    const plain: string[] = [];
     const held: string[] = [];
     const rearm: CurrencyRearm[] = [];
     for (const [key, root] of candidates) {
+      // A document a load starts no piece from rests on no piece, so no mark
+      // reaches it. The caller parks it as that load would, and a commit to
+      // it brings the load.
+      if (plainRoots.has(root)) {
+        this.#served.delete(key);
+        this.#held.delete(key);
+        plain.push(key);
+        this.#stats.currency.plainRoots += 1;
+        continue;
+      }
       const piece = pieces.get(root);
       // A piece with nodes here is running, and its root is loaded as one a
       // start already covers.
@@ -854,7 +881,13 @@ export class StoreCurrency {
       const seq = markingSeq(judged.marked, left.piece);
       if (seq !== undefined) rearm.push({ key, seq });
     }
-    return { servable, origins: this.#originsOf(servable), held, rearm };
+    return {
+      servable,
+      origins: this.#originsOf(servable),
+      plain,
+      held,
+      rearm,
+    };
   }
 
   /**

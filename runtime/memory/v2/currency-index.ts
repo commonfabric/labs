@@ -34,6 +34,7 @@ import {
   fabricAwareEqual,
   isFabricPlainObject,
 } from "@commonfabric/data-model";
+import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import {
   decodeTrustedMemoryBoundary,
   DEFAULT_BRANCH,
@@ -106,11 +107,12 @@ export { ANY_INSTANCE };
  * its inputs is stale, `2` one of its own rows is behind or the slice was
  * not vouched for.
  *
- * An input is stale where it is a computed instance whose writer is marked,
- * is unrecorded or no longer vouches for it, and where it is an instance of
- * another space that its source reported stale upstream. A row is behind
- * where its document's head is above it, in this store or, for a read in
- * another space, in what its source last reported.
+ * An input is stale where it is a computed instance whose recorded writer is
+ * marked or no longer vouches for it, where it is a derived document no
+ * computation may have produced yet (`unproduced()`), and where it is an
+ * instance of another space that its source reported stale upstream. A row
+ * is behind where its document's head is above it, in this store or, for a
+ * read in another space, in what its source last reported.
  */
 export type CurrencyMark = 0 | 1 | 2;
 
@@ -144,7 +146,8 @@ export type CurrencyExport = CurrencyInstance & {
   /**
    * Whether what the source holds is stale upstream: a recorded piece there
    * computes the instance, and a slice that decides it is marked or none
-   * vouches for it, or it is a derived document no recorded piece writes.
+   * vouches for it, or it is a derived document no recorded piece writes
+   * that no computation may have produced yet (`unproduced()`).
    */
   stale: boolean;
 };
@@ -741,6 +744,9 @@ WHERE branch = :branch
   selectAnyExport: engine.prepare(`
 SELECT 1 AS found FROM currency_export WHERE branch = :branch LIMIT 1
 `),
+  selectStaleExports: engine.prepare(`
+SELECT id, scope_key FROM currency_export WHERE branch = :branch AND stale = 1
+`),
   selectExportsOfId: engine.prepare(`
 SELECT scope_key FROM currency_export WHERE branch = :branch AND id = :id
 `),
@@ -908,10 +914,57 @@ const vouchesFor = (
 };
 
 /**
+ * Whether the instance `(id, scopeKey)` of this store, a derived document no
+ * recorded piece writes, may be one no computation has produced yet: the
+ * store holds no such instance, or the instance is a cell of a piece the
+ * index holds no record of, by the `result` back-link its piece's setup
+ * writes. Setup writes a piece's cells before its computations run, a
+ * default into some, and only the piece's record, whose write rows name the
+ * cells its computations write, tells those from the rest. An instance read
+ * at no one key is not asked about.
+ */
+const unproduced = (
+  context: Context,
+  id: string,
+  scopeKey: string,
+): boolean => {
+  if (scopeKey === ANY_INSTANCE) {
+    return headOfInstance(context, id, ANY_INSTANCE) === 0;
+  }
+  const owner = cellOwner(context, id, scopeKey);
+  return owner === null ||
+    (owner !== undefined && slicesOf(context, owner).length === 0);
+};
+
+/**
+ * The piece the instance `(id, scopeKey)` of this store is a cell of, by
+ * the `result` back-link its piece's setup writes onto it; `undefined` for
+ * an instance that holds no back-link, and `null` where the store holds no
+ * such instance.
+ */
+const cellOwner = (
+  context: Context,
+  id: string,
+  scopeKey: string,
+): string | null | undefined => {
+  const document = read(context.engine, {
+    id,
+    branch: context.branch,
+    scopeKey,
+  }) as Record<string, unknown> | null;
+  if (document === null) return null;
+  const link = document.result;
+  if (!isLinkRef(link)) return undefined;
+  const owner = linkRefPayload(link).id;
+  return typeof owner === "string" ? owner : undefined;
+};
+
+/**
  * What keeps the instance `(id, scopeKey)` of this store from being called
- * current: whether it is a derived document no recorded piece writes,
- * whether a recorded piece computes it and none vouches for it, and the
- * marked slices that decide it. `self` is a slice that does not count
+ * current: whether it is a derived document no recorded piece writes that
+ * no computation may have produced yet (`unproduced()`), whether a
+ * recorded piece computes it and none vouches for it, and the marked slices
+ * that decide it. `self` is a slice that does not count
  * against an instance it decides itself.
  */
 const staleInstance = (
@@ -929,11 +982,19 @@ const staleInstance = (
     { piece: string }
   >;
   // The recording runtime knows a document as derived only while its writer
-  // is loaded there, so every read is looked up among the recorded writers,
-  // and the flag decides only whether a read with none is an input nothing
-  // computes or one whose producer is unknown.
+  // is loaded there, so every read is looked up among the recorded writers.
+  // A derived document none of them writes is written by something the
+  // index has no record of: a computation of a piece no record names, one
+  // that writes outside its declared surface, a setup run, a handler. It is
+  // read as an input, which marks its readers when it changes, and is stale
+  // only while no computation has produced it, so that a reader does not
+  // pass on what its piece's setup left before the piece ran.
   if (writers.length === 0) {
-    return { unrecorded: derived, unvouched: false, producers: [] };
+    return {
+      unrecorded: derived && unproduced(context, id, scopeKey),
+      unvouched: false,
+      producers: [],
+    };
   }
   let vouched = false;
   const producers: SliceRef[] = [];
@@ -1009,8 +1070,9 @@ const readsStaleImport = (context: Context, ref: SliceRef): boolean => {
 
 /**
  * What keeps an input of `ref` from being called current: whether it read a
- * derived document no recorded piece writes, whether it read an instance
- * that a recorded piece computes and none vouches for, whether it read an
+ * derived document no recorded piece writes that no computation may have
+ * produced yet, whether it read an instance that a recorded piece computes
+ * and none vouches for, whether it read an
  * instance of another space that its source reported stale upstream or has
  * reported nothing of, and the other marked slices that decide an instance
  * it read.
@@ -1067,9 +1129,9 @@ const staleInputsOf = (
  * between `ref` and such a piece. Starting those pieces is then what can
  * clear `ref`, and starting its own piece is not. `undefined` where
  * something else keeps `ref` stale: a derived document no recorded piece
- * writes, an instance of another space, a read that names no one instance,
- * an instance of a piece whose record was stored not vouched for, or
- * nothing at all.
+ * writes and no computation may have produced, an instance of another
+ * space, a read that names no one instance, an instance of a piece whose
+ * record was stored not vouched for, or nothing at all.
  */
 const upstreamReadsOf = (
   context: Context,
@@ -1429,9 +1491,26 @@ const contextFor = (engine: Engine, space: string): Context => ({
   engine,
   branch: DEFAULT_BRANCH,
   space,
-  statements: statementsFor(engine),
+  statements: preparedFor(engine),
   now: Date.now(),
 });
+
+/**
+ * The prepared statements of each engine. A judgment asks about each of its
+ * roots with a call of its own, and gathering the statements for each call
+ * looks every one of them up again.
+ */
+const prepared = new WeakMap<Engine, Statements>();
+
+/** The prepared statements over the index, for `engine`, gathered once. */
+const preparedFor = (engine: Engine): Statements => {
+  let statements = prepared.get(engine);
+  if (statements === undefined) {
+    statements = statementsFor(engine);
+    prepared.set(engine, statements);
+  }
+  return statements;
+};
 
 /**
  * The context of a call that changes the index. It keeps what the call
@@ -2196,6 +2275,22 @@ const refreshTouched = (context: Context): void => {
     >;
     for (const { scope_key } of rows) {
       refreshExport(context, { id, scopeKey: scope_key });
+    }
+  }
+  // A cell is stale while its piece has no record (`unproduced()`), and the
+  // piece's first record names no write of a cell its computations do not
+  // write, so the cells of each touched piece reported stale are asked
+  // about again here.
+  if (touched.pieces.size > 0) {
+    const stale = statements.selectStaleExports.all({ branch }) as Array<
+      { id: string; scope_key: string }
+    >;
+    for (const { id, scope_key } of stale) {
+      if (touched.ids.has(id)) continue;
+      const owner = cellOwner(context, id, scope_key);
+      if (owner && touched.pieces.has(owner)) {
+        refreshExport(context, { id, scopeKey: scope_key });
+      }
     }
   }
   touched.pieces.clear();

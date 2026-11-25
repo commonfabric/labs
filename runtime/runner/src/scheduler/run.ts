@@ -145,12 +145,20 @@ export function invokeReactiveAction(state: {
     // Track executing action for parent-child relationship tracking.
     state.setExecutingAction(args.action, args.actionId);
     logger.timeStart("scheduler", "run", "action");
+    const body = () => {
+      state.runtime.scheduler.prepareViewAction(args.tx, args.action);
+      state.runtime.scheduler.beginViewAction(args.action);
+      return args.action(args.tx);
+    };
+    // A serving worker's runtime marks the body on its worker's run beacon
+    // (serving-loop.md §2, "The watchdog").
+    const beacon = state.runtime.runBeacon;
     return Promise.resolve(
-      state.runtime.harness.invoke(() => {
-        state.runtime.scheduler.prepareViewAction(args.tx, args.action);
-        state.runtime.scheduler.beginViewAction(args.action);
-        return args.action(args.tx);
-      }),
+      beacon === undefined ? state.runtime.harness.invoke(body) : beacon.hold(
+        args.action,
+        args.actionId,
+        () => state.runtime.harness.invoke(body),
+      ),
     )
       .then((actionResult) => {
         logger.timeEndDetailed(measureDetail, "scheduler", "run", "action");

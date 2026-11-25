@@ -379,6 +379,22 @@ describe("pattern", () => {
       expect(disposed).toBe(1);
     });
 
+    it("sends standalone for --standalone, a part for --part, and nothing for neither", async () => {
+      await share(
+        options({ skipLocalCheck: true, standalone: true }),
+        entry,
+        deps(),
+      );
+      await share(options({ skipLocalCheck: true, part: true }), entry, deps());
+      await share(options({ skipLocalCheck: true }), entry, deps());
+
+      const sent = index.calls.filter((call) => call.fn === "publishPattern")
+        .map((call) =>
+          Object.hasOwn(call.body, "standalone") ? call.body.standalone : "-"
+        );
+      expect(sent).toEqual([true, false, "-"]);
+    });
+
     it("shares the version it kept on beta, by link only, and asks for no listing", async () => {
       await share(options({ skipLocalCheck: true }), entry, deps());
 

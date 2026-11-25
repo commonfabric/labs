@@ -1278,6 +1278,22 @@ Deno.test("unusedGrammarDirectories returns every directory of a grammar's packa
   }
 });
 
+Deno.test("unusedGrammarDirectories lists a package's directories once for grammars that share it", async () => {
+  const root = await Deno.makeTempDir({ prefix: "grammar-package-" });
+  try {
+    await writeFile(`${root}/pkg/package.json`, "{}");
+    await writeFile(`${root}/pkg/tree-sitter-x.wasm`, "");
+    await writeFile(`${root}/pkg/src/parser.c`, "");
+    const wasmUrl = () => toFileUrl(`${root}/pkg/tree-sitter-x.wasm`).href;
+    assertEquals(
+      unusedGrammarDirectories([{ id: "x", wasmUrl }, { id: "y", wasmUrl }]),
+      [`${root}/pkg/src`],
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("buildShell moves each build of the shell into the frontend toolshed serves", async () => {
   const root = await makeFakeRepo();
   try {

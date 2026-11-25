@@ -853,12 +853,61 @@ accesses, so its policy does not have to be repeated on the unchanged consumer
 contract. Capability-kind and scope checks still apply. Changed handle contracts
 require the full producer-contract proof.
 
+A link the piece already holds, to a document that carries no contract of its
+own and whose whole value is a link, stands for the link that document holds.
+Pushing a piece onto an input list stores such a row, linked from the list and
+linking to the piece, and the producer contract proved for the list's link is
+the piece's: the one found by following rows to the first document that carries
+a contract. A row is a whole document: a link to a place inside one is not
+followed, since the path to that place could cross a link partway. A row's value
+is read only where stored-argument validation would read it, in the input
+document's own space and scope and storing no confidentiality label, and only in
+a document that belongs to no piece. Following ends without a contract at a row
+that is not such a document, an absent one, a document that holds anything but a
+link, a document already visited, and after eight rows, and the link is then
+proved as a link to a document with no contract is. A producer reached through
+rows is held to the destination's scope cap as the first document is. Where that
+producer is a piece's input, its contract is recovered through the piece's
+result, which is read under the same rule as a row: a result in another space or
+scope, or one storing a confidentiality label, is not read, and the contract is
+then unproven.
+
+Rows are followed for a retained link and not for a new binding. A row can be
+pointed at another producer after the binding is made, so a contract recovered
+through it is not one the binding keeps, and a new binding takes the linked
+document's own contract or none. Before the proof, each row and the documents
+its producer's contract is recovered from are loaded, so a replica that has
+pulled none of them reaches the verdict one that holds them all does. The
+evidence a confirmation is held to names the document the contract came from
+and the contract, so pointing a row at another producer makes an earlier
+confirmation stale.
+
 Retaining a handle proves continuity of the consumer contract, not a historical
 producer-contract check: writes that bypass `PiecesController.link`, such as
 `setRawUntyped` and `cf cell set`, can omit that check, and the producer schema
 can change after the link is stored. The retained-handle rule relies on
 producer enforcement at access and commit time for payload and flow-policy
 constraints rather than re-proving their subset relation during the update.
+
+A committed link to a document that carries no contract of its own, such as an
+element pushed onto an input array, is held to the piece's prior input contract
+at the link's path: the candidate's contract there must accept everything that
+contract admits. One case is judged under the piece-evolution policy instead, as
+the same value written inline in the input is. The link sits at a position the
+candidate reads as a value, and the document is in the input document's own
+space and scope, stores no confidentiality label, and is present in the
+validating transaction. A link the
+document holds leads to more of the same: it sits at a position the candidate
+reads as a value, and reaches a document that meets these conditions in turn and
+carries no contract of its own, as a pushed comment whose author is an earlier
+comment's author does. Stored-argument validation reads such a document in
+full, so a stored value the candidate cannot read still refuses the update. A
+handle, a document in another space or scope, a labeled document, a document
+that belongs to a piece, and a document that links to anything else keep the
+proof without the policy. Deciding this reads what validation reads and no more:
+each document on the way is read one hop at a time, a labeled document's value
+and a piece's are not read, and a position whose handle wrappers the candidate
+cannot settle is not taken for a value.
 
 Whether an automatic origin update runs these comparisons turns on one
 question: did anything gate the release that produced the candidate?

@@ -2075,6 +2075,43 @@ boardTest("routes: a tile's drill-down path wins over the page; anything else is
   assertStringIncludes(await fallback.text(), "<title>Dashboard — LIVE</title>");
 });
 
+boardTest("routes: /runners is the runners page, marked with the serving version", async () => {
+  const res = await handle(req("/runners"));
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get(VERSION_HEADER), SERVING_VERSION);
+  assertEquals(res.headers.get("content-type"), "text/html; charset=utf-8");
+  assertStringIncludes(await res.text(), "<title>Runners</title>");
+});
+
+boardTest("routes: /runners/socket without a WebSocket upgrade is a 426", async () => {
+  const res = await handle(req("/runners/socket"));
+  assertEquals(res.status, 426);
+  await res.body?.cancel();
+});
+
+boardTest("routes: /runners/key serves the runners socket's key, never cached", async () => {
+  const res = await handle(req("/runners/key"));
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get("cache-control"), "no-store");
+  assertEquals(res.headers.get("content-type"), "text/plain; charset=utf-8");
+  const key = await res.text();
+  assert(key.length > 0, "the key is not empty");
+  assertEquals(await (await handle(req("/runners/key"))).text(), key);
+});
+
+boardTest("routes: a /runners/socket upgrade without the served key is a 403", async () => {
+  const key = await (await handle(req("/runners/key"))).text();
+  for (const query of ["", `?key=${encodeURIComponent(`${key}x`)}`]) {
+    const res = await handle(
+      new Request(`http://localhost/runners/socket${query}`, {
+        headers: { upgrade: "websocket" },
+      }),
+    );
+    assertEquals(res.status, 403, query);
+    await res.body?.cancel();
+  }
+});
+
 boardTest("start: serves the handler on the configured port and keeps collecting", () => {
   const served: { opts: Deno.ServeTcpOptions; handler: unknown }[] = [];
   const logged: string[] = [];
@@ -2212,6 +2249,32 @@ boardTest("start: connects to the relay, and connects again on its clock once th
   await relay.end();
   await onTick();
   assertEquals(relay.connections, 2);
+});
+
+boardTest("start: binds the runners page's feed to the relay it is given", async () => {
+  const key = async () => await (await handle(req("/runners/key"))).text();
+  const before = await key();
+  const log = console.log;
+  console.log = () => {};
+  const relay = new FakeRelay();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    ({ timer } = start(
+      ((opts: Deno.ServeTcpOptions) => {
+        opts.onListen?.({ transport: "tcp", hostname: "localhost", port: PORT });
+        return undefined;
+      }) as unknown as typeof Deno.serve,
+      () => {},
+      relay.webhooks,
+    ));
+  } finally {
+    clearInterval(timer);
+    console.log = log;
+  }
+
+  const after = await key();
+  assert(after !== before, "a feed of its own serves a key of its own");
+  assertEquals(await key(), after);
 });
 
 describe("workflow activity", () => {

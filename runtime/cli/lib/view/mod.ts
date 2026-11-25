@@ -37,6 +37,7 @@ import {
   languageNames,
   prepareLanguages,
   type Semantics,
+  TEMPLATE_LANGUAGE_NAMES,
 } from "./languages/language.ts";
 import type { DecodedLanguageSource } from "./languages/decoder.ts";
 import {
@@ -167,7 +168,7 @@ function pipedSelection(options: ViewOptions): SourceSelection {
     throw new ViewError(
       `cf view: unknown language "${options.language}". Available languages: ${
         languageNames().join(", ")
-      }`,
+      }. ${TEMPLATE_LANGUAGE_NAMES}`,
     );
   }
   return { language, fileName: options.filename };

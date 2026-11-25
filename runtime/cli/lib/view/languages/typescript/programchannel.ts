@@ -4,8 +4,9 @@
  * info card asks them while it builds. So the calling thread posts each query
  * on a message port and waits on a shared word until the worker has posted the
  * answer, then takes the answer off the port. The wait lasts as long as the
- * worker takes to answer: a few milliseconds once the program is built, and
- * the rest of the build before then.
+ * worker takes to answer: a few milliseconds once it has parsed the file asked
+ * about and what that file imports, and otherwise as long as parsing them
+ * takes.
  *
  * The calling thread waits only on a worker that has said, in the same word,
  * that it is serving. From then on the worker reports there any error that

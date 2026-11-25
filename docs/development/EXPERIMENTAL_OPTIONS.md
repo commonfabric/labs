@@ -433,9 +433,14 @@ flags it adopts from the deployment it runs against.
   is read by every deployed-topology entry point — the `productionServer` / `remoteClient` construction presets
   (toolshed's operator runtime, the CLI, every pieces controller and
   integration harness against a toolshed),
-  toolshed's serving-host gate and its memory ACL principal lists (the
-  DELEGATING class since OW31's build — the process identity is no
-  longer an implicit-OWNER service principal), and the browser
+  toolshed's serving-host gate, its indexed-collection host, and its memory
+  ACL principal lists (under the flag, the DELEGATING class since OW31's
+  build — the process identity is no longer an implicit-OWNER service
+  principal there; OFF the flag the process identity is an OWNER-class
+  service principal, for the sessions of the indexed-collection host that
+  keeps every space's
+  [indexed collections](../features/indexed-collections.md#which-runtime-maintains)
+  current on that arm), and the browser
   shell where neither its build define nor its deployment states an arm. An
   UNSET flag resolves to it; an explicit
   `EXPERIMENTAL_SERVER_EXECUTION=false` (or `experimental.serverExecution:
@@ -2337,7 +2342,11 @@ the per-epic implementation notes).
   worker may send no message, its heartbeats included, before it is killed
   (default 60, at least 10). The watchdog checks every 10 seconds, so the kill
   comes at the first check at or past that many seconds of silence in a row:
-  15 kills at 20. The serving memory server tests build reads the first.
+  15 kills at 20. A kill of a worker in a served handler's run fails that
+  run's event rather than running it again, unless the worker the event is
+  handed to, or the process, ends before the error commits (serving-loop.md
+  §2, "The watchdog"), so the setting is also how long one handler may hold
+  its worker's thread. The serving memory server tests build reads the first.
   Where the workers' runtimes compile takes two more:
   `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
   holds for every serving runtime (default 1), and
@@ -2535,12 +2544,14 @@ the per-epic implementation notes).
   read another space the same memory server holds: that space is asked
   what changed before the judgment, and tells the reading space of its next
   change, which has a loop that left such a root unstarted judge it again.
-  A loop that keeps the index also carries demand into the spaces its
-  started pieces' runs read, for the actors those runs were made for, where
-  that space's index does not prove the instance current: `currency.carried`
-  counts the rows offered now, and `currency.carriedRefused` the rows a
-  space refused, as it does an actor's own instance where the actor may not
-  read the space.
+  A loop in the `record` or `start-upstream` mode also carries demand into
+  the spaces its started pieces' runs read, for the actors those runs were
+  made for, where that space's index does not prove the instance current:
+  `currency.carried` counts the rows offered now, and
+  `currency.carriedRefused` the rows a space refused, as it does an actor's
+  own instance where the actor may not read the space. Into its own space it
+  carries, the same way, the instances a run was withdrawn for until the
+  piece that writes them has produced them for the run's viewer.
   `skip` acts on the judgment of what is current: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a
@@ -2550,7 +2561,18 @@ the per-epic implementation notes).
   for (`currency.expiryWakes`), or a session's demand reaches an instance
   the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
-  That is all `skip` does. A root that is stale only through what is
+  A space-scoped root that is no `computed:` document and whose stored
+  document is absent or carries no `result` field and no pattern pointer,
+  which a load starts no piece from, is parked as that load would park it,
+  whatever writes it, until a commit to it (`currency.plainRoots`). One that
+  a commit wrote while the judgment ran, or whose document the loop could not
+  sync for the park, is loaded at once instead. Such a document is read as
+  the store holds it until its writer runs for another reason.
+  That is all `skip` does, and it carries no demand, into another space or
+  its own, as a loop with no index carries none: both counts stay zero. A
+  piece in another space that a run here read, and a piece here that a run
+  was withdrawn for, start only for a demand of their own. A root that is
+  stale only through what is
   upstream of it, in its own space, is not made current by starting its
   piece, and `skip` starts its piece all the same, as it starts any root the
   judgment refuses: the piece derives from what the store holds of the
@@ -2579,7 +2601,7 @@ the per-epic implementation notes).
   `SERVER_EXECUTION_CURRENCY_INDEX=off`
   restores a start for every demanded piece, and `record` keeps the index
   and starts every piece.
-- **Status on 2026-11-23.** Implemented, and `skip` by default on toolshed,
+- **Status on 2026-11-24.** Implemented, and `skip` by default on toolshed,
   under an epoch every build shares. `start-upstream` is opt-in.
   The index and its marks are covered in
   `runtime/memory/test/v2-currency-index.test.ts`, what passes between two
@@ -2589,7 +2611,8 @@ the per-epic implementation notes).
   `runtime/runner/test/executor/space-server-currency.test.ts` and
   `space-server-currency-wish.test.ts` beside it, and what each of `skip`
   and `start-upstream` does with a root stale only upstream in
-  `space-server-currency-upstream.test.ts`. Measured on a
+  `space-server-currency-upstream.test.ts`, and the demand each mode carries
+  into another space in `space-server-carried-demand.test.ts`. Measured on a
   synthetic Topics board under a serving worker and on a counter in the
   browser
   ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md)).

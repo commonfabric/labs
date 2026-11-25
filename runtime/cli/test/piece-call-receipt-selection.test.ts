@@ -53,6 +53,7 @@ async function withReceipt(
     fixture: Fixture,
   ) => Promise<void>,
   declaredResult?: CallableResolution["declaredResult"],
+  serverExecution = false,
 ): Promise<void> {
   const signer = await Identity.fromPassphrase("receipt-selection");
   const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
@@ -71,6 +72,7 @@ async function withReceipt(
     apiUrl: new URL("https://example.com"),
     storageManager: readerStorage,
     errorHandlers: [(error) => errors.push(error.message)],
+    experimental: { serverExecution },
   });
   try {
     const tx = writer.edit();
@@ -352,6 +354,126 @@ describe("piece call receipt selection", () => {
         expect(output.invocation?.result).toBeUndefined();
       },
     );
+  });
+
+  describe("under server execution", () => {
+    // A `cf` under server execution runs nothing, so a selection is answered
+    // by a read of the receipt. What that read loads is what the runtime's
+    // session keeps watching, and a serving runtime keeps current every value
+    // a session watches.
+
+    /** A schemaless receipt holding a scalar beside the record's links. */
+    const seedNamed = (
+      runtime: Runtime,
+      space: MemorySpace,
+      tx: IExtendedStorageTransaction,
+    ): Fixture => {
+      const fixture = seedRecord(runtime, space, tx, undefined);
+      const [topic, , other] = fixture.targets;
+      fixture.receipt.set({
+        name: "42",
+        topic: topic.getAsLink(),
+        other: other.getAsLink(),
+      });
+      return fixture;
+    };
+
+    it("returns a selected field and a child address from a schemaless receipt without delivering any child", async () => {
+      await withReceipt(
+        seedNamed,
+        async (execute, received, fixture) => {
+          const output = await execute({
+            selection: { projection: parseSelectProjection("name,topic@") },
+          });
+          expect(output.invocation?.result).toEqual({
+            name: "42",
+            topic: {
+              $link: `/${fixture.targets[0].getAsNormalizedFullLink().id}`,
+            },
+          });
+          expect(fixture.targets.map(received)).toEqual([false, false, false]);
+        },
+        undefined,
+        true,
+      );
+    });
+
+    it("returns a selected field behind a link of a schemaless receipt, delivering only that child", async () => {
+      await withReceipt(
+        seedNamed,
+        async (execute, received, fixture) => {
+          const output = await execute({
+            selection: { projection: parseSelectProjection("topic.title") },
+          });
+          expect(output.invocation?.result).toEqual({
+            topic: { title: "Stored title" },
+          });
+          expect(fixture.targets.map(received)).toEqual([true, false, false]);
+        },
+        undefined,
+        true,
+      );
+    });
+
+    it("returns a field path that reaches a scalar or a list as a whole read returns it", async () => {
+      await withReceipt(
+        (runtime, space, tx) => {
+          const fixture = seedRecord(runtime, space, tx, undefined);
+          const [topic, , other] = fixture.targets;
+          fixture.receipt.set({
+            topic: "plain",
+            other: [topic.getAsLink(), other.getAsLink()],
+          });
+          return fixture;
+        },
+        async (execute) => {
+          const output = await execute({
+            selection: {
+              projection: parseSelectProjection("topic.title,other.title"),
+            },
+          });
+          expect(output.invocation?.result).toEqual({
+            topic: "plain",
+            other: [{ title: "Stored title" }, { title: "Unselected sibling" }],
+          });
+        },
+        undefined,
+        true,
+      );
+    });
+
+    it("filters and projects a schemaless stored array", async () => {
+      await withReceipt(
+        (runtime, space, tx) => {
+          const fixture = seedRecord(runtime, space, tx, undefined);
+          fixture.receipt.set([
+            {
+              keep: true,
+              title: "Kept",
+              details: fixture.targets[0].getAsLink(),
+            },
+            {
+              keep: false,
+              title: "Dropped",
+              details: fixture.targets[2].getAsLink(),
+            },
+          ]);
+          return fixture;
+        },
+        async (execute, received, fixture) => {
+          const output = await execute({
+            selection: {
+              filter: parseSelectionFilter(".keep == true"),
+              projection: parseSelectProjection("title"),
+            },
+          });
+          expect(output.invocation?.result).toEqual([{ title: "Kept" }]);
+          expect(fixture.targets.map(received)).toEqual([false, false, false]);
+        },
+        undefined,
+        true,
+      );
+    });
   });
 
   it("keeps JSON null distinct from a value-less receipt", async () => {

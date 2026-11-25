@@ -164,9 +164,9 @@ describe("diffcounts", () => {
       "@@ -1 +1 @@",
       "-void main() {} // old comment",
       "+void main() {} // new comment",
-      "diff --git a/page.html b/page.html",
-      "--- a/page.html",
-      "+++ b/page.html",
+      "diff --git a/page.vue b/page.vue",
+      "--- a/page.vue",
+      "+++ b/page.vue",
       "@@ -1 +1 @@",
       "-<!-- old note -->",
       "+<!-- new note -->",
@@ -180,7 +180,6 @@ describe("diffcounts", () => {
 
   it("recognizes fallback comment syntax across supported file families", () => {
     const cases = [
-      ["style.css", "/* old */", "/* new */"],
       ["query.sql", "-- old", "-- new"],
       ["query-block.sql", "/* old */", "/* new */"],
       ["script.lua", "-- old", "-- new"],
@@ -220,6 +219,28 @@ describe("diffcounts", () => {
     expect(countsFor(diff).comments.totals).toEqual({ adds: 1, dels: 1 });
   });
 
+  it("discounts CSS comments, and counts the declarations beside them and text after a double slash", async () => {
+    await prepareLanguages([languageForFile("style.css")]);
+    const diff = [
+      "diff --git a/style.css b/style.css",
+      "--- a/style.css",
+      "+++ b/style.css",
+      "@@ -1,3 +1,4 @@",
+      "-/* old note */",
+      "-.a { color: red; } /* same */",
+      "+/* new note */",
+      "+.a { color: blue; } /* same */",
+      "+// not a comment",
+      " .b { }",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.normal.totals).toEqual({ adds: 3, dels: 2 });
+    expect(counts.comments.totals).toEqual({ adds: 2, dels: 1 });
+  });
+
   it("does not treat an unquoted URL as a comment", () => {
     const diff = [
       "diff --git a/style.scss b/style.scss",
@@ -228,6 +249,27 @@ describe("diffcounts", () => {
       "@@ -1 +1 @@",
       "-background: url(https://old.example/image.png);",
       "+background: url(https://new.example/image.png);",
+      "",
+    ].join("\n");
+
+    const counts = countsFor(diff);
+
+    expect(counts.comments.totals).toEqual({ adds: 1, dels: 1 });
+  });
+
+  it("recognizes HTML comments through HTML highlighting", async () => {
+    await prepareLanguages([languageForFile("page.html")]);
+    const diff = [
+      "diff --git a/page.html b/page.html",
+      "--- a/page.html",
+      "+++ b/page.html",
+      "@@ -1,4 +1,4 @@",
+      " <!--",
+      "-old note",
+      "+new note",
+      " -->",
+      "-<p>old <!-- note --></p>",
+      "+<p>new <!-- note --></p>",
       "",
     ].join("\n");
 
@@ -262,9 +304,9 @@ describe("diffcounts", () => {
       "- * old note",
       "+ * new note",
       "  */",
-      "diff --git a/page.html b/page.html",
-      "--- a/page.html",
-      "+++ b/page.html",
+      "diff --git a/page.vue b/page.vue",
+      "--- a/page.vue",
+      "+++ b/page.vue",
       "@@ -1,3 +1,3 @@",
       " <!--",
       "-old note",
@@ -1139,8 +1181,13 @@ describe("diffcounts", () => {
             before: ["# Build output", "dist/"],
             after: ["# Build output", "# from the bundler", "dist/"],
           },
+          {
+            path: "main.go",
+            before: ["// a", "package main"],
+            after: ["// b", "// c", "package main"],
+          },
         ),
-      ).toEqual([true, true, true, true, true, true, true, true, true]);
+      ).toEqual([true, true, true, true, true, true, true, true, true, true]);
     });
 
     it("returns false for Rust doc comments, which are attributes, and true for a TypeScript doc comment", async () => {
@@ -1173,6 +1220,23 @@ describe("diffcounts", () => {
           after: ['const T: &str = r#"a " // c"#;'],
         }),
       ).toEqual([false]);
+    });
+
+    it("returns false for a change to a Go directive or a cgo preamble, neither of which is a comment", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "main.go",
+            before: ["//go:build linux", "", "package main"],
+            after: ["//go:build darwin", "", "package main"],
+          },
+          {
+            path: "math.go",
+            before: ["package main", "", "// #include <math.h>", 'import "C"'],
+            after: ["package main", "", "// #include <tgmath.h>", 'import "C"'],
+          },
+        ),
+      ).toEqual([false, false]);
     });
 
     it("returns false for a change after a shell comment inside backticks, which ends at the closing backtick", async () => {
@@ -1356,7 +1420,7 @@ describe("diffcounts", () => {
       expect(
         await commentOnly(
           { path: "README.md", before: ["<!-- a -->"], after: ["<!-- b -->"] },
-          { path: "main.go", before: ["// a"], after: ["// b"] },
+          { path: "notes.txt", before: ["// a"], after: ["// b"] },
         ),
       ).toEqual([false, false]);
     });

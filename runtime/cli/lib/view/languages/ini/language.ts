@@ -2,18 +2,23 @@ import type { Language } from "../language.ts";
 import { utf8Decoder } from "../decoder.ts";
 import { remapStructure } from "../../diffremap.ts";
 import { createRecoloringHighlighter } from "../classes.ts";
+import { firstContentLineMatches } from "../evidence.ts";
 import { iniDocument, iniLines } from "./ini.ts";
 
 /** Source whose first line other than blank lines and comments heads a
  * section, which is the evidence a `.cfg` file gives for INI. A section name
  * does not start the way a JSON array's first value does. */
-const SECTION_FIRST =
-  /^(?:[^\S\n]*(?:[;#][^\n]*)?\n)*[^\S\n]*\[(?!(?:true|false|null)\s*[,\]])[^\s[\]{}"\d-]/;
+const SECTION_FIRST = firstContentLineMatches(
+  ";#",
+  /[^\S\n]*\[(?!(?:true|false|null)\s*[,\]])[^\s[\]{}"\d-]/,
+);
 
 /** The evidence a `.conf` file gives for INI: its first section, by the same
  * rule, is not one of the sections a systemd unit or drop-in opens with. */
-const NON_UNIT_SECTION_FIRST =
-  /^(?:[^\S\n]*(?:[;#][^\n]*)?\n)*[^\S\n]*\[(?!(?:Unit|Install|Service|Socket|Timer|Mount|Automount|Swap|Path|Slice|Scope)\])(?!(?:true|false|null)\s*[,\]])[^\s[\]{}"\d-]/;
+const NON_UNIT_SECTION_FIRST = firstContentLineMatches(
+  ";#",
+  /[^\S\n]*\[(?!(?:Unit|Install|Service|Socket|Timer|Mount|Automount|Swap|Path|Slice|Scope)\])(?!(?:true|false|null)\s*[,\]])[^\s[\]{}"\d-]/,
+);
 
 /**
  * The INI language for the pager, which covers Ansible configuration and

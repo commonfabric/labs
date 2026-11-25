@@ -1,3 +1,4 @@
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { Cell } from "../cell.ts";
 import { createCell } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
@@ -48,15 +49,15 @@ export function outputSpotFromBinding(
 }
 
 /**
- * Returns an expression builtin's result-store cause from its operation,
- * owning piece, and output coordinates. The cause stays equal across changes
- * to the serialized inputs while the owning piece and output spot are
- * unchanged.
+ * Returns the cause of the result store a builtin keeps for its node, from
+ * the builtin's operation, the owning piece, and the node's output
+ * coordinates. The cause stays equal across changes to the serialized inputs
+ * while the owning piece and output spot are unchanged.
  *
  * Throws if the node's output binding has no write redirect.
  */
 export function ownedResultCause(
-  op: "ifElse" | "when" | "unless",
+  op: "ifElse" | "when" | "unless" | "sqliteDatabase",
   cause: RawNodeCause,
   parentCell: Cell<any>,
 ): Record<string, unknown> {
@@ -66,6 +67,16 @@ export function ownedResultCause(
     );
   }
   return { [op]: parentCell.entityId, outputSpot: cause.outputSpot };
+}
+
+/** Whether `cause` is a node cause whose output binding reached a redirect. */
+export function isNodeCauseWithOutputSpot(
+  cause: unknown,
+): cause is RawNodeCause & {
+  outputSpot: NonNullable<RawNodeCause["outputSpot"]>;
+} {
+  return isObjectNotArray(cause) && cause.parents !== undefined &&
+    cause.outputSpot !== undefined;
 }
 
 export function cellIdentityKey(cell: Cell<any>): {

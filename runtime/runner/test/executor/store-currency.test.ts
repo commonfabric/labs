@@ -461,6 +461,79 @@ describe("StoreCurrency", () => {
         expect(judged.servable).toEqual(["shared", "derived", "own-derived"]);
       });
 
+      describe("for a root the memory server finds plain", () => {
+        const idleRuntime = {
+          scheduler: { hasNodesUnderDemandRoot: () => false },
+        } as unknown as Runtime;
+
+        /** A loop in `mode` whose memory server finds `of:data` plain. */
+        const plainIn = (
+          mode: CurrencyIndexMode,
+          stats: ServingLoopStats,
+        ) =>
+          new StoreCurrency({
+            space: SPACE,
+            server: {
+              judgeCurrencyRoots: (_space, roots) =>
+                Promise.resolve({
+                  servable: roots.filter((root) => root !== "of:data").map((
+                    root,
+                  ) => ({ root, piece: "of:piece", origins: [] })),
+                  plain: roots.filter((root) => root === "of:data"),
+                  held: [],
+                  upstream: [],
+                  refused: {},
+                  marked: [],
+                }),
+            } as Pick<
+              HostMemoryServer,
+              "judgeCurrencyRoots"
+            > as HostMemoryServer,
+            mode,
+            epoch: "epoch-one",
+            serviceIdentity: "did:key:service",
+            stats,
+            onOwed: () => {},
+            onMarked: () => {},
+          });
+
+        /** Judges `of:data` under the key `data` beside `of:result`. */
+        const judgeBoth = (currency: StoreCurrency) =>
+          currency.judge(
+            idleRuntime,
+            new Map([
+              ["data", { id: "of:data", scope: "space" }],
+              ["result", { id: "of:result", scope: "space" }],
+            ]),
+            () => true,
+            true,
+          );
+
+        it("returns its key apart from the servable ones, and counts it as plain and not as left unloaded, under `skip`", async () => {
+          const stats = emptyServingLoopStats();
+          const currency = plainIn("skip", stats);
+
+          const judged = await judgeBoth(currency);
+
+          expect(judged.plain).toEqual(["data"]);
+          expect(judged.servable).toEqual(["result"]);
+          expect(stats.currency.plainRoots).toBe(1);
+          expect(stats.currency.servable).toBe(1);
+          expect(stats.currency.servedFromStore).toBe(1);
+        });
+
+        it("returns its key and counts it as plain, under `record`", async () => {
+          const stats = emptyServingLoopStats();
+          const currency = plainIn("record", stats);
+
+          const judged = await judgeBoth(currency);
+
+          expect(judged.plain).toEqual(["data"]);
+          expect(stats.currency.plainRoots).toBe(1);
+          expect(stats.currency.servedFromStore).toBe(0);
+        });
+      });
+
       describe("for a root that rests on a piece recording a source origin", () => {
         let judgments: number;
         let currency: StoreCurrency;
@@ -614,12 +687,21 @@ describe("StoreCurrency", () => {
         stats = emptyServingLoopStats();
       });
 
+      it("carries demand in every mode but `skip`", () => {
+        expect(
+          (["record", "skip", "start-upstream"] as const).map((mode) =>
+            loop(mode).carriesDemand
+          ),
+        ).toEqual([true, false, true]);
+      });
+
       it("holds no root under `skip`, counts the root as refused for `stale-upstream`, and names nothing to demand", async () => {
         const currency = loop("skip");
 
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
+          plain: [],
           held: [],
           rearm: [],
         });
@@ -658,6 +740,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
+          plain: [],
           held: [],
           rearm: [],
         });
@@ -672,6 +755,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
+          plain: [],
           held: ["key"],
           rearm: [],
         });
@@ -705,6 +789,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: ["key"],
           origins: new Map(),
+          plain: [],
           held: [],
           rearm: [],
         });
@@ -745,6 +830,7 @@ describe("StoreCurrency", () => {
         expect(await judge(currency)).toEqual({
           servable: [],
           origins: new Map(),
+          plain: [],
           held: ["key"],
           rearm: [],
         });

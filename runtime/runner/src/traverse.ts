@@ -644,6 +644,18 @@ type PreparedAnyOfBranch = {
 
   hasAsCell: boolean;
 
+  /**
+   * Whether the handle the option declares is one a walk that traverses
+   * cells walks through to the value (`followsThroughCell()`).
+   */
+  throughCell: boolean;
+
+  /**
+   * Whether the option caps the scope of the links it follows, so that
+   * following a link under it differs from following it under another.
+   */
+  capsFollowScope: boolean;
+
   /** Normalized type list of the resolved merged schema, if constrained. */
   types: readonly JSONSchemaTypes[] | undefined;
 
@@ -665,12 +677,16 @@ function prepareAnyOfBranch(
     merged: false,
     constant: false,
     hasAsCell: false,
+    throughCell: false,
+    capsFollowScope: false,
     types: undefined,
     required: undefined,
   };
   if (ContextualFlowControl.isFalseSchema(option)) return rejected;
   const merged = mergeSchemaOption(restSchema, option);
   const hasAsCell = SchemaObjectTraverser.hasAsCell(merged);
+  const throughCell = hasAsCell && followsThroughCell(merged);
+  const capsFollowScope = isCellScope(schemaFollowScopeCap(merged));
   const resolved = typeof merged !== "boolean" && "$ref" in merged
     ? resolveSchemaRefsCanonical(merged)
     : merged;
@@ -681,6 +697,8 @@ function prepareAnyOfBranch(
       merged,
       constant: resolved,
       hasAsCell,
+      throughCell,
+      capsFollowScope,
       types: undefined,
       required: undefined,
     };
@@ -691,6 +709,8 @@ function prepareAnyOfBranch(
       merged,
       constant: true,
       hasAsCell,
+      throughCell,
+      capsFollowScope,
       types: undefined,
       required: undefined,
     };
@@ -704,17 +724,56 @@ function prepareAnyOfBranch(
     merged,
     constant: undefined,
     hasAsCell,
+    throughCell,
+    capsFollowScope,
     types,
     required,
   };
 }
 
 /**
+ * Whether `value`, of JSON type `actualType`, can match the prepared `branch`
+ * by its type and by the required properties it carries, the question
+ * `canBranchMatch()` asks of a branch that is not prepared.
+ */
+function preparedBranchAdmits(
+  branch: PreparedAnyOfBranch,
+  value: unknown,
+  actualType: JSONSchemaTypes | null,
+  valueIsRecord: boolean,
+): boolean {
+  const { types, required } = branch;
+  if (
+    types !== undefined && actualType !== null &&
+    !types.some((type) => schemaTypeMatchesValueType(type, actualType))
+  ) {
+    return false;
+  }
+  if (required === undefined || !valueIsRecord) return true;
+  const record = value as Record<string, unknown>;
+  // A `FabricSpecialObject`'s surface is class accessors, so its membership
+  // test is prototype-chain `in`; the nominal brand key has no runtime
+  // existence and is satisfied by construction (the `TODO` on
+  // `FABRIC_SPECIAL_OBJECT_BRAND` says what removing that exemption takes).
+  if (isFabricSpecialObject(value)) {
+    return required.every((req) =>
+      req === FABRIC_SPECIAL_OBJECT_BRAND || req in record
+    );
+  }
+  // `Object.hasOwn`, not `in`: a required name is a schema-declared property
+  // name and the value is data, and `in` walks the prototype chain, which
+  // satisfies a required property called `toString` for every record.
+  return required.every((req) => Object.hasOwn(record, req));
+}
+
+/**
  * The `required` property names of `resolved` that a value has to carry:
- * every required name except one whose property schema declares a stream.
- * A stream position holds no value — its handle is minted from the schema
- * alone — so its absence from a value says nothing about the value's shape.
- * `undefined` when the schema admits no object or requires nothing.
+ * every required name except one whose property schema declares a stream or
+ * a default. A stream position holds no value — its handle is minted from the
+ * schema alone — and the object traversal fills an absent property that
+ * declares a default before it checks what is required, so the absence of
+ * either from a value says nothing about the value's shape. `undefined` when
+ * the schema admits no object or requires nothing.
  *
  * The same exemption applies inside a union's branches, so a required stream
  * never tells two branches apart: branches that differ only by one all match,
@@ -732,8 +791,29 @@ function requiredValueProperties(
     return undefined;
   }
   return (resolved.required as readonly string[]).filter((name) =>
-    !propertyDeclaresStream(resolved, name)
+    !propertyDeclaresStream(resolved, name) &&
+    !propertyDeclaresDefault(resolved, name)
   );
+}
+
+/**
+ * Whether the property `name` of `resolved` declares a default, read the way
+ * the object traversal reads it when it fills an absent property: through
+ * the property's `$ref`.
+ */
+function propertyDeclaresDefault(
+  resolved: JSONSchemaObj,
+  name: string,
+): boolean {
+  const property = isObjectNotArray(resolved.properties)
+    ? resolved.properties[name] as JSONSchema | undefined
+    : undefined;
+  if (!isObjectNotArray(property)) return false;
+  if (!("$ref" in property)) return property.default != undefined;
+  const atPath = ContextualFlowControl.getSchemaAtPath(resolved, [name]);
+  if (!isObjectOrArray(atPath)) return false;
+  const target = ContextualFlowControl.resolveSchemaRefs(atPath);
+  return isObjectOrArray(target) && target.default != undefined;
 }
 
 /**
@@ -2050,6 +2130,44 @@ export type TraversalContext = {
    * so the route names the way to the current position and no other.
    */
   linkCrossingRoute?: LinkCrossingRoute;
+
+  /**
+   * Set while a link is being resolved only to learn what value it leads to
+   * (`SchemaObjectTraverser.#landingOf()`): each link followed adds to it,
+   * and reports nothing of a target it does not find, which the traversals
+   * that follow the link for a result report themselves.
+   */
+  linkProbe?: LinkProbe;
+};
+
+/**
+ * What following a chain of links found out about the chain
+ * (`TraversalContext.linkProbe`).
+ */
+type LinkProbe = {
+  /**
+   * The schema each link carried, where it carried one, in the order the
+   * links were followed.
+   */
+  readonly linkSchemas: JSONSchema[];
+
+  /**
+   * Whether every link followed stays in its space and was reached with the
+   * selector at the link's own address, so that the schema a selector lands
+   * with is its own schema combined with `linkSchemas` in turn.
+   */
+  plain: boolean;
+
+  /**
+   * The record each document of the chain would take in the schema tracker,
+   * held back for whoever resolved the link to make once it knows the record
+   * stands for a walk.
+   */
+  readonly reached: {
+    readonly key: string;
+    readonly selector: SchemaPathSelector;
+    readonly source: IMemorySpaceAddress | undefined;
+  }[];
 };
 
 /**
@@ -3571,7 +3689,7 @@ function followPointerOnce(
     // The walk names each document it reaches by scope instance, and acts as
     // a principal with no session, so it has no instance of a session-scoped
     // target to name. Nothing is read or recorded for the target.
-    context.onUnresolvedLinkScope?.();
+    if (context.linkProbe === undefined) context.onUnresolvedLinkScope?.();
     logger.info("traverse", () => [
       "session-scoped link not followed: the walk acts as a principal " +
       "with no session",
@@ -3580,6 +3698,18 @@ function followPointerOnce(
     return [notFound(target), selector, []];
   }
   noteDeclaredReadScope(tx, schemaScope, link.scope);
+  const probe = context.linkProbe;
+  if (probe !== undefined) {
+    if (
+      !collected || target.space !== doc.address.space ||
+      selector === undefined ||
+      !deepEqual(selector.path, doc.address.path)
+    ) {
+      probe.plain = false;
+    } else if (link.schema !== undefined) {
+      probe.linkSchemas.push(link.schema);
+    }
+  }
   if (selector !== undefined) {
     // We'll need to re-root the selector for the target doc
     // Remove the portions of doc.path from selector.path, limiting schema if
@@ -3653,10 +3783,12 @@ function followPointerOnce(
       // queries. The reported link carries the selector's target-rooted
       // path (minus its "value" prefix) and schema so the fetch covers the
       // shape this read needs.
-      reportMissingLinkTarget(context, link, selector, doc.address.space, {
-        id: doc.address.id,
-        scope: doc.address.scope,
-      });
+      if (probe === undefined) {
+        reportMissingLinkTarget(context, link, selector, doc.address.space, {
+          id: doc.address.id,
+          scope: doc.address.scope,
+        });
+      }
       // We include the path in the address, so that information is available,
       return [notFound(target), selector, []];
     } else if (error.name !== "NotFoundError") {
@@ -3735,8 +3867,12 @@ function trackVisitedDoc(
   if (selector !== undefined) {
     const key = getTrackerKey(target, context.scopeKeyIdentity);
     const interned = internPathSelector(selector);
-    context.schemaTracker.add(key, interned);
-    context.onTrackedDoc?.(key, interned, source, "walked");
+    if (context.linkProbe !== undefined) {
+      context.linkProbe.reached.push({ key, selector: interned, source });
+    } else {
+      context.schemaTracker.add(key, interned);
+      context.onTrackedDoc?.(key, interned, source, "walked");
+    }
   }
   // A document reached through a link is owed the schema document its
   // `cfc` envelope names, whichever way the walk reached it.
@@ -4691,6 +4827,18 @@ type CombinatorWalk =
     option: JSONSchema;
     readonly matches: FabricValue[];
     failure?: TraverseResult<FabricValue>;
+
+    /**
+     * What the link the value is resolves to, once an option has asked
+     * (`#landingOf()`): `null` where the options cannot be narrowed by it.
+     */
+    landing?: Landing | null;
+
+    /**
+     * The link the value is, as the traversal of an option parses it, once an
+     * option has asked: `null` where it does not parse.
+     */
+    pointerLink?: NormalizedFullLink | null;
   }
   & (
     | {
@@ -4706,6 +4854,21 @@ type CombinatorWalk =
       readonly restSchema: JSONSchemaObj;
     }
   );
+
+/**
+ * The value a link at an `anyOf` position resolves to, with what the options
+ * are narrowed by (`SchemaObjectTraverser.#landingOf()`).
+ */
+type Landing = {
+  /** The value at the end of the chain of links, which is not a link. */
+  readonly value: FabricValue;
+
+  readonly actualType: JSONSchemaTypes | null;
+  readonly valueIsRecord: boolean;
+
+  /** The schemas the links of the chain carried (`LinkProbe.linkSchemas`). */
+  readonly linkSchemas: readonly JSONSchema[];
+};
 
 /**
  * An element of an array a schema traversal walks (`ArrayWalk`), where the
@@ -5004,7 +5167,33 @@ export class SchemaObjectTraverser<V extends FabricValue>
    */
   #provisional = false;
 
+  /**
+   * Whether an `anyOf` is narrowed by a value the walk reaches rather than
+   * finds at the position: the value a link there resolves to
+   * (`#linkedBranchMatches()`), and the value behind a handle the walk goes
+   * through (`#holdsCellsToShape`).
+   */
+  #narrowsReachedValues = true;
+
   schemaMemoHits = 0;
+
+  /**
+   * Whether an `anyOf` is narrowed by the value a link resolves to and by
+   * the value behind a handle, which a test turns off to compare a walk with
+   * one that traverses such a value under every option.
+   */
+  get accessForTestingOnly(): { narrowsReachedValues: boolean } {
+    // deno-lint-ignore no-this-alias
+    const outerThis = this;
+    return {
+      get narrowsReachedValues() {
+        return outerThis.#narrowsReachedValues;
+      },
+      set narrowsReachedValues(value) {
+        outerThis.#narrowsReachedValues = value;
+      },
+    };
+  }
 
   /**
    * How many traversals of a position this traversal ran from
@@ -6067,7 +6256,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
       const mergedSchema = mergeSchemaOption(walk.restSchema, option);
       if (
-        walk.kind === "anyOf" && !canBranchMatch(mergedSchema, walk.doc.value)
+        walk.kind === "anyOf" &&
+        !(isSigilLink(walk.doc.value)
+          ? this.#linkedBranchMatches(walk, mergedSchema, undefined)
+          : canBranchMatch(
+            mergedSchema,
+            walk.doc.value,
+            this.#holdsCellsToShape,
+          ))
       ) {
         this.anyOfFastRejects++;
         continue;
@@ -6078,57 +6274,173 @@ export class SchemaObjectTraverser<V extends FabricValue>
     return undefined;
   }
 
+  /**
+   * Whether an option that declares a handle is held to the shape it gives
+   * the value behind the handle: only by a walk that traverses cells, which
+   * goes through the handle where a read mints it.
+   */
+  get #holdsCellsToShape(): boolean {
+    return this.traverseCells && this.#narrowsReachedValues;
+  }
+
   /** Whether the value `walk` walks can match the prepared `branch`. */
   #preparedBranchMatches(
     walk: CombinatorWalk & { readonly kind: "preparedAnyOf" },
     branch: PreparedAnyOfBranch,
   ): boolean {
-    const { valueIsLink, actualType, valueIsRecord } = walk;
-    let match: boolean;
-    if (branch.constant !== undefined) {
-      match = branch.constant;
-    } else if (branch.hasAsCell || valueIsLink) {
-      // Never reject asCell/asStream branches; link values reveal
-      // nothing until dereferenced during traversal.
-      match = true;
-    } else if (
-      branch.types !== undefined && actualType !== null &&
-      !branch.types.some((type) => schemaTypeMatchesValueType(type, actualType))
+    if (branch.constant !== undefined) return branch.constant;
+    // A handle that is minted rather than walked through matches any value,
+    // and one walked through to no value is not judged by the absence: a
+    // default the schema declares stands in for it.
+    if (
+      branch.hasAsCell &&
+      !(this.#holdsCellsToShape && branch.throughCell &&
+        walk.doc.value !== undefined)
     ) {
-      match = false;
-    } else if (branch.required !== undefined && valueIsRecord) {
-      match = true;
-      for (const req of branch.required) {
-        // A `FabricSpecialObject`'s surface is class accessors, so
-        // its membership test is prototype-chain `in`; the nominal brand
-        // key has no runtime existence and is satisfied by
-        // construction (the `TODO` on `FABRIC_SPECIAL_OBJECT_BRAND`
-        // says what removing that exemption takes).
-        if (isFabricSpecialObject(walk.doc.value)) {
-          if (req === FABRIC_SPECIAL_OBJECT_BRAND) continue;
-          if (
-            !(req in (walk.doc.value as unknown as Record<string, unknown>))
-          ) {
-            match = false;
-            break;
-          }
-          continue;
-        }
-        // `Object.hasOwn`, not `in`: `req` is a schema-declared property
-        // NAME and the value is data. `in` walks the prototype chain, so
-        // a required property called `toString` was satisfied by every
-        // record whether or not it carried one.
-        if (
-          !Object.hasOwn(walk.doc.value as Record<string, unknown>, req)
-        ) {
-          match = false;
-          break;
-        }
-      }
-    } else {
-      match = true;
+      return true;
     }
-    return match;
+    return walk.valueIsLink
+      ? this.#linkedBranchMatches(walk, branch.merged, branch)
+      : preparedBranchAdmits(
+        branch,
+        walk.doc.value,
+        walk.actualType,
+        walk.valueIsRecord,
+      );
+  }
+
+  /**
+   * Whether the value the link `walk` walks resolves to can match the option
+   * whose schema merges to `merged`, prepared as `prepared` where it is. An
+   * option is held to that value only where traversing the link under it
+   * comes to traverse the value: it matches whatever the link leads to where
+   * it mints a handle from the link, where it caps the scope of the links it
+   * follows, where the link leads into another space, where the option is
+   * typed `unknown`, where the link's target is one the tracker already
+   * covers for it, and where the link resolves to nothing (`#landingOf()`).
+   * Only the last of those resolves the link.
+   */
+  #linkedBranchMatches(
+    walk: CombinatorWalk,
+    merged: JSONSchema,
+    prepared: PreparedAnyOfBranch | undefined,
+  ): boolean {
+    if (!this.#narrowsReachedValues) return true;
+    if (prepared === undefined) {
+      if (typeof merged === "boolean") return merged;
+      if (
+        SchemaObjectTraverser.hasAsCell(merged) &&
+        !(this.#holdsCellsToShape && followsThroughCell(merged))
+      ) return true;
+    }
+    if (
+      prepared?.capsFollowScope ?? isCellScope(schemaFollowScopeCap(merged))
+    ) return true;
+    // Whatever keeps the option without the link's target is decided before
+    // the link is resolved, so that an `anyOf` none of whose options follows
+    // the link reads nothing of the target.
+    const { doc } = walk;
+    if (walk.pointerLink === undefined) {
+      walk.pointerLink = parseLink(doc.value, doc.address) ?? null;
+    }
+    const { pointerLink } = walk;
+    if (pointerLink === null || pointerLink.space !== doc.address.space) {
+      return true;
+    }
+    // A position typed `unknown` answers for whatever value is there.
+    if (isUnknownValueSchema(merged)) return true;
+    // A link whose target the tracker covers for the option is not followed:
+    // the option matches it as it stands.
+    if (
+      this.traverseCells && pointerLink.id !== doc.address.id &&
+      this.isLinkedDocumentCovered(doc.address, pointerLink, {
+        path: doc.address.path,
+        schema: merged,
+      })
+    ) return true;
+    const landing = this.#landingOf(walk, pointerLink);
+    if (landing === null) return true;
+    // The option's traversal lands under its schema combined with each
+    // link's in turn, which is the option's own schema where no link
+    // carries one.
+    let landed = merged;
+    for (const linkSchema of landing.linkSchemas) {
+      landed = combineSchemaForLink(landed, linkSchema);
+    }
+    if (isUnknownValueSchema(landed)) return true;
+    return prepared !== undefined && landed === merged
+      ? preparedBranchAdmits(
+        prepared,
+        landing.value,
+        landing.actualType,
+        landing.valueIsRecord,
+      )
+      : canBranchMatch(landed, landing.value, this.#holdsCellsToShape);
+  }
+
+  /**
+   * Resolves the link `walk` walks, once for all its options, and returns
+   * the value it leads to, or `null` where the options cannot be narrowed by
+   * that value: the link resolves to nothing, or a link of the chain crosses
+   * into another space or is reached partway down a selector's path, where
+   * the schema an option lands with is not its own combined with the links'.
+   *
+   * The link is followed under the whole `anyOf`, reading what the traversal
+   * of any one option reads on its way to the target. Where the options are
+   * narrowed, each document of the chain is recorded in the schema tracker
+   * under the `anyOf`. That record is what keeps a rejected option's reach:
+   * a walk of the target under it narrows again by whatever value the target
+   * then holds. Its own reach now is that of the options traversed, so it
+   * must not stand in for one of theirs: where the tracker's coverage decides
+   * whether an option follows the link, the options are narrowed only if no
+   * link carries a schema, which leaves every option's record apart from
+   * the `anyOf`'s.
+   */
+  #landingOf(
+    walk: CombinatorWalk,
+    pointerLink: NormalizedFullLink,
+  ): Landing | null {
+    if (walk.landing !== undefined) return walk.landing;
+    const { doc } = walk;
+    const coverageDecides = this.traverseCells &&
+      pointerLink.scope !== undefined;
+    if (coverageDecides && pointerLink.schema !== undefined) {
+      return walk.landing = null;
+    }
+    const probe: LinkProbe = { linkSchemas: [], plain: true, reached: [] };
+    const mark = markLinkCrossings(this.context);
+    let landed: IMemorySpaceValueAttestation;
+    this.context.linkProbe = probe;
+    try {
+      this.tx.read(doc.address, READ_FOR_SCHEDULING);
+      const [redirDoc, redirSelector] = this.getDocAtPath(
+        doc,
+        [],
+        { path: doc.address.path, schema: walk.resolved },
+        "writeRedirect",
+      );
+      [landed] = this.getDocAtPath(redirDoc, [], redirSelector);
+    } finally {
+      this.context.linkProbe = undefined;
+      restoreLinkCrossings(this.context, mark);
+    }
+    const { value } = landed;
+    if (
+      !probe.plain || value === undefined || isSigilLink(value) ||
+      coverageDecides && probe.linkSchemas.length > 0
+    ) {
+      return walk.landing = null;
+    }
+    for (const { key, selector, source } of probe.reached) {
+      this.schemaTracker.add(key, selector);
+      this.context.onTrackedDoc?.(key, selector, source, "walked");
+    }
+    return walk.landing = {
+      value,
+      actualType: getJsonType(value),
+      valueIsRecord: isObjectOrArray(value),
+      linkSchemas: probe.linkSchemas,
+    };
   }
 
   /**
@@ -7744,7 +8056,9 @@ function mergeSchemaOption(
 /**
  * Cheap pre-check: can this anyOf branch possibly match the given value?
  * Returns `true` (don't reject) when uncertain — conservative by design.
- * Never rejects asCell/asStream branches since they represent cell boundaries.
+ * An asCell/asStream branch is a cell boundary, and is rejected only for a
+ * walk that traverses cells (`traversesCells`), and only where that walk
+ * goes through the handle to the value (`followsThroughCell()`).
  *
  * Checks performed (all on the top-level resolved branch):
  * - Type mismatch: branch.type vs actual JS type of value
@@ -7756,12 +8070,18 @@ function mergeSchemaOption(
 export function canBranchMatch(
   branch: JSONSchema,
   value: unknown,
+  traversesCells = false,
 ): boolean {
   // Boolean schemas: true matches everything, false matches nothing
   if (typeof branch === "boolean") return branch;
 
-  // Never reject asCell/asStream branches
-  if (SchemaObjectTraverser.hasAsCell(branch)) return true;
+  // A handle that is minted rather than walked through matches any value,
+  // and one walked through to no value is not judged by the absence: a
+  // default the schema declares stands in for it.
+  if (
+    SchemaObjectTraverser.hasAsCell(branch) &&
+    !(traversesCells && value !== undefined && followsThroughCell(branch))
+  ) return true;
 
   // If the value is an object that could be a link/pointer, bail out entirely.
   // Links are dereferenced during traversal, so the current shape of the value
@@ -7816,6 +8136,19 @@ export function canBranchMatch(
   }
 
   return true;
+}
+
+/**
+ * Whether a walk that traverses cells goes through the handle `schema`
+ * declares to the value behind it, and so holds that value to the schema's
+ * shape: it does for every kind of handle but an opaque one, which is never
+ * walked into, and a stream, whose position holds no value. A handle with no
+ * declared value shape (`type: "unknown"`) has no shape to hold a value to.
+ */
+function followsThroughCell(schema: JSONSchema): boolean {
+  const kind = ContextualFlowControl.declaredHandleKind(schema);
+  return kind !== undefined && kind !== "opaque" && kind !== "stream" &&
+    !isUnknownCellSchema(schema);
 }
 
 /** Whether the schema's `type` admits "object" (an absent type admits all). */

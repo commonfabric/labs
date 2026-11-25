@@ -130,8 +130,14 @@ nothing of it yet.
 The source decides "stale upstream" with the predicate it already applies
 to a local reader's input: a recorded piece computes the instance, and a
 slice that decides it is marked or no piece vouches for it, or the instance
-is a derived document no recorded piece writes. An instance nothing
-computes is plain data, and only a commit moves it.
+is a derived document no recorded piece writes that no computation may
+have produced yet, as the first plan's list says. An instance no recorded
+piece writes is otherwise plain data, and only a commit moves it. For a
+read in its own space, the recording runtime's mark on the read says
+whether the document is derived. For an instance another space
+registered, which carries no such mark, the source takes it for a derived
+document where its id has the form of one, or a serving loop's commit
+wrote it.
 
 Those rows change in two places the index already has. An advance that
 finds a registered instance changed records its new head. And wherever a
@@ -255,10 +261,9 @@ so finding the readers to tell is one read of the rows that moved. A row
 takes a position when it changes, and none when its instance is first
 registered, since the space registering it is handed the row. An index
 that starts over with its records dropped keeps these rows, and the first
-call that changes it brings every one of them up to date. A reader that
-kept its records then hears that an instance a piece here computes is no
-longer vouched for. An instance nothing computes is plain data, and its
-row stays as it was.
+call that changes it brings every one of them up to date. An instance a
+piece here computed is then a cell of a piece the index holds no record
+of, reported stale until a record of that piece is stored.
 
 ### A circle of triggers
 
@@ -394,8 +399,9 @@ root, and a demanding pair, which is the actor's principal and session. It
 differs from a client's row in where it comes from, which the row names as
 its origin: the space where that session is a client's, and the session.
 The source's loop treats it as it treats any row. It loads the piece that
-computes the instance, runs it for that pair, and under `skip` judges it
-first and leaves it unstarted while its record proves it current.
+computes the instance, runs it for that pair, and under `skip` or
+`start-upstream` judges it first and leaves it unstarted while its record
+proves it current.
 
 **Which pair a read carries.** The slice of the run that read says whose
 it is. A read in a `session` slice carries that slice's pair. A read in a
@@ -464,7 +470,10 @@ watermark spans spaces.
 **Not in this step.** A source whose store another memory server holds
 receives no carried demand, as it receives no registration. A loop that
 keeps no index carries nothing, since its records are where it finds what
-a run read. A piece that only a warm request or an anonymous session
+a run read, and a loop in the `skip` mode carries nothing either: a piece
+that runs there derives from what the source holds, and the judgment holds
+the reading slice stale until the source's index proves the instance
+current. A piece that only a warm request or an anonymous session
 demands carries nothing, since neither names an actor to carry.
 
 ## Wish
@@ -769,7 +778,8 @@ A third is ruled:
    access check, their end and the rows the source's index proves current
    left out; the reading loop's set, sent when it changes and withdrawn at
    a park; and activation and parking of the source, which follow from the
-   rows being held among the source's sessions. Measured:
+   rows being held among the source's sessions. A loop carries demand in
+   the `record` and `start-upstream` modes and not in `skip`. Measured:
    [the record](../history/development/performance/2026-11-21-carried-demand-cost.md).
    A return with nothing changed hands the source no demand. A carried
    demand costs the source the admission of its rows and the start of its
@@ -841,7 +851,10 @@ For the serving loop, in `runtime/runner/test/executor/`:
    viewer returns and their home space has not changed. This exists in
    `space-server-currency-wish.test.ts`, with the root refused, and under
    `skip` the piece started, once the home space changed while nothing
-   served the piece.
+   served the piece. The same file holds the case of a home space whose
+   own serving loop made its root, whose documents no recorded piece
+   writes: the viewer's slice is stored clean, and a change to the list of
+   favorites the root's setup wrote starts the piece.
 10. A change to that viewer's home space while the piece is unstarted and
     their session is live starts the piece, and the viewer reads the new
     value. A change to the home space of a viewer who is no longer watching
@@ -913,11 +926,13 @@ change to a shared input of the other space, which reaches both viewers:
     the second. A grant withdrawn afterward marks the slice `2` and drops
     its registration, at the next record and at the judgment that follows
     the change to the access list
-    (`v2-server-currency-across-spaces.test.ts`). Under `skip`
+    (`v2-server-currency-across-spaces.test.ts`). Under `start-upstream`
     the piece of test 22 is left unstarted, and carries nothing, while
     each viewer's instance is unchanged, and is started when an input of
     the other space's piece changes, which brings each viewer the new
-    value (`space-server-carried-demand.test.ts`).
+    value. Under `skip` the loop carries nothing into the other space,
+    which computes no instance for a viewer with no session there
+    (`space-server-carried-demand.test.ts`).
 
 ## Related
 

@@ -609,27 +609,32 @@ export function embedArgs(config: BuildConfig, binary: BinaryName): string[] {
  * never reads, which the `cf` binary leaves out: every directory in the
  * package but the one holding its compiled parser, such as generated C source
  * and native builds. The packages are in Deno's npm cache rather than in the
- * repository. `grammars` are the grammars the pager loads.
+ * repository. `grammars` are the grammars the pager loads. Each directory is
+ * listed once, though grammars may share a package.
  */
 export function unusedGrammarDirectories(
   grammars: readonly Pick<TreeSitterGrammar, "id" | "wasmUrl">[] =
     treeSitterGrammars,
 ): string[] {
-  return grammars.flatMap((grammar) => {
-    const parser = path.fromFileUrl(grammar.wasmUrl());
-    let root = path.dirname(parser);
-    while (!existsSync(path.join(root, "package.json"))) {
-      if (path.dirname(root) === root) {
-        throw new Error(`No package holds the ${grammar.id} grammar ${parser}`);
+  return [
+    ...new Set(grammars.flatMap((grammar) => {
+      const parser = path.fromFileUrl(grammar.wasmUrl());
+      let root = path.dirname(parser);
+      while (!existsSync(path.join(root, "package.json"))) {
+        if (path.dirname(root) === root) {
+          throw new Error(
+            `No package holds the ${grammar.id} grammar ${parser}`,
+          );
+        }
+        root = path.dirname(root);
       }
-      root = path.dirname(root);
-    }
-    const kept = path.relative(root, parser).split(path.SEPARATOR)[0];
-    return Array.from(Deno.readDirSync(root))
-      .filter((entry) => entry.isDirectory && entry.name !== kept)
-      .map((entry) => path.join(root, entry.name))
-      .sort();
-  });
+      const kept = path.relative(root, parser).split(path.SEPARATOR)[0];
+      return Array.from(Deno.readDirSync(root))
+        .filter((entry) => entry.isDirectory && entry.name !== kept)
+        .map((entry) => path.join(root, entry.name))
+        .sort();
+    })),
+  ];
 }
 
 /** Returns the dependency-resolution arguments shared by every binary build. */

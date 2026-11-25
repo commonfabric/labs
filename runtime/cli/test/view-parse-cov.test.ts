@@ -92,17 +92,19 @@ Deno.test("registry: a .md filename is highlighted as Markdown", () => {
 });
 
 //
-// Highlight refresh: the no-op paths, and an edit that is not (lines 297, 403)
+// Highlight refresh: the no-op paths, and an edit that is not
 //
 
 Deno.test("createHighlighter: update with identical text returns the same lines", () => {
   const src = "const a = 1;\nconst b = 2;\n";
   const hl = createHighlighter(src, "m.ts");
   const before = hl.lines;
-  const after = hl.update(src);
-  // Identical text short-circuits update, which hands back the exact same
-  // array reference.
-  assertEquals(after, before);
+  // An update with unchanged text hands back the same array, and an edit
+  // recolors.
+  assert(hl.update(src) === before);
+  const edited = `${src}const c = 3;\n`;
+  assert(hl.update(edited) !== before);
+  assertEquals(hl.lines, highlightDocument(edited, "m.ts"));
 });
 
 Deno.test("highlightLineEditLocally: unchanged text returns the original line", () => {

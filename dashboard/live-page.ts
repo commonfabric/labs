@@ -177,14 +177,14 @@ export function livePages(
 }
 
 /** The styles of the badge a live page carries. */
-const LIVE_PAGE_STYLES = `
+export const LIVE_PAGE_STYLES = `
   .live-badge{font-size:11px;color:var(--status-good-text);border:1px solid ${
   statusLayer("good", 0.4)
 };border-radius:6px;padding:2px 8px}
   .live-badge.offline{color:var(--status-unknown-text);border-color:var(--status-unknown)}`;
 
 /** The badge saying whether a live page can hear the server. */
-const LIVE_PAGE_BADGE =
+export const LIVE_PAGE_BADGE =
   `<div class="live-badge" id="live-badge" role="status">● LIVE</div>`;
 
 /** Keeps the page it is placed in current. It belongs after `<main>`. */

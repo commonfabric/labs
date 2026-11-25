@@ -517,6 +517,16 @@ inside the assertion itself (they are gated and throw in a `computed()`
 anyway). If the pattern stamps a timestamp or random ID, assert that the value
 exists or changed in the expected place.
 
+Write each assertion so that it evaluates without throwing in every state the
+test passes through, not only at its own step. With server execution on, the
+serving loop derives the test pattern's values as it derives any piece's: it
+runs an assertion before the assertion's step, and again whenever what the
+assertion reads changes, and an error thrown there fails the file. Read a list
+element that a later action adds through `?.`: `items.get()[1]?.done === true`
+is `false` until the element exists, where `items.get()[1].done` throws.
+`patterns/apps/topics/activity-scalars.test.tsx` reads its comments and links
+this way.
+
 ## Answering Fetches and Model Requests
 
 A test states what a fetch or a language model answers in a module-scope

@@ -907,10 +907,12 @@ export class Client {
    */
   #cidBodyFetches = new Map<string, Promise<boolean>>();
   /**
-   * The bounds a watch set is staged in parts to fit on this connection: on
-   * a routed connection, the frame cap and the 4 MiB a request may take, in
-   * parts of 1 MiB; on a direct one, the server's slot limit on a client
-   * message.
+   * The bounds one request is held to on this connection, which a watch
+   * set is staged in parts to fit and a commit past them is refused unsent:
+   * on a routed connection, the frame cap and the 4 MiB a request may take,
+   * in parts of 1 MiB; on a direct one, the server's slot limit on a client
+   * message, which is the one its `hello.ok` carries (`messageSlots`) or
+   * else the default.
    */
   #requestLimits: PartLimits | undefined;
   /** The split syncs whose last part has not arrived, by session. */
@@ -2799,7 +2801,7 @@ export class Client {
           }
           : this.#transport.messageLimits ?? {
             bytes: Number.MAX_SAFE_INTEGER,
-            values: MAX_UNTRUSTED_MESSAGE_SLOTS,
+            values: helloOk.messageSlots ?? MAX_UNTRUSTED_MESSAGE_SLOTS,
           };
         this.#helloPending.resolve();
         return;
@@ -6893,6 +6895,7 @@ const parseHelloOk = (
   routerTransport?: number;
   routerUploadWindow?: number;
   routerFrameSlots?: number | null;
+  messageSlots?: number;
 } | null => {
   if (!isPlainObject(message)) {
     return null;
@@ -6917,6 +6920,17 @@ const parseHelloOk = (
   ) {
     return null;
   }
+  // A server's limit is never below the default, so a lower one is not a
+  // limit any server was given.
+  const messageSlots = message.messageSlots;
+  if (
+    messageSlots !== undefined &&
+    (typeof messageSlots !== "number" ||
+      !Number.isSafeInteger(messageSlots) ||
+      messageSlots < MAX_UNTRUSTED_MESSAGE_SLOTS)
+  ) {
+    return null;
+  }
   return {
     flags: parsed,
     sessionOpen: message.sessionOpen,
@@ -6925,6 +6939,7 @@ const parseHelloOk = (
       ? { routerUploadWindow: message.routerUploadWindow }
       : {}),
     ...(frameSlots === undefined ? {} : { routerFrameSlots: frameSlots }),
+    ...(messageSlots === undefined ? {} : { messageSlots }),
   };
 };
 

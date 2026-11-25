@@ -60,6 +60,14 @@ dashboard/
   history-page-client.ts  the browser half of the two performance history pages: the window slider, chart loading, progress, and update checks
   ci-jobs-page.ts the page behind the ci tile, and its table sorting
   repo-page.ts  the page for each repository, and the index of them all
+  runners-page.ts  the runners page, and the script it hands the browser
+  runners-feed.ts  the jobs and runners the runners page shows, and its WebSocket
+  runner-jobs.ts   which jobs are queued and running, from deliveries and GitHub's API
+  runner-board.ts  the pools, boxes, and slots the runners page shows, and run colors
+  runner-layout.ts where everything on the runners page's board goes
+  runner-physics.ts the heaps and flights of the runners page's balls
+  runner-gl.ts     the WebGL drawing of the runners page's balls
+  runner-view.ts   the browser half of the runners page: drawing, motion, pointing, the socket
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
   registry.ts   THE ONE REGISTRATION POINT — the array of tiles
   tiles/*.ts     one tile per file
@@ -731,6 +739,166 @@ otherwise the lane past its budget where there is one, and otherwise the count
 of tests no lane can hold. A stale manifest colors the tile too and competes for
 neither line, because its own figure is the age badge in the header.
 
+### The runners page
+
+The **Runners** button at the bottom of the dashboard opens `/runners`, which
+shows what every runner of the organization is doing, and what is waiting for
+one. Each job queued or running on any branch that the server has read from
+GitHub or been told of by the relay is a ball, colored by its run, so that the
+jobs of one workflow for two pull requests have two colors. Runs on the board at
+the same time have colors of their own while there are enough to go round:
+twelve strong ones, then a paler shade of each. A run keeps its color while it
+has jobs on the board. The legend beside the board lists each run in its color,
+alphabetically, with how many of its jobs show, each line a link to the run on
+GitHub. The board is laid out 780 pixels wide, and shown at that size beside the
+legend; on a window with no room for both, the legend goes under the board, and
+the board is scaled, with everything on it, to fill the window's width without
+growing taller than the window.
+
+The board is split into pools, each a set of runners that the same jobs can run
+on, as a band across the board. A pool's heading names it, says what its runners
+are, and says how many of its jobs are queued and running. Under the heading,
+its queue is on the left and its runners are on the right, in boxes:
+
+- A runner whose name is one of its labels, or one of its labels followed by a
+  dash and a word, as `ci-mac-01-3` is, and that has another label saying what
+  it is for, is on the machine the first label names. Each machine is a box with
+  a slot for each of its runners. An offline runner's slot is red and crossed
+  out. Machines that share a label other than their names form one pool.
+- Other self-hosted runners, such as virtual machines made for each job, are
+  pooled by their labels. A job that asks for a runner group rather than labels,
+  as `runs-on: group: labs` does, is pooled by that group, queued or running.
+- Each larger runner, such as `ubuntu-24.04-32-core`, is a pool of its own, with
+  a place for each job it can run at once when that is 64 or fewer; one that can
+  run more has places as many as it has needed, as a box of autoscaled runners
+  does.
+- GitHub's own runners are one pool, with a box for each set of labels jobs ask
+  for, such as `ubuntu-latest`.
+
+A box of runners that are not a machine's has numbered places. A job takes the
+first empty place and keeps it while it runs, so a running job never moves.
+Pools and boxes stay where they are, empty if their jobs have gone, until
+keeping them would make the balls smaller or leave a pool off the board. The
+balls are as big as lets every pool fit, from 16 pixels down to 6; pools that do
+not fit at 6 are left off and counted at the bottom.
+
+A queued job waits in the pool of the first online runner that has every label
+it asks for, or, when all those runners are offline, of the first of them.
+Failing that, it waits for the larger runner it names, or in the pool of runners
+with its labels, made for it if it asks for a self-hosted runner, so that a job
+that may never be taken can be seen. Any other job waits for GitHub's runners.
+
+A queue is a heap of balls under gravity, as tall as its pool. Jobs just queued
+are piled up out of sight far to the left of the heap, fall onto a slope at 45
+degrees that leads down to the heap's top left corner, and roll into the heap
+one after another. When a job leaves the queue, the balls above it fall into its
+place. The heap's balls are as big as lets them all fit, and half a pixel
+smaller again while any sticks out of the top. When a job starts running, its
+ball is drawn to its runner's place by a pull that comes on over a quarter of a
+second, so that a ball still falling goes on falling a moment and then curves
+round. When a job ends, its ball gains an outline and a mark: a green ✓ if it
+passed, a red ✕ if it failed, and a gray – if it was cancelled or skipped. One
+that passed is thrown up and off the board to the right. One that failed leaves
+a red ring behind, is thrown against the right side of the board, falls to the
+line along the bottom, and bounces along it to the left until it falls off the
+end. One that neither passed nor failed rises like a puff of smoke. A job that
+goes for any other reason simply goes. While the system asks for reduced motion,
+the board changes without moving anything.
+
+Pointing at a ball says what run and job it is, how long it has run and where,
+or how long it has waited and for what labels. Pointing at a slot names its
+runner and says what it is doing. Clicking a ball opens its job on GitHub.
+
+The server keeps which jobs are queued and running (`runner-jobs.ts`), from each
+`workflow_job` and `workflow_run` delivery of the GitHub webhook relay. A page's
+WebSocket, `/runners/socket`, opens with a snapshot of everything the server
+holds, and then carries what each such delivery says, one message per delivery,
+as it arrives. The page runs the same tracker on those messages, so it follows
+the same changes the server does. A delivery that arrives out of order, such as
+news that a job is queued after news that it runs, changes nothing.
+
+What the relay delivers is complete only from when a connection to it is first
+heard, and GitHub does not promise to make every delivery. So the server reads
+the jobs under way from GitHub's API whenever the relay does not vouch for the
+last read that succeeded (as described under [Following the GitHub webhook
+relay](#following-the-github-webhook-relay)), as after the relay falls silent or
+a new connection to it is heard: when a page opens, on a delivery, or on the
+server's tick while a page is open, but at most every five minutes, since a read
+costs a request for each repository and more. Every request is conditional on
+GitHub's last answer to it, through its ETag, and GitHub does not count a reply
+that nothing has changed against the token's rate limit, so a read of
+repositories, runs, and runners that have not changed costs almost nothing. A
+read covers the organization's repositories pushed to in the last week and those
+of the jobs held. For each, it reads, through `github-runs.ts`, the runs not
+completed among the newest hundred of its unfiltered list. On the first read
+under a relay connection, when that list goes on past them without reaching back
+past the oldest a run under way can be, it also reads the lists filtered to each
+status a run under way can have, page by page while the pages are full, and
+reads again by its id each run young enough that they name further down, since
+those lists can be behind, remembering those found completed; later reads under
+the connection need not, since every run started since the first was delivered.
+A run held that no list names is read again by its id. Then it reads the jobs of
+each run under way, starts afresh from what it read, takes in again what the
+relay delivered during the read, and sends every page a new snapshot. A held run
+found completed ends its jobs as it ended. A repository GitHub says does not
+exist has no runs. One the dashboard is forbidden to read keeps the jobs the
+relay told of, is named on the board, and does not keep the read from counting
+as current, since reading it again would be forbidden again. The jobs of a
+repository that could not be read for any other reason, or of a run whose jobs
+could not be read, are kept as they were, and the read does not count as
+current; a read that cannot list the repositories changes nothing. While no page
+is open, the server holds no jobs and takes in no deliveries, and the next page
+to open has them read afresh. A page tells the server whether a reader can see
+it, and the server reads GitHub, jobs and runners alike, only while one can: a
+page left open behind other tabs is still sent every delivery, which costs
+nothing, and what is not current is read when a reader looks at one again. When
+the relay falls silent for two minutes, or is heard again, open pages are told,
+and while it is silent the board says that jobs may have started or ended
+unseen. The organization's self-hosted and larger runners are read when a page
+opens, at most twice a minute, and on the server's tick every five minutes while
+a page is open, since no delivery says when a runner comes, goes, or loses its
+connection. A list that cannot be read is kept as it was, and named on the
+board. The larger runners are read group by group, so listing both takes one
+permission: a GitHub App or a fine-grained token needs read-only access to the
+organization's "Self-hosted runners", and a classic token needs `admin:org`.
+Without it, the jobs' runners are pooled by what the jobs say.
+
+The page moves its balls in the browser, every frame while any moves, by the
+time the frame took (`runner-physics.ts`), and stops drawing once everything is
+at rest. While the system asks for reduced motion, each heap's balls are set out
+in rows at once instead. A heap is simulated in steps short enough that no ball
+moves much further than its own width in one, sorting its balls by the squares
+of a grid each step so that each ball finds its neighbors among a few others. A
+heap at rest sleeps, and a change wakes only the balls it can move, such as
+those above a ball that leaves, so that a ball landing on a heap at rest moves
+only the balls it lands on. A step pushes overlapping balls apart row by row
+from the floor up, once for each eight rows of awake balls, between two and
+six times, so that the weight of a heap up to about fifty rows deep reaches its
+floor and its balls come to rest rather than go on jostling. The balls are
+drawn with WebGL in one draw call (`runner-gl.ts`), each heap's balls cut to its
+pool's rounded box in the shader, and the few balls leaving the board on a 2D
+canvas over it. A page shows what many deliveries
+change together once, with the next frame. In headless Chrome on an Apple M5
+Max, a board of 6,000 queued jobs with jobs starting and ending ten times a
+second draws at 120 frames a second, with about 5 milliseconds of script in a
+typical frame and at most 10 in nineteen of twenty.
+
+The socket needs a key that the server makes when it starts, which a page reads
+from `/runners/key` before it opens the socket. Only a page of the dashboard's
+own origin can read that response, so another site someone visits cannot open a
+socket and read the organization's jobs. The server closes the socket of a page
+that has left 64 MiB of messages unread, and refuses a socket while 64 are open.
+
+A page served by another version of the server reloads. Beside the page's name,
+the badge the dashboard's other live pages carry says LIVE while the page hears
+the server and OFFLINE otherwise. A page whose socket closes shows no jobs,
+since it no longer knows which are queued or running. It opens the socket again
+at once if the socket had carried anything, and otherwise looks again every
+fifteen seconds, as the main dashboard page looks at its stream. The server says
+it is still there on each tick, every fifteen seconds, so a page gives up on a
+socket that has carried nothing for forty-five, as one left open after the
+computer slept does, or that has not opened in that time, and opens another.
+
 ### The `TileView` a tile returns
 
 The header text is the tile's own `label`, which does not change from one view
@@ -1237,7 +1405,8 @@ requests an hour, where a personal access token is allowed 5,000.
    job was cancelled, which the **ci** and **ci trust** tiles read. **Pull
    requests** is for **recent commits**.
 3. **Organization permissions**: **Members** **Read-only** for **github
-   users**. GitHub refuses an app's tokens for an organization's billing
+   users**, and **Self-hosted runners** **Read-only** for the runners page's
+   self-hosted and larger runners. GitHub refuses an app's tokens for an organization's billing
    ("Resource not accessible by integration"), so **github spend** reads
    through the app only with `GH_BILLING_ENTERPRISE` set. For an
    organization's billing, set `GH_BILLING_TOKEN` as well.
@@ -1296,8 +1465,9 @@ organization member; other callers see only public memberships.
    requests** to **Read-only**. **Pull requests** is for **recent commits**.
 5. **Organization permissions**: set **Members** to **Read-only** for GitHub
    users. Set **Administration** to **Read-only** for github spend. Only an org
-   owner or billing manager can grant the latter permission. Skip either
-   permission when its tile is not needed.
+   owner or billing manager can grant that permission. Set **Self-hosted
+   runners** to **Read-only** for the runners page's self-hosted and larger
+   runners. Skip any of these permissions whose tile or page is not needed.
 6. **Generate token** and copy it (`github_pat_…`, shown once).
 
 If you only need the labs CI tiles, keep `commonfabric` as the resource owner,

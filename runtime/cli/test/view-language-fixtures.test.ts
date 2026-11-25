@@ -135,13 +135,22 @@ function reconstructDiffSide(
 describe("view language fixture corpus", () => {
   it("covers every registered text language", () => {
     // A language may have several fixtures, one per surveyed repository; what
-    // the corpus owes is one for each registered text language.
-    const textLanguageIds = languageIds().filter((id) =>
-      languageForName(id)?.input.kind === "text"
+    // the corpus owes is one for each registered text language. A fixture may
+    // also name a template syntax over a host, such as `jinja-shell`, which
+    // selection builds when a name calls for it rather than registering.
+    const fixtureIds = new Set(
+      VIEW_LANGUAGE_FIXTURES.map((fixture) => fixture.languageId),
     );
-    expect([
-      ...new Set(VIEW_LANGUAGE_FIXTURES.map((fixture) => fixture.languageId)),
-    ]).toEqual(textLanguageIds);
+    expect(
+      languageIds().filter((id) =>
+        languageForName(id)?.input.kind === "text" && !fixtureIds.has(id)
+      ),
+    ).toEqual([]);
+    expect(
+      [...fixtureIds].filter((id) =>
+        languageForName(id)?.input.kind !== "text"
+      ),
+    ).toEqual([]);
   });
 
   it("records every language's selection routes on one of its fixtures", () => {

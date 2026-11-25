@@ -1,0 +1,46 @@
+/* suggestions.css — the Weaver's suggestion card (sg-*), shared by suggestions.html and suggestion-workbench.html.
+   The card draws the Weaver's suggestion card, whose measures (18px corner, 16px padding, 8px rhythm, the label and
+   item sizes) are the Weaver's own and are set here as values, not tokens; its colours come from --sg-* (the
+   Weaver's dress, set inline by sgparts.js) or from the style's tokens (.sg-card--style). */
+/* ---------- the card ---------- */
+.sg-card {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 16px; border-radius: 18px; box-sizing: border-box; width: 100%;
+  background: var(--sg-paper); color: var(--sg-ink);
+  border: 1px solid color-mix(in oklab, var(--sg-accent) 50%, transparent);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.12);
+}
+/* ---------- the style's dress: Warp's tokens on the card ---------- */
+.sg-card--style {
+  --sg-paper: var(--wf-surface-solid, var(--wf-surface));
+  --sg-ink: var(--wf-ink);
+  --sg-accent: var(--wf-accent);
+  --sg-verb: var(--wf-accent-text);
+  --sg-link: var(--wf-link-color, var(--wf-accent-text));
+  border-radius: var(--wf-radius-surface); border-color: var(--wf-line-2);
+  box-shadow: var(--wf-shadow-2, 0 4px 14px rgb(0 0 0 / 0.12));
+  font-family: var(--wf-font-body); font-weight: var(--wf-body-weight);
+}
+/* ---------- the third set: an agenda, and a proposed change on an agenda item or a to-do ---------- */
+.sg-agenda { display: flex; flex-direction: column; gap: 6px; }
+.sg-agenda-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.sg-agenda-item { display: grid; grid-template-columns: 3.6em 1fr auto; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 10px;
+  border-left: 3px solid color-mix(in oklab, var(--sg-ink) 18%, transparent); }
+.sg-agenda-time { display: flex; flex-direction: column; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px; }
+.sg-change-tag { font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sg-accent); }
+/* a change: what moves or goes is struck (sg-struck), what is new or where it moves to is in the accent */
+.sg-struck { text-decoration: line-through; opacity: 0.6; }
+.sg-change-when { color: var(--sg-accent); font-weight: 600; }
+.sg-change--add, .sg-agenda-item.sg-change--move { border-left-color: var(--sg-accent); background: color-mix(in oklab, var(--sg-accent) 9%, transparent); }
+.sg-change--add .sg-option-words > :first-child::before { content: "+ "; color: var(--sg-accent); font-weight: 700; }
+.sg-change--drop { border-left-color: transparent; }
+.sg-change--done .sg-checklist-box { border-color: var(--sg-accent); border-style: dashed; color: var(--sg-accent); }
+.sg-checklist-item.sg-change { padding: 5px 8px; margin: 0 -8px; border-radius: 10px; }
+.sg-checklist-item.sg-change--add, .sg-checklist-item.sg-change--move, .sg-checklist-item.sg-change--done { background: color-mix(in oklab, var(--sg-accent) 9%, transparent); }
+.sg-card--style .sg-agenda-item, .sg-card--style .sg-checklist-item.sg-change { border-radius: var(--wf-radius-control); }
+/* a drive between two entries (the leave-by time in the time column, the route glyph before its words) and the
+   weather over the hours (the rain glyph in the time column): quiet, dashed rows, so the entries keep the day's shape */
+.sg-agenda-item--travel, .sg-agenda-item--weather { border-left-style: dashed; }
+.sg-agenda-item--travel > .sg-option-words, .sg-agenda-item--weather > .sg-option-words { font-size: 12px; opacity: 0.8; }
+.sg-agenda-item--travel .sg-agenda-time { font-weight: 500; }
+.sg-agenda-item--travel .sg-option-words .sg-glyph { width: 13px; height:

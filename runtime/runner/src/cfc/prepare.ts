@@ -5,6 +5,7 @@ import {
   CFC_SYSTEM_STRING_ATOMS,
   type CfcAtom,
   cfcAtom,
+  type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
 import {
   emptySchemaObject,
@@ -181,6 +182,7 @@ import {
   admitsRulesOfKind,
   type CfcGrantConsumptionContext,
   evaluateExchangeRules,
+  isValueIntrinsicExchangeRule,
 } from "./exchange-eval.ts";
 import { externalIngestStamp } from "./external-ingest.ts";
 import {
@@ -944,9 +946,17 @@ const consumedLocations = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
   nonRecursive: boolean | undefined,
+  evidence?: readonly LabelMapEntry[],
 ): ConsumedLocation[] =>
   Array.from(
-    resolvedLocations(entries, path, nonRecursive, "labeled", "evidence"),
+    resolvedLocations(
+      entries,
+      path,
+      nonRecursive,
+      "labeled",
+      "evidence",
+      evidence,
+    ),
     ({ path: location, label, evidence, integrity }) => ({
       key: stringTupleKey([document, pathKey(probedSlotPath(location))]),
       confidentiality: label.confidentiality ?? [],
@@ -5480,11 +5490,113 @@ const deriveFlowJoinImpl = (
       type,
     });
   };
+  // Exchange at observation (§5.3): "A runtime MUST evaluate exchange
+  // wherever a label is consumed: when a value is observed into a
+  // computation", and a value-intrinsic rule's result is the one that
+  // travels: "values derived from that observation carry the exchanged
+  // confidentiality". The evidence such a rule guards on is bound to the
+  // value observed, and the join below drops it, so a gate that reads what
+  // this transaction writes finds none of it.
+  const policyEvaluationMode = tx.getCfcState().policyEvaluationMode;
+  const snapshotCarriesExchange =
+    tx.getCfcState().policySnapshot?.records.some((record) =>
+      record.rules.some(isValueIntrinsicExchangeRule)
+    ) ?? false;
+  // Nothing the flow join does installs a manifest.
+  const manifestFor = passManifestLookup(tx);
+  /**
+   * Returns `clauses`, the confidentiality one observation of the document
+   * `document` in `space` consumed, as the value-intrinsic rules leave it:
+   * each rule matched at one location the observation consumed, against the
+   * evidence there about the value currently at it, as a release gate
+   * matches it (`access-integrity.ts`). `entries`, `path` and `nonRecursive`
+   * are what the observation's label was resolved from, and `evidence`
+   * returns the entries a location's evidence is resolved over where those
+   * are not `entries`. `membership` returns the further locations a read
+   * that stops at a container consumes: the container's length, whose
+   * writer the evidence at the container does not speak for.
+   *
+   * The clauses come back as read where the policy-evaluation dial is not
+   * `enforce` and where no location carries evidence. A policy that cannot
+   * be resolved fires none of its rules, so the clause naming it stays as
+   * read on the derived value and the gate that later reads it decides on
+   * it again (§5.3.2: "leaves the original label unchanged").
+   *
+   * Where an evaluation runs out of fuel, each clause that location consumed
+   * comes back split into its alternatives, one clause each. Keeping the
+   * clauses as read is not the strict side there, since a `dropClause` rule
+   * on a clause of several alternatives removes one, which tightens it, and
+   * §5.3.2 makes exhaustion "a hard boundary failure (fail closed), not
+   * permission to continue with a partially rewritten label". The split is
+   * never looser than the clauses as read, and is stricter than any outcome
+   * that keeps one of a clause's original alternatives. It is not a bound on
+   * every outcome: a rule that adds an alternative can enable another that
+   * then drops an original one, leaving a clause the split does not imply.
+   * Exhaustion needs more than 64 firings at one location. The flow join
+   * has callers outside prepare (a query builtin's request label, the
+   * serving loop's processed claim), so it refuses through the label it
+   * returns rather than by throwing.
+   */
+  const exchangedAtObservation = (
+    document: string,
+    space: MemorySpace,
+    clauses: readonly CfcConfClause[],
+    entries: readonly LabelMapEntry[],
+    path: readonly string[],
+    nonRecursive: boolean | undefined,
+    evidence: () => readonly LabelMapEntry[] | undefined,
+    membership: () => readonly ConsumedLocation[],
+  ): readonly CfcConfClause[] => {
+    if (
+      policyEvaluationMode !== "enforce" || clauses.length === 0 ||
+      (!snapshotCarriesExchange &&
+        modulePolicyReferencesIn(clauses).length === 0)
+    ) {
+      return clauses;
+    }
+    const locations = [
+      ...consumedLocations(
+        document,
+        entries,
+        path,
+        nonRecursive,
+        evidence(),
+      ),
+      // A recursive observation's own locations already include the length.
+      ...(nonRecursive === true ? membership() : []),
+    ];
+    if (locations.every((location) => location.evidence.length === 0)) {
+      return clauses;
+    }
+    return exchangeEachObservation(
+      clauses,
+      locations,
+      (consumed, evidence) => {
+        const outcome = evaluateGatedConfidentiality(
+          tx,
+          consumed,
+          evidence,
+          [],
+          "observing",
+          space,
+          admitsRulesOfKind("value-intrinsic"),
+          manifestFor,
+        );
+        return outcome.exhausted
+          ? consumed.flatMap((clause) => clauseAlternatives(clause))
+          : outcome.confidentiality;
+      },
+    ).confidentiality;
+  };
   // Each pass owns its snapshots: prepare can run again after metadata writes.
   const metadataByDoc = new Map<string, {
     metadata: CfcMetadata | undefined;
     indexes: Map<ReadObservationShape, ConsumedLabelIndex>;
     labels: Map<string, IFCLabel | undefined>;
+
+    // By the same key as `labels`, the confidentiality an observation joins,
+    // exchanged where it was observed (`exchangedAtObservation`).
+    exchanged: Map<string, readonly CfcConfClause[]>;
     witnesses: Map<string, () => CfcAtom[] | undefined>;
 
     // With `collectSources`, by the same key as `labels`, the entries the
@@ -5640,6 +5752,7 @@ const deriveFlowJoinImpl = (
           metadata: storedMetadataFor(tx, space, id, scope, type),
           indexes: new Map(),
           labels: new Map(),
+          exchanged: new Map(),
           witnesses: new Map(),
           joined: new Map(),
           sourced: new Set(),
@@ -5774,6 +5887,8 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
+        // For a read declared onward, the entries it consumed at the slots.
+        let slotEntries: readonly LabelMapEntry[] | undefined;
         if (sourceSteps !== undefined && entries !== undefined) {
           document.joined.set(labelKey, entries);
         }
@@ -5811,6 +5926,7 @@ const deriveFlowJoinImpl = (
           if (sourceSteps !== undefined) {
             document.joined.set(labelKey, below);
           }
+          slotEntries = below;
         }
         // A shallow content read's locations are resolved over what a value
         // read of them would consume; see `observationInputWitnesses`. So are
@@ -5836,6 +5952,87 @@ const deriveFlowJoinImpl = (
             indexFor("value"),
           );
         };
+        // A read that stops at a container observes its membership: for a
+        // list, how long it is. The length is a value of its own, stamped by
+        // whoever last changed it, and nothing else the read consumes says
+        // who that was. Its value stamps are a location of the read, both
+        // for the input witnesses and for exchange, so that neither a
+        // witness nor a release survives a list other code truncated. A
+        // record's key named `length` is read the same way, which can only
+        // withhold. Resolved on first use.
+        let lengthEntriesMemo: readonly LabelMapEntry[] | undefined;
+        const lengthPath = [...logicalPath, "length"];
+        const lengthEntries = (): readonly LabelMapEntry[] => {
+          if (lengthEntriesMemo !== undefined) return lengthEntriesMemo;
+          // A recursive read consumed the length's entries already; what
+          // reaches its declared target is its node alone, so they are a
+          // location of that node too.
+          lengthEntriesMemo = (document.metadata === undefined ||
+              observation.shape === "followRef"
+            ? []
+            : observation.nonRecursive === true
+            ? consumedEntriesForRead(
+              document.metadata,
+              lengthPath,
+              { nonRecursive: true, consumes: "value", ...exclusion },
+              indexFor("value"),
+            )
+            : entries ?? []).filter((entry) =>
+              pathKey(entry.path) === pathKey(lengthPath)
+            );
+          return lengthEntriesMemo;
+        };
+        const membership = (): readonly ConsumedLocation[] =>
+          lengthEntries().length === 0
+            ? []
+            : consumedLocations(key, lengthEntries(), lengthPath, true);
+        // What joins of this observation, exchanged where it was observed.
+        // A read declared onward joins what it consumed at the slots; what
+        // it consumed at its own path lands on the target it names, and is
+        // exchanged the same way, as a shallow read there. The evidence is
+        // the input witnesses': a shallow read observes a function of the
+        // value stored at its node, and the shape class it consumes holds
+        // no integrity of its own.
+        const joinedEntries = entries === undefined
+          ? undefined
+          : observation.declaredOnward !== undefined
+          ? slotEntries
+          : entries;
+        const joinedClauses = (observation.declaredOnward !== undefined
+          ? document.labels.get(`${labelKey}#below`)
+          : label)?.confidentiality ?? [];
+        if (joinedEntries !== undefined && joinedClauses.length > 0) {
+          document.exchanged.set(
+            labelKey,
+            exchangedAtObservation(
+              key,
+              space,
+              joinedClauses,
+              joinedEntries,
+              logicalPath,
+              observation.nonRecursive,
+              observationEvidence,
+              membership,
+            ),
+          );
+        }
+        const nodeClauses = document.labels.get(`${labelKey}#node`)
+          ?.confidentiality ?? [];
+        if (entries !== undefined && nodeClauses.length > 0) {
+          document.exchanged.set(
+            `${labelKey}#node`,
+            exchangedAtObservation(
+              key,
+              space,
+              nodeClauses,
+              entries,
+              logicalPath,
+              true,
+              observationEvidence,
+              membership,
+            ),
+          );
+        }
         // Computed on first use, since a followed slot's probe never uses it
         // and resolving a probe's evidence may read the slot's value.
         let computed: { witnesses: CfcAtom[] | undefined } | undefined;
@@ -5858,34 +6055,15 @@ const deriveFlowJoinImpl = (
           };
           return computed.witnesses;
         });
-        // A read that stops at a container observes its membership: for a
-        // list, how long it is. The length is a value of its own, stamped by
-        // whoever last changed it, and nothing else the read consumes says
-        // who that was, so a list other code truncated would otherwise keep
-        // every surviving member's witness. Its value stamps are a location
-        // of the read. A record's key named `length` is read the same way,
-        // which can only withhold a witness.
-        const lengthWitnesses = document.metadata === undefined ||
-            observation.nonRecursive !== true ||
-            observation.shape === "followRef" || identity === undefined ||
-            inputWitnesses?.length === 0
+        // The membership a read that stops at a container observes is a
+        // location of its input witnesses (see `lengthEntries`).
+        const lengthWitnesses = observation.nonRecursive !== true ||
+            identity === undefined || inputWitnesses?.length === 0 ||
+            lengthEntries().length === 0
           ? undefined
-          : (() => {
-            const lengthPath = [...logicalPath, "length"];
-            const lengthEntries = consumedEntriesForRead(
-              document.metadata!,
-              lengthPath,
-              { nonRecursive: true, consumes: "value", ...exclusion },
-              indexFor("value"),
-            ).filter((entry) =>
-              pathKey(entry.path) ===
-                pathKey(lengthPath)
-            );
-            return lengthEntries.length === 0
-              ? undefined
-              : observationInputWitnesses(lengthEntries, lengthPath, true);
-          })();
-        document.witnesses.set(`${labelKey}#length`, () => lengthWitnesses);
+          : observationInputWitnesses(lengthEntries(), lengthPath, true);
+        document.witnesses.set(`${labelKey}#length`, () =>
+          lengthWitnesses);
       }
       // Every observation counts toward the input witnesses, `followRef`
       // included: which reference sits at a slot is information the
@@ -5941,7 +6119,10 @@ const deriveFlowJoinImpl = (
             onward = { target, atoms: [] };
             declaredAtomsAt.set(at, onward);
           }
-          for (const atom of node.confidentiality) {
+          for (
+            const atom of document.exchanged.get(`${labelKey}#node`) ??
+              node.confidentiality
+          ) {
             declaredAtoms.push(atom);
             onward.atoms.push(atom);
           }
@@ -5951,7 +6132,13 @@ const deriveFlowJoinImpl = (
         ? document.labels.get(`${labelKey}#below`)?.confidentiality
         : label?.confidentiality;
       if (joined?.length) {
-        for (const atom of joined) atoms.push(atom);
+        // What joins is the label as exchanged where it was observed. The
+        // bookkeeping below, and the input witnesses above, go by the label
+        // as read: a location whose clause a rule released is still a
+        // confidential input of this transformation.
+        for (const atom of document.exchanged.get(labelKey) ?? joined) {
+          atoms.push(atom);
+        }
         if (sourceSteps !== undefined && !document.sourced.has(labelKey)) {
           document.sourced.add(labelKey);
           const consumed = document.joined.get(labelKey) ?? [];
@@ -12075,6 +12262,52 @@ export const describeSinkReleaseRefusal = (
   );
 };
 
+/** Looks up the manifest of a module policy, in `space` where one is named. */
+type ManifestLookup = (
+  reference: CfcModulePolicyRefAtom,
+  space: MemorySpace | undefined,
+) => unknown;
+
+/**
+ * A manifest lookup for one pass of exchange evaluations, which resolves each
+ * module policy once per space rather than once per evaluation. A resolution
+ * reads the manifest document, adds its reads to the journal and binds it into
+ * the commit, so a pass that evaluates at every location of a long list
+ * otherwise pays that per location. Absences are kept too. Sound only while the
+ * pass installs no manifest: a pass that does must take a new lookup after it.
+ * A lookup with no space named resolves over the spaces the journal has
+ * touched so far, which the pass can widen, so it is not kept.
+ */
+const passManifestLookup = (
+  tx: IExtendedStorageTransaction,
+): ManifestLookup => {
+  const resolved = new Map<string, unknown>();
+  // A lookup is not an observation of the manifest: the commit is bound to
+  // the manifest it found by a precondition, and like every other policy
+  // lookup it reads under `internalVerifierRead`. Read plainly, a flow join
+  // that made it would walk the manifest document as an unlabeled input,
+  // whose empty integrity ends the hereditary meet.
+  const resolve = (
+    reference: CfcModulePolicyRefAtom,
+    space: MemorySpace | undefined,
+  ): unknown =>
+    tx.runWithAmbientReadMeta(
+      internalVerifierRead,
+      () => tx.resolveCfcPolicyManifest(reference, space),
+    );
+  return (reference, space) => {
+    if (space === undefined) return resolve(reference, undefined);
+    const key = stringTupleKey([
+      space,
+      reference.policyDigest,
+      reference.moduleIdentity,
+      reference.symbol,
+    ]);
+    if (!resolved.has(key)) resolved.set(key, resolve(reference, space));
+    return resolved.get(key);
+  };
+};
+
 /**
  * Runs the exchange-rule evaluator over one gated confidentiality set under
  * the transaction's policy snapshot + trust config (Epic B5). Pure wiring:
@@ -12099,6 +12332,8 @@ export const describeSinkReleaseRefusal = (
  * consumption commits atomically with the release.
  *
  * `admitsRule`, when given, restricts the evaluation to the rules it admits.
+ * `manifestFor` looks up a module policy's manifest; a caller that evaluates
+ * many times within one pass passes one `passManifestLookup()` to them all.
  */
 const evaluateGatedConfidentiality = (
   tx: IExtendedStorageTransaction,
@@ -12110,6 +12345,7 @@ const evaluateGatedConfidentiality = (
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
   admitsRule?: (rule: ExchangeRule) => boolean,
+  manifestFor: ManifestLookup = passManifestLookup(tx),
 ): {
   confidentiality: readonly CfcConfClause[];
   exhausted: boolean;
@@ -12152,7 +12388,7 @@ const evaluateGatedConfidentiality = (
           if (typeof destinationSpace === "function" && space === undefined) {
             return undefined;
           }
-          return tx.resolveCfcPolicyManifest(reference, space);
+          return manifestFor(reference, space);
         },
       ),
     },
@@ -12212,6 +12448,7 @@ const evaluateAccessExchange = (
   const failures: ReturnType<
     typeof evaluateGatedConfidentiality
   >["resolutionFailures"][number][] = [];
+  const manifestFor = passManifestLookup(tx);
   const access = exchangeEachObservation(
     confidentiality,
     locations(),
@@ -12224,6 +12461,7 @@ const evaluateAccessExchange = (
         "observing",
         destinationSpace,
         admitsRulesOfKind("value-intrinsic"),
+        manifestFor,
       );
       exhausted ||= outcome.exhausted;
       firings += outcome.firings;
@@ -12241,6 +12479,7 @@ const evaluateAccessExchange = (
     consumption,
     destinationSpace,
     admitsRulesOfKind("not-value-intrinsic"),
+    manifestFor,
   );
   exhausted ||= joined.exhausted;
   for (const failure of joined.resolutionFailures) failures.push(failure);

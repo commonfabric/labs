@@ -6,6 +6,7 @@
 
 import type { Language } from "../language.ts";
 import { utf8Decoder } from "../decoder.ts";
+import { firstContentLineMatches } from "../evidence.ts";
 import {
   createYamlHighlighter,
   yamlDocument,
@@ -21,8 +22,10 @@ import {
  * on their own line, and INI, systemd, sysusers.d, and tmpfiles.d
  * configuration open in neither way.
  */
-const YAML_FIRST =
-  /^(?!#!)(?:[^\S\n]*(?:#[^\n]*)?\n)*(?:---[^\S\n]*(?:#[^\n]*)?(?:\n|$)|[A-Za-z_][\w.-]*:[^\S\n]*(?:#[^\n]*)?\n(?:[^\S\n]+\S|-[^\S\n]))/;
+const YAML_LINE = firstContentLineMatches(
+  "#",
+  /(?:---[^\S\n]*(?:#[^\n]*)?(?:\n|$)|[A-Za-z_][\w.-]*:[^\S\n]*(?:#[^\n]*)?\n(?:[^\S\n]+\S|-[^\S\n]))/,
+);
 
 export const yamlLanguage: Language = {
   id: "yaml",
@@ -36,7 +39,10 @@ export const yamlLanguage: Language = {
     aliases: ["yml"],
     interpreters: [],
     signatures: [],
-    sharedExtensions: [{ extension: ".conf", content: YAML_FIRST }],
+    sharedExtensions: [{
+      extension: ".conf",
+      content: (text) => !text.startsWith("#!") && YAML_LINE(text),
+    }],
   },
 
   parseDocument: (text) => yamlDocument(text),

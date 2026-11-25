@@ -162,6 +162,15 @@ const MINIMAL_TREATMENT: Record<RuntimeOptionKey, MinimalTreatment> = {
   // The same factory shares these among the serving runtimes it builds.
   compileTurns: { treat: "absent" },
   moduleCompiler: { treat: "absent" },
+  runBeacon: { treat: "absent" },
+  // The toolshed a deployment-facing runtime talks to maintains a space's
+  // collections; a single-process runtime has no server and maintains its
+  // own.
+  indexedCollectionMaintenance: {
+    treat: "pinned-in",
+    presets: DEPLOYMENT_FACING,
+    value: "none",
+  },
 };
 
 describe("runtimePresets conformance", () => {
