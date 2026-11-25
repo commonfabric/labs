@@ -1406,6 +1406,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "linker-script",
+    // CSS reads a section name such as `.text` as a class selector, and colors
+    // it as the name a rule styles, as linker scripts color an output section.
+    highlightingPeers: ["css"],
     surveyRepository: "gvisor",
     surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
     surveyPath: "vdso/vdso_amd64.lds",
@@ -1432,6 +1435,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "linker-script",
+    // CSS reads a section name such as `.text` as a class selector, and colors
+    // it as the name a rule styles, as linker scripts color an output section.
+    highlightingPeers: ["css"],
     surveyRepository: "gvisor",
     surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
     surveyPath: "pkg/sentry/platform/systrap/sysmsg/pie.lds.S",
