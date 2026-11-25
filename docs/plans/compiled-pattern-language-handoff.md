@@ -321,8 +321,12 @@ twenty).
     event still takes no label from the payload. With the residency refusal
     gone, that under-taint now reaches across spaces too: a served handler
     that read another space's labeled value can send it, and the consuming
-    handler writes it unlabeled. The conformance statement and the
-    enforcement matrix §4 say so.
+    handler writes it unlabeled. The same commit changes
+    `docs/specs/cfc-conformance-statement.md` and
+    `docs/specs/cfc-enforcement-matrix.md` §4 to say so, on the round's
+    branch only: this branch's copies are unchanged, and its §4 still
+    describes the residency refusal. Whether the consumer should take the
+    payload's label is open, a CFC question the round deferred.
   - The first append onto a list the storage did not hold stored a record
     `{0: …, length: 1}`, which emptied a resumed room's window (P489).
     Rooms created before the fix keep the record.
