@@ -26021,3 +26021,477 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 5. P461: no rule of a label changes; a `filter` over the rows of a `map`, which
    stored `{ at: [] }` for an appended row, stores the row again, with the
    record of the result at its position.
+
+## Round twenty-four: the store step of a result, and a filter over rows
+
+Round twenty-four (2026-11-24), on the branch
+`claude/compiled-pattern-scoped-rows` from `71fefaf1e3`. The notes are numbered
+from 1044, the provisional decisions from P462. The logs are in the folder
+`r24-store-step/` of the session. Whenever a note says `map` or `filter`, it
+names the case. Times are on an Apple M5 Max with 18 cores at the load averages
+given, from other sessions; the counts do not depend on the load.
+
+1044. **Findings, first.**
+      - _Scale, fixed: the store step of the room's result placed the whole
+        result again at each send._ It formed and compared 621 positions, the
+        rendered tree included, where the tree and most members were the very
+        values placed before. A record or an array that is the value placed at
+        its position before is now neither formed nor compared (P462): 83
+        positions at every size. The positions did not follow the room; the
+        noting of records did (next item).
+      - _Scale, fixed in part: each record given again was registered at every
+        position its inputs reach._ Fourteen records of the result name the
+        inputs of `facts`, about four positions per message held, and each was
+        removed from and added to the index of label readers at every send:
+        6,800 to 6,900 positions at 100 messages, 29,200 to 29,300 at 500.
+        Records whose inputs hold equal content now share one set of positions,
+        changed where the positions differ (P463): 1,012 to 1,028 at 100, 4,212
+        to 4,228 at 500, 8,212 to 8,228 at 1,000. `#storeResult` takes 90 ms per
+        send at 1,000 messages where it took 319 ms (both without the harness's
+        walk), and the piece's own time per send is 323 to 337 ms where it was
+        549 to 565 ms, at the same load (note 1050).
+      - _Scale, open: what a send still registers grows with the room._ The row
+        of each new message has two places, in its row document of the scope
+        `user`, whose records name the inputs of `facts` through two outputs;
+        they are records of a new key, so each send registers their set whole
+        (about 8 positions per message held). And every row's records keep the
+        positions of the inputs of `facts` as they were when the row was made,
+        since a row is not given its record again when `facts` changes: the
+        index of label readers holds, over the life of the room, a set per row
+        as large as the room was then, which grows with the square of the room.
+        This is older than this round (each record kept its own array of
+        positions). Plan in note 1052; it needs a decision on what a record that
+        names another output is a reader of.
+      - _Structure, a defect of this round found by the measurement and fixed:_
+        with `SAME` counted as `KEPT` is, an array that holds another value at
+        every position was compared position by position where a member held a
+        record placed before: the window of the newest messages was written as
+        112 positions per send at 100 messages, where it was written whole as
+        one (note 1045, test over `fixtures/shared-window.tsx`).
+      - _Performance, found and fixed:_ with the sets shared, the question
+        whether a record's positions consume another label after a change
+        (`#readsChangedLabel`) copied the shared set for each record (140 ms per
+        send at 1,000 against 46 ms before); it is answered once per set.
+      - _Scale, fixed: a `filter` over the rows of a `map` was formed whole at
+        each change of a row or of its membership._ It is brought up to date by
+        row (P464): 3 elements looked at for an append at 10, 100 and 1,000
+        elements, over the result of a `map` over an array of references and
+        over an array of plain values in place, where the assembly was formed
+        whole.
+      - _Scale, open: the records below a member that is the value placed before
+        are each asked about (`#sameRecords`),_ which computes the inputs of
+        each output found there and their number: the work follows the outputs
+        the member holds, not what changed (11 ms per send at 1,000 in the
+        room). Plan in note 1052.
+      - _Scale, open: a middle edit of a `filter`, a `sortBy` or a `flatMap`
+        numbers again every member behind it_ (250 at 1,000 elements of a
+        `filter` over the result of a `map`), and the element table of a
+        construct over the result does the same; step 5 is planned and not
+        built, as it is not contained (note 1049).
+      - _Harness: `Instance.streams()` is called once per binding_ (note 1048);
+        the 353 ms per send of round twenty-three at 1,000 messages were the
+        harness's.
+      - _Recorded, not changed:_ the stream markers of the result are made again
+        at each evaluation of the result entry, so a record that holds one is
+        never the value placed before, and its link is compared at each send;
+        and `facts`, an authored body, reads about eight positions per message
+        held at each send (8,061 reads at 1,000).
+1045. **Placing a result again (step 1; provisional decision P462).**
+      - _What was visited._ `Instance.#storeResult` places the value of the
+        result entry whenever the entry is another one (`#place`): `#formOf`
+        forms the whole value, the rendered tree included, and `put` compares
+        each position with what it holds, giving at each position left as it was
+        the record of the output nearest above it (`#unchangedOutput`, which
+        finds that output by a scan of every recorded output). The result entry
+        of the room is evaluated again at each send because it holds
+        `messages.count` and the other facts, while most of its value is the
+        value of cones that were not evaluated again: the tree, the records of
+        `about`, `participants` and the others. A send placed 621 positions at
+        100, 500 and 1,000 messages (`Counts.positionsPlaced`, new). The number
+        does not follow the room; what followed the room in the store step was
+        the noting of records (note 1046).
+      - _What was built._ `#place` takes the value placed at the place before
+        (the value of `#storedResult` for the result, the row's value for a row
+        of a unit), and a record or an array of the new value that is the one
+        the previous value held at its position is given as `SAME` (`stored`,
+        `#storedMember`): nothing below it is formed or compared. A unit below
+        such a member stands where it stood and is due; the records its
+        positions would have given are given as those of places left as they
+        were (`#sameRecords`): the record of the output nearest at or above the
+        member, and that of each output below it that holds a value, found
+        through a tree of the recorded paths (`#recordedTrie`, `#trieAt`),
+        expanding `*` over what the place holds and stopping at the path of a
+        unit or of an index stored by itself. Each record is asked about once
+        per comparison (`#checkedNow`): nothing is evaluated while a place is
+        compared, so its inputs are the same at every position it covers. The
+        link record of a stream is compared whole, as a link is (a stream that
+        stays is given no record, which `put` said and did not do for a stream's
+        members). A result document that an aborted transaction wrote is placed
+        whole again (`#abort` clears `#storedResult`).
+      - _A defect found by the measurement and fixed._ `differsThroughout`
+        counts a member that holds `KEPT` as one that does not differ; with
+        `SAME` counted the same way, the window of the newest messages, whose
+        entries each hold the author's profile record placed before, was
+        compared and written position by position: 112 writes per send at 100
+        messages where there was one. `SAME` is filled from what the position
+        holds before the comparison (`withSame`); `holdsKept` is about `KEPT`
+        alone.
+      - _P462._ As above. Today's runtime writes a result by diffing the whole
+        value against what is stored (`diffAndUpdate`); here what is compared is
+        what is not the value placed before, so the work follows the cones
+        evaluated again. The records of the outputs below a member that is the
+        same are still asked about, one by one: the work for them follows the
+        outputs the member holds, not what changed (note 1052).
+      - _Tests_ (`exec/test/store-step.test.ts`, over
+        `fixtures/result-tree.tsx`: a result whose tree holds the rows of a
+        `map` over an array of references, each item a document of its own,
+        beside the count and the titles a body forms from every item through the
+        handle of the array): an append places at most 8 positions, the same at
+        10 and 100 items (51 before); an append gives the records of what it
+        changed and of nothing else, and a rename the record of the titles alone
+        (passing before and after); over `fixtures/shared-window.tsx` the window
+        is written whole (three writes of a title before the fix of
+        `differsThroughout`). In `exec/test/transaction-hooks.test.ts`, over
+        `fixtures/unchanged-record.tsx` (a record whose named output read
+        another position and gave the value it gave), the record of the place is
+        given again; without `#sameRecords` it is not. In
+        `compare/test/store-step-labels.test.ts`, the labels stored at the
+        count, the titles, the heading of the tree, the list and the rows of
+        `result-tree.tsx`, each item under a clause of its own, after an append
+        and after a rename: the same at `71fefaf1e3` and after.
+
+1046. **Registering a record (step 2; provisional decision P463).**
+      - _What it cost._ `Instance.#noteRecord` kept, for each record key, the
+        positions its inputs reach, and at each noting removed the key from
+        every position it was registered at and registered it again at every
+        position the new inputs reach, through the index of label readers
+        (`#recordReaders`, a tree of documents and path segments). In FabriChat
+        fourteen records of the room's result (`messages/count`, `oldestAt`,
+        `newestAt`, `threads`, `legacyReplies` at the top level and in
+        `$VIEWS/room/messages`, and four positions of the tree and of a row's
+        place) name the inputs of `facts`, which read about four positions per
+        message held; each of them registered 417 positions at 100 messages. A
+        send registered 6,798 to 6,910 positions at 100 and 29,198 to 29,310 at
+        500 (`Counts.recordRegistrations`, new: the positions at which a reader
+        was added or removed).
+      - _What was built._ Records whose inputs hold equal content share one set
+        of positions (`ReadSet`): its name is the instance and the number
+        `InputsDigests` gives the inputs with their element keys, or the
+        positions of the record's own element where it names the inputs of
+        another element (`#ownReads`). The set is registered once in
+        `#recordReaders`, and it keeps the folds over a collection and the
+        tables of member groups its inputs read (`#recordFolds` and
+        `MemberGroups.records` name sets). Noting a record names the content of
+        its inputs and nothing more (`#pendingReads`); the sets are brought up
+        to date when the transaction ends, when a label change asks for them, or
+        when the positions of one record are asked for (`#flushReads`): the
+        records that take one new content share a set; a set all of whose
+        records take the same new content is changed where the positions, the
+        folds and the tables differ (`#retarget`); any other new content gets a
+        set of its own, and a set no record names any more is dropped.
+        `#recordsReading`, the rows a body wrote (`#labelsRead`) and
+        `#relabelCreated` read the sets, and `labelsChanged` asks once per set
+        whether its positions consume another label (`#readsChangedLabel`),
+        which it asked once per record, over a copy of the record's positions.
+      - _What it does not change._ What a record says: the records given, their
+        inputs and the table are the same; which records a label change alone
+        reaches is the same (test below), and the labels stored are the same
+        (the test of note 1045). What noting a new content still costs: the walk
+        of its inputs to list their positions (`#readsOf`), once per new content
+        and not once per record, and the number `InputsDigests` gives each
+        record's inputs, formed from their whole text.
+      - _P463._ As above. Today's runtime forms a label from the read set at
+        each commit and keeps no index of the records that read a label; the
+        index exists here so that a label change alone forms again the labels of
+        exactly the records that read it (`plan-and-label-templates.md` §4.1),
+        and it now costs what changed in the content of the inputs.
+      - _Tests_ (`exec/test/store-step.test.ts`): an append to
+        `fixtures/result-tree.tsx` registers as many positions at 10 items as at
+        100 (133 and 1,213 before, 4 and 4 after); after an append, a label
+        change alone at a position the body read before the append, at one it
+        read for the appended item, and in a document nothing reads, reaches the
+        same records before and after (the count, the titles and the row's child
+        of the item; nothing).
+
+1047. **A `filter` over the rows of a `map` (step 3; provisional decision
+      P464).**
+      - _Why it was formed whole._ The assembly of a `filter` whose elements are
+        the rows of another per-element construct holds each kept row's value
+        and depends on the row's entry (`given` in `assembled`); the branch of
+        `#reassemble` for a `filter` knew the dependencies of the elements'
+        predicates and not those, so a change of a kept row was a suspect it
+        could not place and formed the assembly whole, and an entered element
+        that is no reference formed it whole as well (P461).
+      - _What was built._ The formation records the entry of each kept row with
+        its key (`Rows.kept`), the dependencies on those entries standing behind
+        those of the elements, in the order of the members. `#reassemble` puts
+        an entered member that is a row with the row's value and a dependency on
+        its entry (`#rowDependency`, the same dependency `Host.depend` gives for
+        a path), splices those dependencies with the members, and puts a changed
+        row's value at its member's place, found by binary search, reported as a
+        row of the delta (`delta.rows`, as a `map` reports one), which
+        `#storeUnit` places.
+      - _P464._ As above; the same code covers a `filter` over the result of a
+        `map` over an array of references and over an array of plain values in
+        place, and over the result of any per-element construct whose members
+        are rows held whole (`isRowSource`: a source at no path below the row).
+        A member that is a row at a path below it forms the assembly whole, as
+        before.
+      - _Counts_ (elements looked at, assemblies formed whole, evaluations, at
+        10, 100 and 1,000 elements of `fixtures/filter-of-map.tsx`; before /
+        after, the same over an array of references and an array of plain values
+        in place but where marked):
+
+        | change                                  | before                     | after                        |
+        | --------------------------------------- | -------------------------- | ---------------------------- |
+        | an append the predicate keeps           | 8, 53, 503; formed whole   | 3, 3, 3                      |
+        | an append the predicate leaves out      | 3, 3, 3                    | 3, 3, 3                      |
+        | an edit that keeps the membership       | 5, 50, 500; formed whole   | 0 (references), 4 (in place) |
+        | an edit that takes the last element out | 4–5, 49–50, 499–500; whole | 2 (references), 4 (in place) |
+        | an edit that takes the middle one out   | 0–3, 49–50, 499–500; whole | 0–3, 26–28, 251–253          |
+        | a removal of the last element           | 0, 0, 0                    | 0, 0, 0                      |
+
+        The evaluations are the same before and after (2 to 4). "Formed whole"
+        counts the elements the store step compared by key (`#storeUnit`), not
+        those the formation read. An edit in the middle still numbers again
+        every member behind it (note 1049).
+      - _Tests_ (`exec/test/growth.test.ts`): each change of the table but the
+        middle one, and an append left out followed by one kept, looks at as
+        many elements at 10 as at 100 and forms no assembly whole, for a
+        `filter` over the result of a `map` over an array of references and over
+        an array of plain values in place; eight of the twelve cases failed
+        before (formed whole). The case that holds the rows each change keeps
+        passes before and after.
+
+1048. **The harness (step 4).** `compare/fabrichat/scale.ts` found the entity of
+      the stream it sends to with `Instance.streams()` at each send, which walks
+      the stored result and follows every link in it; it finds it once per
+      binding now (`entityOf`), and prints the load average with each timed
+      send. Nothing else changes. The before at 1,000 messages was run with the
+      same change (note 1050).
+
+1049. **The members of an assembly without positions (step 5): planned, not
+      built.**
+      - _What renumbers._ A member of an assembly is an `Element` and carries
+        `index`; the branches of `#reassemble` for a `filter`, a `sortBy` and a
+        `flatMap` give every member behind a splice that puts in another number
+        than it takes out a new object with its new position
+        (`rowsNow[index] = { ...rowsNow[index], index }`), a window makes new
+        members, and the formation numbers them (`numbered` in `assembled`). The
+        readers of the members read them by their place in the array:
+        `#storeUnit` reads `members[index].key`, `#reassemble` finds a member's
+        element through `byKey` (`placeOf`), and `#table` of a construct over
+        the result numbers the members again for its own element table
+        (`upstream.members.map((member, index) => ...)`).
+      - _The plan._ A type `Member` (`Element` without `index`) for
+        `Entry.members`, `Rows.members` and `assembledElements`; `numbered` gone
+        from `assembled`; the renumbering loops gone from the three branches and
+        the window's members made without positions; `#table` numbering the
+        members it takes as elements, as it does now. Tests first in
+        `exec/test/growth.test.ts`: an edit that takes the middle element out of
+        `filter-rows.tsx` and of `filter-of-map.tsx`, and one that moves a key
+        in `sort-by.tsx`, looks at as many members at 10 as at 100.
+      - _Why it is not built._ It is not contained: removing the positions of
+        members bounds the assembly's own work, but a construct over its result
+        keeps an element table whose positions a cone that reads the index of
+        its element depends on, and `#reassemble` numbers again every element of
+        that table behind a splice (the loop from `low` to the end where
+        `high < 0`), so a middle edit of a `filter` with a `map` over its result
+        still visits every element behind it. Bounding that needs positions that
+        a splice does not rewrite, an order-statistics structure for element
+        tables, which is a decision of its own (note 1042).
+
+1050. **Measured: FabriChat.** `SCALE_STAND_INS=table`,
+      `compare/fabrichat/scale.ts runner room <n>`, one run of each cell, three
+      timed sends each. Before is `71fefaf1e3` in a scratch worktree with the
+      harness change of note 1048, so that both sides measure the piece; after
+      is `ba37345907`. At 100 and 500 messages the runs went one after another,
+      alone. At 1,000 the before and a first after were started together; the
+      after finished its seed first, so its timed sends ran beside the before's
+      seed (load 4.0 to 4.2) and the before's alone (2.8 to 2.9); a second
+      after, alone, gives the times of the table (2.7). Times in milliseconds,
+      the piece's own time in brackets; "KB" is the size as JSON after the
+      commit of each document a send's commits changed. The counts of positions
+      placed, records noted and positions registered before are those of
+      `71fefaf1e3` with the counters alone added (runs at 100 and 500 in this
+      round; 1,000 was not counted).
+
+      | messages | when   | load    | ms per send (own) | records | evaluations | element evaluations | documents | KB changed | positions placed | records noted | registrations |
+      | -------- | ------ | ------- | ----------------- | ------- | ----------- | ------------------- | --------- | ---------- | ---------------- | ------------- | ------------- |
+      | 100      | before | 3.1     | 114–133 (56–61)   | 300     | 54          | 31                  | 77–78     | 329–331    | 621              | 280           | 6,798–6,910   |
+      | 100      | after  | 3.0     | 108–129 (53–54)   | 300     | 54          | 31                  | 77–78     | 329–331    | 83               | 282           | 1,012–1,028   |
+      | 500      | before | 2.6     | 346–361 (199–212) | 300     | 54          | 31                  | 76–78     | 480–482    | 621              | 280           | 29,198–29,310 |
+      | 500      | after  | 2.6     | 319–336 (174–182) | 300     | 54          | 31                  | 76–78     | 480–482    | 83               | 282           | 4,212–4,228   |
+      | 1,000    | before | 2.8–2.9 | 837–858 (549–565) | 300     | 54          | 31                  | 77–80     | 714–729    |                  |               |               |
+      | 1,000    | after  | 2.7     | 607–721 (323–337) | 300     | 54          | 31                  | 77–80     | 714–729    | 83               | 282           | 8,212–8,228   |
+
+      - _What did not change._ The records given, the evaluations, the documents
+        and bytes a send changes (the same documents with the same sizes at
+        1,000: the argument 249 KB, the result 183 KB, a user instance 17.7 KB,
+        and the parts of the basis), the reads (8,061 to 8,077 at 1,000) and the
+        writes (31 to 33). The dumps (`SCALE_DUMP`) hold no error value; the
+        reader's rights of every message read back (103, 503, 1,003).
+      - _Records noted:_ 282 where 280. The two more are the records of
+        `participants` at its two places of the result: its value is the array
+        placed before, whose members are links, and the inputs its template
+        names include those of `facts`, which changed; the comparison of each
+        position asked for no record at a link, and `#sameRecords` asks for the
+        output at the member's position (CFC question 2 of this round).
+      - _Registrations_ still grow with the room, by about 8 per message held:
+        each send makes the row of the new message, whose row document (of the
+        scope `user`) holds two places whose records name, through two outputs,
+        the inputs of `facts`; those are records of a new key with new inputs,
+        so their set is registered whole, about 4,100 positions each at 1,000
+        messages. Of the twelve others, the ten whose inputs are those of
+        `facts` itself share one set, and each of the two positions of the tree
+        that name it through an output has a set of its own; each of those sets
+        is changed at the positions of the new message (`#retarget`). Note 1052
+        has what remains.
+      - _The seeds._ At 1,000 messages, the pair started together: 477 s at a
+        peak of 4.57 GB resident before, 427 s and 4.70 GB after; the second
+        after, alone, 347 s and 4.64 GB. At 500, 103 s and 3.50 GB before, 95 s
+        and 3.51 GB after; at 100, 9 s and 1.29 GB before, 9 s and 1.25 GB
+        after. Round twenty-three's seed at 1,000 (694 s against 530 s before
+        it, note 1040) included the harness's walk at every send of the seed.
+      - _Phases per send at 1,000_ (`profile-phases.py`, the three timed sends
+        of the before and of the second after), in milliseconds:
+
+        | phase                                     | before | after |
+        | ----------------------------------------- | ------ | ----- |
+        | all                                       | 850.6  | 653.0 |
+        | garbage collection                        | 53.3   | 49.0  |
+        | memory server: apply commit               | 37.6   | 37.3  |
+        | client: CFC preparation of a commit       | 71.9   | 73.6  |
+        | client: transaction commit (encode, send) | 85.3   | 78.9  |
+        | client: receive and decode                | 48.4   | 49.1  |
+        | executor: `#pullScoped`                   | 13.7   | 12.3  |
+        | executor: `#storeResult`                  | 319.3  | 90.1  |
+        | executor: `#reassemble`                   | 1.0    | 1.0   |
+        | executor: other of a derivation           | 131.7  | 141.6 |
+        | handler event                             | 57.4   | 92.0  |
+        | scheduler: resubscribe after a commit     | 8.0    | 8.2   |
+        | other                                     | 23.0   | 19.9  |
+
+        `#storeResult` falls from 319 to 90 ms: 53 ms are the rows of
+        `messageRights` its unit brings up to date (`#storeUnit`, evaluations of
+        element bodies the send needs), 37 ms placing (`#place`: the writes and
+        their records 16 ms, `#sameRecords` 11 ms). Bringing the sets of
+        positions up to date takes 11.5 ms (`#flushReads`, of which the walk of
+        the new contents 8 ms). The handler event's 92 ms hold a freeze of a
+        minted document (`#keepMinted`, 36 ms over the three sends) that neither
+        the before's profile nor the first after's shows (60 ms in the first
+        after); it was not traced. The walk of the harness
+        (`Instance.streams()`, 353 ms per send in note 1040) is gone from both.
+        A first profile of the after, before the label question was answered
+        once per set (note 1046), showed 140 ms in `#readsChangedLabel` against
+        46 ms before: each of the fourteen records copied the 4,000 positions of
+        their shared set.
+
+1051. **Measured: Topics, the serving path, and the corpus.**
+      - _Topics, the arm `serving` on `filing-order`_, the boards of the
+        measurement branch copied into a scratch worktree at `ba37345907`, one
+        run each, loads 2.0 to 2.2. An edit of a title runs 1 derivation and 5
+        evaluations and gives 2 to 8 records at 1,000 and 2,000 topics, as in
+        note 1041; the second client reads it after 14 to 37 ms at 1,000 and 12
+        to 32 ms at 2,000 (note 1041: 13.9 to 37 and 13.7 to 42). A create runs
+        9 derivations with no refusal and gives 111 to 123 records at both
+        sizes, as in note 1041; the second client reads it after 217 to 477 ms
+        at 1,000 and 386 to 929 ms at 2,000 (note 1041: 257 to 574 and 485 to
+        1,100). The first run at 1,000 went idle before the load with 1.5 s of
+        processor time (note 931); it was stopped and run again.
+      - _`compare/serving-path.ts 1000`_: the piece is found current after the
+        takeover with no evaluation, 6 evaluations at the wake, 11 derivations,
+        no refusal, 20.7 ms of its own for its ten events and derivations (load
+        2.1 to 3.0; note 1041: 22.9 ms at 5.7 to 6.1).
+      - _The corpus,_ `compare/runner-corpus.ts` in its four modes, run side by
+        side once at `ba37345907` (loads 2.1 to 3.8), against note 1041:
+        started, every event handled, no commit refused, equal to the executor
+        in memory, and for the resumes, resumed, found current, wrote no
+        document.
+
+        | Mode                  | Note 1041                        | This round                       |
+        | --------------------- | -------------------------------- | -------------------------------- |
+        | runner                | 259, 215, 249, 229               | 259, 215, 249, 229               |
+        | serving               | 235, 201, 221, 211               | 235, 201, 221, 211               |
+        | after a resume        | 259, 215, 251, 226; 148, 121, 82 | 259, 215, 251, 226; 148, 121, 82 |
+        | serving with a resume | 235, 201, 221, 210; 81, 72, 0    | 235, 201, 221, 210; 81, 72, 0    |
+
+        No module's line differs from round twenty-three's run in any mode: the
+        events handled, the number of refusals and the comparison with the
+        executor in memory are the same for each of the 375 modules
+        (`compare.py` over the two runs' lines).
+
+1052. **Planned, not built.**
+      - _A record that names another output, registered by that output._ The
+        sets of positions of P463 are snapshots of content: a row whose places
+        name `facts` keeps the positions `facts` read when the row was made, and
+        the next row makes a new set. Registering a record by the outputs its
+        template names (a set per cone instance, brought up to date when that
+        cone instance is evaluated, with the records that name it as readers)
+        would cost what changed at each evaluation and hold one set per cone
+        instance. It changes which records a label change alone reaches: a row's
+        record would be reached by a position `facts` read after the row was
+        given, and not by one it no longer reads, which is what the label of the
+        row's place, formed from the template that names `facts`, would take if
+        the record were given again. That is a question of Contextual Flow
+        Control (question 5 below), so it is not built.
+      - _The records below a member that is the value placed before, by the
+        cones evaluated._ An output's inputs change only where its cone
+        instance, or one its template names, was evaluated, or where an
+        element's position moved; `#sameRecords` could ask about those alone
+        with the closure of the cones each output's template names, formed once
+        per plan. Not built: the positions an element's binding names
+        (`#positionBinding`, `#elementBound`) change with a splice and no
+        evaluation, which the closure has to cover.
+      - _A stream marker made once per binding and instance_, so that a record
+        that holds one can be the value placed before. Not built.
+      - _The members of an assembly without positions_ (note 1049).
+      - _From note 1042, still open:_ the rows of the main conversation are of
+        the scope `user` (the work on how handles follow links); the lists of
+        links of the room's tree written whole below 128 rows.
+
+1053. **Provisional decisions, and what was not verified.** P462: as note 1045.
+      P463: as note 1046. P464: as note 1047. Not verified: the stored labels
+      beyond `fixtures/result-tree.tsx` (one test; no test compares the labels
+      of a label change alone through the runtime, since writing an item again
+      under another clause was refused); FabriChat under the serving loop or
+      with two users; a resume of FabriChat; the records `#sameRecords` gives
+      beyond the room and the fixtures (the room gives two more per send, note
+      1050); the times beyond one run of each cell, and the pair at 1,000 ran at
+      different loads for the first after; the freeze of a minted document in
+      one of the two profiles of the after (note 1050).
+
+### CFC questions deferred, round twenty-four
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. P462, the link record of a stream compared whole: a position that holds a
+   stream's link no longer asks for the record of the output nearest above it.
+   Before, the comparison went into the members of the link record and asked for
+   that record at each of them, so it was given again where the output's inputs
+   had changed; now it is given again only where another position below that
+   output asks for it. A change that can leave a label formed from earlier
+   inputs where an output covers nothing but links of streams; in FabriChat the
+   records given per send are the same (300).
+2. P462, `#sameRecords`: for a record or an array that is the one placed before,
+   the record of the output nearest at or above it and of every output below it
+   is asked for, where the comparison of each position asked only for the
+   outputs nearest to some position compared. A record whose output covers no
+   position that no deeper output covers, or one reached through both a literal
+   and a `*` segment, can now be given again where its inputs changed and it was
+   not given before: its label is formed from the current inputs. The labels
+   stored in the test of note 1045 are the same before and after.
+3. P463: the tables of member groups a set of positions reads are those that
+   exist when the set is brought up to date (`#flushReads`), not those that
+   existed when the record was noted; a table made between the two is read, so a
+   label change there reaches the record. No rule of a label changes.
+4. P464: no rule of a label changes; a changed row of a `filter` over the rows
+   of a `map` is placed with the record of the result at its position, as the
+   rows the assembly formed whole were.
+5. Note 1052, planned: a record whose template names another output keeps, as
+   the positions a label change alone reaches it through, those the named
+   output's inputs read when the record was given; the record is not given again
+   when the named output's inputs change and its own value does not. A reader by
+   the named output's cone instance would be reached by what the named output
+   reads now. Which of the two a record owes is the question; the second would
+   form again labels the first leaves as they were.

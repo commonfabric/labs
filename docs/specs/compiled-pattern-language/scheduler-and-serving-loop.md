@@ -1404,7 +1404,11 @@ In this design a label-only change does the following.
 As built in milestone 4 of the integration, the prototype's executor keeps, for
 each record of an output it gave, the positions that the inputs of the record
 read, and the collections its template folds over (`Instance.#noteRecord` of
-`base/pattern-compiler/exec/executor.ts`). After a commit changed a label and no
+`base/pattern-compiler/exec/executor.ts`). Records whose inputs hold equal
+content share one set of those positions, registered once, and a set whose
+records all take new inputs of one content is changed where the positions
+differ, so noting a record again costs what changed in the content of its
+inputs (`Instance.#flushReads`). After a commit changed a label and no
 value, it gives again, in a derivation transaction of its own, the records whose
 inputs read a position at, above or below the changed entry and those that fold
 over a collection with an element whose group changed
