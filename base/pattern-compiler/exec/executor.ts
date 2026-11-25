@@ -6353,13 +6353,15 @@ export class Instance {
     // reference stand-in (ES §2.4): the body can pass it on, and what it
     // passes on is stored as the reference. It has no member of its own,
     // and the entries below its path are placed in it. The schema of a
-    // slot of a handler's state is that of the handler's declared type.
-    // The schema of another slot is that of the place, which does not
-    // say what the body declares, and the body is handed a handle.
+    // slot of a handler's state, and of its event, is that of the
+    // handler's declared type. The schema of another slot is that of the
+    // place, which does not say what the body declares, and the body is
+    // handed a handle.
     if (
       value instanceof Ref && typeof declared === "object" &&
       declared.asCell === undefined && slot !== undefined &&
-      this.plan.slots[slot].root.kind === "binding"
+      (this.plan.slots[slot].root.kind === "binding" ||
+        this.plan.slots[slot].root.kind === "event")
     ) {
       const standIn = {};
       this.store.addresses.set(
@@ -12732,11 +12734,21 @@ export class Instance {
     return true;
   }
 
+  /**
+   * Queues `event`, which a body of this instance sends to `stream`, in
+   * stored form: a handle in it, a reference stand-in and a container
+   * that carries the address it was read from are each a link to that
+   * address, as in what a body writes (ES §2.4, "A value passed on
+   * unchanged is stored as a reference"). So the handler of the stream
+   * finds the same references whether the event stays in this queue or
+   * is stored and read back by whoever runs the executor.
+   */
   queue(stream: StreamRef, event: unknown): void {
+    const sent = this.stored(this.returned(event));
     if (this.root.options.events !== "queue") {
-      this.root.#append(stream, event);
+      this.root.#append(stream, sent);
     }
-    this.root.#queue.push({ stream, event });
+    this.root.#queue.push({ stream, event: sent });
   }
 
   /**
@@ -17142,10 +17154,82 @@ export class Instance {
       );
     }
     this.#bindEvent(host, body, stream);
+    const given = this.#handedEvent(event, body, host, handed);
     return this.handing(
       handed,
-      () => this.#run(binding, body, run, event, state, host),
+      () => this.#run(binding, body, run, given, state, host),
     );
+  }
+
+  /**
+   * The event that the handler with body `body` is handed: `event` with
+   * each link the body reads through as the value read through it, and
+   * each other link at a position the body reads by `identity` as a
+   * reference of its state is given, by `handleOf`: a reference stand-in
+   * where the event's declared type is data there, and a handle where it
+   * is a cell (ES §2.4). Either can be passed on and compared, as
+   * `items.remove(item)` does, and the value carries the address it was
+   * read from (`handed`). A slot that reads through a link is bound to
+   * what the read went through as well as to the event's position
+   * (`#bindEvent`). Every other position is as the event holds it.
+   */
+  #handedEvent(
+    event: unknown,
+    body: number,
+    host: Host,
+    handed: HandedValues,
+  ): unknown {
+    const reads = this.plan.bodies[body].reads
+      .map(({ slot }) => ({ slot, record: this.plan.slots[slot] }))
+      .filter(({ record }) => record.root.kind === "event");
+    if (reads.length === 0) return event;
+    // Only positions on the way to a path that a read names are walked.
+    const reaches = (path: readonly string[]) =>
+      reads.some(({ record }) => matchesPath(path, record.path));
+    const walk = (value: unknown, path: string[]): unknown => {
+      if (isLink(value)) {
+        const { doc, path: at, schema } = value.$link;
+        const ref = new Ref(doc, at, schema);
+        const through = reads.filter(({ record }) =>
+          record.observes !== "identity" && matchesPath(path, record.path)
+        );
+        if (through.length > 0) {
+          const from = host.reads.length;
+          const given = host.v(ref);
+          handed.note(given);
+          const crossed = host.reads.slice(from);
+          for (const { slot } of through) {
+            const held = host.bound.get(slot);
+            if (held === undefined || !("at" in held)) continue;
+            for (const position of crossed) held.at.push(position);
+          }
+          return given;
+        }
+        const named = reads.find(({ record }) =>
+          record.observes === "identity" &&
+          record.path.length === path.length && matchesPath(record.path, path)
+        );
+        return named === undefined
+          ? value
+          : this.handleOf(ref, undefined, named.slot);
+      }
+      if (Array.isArray(value)) {
+        return value.map((member, index) => {
+          const below = [...path, `${index}`];
+          return reaches(below) ? walk(member, below) : member;
+        });
+      }
+      if (isRecord(value)) {
+        return Object.fromEntries(
+          Object.entries(value).map(([name, member]) => {
+            const below = [...path, name];
+            return [name, reaches(below) ? walk(member, below) : member];
+          }),
+        );
+      }
+      return value;
+    };
+    return walk(event, []);
   }
 
   /**
