@@ -15,10 +15,7 @@ import {
   tokenClasses,
   type TreeSitterGrammar,
 } from "../treesitter/adapter.ts";
-import {
-  createHighlighter as createScriptHighlighter,
-  highlightDocument,
-} from "../typescript/parse.ts";
+import type * as ScriptHighlighting from "../typescript/parse.ts";
 
 /**
  * Capture names are token classes. Order carries meaning: the narrowest
@@ -42,15 +39,30 @@ interface EmbeddedLanguage {
    * language loads. */
   classes(text: string): EmbeddedClasses | undefined;
 
-  /** A highlighter of `text` that colors an edit from its earlier work. */
-  highlighter?(text: string): Highlighter;
+  /** A highlighter of `text` that colors an edit from its earlier work, or
+   * undefined while the language loads. */
+  highlighter?(text: string): Highlighter | undefined;
+}
+
+/** The highlighter of a page's scripts, once {@link loadScriptHighlighting}
+ * has loaded it. */
+let scripts: typeof ScriptHighlighting | undefined;
+
+/** Load the highlighter of a page's scripts. */
+export async function loadScriptHighlighting(): Promise<void> {
+  // The TypeScript compiler the highlighter runs on is large and reads the
+  // environment as it loads, so a page loads it when it is shown, and a module
+  // that only lists the grammars, such as the binary build, does not.
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  scripts ??= await import("../typescript/parse.ts");
 }
 
 /** Each language that colors part of a page. */
 const LANGUAGES = {
   javaScript: {
-    classes: (text) => classesFromLines(highlightDocument(text, "script.js")),
-    highlighter: (text) => createScriptHighlighter(text, "script.js"),
+    classes: (text) =>
+      scripts && classesFromLines(scripts.highlightDocument(text, "script.js")),
+    highlighter: (text) => scripts?.createHighlighter(text, "script.js"),
   },
   json: {
     classes: (text) => classesFromLines(jsonHighlightLines(text)),
@@ -88,8 +100,8 @@ function coloring(
   text: string,
   editing: boolean,
 ): EmbeddedColoring | undefined {
-  if (editing && language.highlighter !== undefined) {
-    const highlighter = language.highlighter(text);
+  const highlighter = editing ? language.highlighter?.(text) : undefined;
+  if (highlighter !== undefined) {
     return highlighted(highlighter, highlighter.lines);
   }
   const classes = language.classes(text);

@@ -8,7 +8,7 @@ import {
   prepareGrammar,
 } from "../treesitter/adapter.ts";
 import { cssGrammar } from "../css/css.ts";
-import { htmlGrammar } from "./html.ts";
+import { htmlGrammar, loadScriptHighlighting } from "./html.ts";
 
 /**
  * The HTML language for the pager. It provides lossless syntax highlighting
@@ -32,8 +32,11 @@ export const htmlLanguage: Language = {
   },
 
   prepare: () =>
-    Promise.all([prepareGrammar(htmlGrammar), prepareGrammar(cssGrammar)])
-      .then(() => {}),
+    Promise.all([
+      prepareGrammar(htmlGrammar),
+      prepareGrammar(cssGrammar),
+      loadScriptHighlighting(),
+    ]).then(() => {}),
 
   parseDocument: (text) => parseDocument(htmlGrammar, text),
 
