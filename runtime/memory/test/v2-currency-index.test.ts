@@ -118,6 +118,8 @@ describe("currency-index", () => {
     /** Ids the piece writes and vouches for the shared instance of. */
     produces?: string[];
     owned?: string[];
+    /** Ids among `owned` an absent instance of which reads as its default. */
+    absentAsDefault?: string[];
     vouches?: Array<{ id: string; scopeKey: string }>;
     slices?: CurrencySliceRecord[];
     /** The time the `space` slice expires at. */
@@ -180,6 +182,8 @@ describe("currency-index", () => {
       vouched: parts.vouched ?? true,
       writes: [...(parts.writes ?? []), ...(parts.produces ?? [])],
       owned: parts.owned ?? [],
+      ...(parts.absentAsDefault !== undefined &&
+        { absentAsDefault: parts.absentAsDefault }),
       ...(parts.followsOrigin === true && { followsOrigin: true }),
       slices: [...slices.values()],
     };
@@ -2003,6 +2007,69 @@ describe("currency-index", () => {
           { id: "of:state", scopeKey: "session:alice:one" },
         ]),
       ).toEqual([]);
+    });
+
+    it("returns a root when the store holds no instance of a demanded owned cell that reads as its default while absent", () => {
+      storeVouching({ owned: ["of:state"], absentAsDefault: ["of:state"] });
+
+      expect(
+        judge(["of:piece"], [
+          ROOT_ROW,
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual(["of:piece"]);
+    });
+
+    it("refuses a root for an absent owned cell that reads as its default while absent, when a computation of the piece writes it", () => {
+      storeVouching({
+        writes: ["computed:out", "of:state"],
+        owned: ["of:state"],
+        absentAsDefault: ["of:state"],
+      });
+
+      expect(
+        refusals(["of:piece"], [
+          ROOT_ROW,
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual({ "of:piece": "unvouched-instance" });
+    });
+
+    it("refuses a root for an absent owned cell that reads as its default while absent for one owner and not for another", () => {
+      const asOf = storeVouching({
+        owned: ["of:state"],
+        absentAsDefault: ["of:state"],
+      });
+      store(asOf, [
+        record("of:nested", { under: ["of:piece"], owned: ["of:state"] }),
+      ]);
+
+      expect(
+        refusals(["of:piece"], [
+          ROOT_ROW,
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual({ "of:piece": "absent-owned" });
+    });
+
+    it("refuses a root for an absent owned cell that reads as its default while absent, when a slice the row is resolved under is marked", () => {
+      storeVouching({
+        owned: ["of:state"],
+        absentAsDefault: ["of:state"],
+        slices: [{
+          key: "session:alice:one",
+          vouched: false,
+          reads: [],
+          vouches: [],
+        }],
+      });
+
+      expect(
+        refusals(["of:piece"], [
+          ROOT_ROW,
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual({ "of:piece": "owner-not-clean" });
     });
 
     it("returns a root when the store holds the demanded instance of an owned cell", () => {
