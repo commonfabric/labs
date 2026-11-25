@@ -3,6 +3,7 @@ import { cGrammar, cppGrammar } from "../c-family/c-family.ts";
 import { cssGrammar } from "../css/css.ts";
 import { goGrammar } from "../go/go.ts";
 import { hclGrammar } from "../hcl/hcl.ts";
+import { htmlGrammar } from "../html/html.ts";
 import { kotlinGrammar } from "../kotlin/kotlin.ts";
 import { pythonGrammar } from "../python/python.ts";
 import { rustGrammar } from "../rust/rust.ts";
@@ -23,6 +24,7 @@ export const treeSitterGrammars: readonly TreeSitterGrammar[] = [
   cssGrammar,
   goGrammar,
   hclGrammar,
+  htmlGrammar,
   kotlinGrammar,
   pythonGrammar,
   rustGrammar,

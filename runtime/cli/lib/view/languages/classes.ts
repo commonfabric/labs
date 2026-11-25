@@ -62,6 +62,19 @@ export function linesFromClasses(
   return lines;
 }
 
+/** The token class of every character of the source that `lines` color, the
+ * line break after each line included. A language that colors part of its
+ * source with another language's lines reads that part's classes here. */
+export function classesFromLines(lines: readonly Line[]): TokenClass[] {
+  return lines.flatMap((line, index) => {
+    const classes = line.spans.flatMap((span) =>
+      new Array<TokenClass>(span.text.length).fill(span.cls)
+    );
+    if (index < lines.length - 1) classes.push("whitespace");
+    return classes;
+  });
+}
+
 /** A highlighter that colors the whole text again on each update. */
 export function createRecoloringHighlighter(
   initial: string,

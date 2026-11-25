@@ -516,7 +516,7 @@ uses this fixture mechanism at both postures.
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, C, C++, CUDA, CSS,
-shell, makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT,
+HTML, shell, makefile, Dockerfile, Java properties, INI, dotenv, Graphviz DOT,
 ProGuard, XML, Org mode, CSV, TSV, assembly, and SQL files use their own
 highlighting. A lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`,
 `.hpp`, `.hxx`, `.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and
@@ -540,33 +540,38 @@ covers `.bazelrc` and other files named with that suffix, and lists the files an
 rc file imports and the configurations it defines, such as `race` in
 `build:race`. `.bazelversion` is plain text. CSS covers style sheets named
 `.css`, with a structure tree of rule sets, at-rules, and custom property
-declarations. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
-`.command`, and Bash's startup files, such as `.bashrc` and `.profile`. A
-heredoc's body is colored as a string, with the expansions its delimiter allows.
-The makefile language reads GNU make's syntax in files named `Makefile`,
-`makefile`, `GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so
-they are colored as shell. The same is true of the command in a `!=` assignment
-and the argument of the `shell` function. Make's own variable references and
-function calls are colored inside that shell text. A Swift package manifest is
-Swift source under its `.swift` extension, and a module's `.swiftinterface` is
-Swift as well. Gradle build and settings scripts are Kotlin scripts under the
-`.kts` extension. Gradle version catalogs and Cargo manifests are TOML, as are
-Cargo lock files. The ProGuard language covers the keep rules that ProGuard and
-R8 read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
-another `.pro` file uses it when one of its lines starts with one of ProGuard's
-option names, because Qt project files and Prolog use that suffix as well. XML
-covers Android manifests, resources, and layouts, SVG images, and Apple property
-lists, entitlements, and privacy manifests. Web manifests, TLDraw documents,
-Deno lock files, editor workspace files, and Swift package resolutions use the
-JSON highlighting their suffixes do not announce. A `.cfg` file uses JSON
-highlighting when the source in view opens a JSON object; that suffix is shared
-with unrelated syntaxes, so its name alone leaves it as plain text. Transformed
-compiler output piped without a filename keeps TypeScript highlighting when its
-module header identifies it. Python interpreter shebangs select Python for
-otherwise unrecognized names, `swift` and `xcrun swift` shebangs select Swift,
-and `kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs
-select shell, which covers Git hooks and other extensionless programs. `make`
-and `gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
+declarations. HTML covers pages named `.html` or `.htm`, with a structure tree
+of elements. A `script` element's text is colored as JavaScript, or as JSON for
+an import map or a JSON data block, as its `type` and `language` attributes say,
+and an event handler attribute's value as JavaScript. A `style` element's text
+and a `style` attribute's value are colored as CSS. Shell covers Bash and POSIX
+shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup files,
+such as `.bashrc` and `.profile`. A heredoc's body is colored as a string, with
+the expansions its delimiter allows. The makefile language reads GNU make's
+syntax in files named `Makefile`, `makefile`, `GNUmakefile`, or `.mk`. Make
+passes recipe lines to the shell, so they are colored as shell. The same is true
+of the command in a `!=` assignment and the argument of the `shell` function.
+Make's own variable references and function calls are colored inside that shell
+text. A Swift package manifest is Swift source under its `.swift` extension, and
+a module's `.swiftinterface` is Swift as well. Gradle build and settings scripts
+are Kotlin scripts under the `.kts` extension. Gradle version catalogs and Cargo
+manifests are TOML, as are Cargo lock files. The ProGuard language covers the
+keep rules that ProGuard and R8 read: `proguard-rules.pro` and
+`consumer-rules.pro` select it by name, and another `.pro` file uses it when one
+of its lines starts with one of ProGuard's option names, because Qt project
+files and Prolog use that suffix as well. XML covers Android manifests,
+resources, and layouts, SVG images, and Apple property lists, entitlements, and
+privacy manifests. Web manifests, TLDraw documents, Deno lock files, editor
+workspace files, and Swift package resolutions use the JSON highlighting their
+suffixes do not announce. A `.cfg` file uses JSON highlighting when the source
+in view opens a JSON object; that suffix is shared with unrelated syntaxes, so
+its name alone leaves it as plain text. Transformed compiler output piped
+without a filename keeps TypeScript highlighting when its module header
+identifies it. Python interpreter shebangs select Python for otherwise
+unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
+`kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
+shell, which covers Git hooks and other extensionless programs. `make` and
+`gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
 select the TypeScript and JavaScript language family. For an otherwise
 unrecognized name, source that starts with an XML declaration (`<?xml`), after
 any byte order mark, selects XML, which covers Interface Builder documents,

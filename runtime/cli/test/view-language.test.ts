@@ -62,6 +62,7 @@ import { starlarkLanguage } from "../lib/view/languages/starlark/language.ts";
 import { bazelrcLanguage } from "../lib/view/languages/bazelrc/language.ts";
 import { cssLanguage } from "../lib/view/languages/css/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
+import { htmlLanguage } from "../lib/view/languages/html/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { dockerfileLanguage } from "../lib/view/languages/dockerfile/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
@@ -232,6 +233,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
+  assertEquals(languageForName("html"), htmlLanguage);
   assertEquals(languageForName("make"), makeLanguage);
   assertEquals(languageForName("makefile"), makeLanguage);
   assertEquals(languageForName("mk"), makeLanguage);
@@ -310,6 +312,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "proguard",
     "gitattributes",
     "linker-script",
+    "html",
     "xml",
     "org",
     "directive",
@@ -404,6 +407,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "ld",
     "lds",
     "linkerscript",
+    "html",
     "xml",
     "svg",
     "plist",

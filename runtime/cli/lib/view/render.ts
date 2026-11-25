@@ -1291,7 +1291,9 @@ function renderStatus(
   } else if (view.editHint) {
     hints = view.editHint;
   } else if (view.selected) {
-    text = `${kindGlyph(view.selected.kind)} ${view.selected.label}`;
+    text = `${kindGlyph(view.selected.kind)} ${
+      showControls(view.selected.label)
+    }`;
   } else {
     hints = browseHints(view);
   }

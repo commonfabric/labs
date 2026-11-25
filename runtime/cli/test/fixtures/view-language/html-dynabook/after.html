@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pick · Loom Styles</title>
+<link rel="icon" href="data:,">
+<script>
+(function(d,h){function g(k){try{return localStorage.getItem(k)}catch(e){return null}}
+var q=new URLSearchParams(location.search),b={},t=q.get('theme'),m=q.get('mode');
+if(!/^(native|light|dark|system)$/.test(m))m=g('wf-mode');
+if(m=='light'||m=='dark')h.setAttribute('data-mode',m);
+h.setAttribute('data-picked','');
+})(document,document.documentElement);
+</script>
+<link rel="stylesheet" href="dist/weft.css">
+<script src="src/pick.js" defer></script>
+<style>
+  /* Pick page layout (pk-*): layout values and tokens only. */
+  .pk-wrap { padding: calc(var(--wf-space) * 6) calc(var(--wf-space) * 6); }
+  .pk-bar h1 { margin: 0; font-size: var(--wf-fs-lg); }
+  .pk-tile[aria-pressed="true"] { outline-color: var(--wf-accent); }
+</style>
+</head>
+<body>
+<div class="pk-wrap">
+  <div class="pk-bar">
+    <h1>Pick</h1>
+    <span class="pk-count" id="pk-count">0 picked</span>
+    <div class="pk-tools">
+      <button type="button" class="wf-btn" id="pk-copy">Copy JSON</button>
+      <button type="button" class="wf-btn" id="pk-download">Download</button>
+      <button type="button" class="wf-btn wf-btn--ghost" id="pk-clear">Clear</button>
+    </div>
+  </div>
+  <details class="pk-out">
+    <summary>The JSON</summary>
+    <pre id="pk-json">{}</pre>
+  </details>
+</div>
+</body>
+</html>
