@@ -5670,10 +5670,11 @@ export class Runtime {
   }
 
   /**
-   * The host that serves a space's space-bound work (LLM, fetch, blob).
-   * A mapped space resolves to its host; everything else to the
-   * default `apiUrl`. The single compute-side analog of the storage
-   * layer's per-space address resolver.
+   * The host that serves a space's space-bound work other than its model
+   * calls (fetch, blob; LLM calls go through {@link llmEndpointFor}, whose
+   * fallback is the pattern-facing deployment). A mapped space resolves to
+   * its host; everything else to the default `apiUrl`. The compute-side
+   * analog of the storage layer's per-space address resolver.
    */
   hostForSpace(space: MemorySpace): URL {
     return new URL(this.mappedHostFor(space) ?? this.apiUrl);
