@@ -599,6 +599,10 @@ const counted = (instance: Instance, before: Instance["counts"]) => ({
   elementEvaluations: instance.counts.elementEvaluations -
     before.elementEvaluations,
   assemblies: instance.counts.assemblies - before.assemblies,
+  positionsPlaced: instance.counts.positionsPlaced - before.positionsPlaced,
+  recordsNoted: instance.counts.recordsNoted - before.recordsNoted,
+  recordRegistrations: instance.counts.recordRegistrations -
+    before.recordRegistrations,
 });
 
 /**
@@ -889,7 +893,6 @@ for (
         SEND_GESTURE,
       );
       const listed = changesListed?.sort(([, a], [, b]) => b - a);
-      changesListed = undefined;
       if (Deno.env.get("SCALE_TRACE") !== undefined && index === 2) {
         print({ ...base, step: "trace", ...started.trace?.() });
       }

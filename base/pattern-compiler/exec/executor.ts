@@ -473,6 +473,17 @@ type RecordedOutput = {
   members?: true;
 };
 
+/**
+ * A node of the tree of the paths of the outputs a change of the result
+ * document is recorded for (`Instance.#recordedTrie`): the output whose
+ * path ends here, where one does, and the nodes of the next segments, `*`
+ * among them for the position of an element.
+ */
+type RecordedTrie = {
+  here?: RecordedOutput;
+  children: Map<string, RecordedTrie>;
+};
+
 export class Assembled {
   constructor(
     readonly collection: number,
@@ -754,9 +765,16 @@ const splits = (form: unknown): boolean =>
 /** Stands, in a stored form, for rows that are stored already. */
 const KEPT = Symbol("kept");
 
-/** Whether a stored form has `KEPT` at or below it. */
+/**
+ * Stands, in a stored form, for a record or an array that is the value
+ * placed at the same position before, whose form the position holds
+ * already (`Instance.#place`).
+ */
+const SAME = Symbol("same");
+
+/** Whether a stored form has `KEPT` or `SAME` at or below it. */
 const holdsKept = (form: unknown): boolean =>
-  form === KEPT ||
+  form === KEPT || form === SAME ||
   (Array.isArray(form)
     ? form.some(holdsKept)
     : isRecord(form) && Object.values(form).some(holdsKept));
@@ -1384,6 +1402,25 @@ export type Counts = {
    * counted.
    */
   elementsVisited: number;
+  /**
+   * Positions of a result document that storing a value there compared
+   * with what the position held or wrote (`Instance.#place`), of every
+   * instance of the executor: counted on the instance the executor was
+   * started with.
+   */
+  positionsPlaced: number;
+  /**
+   * Records of outputs whose inputs were noted again for a change of a
+   * label to find (`Instance.#noteRecord`), on the instance the executor
+   * was started with.
+   */
+  recordsNoted: number;
+  /**
+   * The positions at which noting those records added or removed a
+   * reader of a label (`Instance.#recordReaders`), on the instance the
+   * executor was started with.
+   */
+  recordRegistrations: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -3550,6 +3587,9 @@ export class Instance {
     groupUpdates: 0,
     scopedPulls: 0,
     elementsVisited: 0,
+    positionsPlaced: 0,
+    recordsNoted: 0,
+    recordRegistrations: 0,
   };
   readonly valueOfOutput = new Map<number, number>();
   readonly bodies = new Map<number, (...given: unknown[]) => unknown>();
@@ -4706,6 +4746,13 @@ export class Instance {
   #abort(open: Open): void {
     this.store.undo(open.journal);
     open.journal.length = 0;
+    // A result document the transaction wrote holds what it held before,
+    // and not what its store step placed: the next one places the whole
+    // value.
+    for (const doc of open.touched) {
+      const owner = doc === this.id ? this : this.#instances.get(doc);
+      if (owner !== undefined) owner.#storedResult = undefined;
+    }
     for (const { instance, key } of open.writes.values()) {
       instance.#memo.delete(key);
       instance.#markUsers(key);
@@ -5849,6 +5896,13 @@ export class Instance {
      * of the array.
      */
     placed?: (array: readonly unknown[]) => Ref | undefined,
+    /**
+     * The value placed at the same position before, and what is told the
+     * path of each record or array of `value` that is the value placed at
+     * its position before: such a member is given as `SAME`, and nothing
+     * below it is formed.
+     */
+    previous?: { was: unknown; same: (path: string[]) => void },
   ): unknown {
     // An index is compared by which bucket each element is in.
     if (value instanceof Index) return { $index: [...value.of] };
@@ -5894,14 +5948,30 @@ export class Instance {
       if (place !== undefined) {
         return { $link: { doc: place.doc, path: [...place.path] } };
       }
+      const before = Array.isArray(previous?.was) ? previous.was : undefined;
       return value.map((member, index) =>
-        this.stored(member, assembled, [...path, `${index}`], placed)
+        this.#storedMember(
+          member,
+          before?.[index],
+          assembled,
+          [...path, `${index}`],
+          placed,
+          previous,
+        )
       );
     }
     if (isRecord(value)) {
+      const before = isRecord(previous?.was) ? previous.was : undefined;
       const members: Record<string, unknown> = {};
       for (const [name, member] of Object.entries(value)) {
-        const kept = this.stored(member, assembled, [...path, name], placed);
+        const kept = this.#storedMember(
+          member,
+          before?.[name],
+          assembled,
+          [...path, name],
+          placed,
+          previous,
+        );
         if (kept !== undefined) members[name] = kept;
       }
       if (this.store.copies.has(value)) this.#copied.add(members);
@@ -5918,6 +5988,35 @@ export class Instance {
       );
     }
     return value;
+  }
+
+  /**
+   * Helper for `stored()`, which gives the stored form of a member of a
+   * record or an array: `SAME` where a value placed before is given and
+   * the member is the record or the array that it held at the member's
+   * position, and the form of the member otherwise.
+   */
+  #storedMember(
+    member: unknown,
+    was: unknown,
+    assembled:
+      | ((reference: Assembled | IndexHandle, path: string[]) => unknown)
+      | undefined,
+    path: string[],
+    placed: ((array: readonly unknown[]) => Ref | undefined) | undefined,
+    previous: { was: unknown; same: (path: string[]) => void } | undefined,
+  ): unknown {
+    if (previous === undefined) {
+      return this.stored(member, assembled, path, placed);
+    }
+    if (member === was && (Array.isArray(member) || isRecord(member))) {
+      previous.same(path);
+      return SAME;
+    }
+    return this.stored(member, assembled, path, placed, {
+      was,
+      same: previous.same,
+    });
   }
 
   /**
@@ -6371,13 +6470,17 @@ export class Instance {
    * `inside` holds the units of the holder of the place, by their path
    * below it. A reference that stands where the same collection stood
    * gives `KEPT`: its rows are stored already and are brought up to
-   * date by themselves. `seen` gets the path of each reference.
+   * date by themselves. `seen` gets the path of each reference. Where
+   * `previous` gives the value placed at the place before, a record or
+   * an array that is the one placed at its position gives `SAME`, and
+   * `previous.same` gets its path below the holder.
    */
   #formOf(
     value: unknown,
     owner: { unit: Unit; key: string } | undefined,
     below: readonly string[],
     seen: Set<string>,
+    previous?: { was: unknown; same: (path: string[]) => void },
   ): unknown {
     const inside = owner === undefined
       ? this.#rootUnits
@@ -6431,6 +6534,10 @@ export class Instance {
       },
       [],
       (array) => bucketPlaces.get(array),
+      previous === undefined ? undefined : {
+        was: previous.was,
+        same: (path) => previous.same([...below, ...path]),
+      },
     );
   }
 
@@ -6855,18 +6962,22 @@ export class Instance {
    * hold now, which can be other positions than the ones the stored label
    * was formed from. An output whose template reads nothing has one label
    * whatever was read, and is not reported; nor is a record given earlier
-   * in the transaction.
+   * in the transaction. `known` is the output nearest at or above `at`,
+   * where the caller found it.
    */
-  #unchangedOutput(at: readonly string[]): void {
+  #unchangedOutput(at: readonly string[], known?: RecordedOutput): void {
     const { root } = this;
     const hooks = root.options.transactions;
     if (root.#tx === undefined || hooks?.unchanged === undefined) return;
-    let nearest: { output: number; path: readonly string[] } | undefined;
-    for (const entry of this.#recordedOutputs()) {
-      if (
-        entry.path.length <= at.length && matchesPath(entry.path, at) &&
-        (nearest === undefined || entry.path.length > nearest.path.length)
-      ) nearest = entry;
+    let nearest: { output: number; path: readonly string[] } | undefined =
+      known;
+    if (nearest === undefined) {
+      for (const entry of this.#recordedOutputs()) {
+        if (
+          entry.path.length <= at.length && matchesPath(entry.path, at) &&
+          (nearest === undefined || entry.path.length > nearest.path.length)
+        ) nearest = entry;
+      }
     }
     if (nearest === undefined) return;
     const template = this.plan.outputs[nearest.output].template;
@@ -6879,6 +6990,10 @@ export class Instance {
     const path = at.slice(0, nearest.path.length);
     const key = this.#recordKey(nearest.output, path);
     if (root.#givenNow.has(key)) return;
+    if (root.#placing) {
+      if (root.#checkedNow.has(key)) return;
+      root.#checkedNow.add(key);
+    }
     if (!root.#placing) root.#namedIndex.clear();
     const write = this.#outputRecord(this.id, nearest.output, [...path]);
     // The record last given for the place had these inputs, and no label
@@ -6907,30 +7022,54 @@ export class Instance {
    * Stores a value at a place of the result document, and writes only
    * what differs from what the place holds: a member of a record and a
    * position of an array of the same length are compared by themselves.
+   * `previous` is the value placed at the place before, where the place
+   * holds its form: a record or an array of `value` that is the one
+   * `previous` held at its position is not formed or compared again, and
+   * the records of the outputs it holds are given as those of places a
+   * comparison left as they were (`#sameRecords`).
    */
   #place(
     path: readonly string[],
     value: unknown,
     owner: { unit: Unit; key: string } | undefined,
     below: readonly string[],
+    previous?: unknown,
   ): void {
     const seen = new Set<string>();
-    const form = this.#formOf(value, owner, below, seen);
+    // The paths below the holder of the members that are the ones placed
+    // before.
+    const sames: (readonly string[])[] = [];
+    const form = previous !== undefined && value === previous &&
+        (Array.isArray(value) || isRecord(value))
+      ? (sames.push(below), SAME)
+      : this.#formOf(
+        value,
+        owner,
+        below,
+        seen,
+        previous === undefined
+          ? undefined
+          : { was: previous, same: (at) => sames.push(at) },
+      );
+    const within = (outer: readonly string[], at: readonly string[]) =>
+      outer.length <= at.length &&
+      outer.every((segment, index) => segment === at[index]);
     // The units that stood at or below the place and stand there no
-    // more.
+    // more. A unit below a member that is the one placed before stands
+    // where it stood.
     const inside = owner === undefined
       ? this.#rootUnits
       : owner.unit.inside.get(owner.key);
     for (const [id, unit] of [...inside ?? []]) {
       if (seen.has(id)) continue;
       const at = "path" in unit.place ? unit.place.path : unit.place.below;
-      if (
-        below.length <= at.length &&
-        below.every((segment, index) => segment === at[index])
-      ) {
-        this.#dispose(unit);
-        inside?.delete(id);
+      if (!within(below, at)) continue;
+      if (sames.some((same) => within(same, at))) {
+        this.#dueUnits.add(unit);
+        continue;
       }
+      this.#dispose(unit);
+      inside?.delete(id);
     }
     const { store, id: doc, root } = this;
     const bucketPaths = this.#bucketRecordPaths();
@@ -6941,11 +7080,13 @@ export class Instance {
     const outermost = !root.#placing;
     if (outermost) {
       root.#namedIndex.clear();
+      root.#checkedNow.clear();
       root.#placing = true;
     }
-    // What a place holds, where the form has `KEPT` at or below it.
+    // What a place holds, where the form has `KEPT` or `SAME` at or below
+    // it.
     const filled = (form: unknown, held: unknown): unknown => {
-      if (form === KEPT) return held;
+      if (form === KEPT || form === SAME) return held;
       if (Array.isArray(form)) {
         return form.map((member, index) =>
           filled(member, Array.isArray(held) ? held[index] : undefined)
@@ -6965,6 +7106,15 @@ export class Instance {
     };
     const put = (at: readonly string[], form: unknown, held: unknown) => {
       if (form === KEPT) return;
+      if (form === SAME) {
+        this.#sameRecords(
+          at,
+          held,
+          (position) => this.#unitAt(owner, path, below, position),
+        );
+        return;
+      }
+      root.counts.positionsPlaced += 1;
       if (
         Array.isArray(form) && Array.isArray(held) &&
         form.length === held.length && form.length > 0 &&
@@ -7040,6 +7190,135 @@ export class Instance {
   #placing = false;
 
   /**
+   * On the root: the keys of the records of places left as they were
+   * that the comparison in progress (`#placing`) asked about already.
+   * Nothing is evaluated while a place is compared, so the inputs of a
+   * record are the same at each position it covers.
+   */
+  readonly #checkedNow = new Set<string>();
+
+  /**
+   * Whether a unit, or an index whose buckets are stored by themselves,
+   * stores its rows at the path `position` of the result document, where
+   * `#place` stores at `path` a value whose place is `below` in the holder
+   * `owner`. Its rows are brought up to date by themselves.
+   */
+  #unitAt(
+    owner: { unit: Unit; key: string } | undefined,
+    path: readonly string[],
+    below: readonly string[],
+    position: readonly string[],
+  ): boolean {
+    if (owner === undefined) {
+      const id = JSON.stringify(position);
+      return this.#rootUnits.has(id) || this.#indexUnits.has(id);
+    }
+    if (position.length < path.length) return false;
+    const relative = [...below, ...position.slice(path.length)];
+    return owner.unit.inside.get(owner.key)?.has(JSON.stringify(relative)) ===
+      true;
+  }
+
+  /**
+   * The records of the places below `at` of the result document, where
+   * `#place` found the value the one it placed there before: the record
+   * of the output nearest at or above `at`, and that of each kept output
+   * below it that holds a value, each given as that of a place a
+   * comparison left as it was (`#unchangedOutput`), which forms its label
+   * again where its inputs are other ones. These are the records that a
+   * comparison of each position would give. `held` is what the place
+   * holds, and `kept` says which positions store the rows of a unit,
+   * which bring them up to date by themselves.
+   */
+  #sameRecords(
+    at: readonly string[],
+    held: unknown,
+    kept: (position: readonly string[]) => boolean,
+  ): void {
+    this.#unchangedOutput(at);
+    const visit = (
+      node: RecordedTrie,
+      position: string[],
+      value: unknown,
+      top: boolean,
+    ): void => {
+      if (value === undefined || kept(position)) return;
+      if (
+        !top && node.here !== undefined && !isLink(value) && !isStream(value)
+      ) {
+        this.#unchangedOutput(position, node.here);
+      }
+      for (const [segment, child] of node.children) {
+        if (segment === "*") {
+          if (!Array.isArray(value)) continue;
+          value.forEach((member, index) =>
+            visit(child, [...position, `${index}`], member, false)
+          );
+        } else {
+          visit(
+            child,
+            [...position, segment],
+            typeof value === "object" && value !== null && !isLink(value)
+              ? (value as Record<string, unknown>)[segment]
+              : undefined,
+            false,
+          );
+        }
+      }
+    };
+    for (const node of this.#trieAt(at)) visit(node, [...at], held, true);
+  }
+
+  /**
+   * The nodes of the tree of the outputs a change of the result document
+   * is recorded for (`#recordedTrie`) that the path `at` reaches, a `*`
+   * of an output's path reaching any segment.
+   */
+  #trieAt(at: readonly string[]): RecordedTrie[] {
+    let nodes = [this.#recordedTrie()];
+    for (const segment of at) {
+      const next: RecordedTrie[] = [];
+      for (const node of nodes) {
+        const exact = node.children.get(segment);
+        if (exact !== undefined) next.push(exact);
+        const any = segment === "*" ? undefined : node.children.get("*");
+        if (any !== undefined) next.push(any);
+      }
+      nodes = next;
+      if (nodes.length === 0) break;
+    }
+    return nodes;
+  }
+
+  /**
+   * The outputs a change of the result document is recorded for
+   * (`#recordedOutputs`), as a tree of the segments of their paths: each
+   * node holds the output nearest at its path, as `#unchangedOutput`
+   * finds it there.
+   */
+  #recordedTrie(): RecordedTrie {
+    if (this.#trie !== undefined) return this.#trie;
+    const root: RecordedTrie = { children: new Map() };
+    for (const entry of this.#recordedOutputs()) {
+      let node = root;
+      for (const segment of entry.path) {
+        let child = node.children.get(segment);
+        if (child === undefined) {
+          child = { children: new Map() };
+          node.children.set(segment, child);
+        }
+        node = child;
+      }
+      node.here ??= entry;
+    }
+    this.#trie = root;
+    return root;
+  }
+
+  /** The result of `#recordedTrie()`, made once. */
+  #trie: RecordedTrie | undefined;
+
+  /**
    * Brings the stored rows of a unit up to date with its assembly
    * (`execution-and-storage.md` §4.2, "A kept collection is stored as
    * an array at its path"): a row whose value is another one is stored
@@ -7093,11 +7372,18 @@ export class Instance {
           inserted.forEach((key, offset) => {
             const index = start + offset;
             if (members[index]?.key !== key || unit.keys[index] !== key) return;
+            const previous = unit.values[index];
             unit.values[index] = values[index];
-            this.#place([...path, `${index}`], values[index], {
-              unit,
-              key,
-            }, []);
+            this.#place(
+              [...path, `${index}`],
+              values[index],
+              {
+                unit,
+                key,
+              },
+              [],
+              previous,
+            );
           });
           continue;
         }
@@ -7122,8 +7408,15 @@ export class Instance {
       for (const key of settled ? delta.rows : []) {
         const index = this.#positionIn(unit, key);
         if (index < 0 || members[index]?.key !== key) continue;
+        const previous = unit.values[index];
         unit.values[index] = values[index];
-        this.#place([...path, `${index}`], values[index], { unit, key }, []);
+        this.#place(
+          [...path, `${index}`],
+          values[index],
+          { unit, key },
+          [],
+          previous,
+        );
       }
       if (settled && delta.ops.length <= 1) {
         unit.seen = entry;
@@ -7145,13 +7438,15 @@ export class Instance {
     ) tail += 1;
     this.counts.elementsVisited += head + tail;
     const row = (index: number) => {
-      if (values[index] === unit.values[index]) return;
+      const previous = unit.values[index];
+      if (values[index] === previous) return;
       unit.values[index] = values[index];
       this.#place(
         [...path, `${index}`],
         values[index],
         { unit, key: keys[index] },
         [],
+        previous,
       );
     };
     for (let index = 0; index < head; index++) row(index);
@@ -7186,8 +7481,9 @@ export class Instance {
    */
   #storeResult(entry: Entry): void {
     if (entry !== this.#storedResult) {
+      const previous = this.#storedResult?.value;
       this.#storedResult = entry;
-      this.#place([], entry.value, undefined, []);
+      this.#place([], entry.value, undefined, [], previous);
     }
     if (this.#alwaysCount > 0) {
       for (const units of this.#units.values()) {
@@ -11453,6 +11749,7 @@ export class Instance {
    * change of a label finds the records that read it.
    */
   #noteRecord(key: string, instance: string, write: PlanWrite): void {
+    this.counts.recordsNoted += 1;
     this.#givenNow.add(key);
     this.#relabels.delete(key);
     this.#recordDigests.set(
@@ -11463,6 +11760,7 @@ export class Instance {
       let node = this.#recordReaders.get(doc);
       for (const segment of path) node = node?.children.get(segment);
       node?.readers.delete(key);
+      this.counts.recordRegistrations += 1;
     }
     const positions: Address[] = [];
     const seen = new Set<string>();
@@ -11541,6 +11839,7 @@ export class Instance {
     if (own === undefined) visit(write.inputs);
     else for (const address of own) read(address);
     this.#recordReads.set(key, positions);
+    this.counts.recordRegistrations += positions.length;
     for (const { doc, path } of positions) {
       const root: LabelReaders = this.#recordReaders.get(doc) ??
         { readers: new Set(), children: new Map() };

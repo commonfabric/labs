@@ -2042,3 +2042,38 @@ describe("the record of a place of the result that a comparison left as it was",
     expect(left).toEqual(["chosen"]);
   });
 });
+
+// `fixtures/unchanged-record.tsx`: after `useLeft` changed, `box` is the
+// very record placed before, and the output its template names, `parity`,
+// read another position. The store step compares nothing below a record
+// that is the one it placed, and still gives the record of its place where
+// the inputs changed.
+describe("the record of a place that holds the record placed there before", () => {
+  it("is given again where an output its template names bound a slot to another position", async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("unchanged-record"),
+      { count: 1, useLeft: true, left: 5, right: 7 },
+      { transactions: recorder },
+    );
+    const leftBy = (event: { count?: number; useLeft?: boolean }) => {
+      const given = recorder.left.length;
+      instance.send(bindingOf(instance, "set"), event);
+      return recorder.left.slice(given).filter(({ cause }) =>
+        cause === "derivation"
+      ).flatMap(({ writes }) => writes).map(({ target }) =>
+        target.path.join("/")
+      );
+    };
+
+    const unchanged = leftBy({ count: 2 });
+    const rebound = leftBy({ count: 3, useLeft: false });
+
+    expect(instance.result()).toMatchObject({
+      next: 4,
+      box: { parity: 1, label: "parity" },
+    });
+    expect(unchanged).toEqual([]);
+    expect(rebound).toEqual(["box"]);
+  });
+});
