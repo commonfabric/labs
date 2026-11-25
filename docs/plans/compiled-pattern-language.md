@@ -6734,9 +6734,10 @@ is relitigated.
   §7.5.1), `unknown` reads of the legacy author name, an import form and a
   mapped type. Asked whether to change those modules and the rest of
   `topic.tsx` on the build branch, the owner answered "Fix both here"
-  (2026-11-25). Planned: round twenty-eight is to make those changes on
-  `claude/compiled-pattern-scoped-rows`, keeping the board's upgrade path
-  from an existing board; not landed yet.
+  (2026-11-25). Round twenty-eight made those changes on the local branch
+  `claude/compiled-pattern-scoped-rows` (`ab5c0bac9d`, P484, notes 1103 to
+  1105, not pushed): the whole program passes the check with no stored
+  schema changed, and an existing board updates to the new source.
 
 ## Provisional decisions awaiting the owner's ratification
 

@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in documents by default, the window construct, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The merged branch at `5db1c2658d`: every branch of the build, and the two executor fixes of round twenty (P453) | #10183, stacked on #10140 |
 | `merge-attempt/serving-m6` | none | The merge of the serving branch, at `31d73441f8`; the merged branch was fast-forwarded to it | none |
-| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five to twenty-seven, at `e157bd950b`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d`; round twenty-eight in progress there: `31089788f4` declares the Topics board's `mentionListsOf` and `cardRowsOf` parameters as `ReadonlyCell` (Z98), the rest of the board's whole-program refusals pending | none (local) |
+| `claude/compiled-pattern-scoped-rows` | `compiled-pattern-scoped-rows` | Rounds twenty-one to twenty-four, and the four link-following commits of `claude/fabrichat-row-rights-68447f` (P470, P471), and rounds twenty-five to twenty-seven, at `e157bd950b`: a scoped read in the body of a per-element construct stored per row (P454 to P456), the basis list over parts (P457), the room's tree of the space and the rows of a `filter` (P458 to P461), the store step of a result (P462 to P464); cut from the merged branch at `5db1c2658d`; and round twenty-eight at `9b0d83a3d0`: the real Topics board and the modules it imports declared to the compiler's check (Z98, P484), an event a body sends stored as a write (P482), `cellFromUrl` for compiled pieces (P483) | none (local) |
 | `claude/fabrichat-row-rights-68447f` | `fabrichat-row-rights-68447f` | The FabriChat room, real and copy, whose message rows derive their own controls; the two executor fixes of round twenty, carried onto the merged branch | none (local) |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
 | `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
@@ -285,6 +285,29 @@ twenty).
   check (`subset-type:mismatch`), so they run on today's path; a CLI send to
   the room copy is refused (its write policy expects a gesture from the send
   surface).
+  Round twenty-eight (`9b0d83a3d0`, notes 1095 to 1109, P482 to P484): by
+  Z98 and the owner's "Fix both here", the real Topics board
+  (`patterns/apps/topics/`), `product/collection-naming/` and
+  `system/profile-face/` declare the cells they hand to functions as cell
+  types, the board's `upgrade` record declares the stored types, and the
+  board's whole program passes the compiler's check with no stored schema
+  changed; an existing board created from the old source updates to the new
+  one (`cf piece setsrc --check`, then `setsrc`). An event a body sends is
+  stored as a body's write is, so a row's `removeItem` carries a link and
+  `items.remove(item)` removes the item (P482); a compiled piece answers
+  `cellFromUrl` (P483). The rewrite patch of the Topics harness is gone; the
+  harness copies the board as it is. On 2026-11-25 the coordinator checked in
+  the browser: removing a todo from its row now works on the compiled path;
+  the real Topics board renders on the compiled path and reads the acting
+  profile, but its Start button creates no topic, where the same click on
+  today's path does (the handler reads the per-session `newTitle` the input
+  writes and returns when it reads blank; not diagnosed). Open from the
+  round: a topic is an instance inside the board's piece, so the CLI cannot
+  call its verbs or write its cells (no argument link and no schema
+  metadata for instances a body makes); a verb's receipt carries no result;
+  a topic read through the board comes back whole; an empty outcome cell
+  reads `null` where today's path reads `undefined`; no Topics figures were
+  taken on the real board.
 - *Fixed in round twenty, two executor defects (notes 1012 and 1013).*
   `Executor.#invoke` handed a body a plain value where an `identity` entry
   of `Body.computed` reached each row through `*`, so a body that resolved
@@ -450,14 +473,14 @@ and P350 to P360 sandbox and scopes, P310 to P316 and P370 to P382 write integri
 P411 specification review; P420 to P425 resume by units, fourth round; P390
 to P394 serving, round fifteen; P450 to P464 the merges and rounds nineteen
 to twenty-four, P470 and P471 the link-following work, P472 to P478
-rounds twenty-five and twenty-six, P479 to P481 round twenty-seven (the
-next is P482). Note
+rounds twenty-five and twenty-six, P479 to P481 round twenty-seven, P482 to
+P484 round twenty-eight (the next is P485). Note
 numbers in `SPEC-NOTES.md` likewise: 692 to 704, 860 to 875 and 960 to 975
 trunk, 940 to 944 carry, 742 to 752 and 880 to 892 sandbox, 760 to 772
 and 900 to 914 write integrity, 851 to 866 and 920 to 932 serving, 980 to
-1094 the merges and the rounds after them (1016 to 1094 on
+1109 the merges and the rounds after them (1016 to 1109 on
 `claude/compiled-pattern-scoped-rows`, 1060 to 1066 the link-following
-work; the next is 1095). The plan documents hold decisions up to
+work; the next is 1110). The plan documents hold decisions up to
 P210 and P410 to P411; the rounds after that are in `SPEC-NOTES.md` of their
 branches only and need a document round after the merges.
 
