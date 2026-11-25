@@ -105,6 +105,12 @@ discharges, which guard on `DisclosureRendered` and `DisclosureAcknowledged`,
 are such rules. A value-intrinsic rule runs only at observation, so no rule
 the join stage fires can enable one.
 
+While `cfcPolicyEvaluation` is `enforce`, the flow join makes the same
+per-location evaluation of the value-intrinsic rules where a computation reads
+a value, and what the computation writes carries the result (§5.3); at
+`observe` it joins the labels as read. The gates above then meet a derived value's label
+already exchanged, with none of the evidence that exchanged it.
+
 The `requiredIntegrity` floor needs one witness key shared by every location
 each gated read consumed and by the read's own label. A cell's stored label at
 the display is still fitted on its root's integrity: a label view carries no
