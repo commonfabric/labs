@@ -595,6 +595,25 @@ describe("the membership of a `filter` brought up to date", () => {
         expect(large).toEqual(small);
         expect(small.formed).toBe(0);
       });
+      it(`looks at as many elements at 10 as at 100: ${name}, for a \`filter\` over the result of a \`map\` over ${kind}`, async () => {
+        const costs = [];
+        for (const length of [10, 100]) {
+          const instance = await start("filter-of-map", references, length);
+          const before = {
+            visited: instance.counts.elementsVisited,
+            formed: instance.counts.assembliesFormed,
+          };
+          change(instance, length);
+          costs.push({
+            visited: instance.counts.elementsVisited - before.visited,
+            formed: instance.counts.assembliesFormed - before.formed,
+          });
+        }
+        const [small, large] = costs;
+
+        expect(large).toEqual(small);
+        expect(small.formed).toBe(0);
+      });
     }
   }
 

@@ -893,6 +893,13 @@ type Rows = {
   members: Element[];
   /** For a `filter`: whether each element is kept. */
   flags?: boolean[];
+  /**
+   * For a `filter` whose elements are the rows of another per-element
+   * construct, which the result holds as they are: the key of each member,
+   * by the name of the entry of its row. The dependencies on those entries
+   * stand behind those of the elements, in the order of the members.
+   */
+  kept?: Map<string, string>;
   /** For a collection index: the index, which the results are the keys of. */
   index?: Index;
   /**
@@ -930,6 +937,16 @@ const segmentSource = (
     entry: () => source.entry(inner),
     at: source.at,
   };
+
+/**
+ * Whether the source of an element is the row of another per-element
+ * construct that a result holds whole: the result of that construct's body
+ * for the element's key, at no path below it.
+ */
+const isRowSource = (
+  source: Element["source"],
+): source is { entry: Lazy; at: string[] } =>
+  !(source instanceof Ref) && "entry" in source && source.at.length === 0;
 
 /** Stands for the source of an element that is not found yet. */
 const PENDING = new Ref("", []);
@@ -9896,12 +9913,34 @@ export class Instance {
               const flags = elements.map((_, index) => holds(index));
               const kept = elements.filter((_, index) => flags[index]);
               host.members = numbered(kept);
+              // Each kept row of another per-element construct is a
+              // dependency, behind those of the elements.
+              const before = host.dependencies.length;
+              const values = kept.map(given);
+              const ofRows = kept.length > 0 &&
+                kept.every(({ source }) => isRowSource(source));
               if (
                 results.every((result) =>
                   result === null || typeof result !== "object"
-                )
-              ) rows("filter", host.members, flags);
-              return keyed(kept.map(given));
+                ) && (ofRows || host.dependencies.length === before)
+              ) {
+                rows(
+                  "filter",
+                  host.members,
+                  flags,
+                  host.dependencies.length - before,
+                );
+                if (host.rows !== undefined && ofRows) {
+                  const named = host.dependencies.slice(before)
+                    .map(({ on }) => on);
+                  if (named.every((on) => on !== undefined)) {
+                    host.rows.kept = new Map(
+                      named.map((on, index) => [on!, kept[index].key]),
+                    );
+                  } else host.rows = undefined;
+                }
+              }
+              return keyed(values);
             }
             case "sortBy": {
               // The elements of the source in the order of their keys,
@@ -10225,6 +10264,30 @@ export class Instance {
    * where what marked the entry is something else, and the assembly is
    * then formed whole.
    */
+  /**
+   * The value of the row of another per-element construct that `lazy`
+   * gives, and the dependency of an assembly that holds the row as one of
+   * its members: on the row's entry, by the stored form of its value, as
+   * `Host.depend` gives one for a path. Nothing where the entry is of
+   * another instance.
+   */
+  #rowDependency(
+    lazy: Lazy,
+    context: Context,
+  ): { dependency: Dependency; value: unknown } | undefined {
+    const entry = lazy(context);
+    if (entry.owner !== this || entry.key === undefined) return undefined;
+    const held = (from: Entry) => canonical(this.stored(from.value));
+    return {
+      value: entry.value,
+      dependency: {
+        stamp: (now) => held(lazy(now)),
+        seen: held(entry),
+        on: entry.key,
+      },
+    };
+  }
+
   #reassemble(
     collection: number,
     name: string,
@@ -10250,9 +10313,13 @@ export class Instance {
       relocate.add(key);
     }
     const changed = new Set<string>();
+    // The members of a `filter` whose row holds another value.
+    const rowsChanged = new Set<string>();
     for (const used of slot.suspects) {
       const key = rows.keyOf.get(used) ?? rows.segments?.of.get(used);
+      const row = rows.kept?.get(used);
       if (key !== undefined) changed.add(key);
+      else if (row !== undefined) rowsChanged.add(row);
       else if (used !== rows.upstream?.name) return undefined;
     }
     // The changes of what the collection is over, and how the element
@@ -10811,15 +10878,17 @@ export class Instance {
       } else {
         differs = false;
       }
-    } else if (moved || flagged) {
+    } else if (moved || flagged || rowsChanged.size > 0) {
       // A `filter`: its members are the elements of the source whose flag
       // holds, in the order of the source. The positions of the source
       // that a splice put in or whose flag changed are looked at, and no
       // other: the members before the first of them and behind the last
       // are those that stood there, found by binary search over the
-      // members by where their elements stand now. An element that is no
-      // reference, as a row of a `map` is, forms the assembly whole, as it
-      // does for a window.
+      // members by where their elements stand now. A member that is a row
+      // of another per-element construct is held as the row's value, which
+      // the assembly depends on (`Rows.kept`): a row that holds another
+      // value is put at its member's place. Any other element that is no
+      // reference forms the assembly whole, as it does for a window.
       if (flags === undefined || !Array.isArray(held.value)) return undefined;
       const count = elements.length;
       const from = Math.min(low, flippedFrom);
@@ -10847,13 +10916,24 @@ export class Instance {
       }
       const fresh: Element[] = [];
       const freshValues: unknown[] = [];
+      // The dependencies on the rows of the fresh members, where the
+      // members are rows.
+      const freshRows: Dependency[] = [];
+      const { kept } = rows;
       for (let index = from; index < end; index++) {
         this.counts.elementsVisited += 1;
         if (!flags[index]) continue;
         const element = elements[index];
-        if (!(element.source instanceof Ref)) return undefined;
+        const { source } = element;
+        if (kept !== undefined && isRowSource(source)) {
+          const row = this.#rowDependency(source.entry, context);
+          if (row === undefined) return undefined;
+          freshRows.push(row.dependency);
+          freshValues.push(row.value);
+        } else if (kept === undefined && source instanceof Ref) {
+          freshValues.push(source);
+        } else return undefined;
         fresh.push({ ...element, index: head + fresh.length });
-        freshValues.push(element.source);
       }
       // The members that left or entered, as one splice: what stands
       // before and after it holds the keys it held.
@@ -10907,6 +10987,55 @@ export class Instance {
           }],
           rows: [],
         };
+        if (kept !== undefined) {
+          // The dependencies on the rows of the members put in take the
+          // place of those of the members they replace.
+          const base = rows.first + elements.length;
+          const gone = spliceIn(dependencies, base + head, were, freshRows);
+          for (const { on } of gone) {
+            if (on === undefined) continue;
+            kept.delete(on);
+            this.#users.get(on)?.delete(name);
+            slot.uses.delete(on);
+          }
+          freshRows.forEach(({ on }, offset) => {
+            if (on === undefined) return;
+            kept.set(on, fresh[offset].key);
+            this.uses(name, on);
+          });
+        }
+      }
+      // A member whose row holds another value holds that value, at its
+      // place, which is found by binary search over the members by where
+      // their elements stand.
+      const entered = new Set(fresh.map(({ key }) => key));
+      const replaced: string[] = [];
+      for (const key of rowsChanged) {
+        const element = byKey.get(key);
+        if (
+          kept === undefined || element === undefined || entered.has(key) ||
+          !flags[element.index]
+        ) continue;
+        let at = 0;
+        for (let above = rowsNow.length; at < above;) {
+          const middle = (at + above) >> 1;
+          if ((placeOf(rowsNow[middle]) ?? -1) < element.index) at = middle + 1;
+          else above = middle;
+        }
+        const member = rowsNow[at];
+        if (member?.key !== key || !isRowSource(member.source)) {
+          return undefined;
+        }
+        const row = this.#rowDependency(member.source.entry, context);
+        if (row === undefined || !Array.isArray(value)) return undefined;
+        if (value === held.value) value = [...value];
+        (value as unknown[])[at] = row.value;
+        dependencies[rows.first + elements.length + at] = row.dependency;
+        replaced.push(key);
+      }
+      if (replaced.length > 0) {
+        differs = true;
+        delta = { ops: delta?.ops ?? [], rows: replaced };
       }
     } else {
       differs = false;
