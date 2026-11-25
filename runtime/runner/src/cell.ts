@@ -3341,7 +3341,7 @@ export class CellImpl<T extends FabricValue>
         newValue,
         this.#frame?.cause,
         undefined,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, newValue),
       );
 
       // The value at `writeLink` is now the one supplied here, whatever the
@@ -3543,7 +3543,7 @@ export class CellImpl<T extends FabricValue>
         currentValue,
         values,
         cause,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, values, currentValue.length),
       );
     } else {
       if (currentValue !== undefined) {
@@ -3582,7 +3582,7 @@ export class CellImpl<T extends FabricValue>
         [...created, ...values],
         cause,
         undefined,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, [...created, ...values]),
       );
     }
 
@@ -3721,7 +3721,7 @@ export class CellImpl<T extends FabricValue>
         existing,
         toAdd,
         cause,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, toAdd, existing.length),
       );
     } else {
       diffAndUpdate(
@@ -3731,7 +3731,7 @@ export class CellImpl<T extends FabricValue>
         [...existing, ...toAdd],
         cause,
         undefined,
-        frameAnchorIds(this.#frame),
+        frameAnchorIds(this.#frame, [...existing, ...toAdd]),
       );
     }
     this.#tx.recordMergeableOp?.(resolvedLink, {
@@ -6146,13 +6146,37 @@ function validateStaticData(value: unknown): void {
  * frame that nothing pops until that runtime is disposed, so a cell made while
  * a runtime is alive always carries one and this always hands back a source.
  * Making the cell inside a handler or a lift puts that frame's counter behind
- * the ids instead. Where the cell was made is what decides, not where the write
- * happens.
+ * the ids instead, and making it inside a builtin's run puts `written` behind
+ * them (`Frame.builtinRun`). Where the cell was made is what decides, not where
+ * the write happens.
  */
 export function frameAnchorIds(
   frame: Frame | undefined,
-): (() => number) | undefined {
-  return frame === undefined ? undefined : () => frame.generatedIdCounter++;
+  written: unknown,
+  appendAt?: number,
+): (() => string | number) | undefined {
+  if (frame === undefined) return undefined;
+  if (frame.builtinRun !== true) return () => frame.generatedIdCounter++;
+  // Under a builtin's run the seeds come from the write: what it writes (with,
+  // for an append, the length of the array it extends) and a count from zero
+  // within it. A builtin's run restarts its frame's counter, and its stores
+  // are read back and written again by its later runs, so seeding from the
+  // counter would hand a new element the id an earlier run gave another.
+  // Seeded from the write, every runtime running the node mints the same
+  // documents for the same write (speculation.md §2), and a write of
+  // anything else mints documents of its own. The written value is hashed
+  // once, on the first element anchored.
+  let writeId: string | undefined;
+  let count = 0;
+  return () => {
+    writeId ??= toURI(
+      createRef(
+        { write: written, ...(appendAt === undefined ? {} : { appendAt }) },
+        frame.cause,
+      ),
+    );
+    return `${writeId}/${count++}`;
+  };
 }
 
 /**

@@ -16794,6 +16794,7 @@ export class Runner {
         return;
       }
       const frame = pushFrameFromCause(nodeCause, {
+        builtinRun: true,
         runtime: this.#runtime,
         tx,
         space: nodeResultCell.space,
