@@ -222,6 +222,9 @@ installFakeClock({
     "scoped-view",
     // The same, for the rows of a `map` that two principals read.
     "scoped-rows",
+    // The same, for a handler that reads state of the scope `session` a
+    // client wrote.
+    "session-draft",
   ],
 });
 

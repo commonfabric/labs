@@ -103,6 +103,7 @@ import {
   cellScopeOf,
   DocumentInstances,
   instanceNameOf,
+  namesScope,
   scopeKeyOf,
 } from "./scopes.ts";
 import type {
@@ -1034,12 +1035,17 @@ export class RuntimeTransactions implements TransactionHooks {
             // its position in the array. A place the executor declared and
             // has not written, as a state cell that a result holds a write
             // redirect to, gets its document from another writer's first
-            // write, which the executor takes as it takes a later one.
+            // write, which the executor takes as it takes a later one. The
+            // executor declares a place of a scope by its one name for
+            // every key.
             const row = this.#rowDocuments.get(doc);
+            const declaredAs = named === undefined || changed === undefined
+              ? doc
+              : scopedDocument(named, address.scope as Scope);
             if (
               own || this.#onChanges === undefined ||
               (!this.#documents.has(doc) && row === undefined &&
-                this.#store?.declared.has(doc) !== true) ||
+                this.#store?.declared.has(declaredAs) !== true) ||
               (address.path.length > 0 && address.path[0] !== "value")
             ) continue;
             // A change names its path below the member `value` of what the
@@ -5145,9 +5151,16 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#streams.has(id)) return undefined;
     // The executor makes the result document of a resumed instance empty.
     if (this.#resume && id === this.#owner) return undefined;
-    // An entity named `data:` holds the value its name encodes.
+    // An entity named `data:` holds the value its name encodes. Any other
+    // document is one the executor makes, which a resumed instance finds
+    // as the run before stored it. So is a document of a scope, but the
+    // instance of a scope key the executor holds no copy of may have been
+    // written by a writer outside the piece, as a client writes its own
+    // instance of a state cell through a binding, and is read as one from
+    // outside.
     if (!id.startsWith("of:") && !id.startsWith("data:")) {
-      return this.#resume ? this.#held(id) : undefined;
+      if (this.#resume) return this.#held(id);
+      if (!namesScope(id)) return undefined;
     }
     const address = this.#address(id, []);
     const scope = cellScopeOf(id);
