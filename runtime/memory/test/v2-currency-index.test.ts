@@ -674,6 +674,26 @@ describe("currency-index", () => {
       expect(stored.blockedBy).toEqual([]);
     });
 
+    it("stores marked `1` a piece that read, at no one instance, a derived document of which the store holds no instance", () => {
+      const asOf = write("of:pieceC");
+
+      store(asOf, [
+        record("of:pieceC", { reads: [derived("computed:b", ANY_INSTANCE)] }),
+      ]);
+
+      expect(markOf("of:pieceC")).toBe(1);
+    });
+
+    it("stores clean a piece that read, at no one instance, a derived document no recorded piece writes, of which the store holds an instance", () => {
+      const asOf = write("of:pieceC", { id: "computed:b", scope: "user" });
+
+      store(asOf, [
+        record("of:pieceC", { reads: [derived("computed:b", ANY_INSTANCE)] }),
+      ]);
+
+      expect(markOf("of:pieceC")).toBe(0);
+    });
+
     it("clears a piece marked `1` once the piece that writes its input is stored clean", () => {
       const asOf = write("of:pieceC");
       store(asOf, [record("of:pieceC", { reads: [derived("computed:b")] })]);
@@ -3567,6 +3587,23 @@ describe("currency-index", () => {
           storeSource(asOf, [record(OWNER, { writes: [OWNED] })]);
 
           expect(reportedStale(OWNED)).toBe(true);
+        });
+      });
+
+      describe("pullCurrencyExports()", () => {
+        it("returns current a cell registered while its piece had no record, once a record of the piece that names no write of it is stored", () => {
+          const asOf = serve(OWNED);
+          register(OWNED);
+
+          storeSource(asOf, [record(OWNER)]);
+
+          expect(
+            pullCurrencyExports(source, {
+              space: SOURCE,
+              reader: SPACE,
+              since: 0,
+            }).entries.map(({ id, stale }) => ({ id, stale })),
+          ).toEqual([{ id: OWNED, stale: false }]);
         });
       });
 

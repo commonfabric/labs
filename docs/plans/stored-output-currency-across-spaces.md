@@ -132,9 +132,12 @@ to a local reader's input: a recorded piece computes the instance, and a
 slice that decides it is marked or no piece vouches for it, or the instance
 is a derived document no recorded piece writes that no computation may
 have produced yet, as the first plan's list says. An instance no recorded
-piece writes is otherwise plain data, and only a commit moves it. The
-source takes an instance for a derived document where its id has the form
-of one, or a serving loop's commit wrote it.
+piece writes is otherwise plain data, and only a commit moves it. For a
+read in its own space, the recording runtime's mark on the read says
+whether the document is derived. For an instance another space
+registered, which carries no such mark, the source takes it for a derived
+document where its id has the form of one, or a serving loop's commit
+wrote it.
 
 Those rows change in two places the index already has. An advance that
 finds a registered instance changed records its new head. And wherever a
@@ -259,8 +262,8 @@ takes a position when it changes, and none when its instance is first
 registered, since the space registering it is handed the row. An index
 that starts over with its records dropped keeps these rows, and the first
 call that changes it brings every one of them up to date. An instance a
-piece here computed is then one no recorded piece writes, plain data while
-it holds a value, and its row stays as it was.
+piece here computed is then a cell of a piece the index holds no record
+of, reported stale until a record of that piece is stored.
 
 ### A circle of triggers
 

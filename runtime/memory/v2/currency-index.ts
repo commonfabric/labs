@@ -750,6 +750,9 @@ WHERE branch = :branch
   selectAnyExport: engine.prepare(`
 SELECT 1 AS found FROM currency_export WHERE branch = :branch LIMIT 1
 `),
+  selectStaleExports: engine.prepare(`
+SELECT id, scope_key FROM currency_export WHERE branch = :branch AND stale = 1
+`),
   selectExportsOfId: engine.prepare(`
 SELECT scope_key FROM currency_export WHERE branch = :branch AND id = :id
 `),
@@ -931,17 +934,35 @@ const unproduced = (
   id: string,
   scopeKey: string,
 ): boolean => {
-  if (scopeKey === ANY_INSTANCE) return false;
+  if (scopeKey === ANY_INSTANCE) {
+    return headOfInstance(context, id, ANY_INSTANCE) === 0;
+  }
+  const owner = cellOwner(context, id, scopeKey);
+  return owner === null ||
+    (owner !== undefined && slicesOf(context, owner).length === 0);
+};
+
+/**
+ * The piece the instance `(id, scopeKey)` of this store is a cell of, by
+ * the `result` back-link its piece's setup writes onto it; `undefined` for
+ * an instance that holds no back-link, and `null` where the store holds no
+ * such instance.
+ */
+const cellOwner = (
+  context: Context,
+  id: string,
+  scopeKey: string,
+): string | null | undefined => {
   const document = read(context.engine, {
     id,
     branch: context.branch,
     scopeKey,
   }) as Record<string, unknown> | null;
-  if (document === null) return true;
+  if (document === null) return null;
   const link = document.result;
-  if (!isLinkRef(link)) return false;
+  if (!isLinkRef(link)) return undefined;
   const owner = linkRefPayload(link).id;
-  return typeof owner !== "string" || slicesOf(context, owner).length === 0;
+  return typeof owner === "string" ? owner : undefined;
 };
 
 /**
@@ -2260,6 +2281,22 @@ const refreshTouched = (context: Context): void => {
     >;
     for (const { scope_key } of rows) {
       refreshExport(context, { id, scopeKey: scope_key });
+    }
+  }
+  // A cell is stale while its piece has no record (`unproduced()`), and the
+  // piece's first record names no write of a cell its computations do not
+  // write, so the cells of each touched piece reported stale are asked
+  // about again here.
+  if (touched.pieces.size > 0) {
+    const stale = statements.selectStaleExports.all({ branch }) as Array<
+      { id: string; scope_key: string }
+    >;
+    for (const { id, scope_key } of stale) {
+      if (touched.ids.has(id)) continue;
+      const owner = cellOwner(context, id, scope_key);
+      if (owner && touched.pieces.has(owner)) {
+        refreshExport(context, { id, scopeKey: scope_key });
+      }
     }
   }
   touched.pieces.clear();

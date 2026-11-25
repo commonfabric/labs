@@ -651,14 +651,14 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
 ## Known limits
 
 - **A document no record accounts for is read as an input.** A derived
-  document no recorded piece writes, once a computation has produced a
-  value in it, is current for its readers until it changes. Where its
-  writer, a piece with no record or a computation writing outside its
-  declared surface, would compute another value from inputs that changed
-  while it did not run, its readers serve what they derived from the value
-  the store holds, until that writer runs for another reason and writes.
-  An index that drops its records, or a piece whose record is gone, turns
-  the outputs it held into documents of this kind.
+  document no recorded piece writes is current for its readers until it
+  changes, unless the store holds no instance of it or it is a cell of a
+  piece the index holds no record of, both of which stay stale ("How a mark
+  is cleared"). Where its writer, a computation writing outside its
+  declared surface or a handler, would write another value after inputs
+  changed while it did not run, its readers serve what they derived from
+  the value the store holds, until that writer runs for another reason and
+  writes.
 - **`skip` starts nothing upstream of a stale piece.** Under the default
   mode a piece that is stale only through a piece upstream of it, in its own
   space, derives from what the store holds of that piece, and its session
