@@ -456,6 +456,26 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       }
     });
   }
+  // The entity of the stream of each binding the harness sends to, found
+  // once: `Instance.streams()` walks the stored result and follows every
+  // link in it, which a timed send is not to pay for. A stream of the
+  // instance's own binding keeps its entity.
+  type Entity = ReturnType<typeof piece.transactions.entityOfStream>;
+  const streamEntities = new Map<number, Entity>();
+  const entityOf = (binding: number): Entity => {
+    if (streamEntities.has(binding)) return streamEntities.get(binding);
+    const stream = piece.instance.streams().find((held) =>
+      held.binding === binding && held.instance === undefined
+    );
+    const entity = stream === undefined
+      ? undefined
+      : piece.transactions.entityOfStream({
+        binding: stream.binding,
+        keys: stream.keys,
+      });
+    if (entity !== undefined) streamEntities.set(binding, entity);
+    return entity;
+  };
   return {
     instance: piece.instance,
     trace: () => {
@@ -470,15 +490,7 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
       event: unknown,
       trusted?: { surface: string; action: string },
     ) => {
-      const stream = piece.instance.streams().find((held) =>
-        held.binding === binding && held.instance === undefined
-      );
-      const entity = stream === undefined
-        ? undefined
-        : piece.transactions.entityOfStream({
-          binding: stream.binding,
-          keys: stream.keys,
-        });
+      const entity = entityOf(binding);
       if (entity === undefined) return false;
       const before = piece.counts;
       const refusedBefore = piece.refusals.length;
