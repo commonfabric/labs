@@ -6748,8 +6748,13 @@ is relitigated.
   it is purely internal state machine." It answers why a FabriChat send was
   refused after round twenty-eight: the send handler's append of
   `{ messageAct: true }` to the room's `tellJoined` stream was given the label
-  of what the handler read. Planned, not built: the sidecar becomes a table of
-  the memory server's store instead of documents.
+  of what the handler read. The owner added: "(that said events themselves
+  might have labels and whatever this mechanism is it should preserve
+  them)". So the sidecar as a container takes no label, while each event's
+  payload keeps the label of its own content through the append, the drain
+  and delivery, and the handler that consumes it consumes that label.
+  Planned, not built: the sidecar becomes a table of the memory server's
+  store instead of documents.
 
 ## Provisional decisions awaiting the owner's ratification
 
