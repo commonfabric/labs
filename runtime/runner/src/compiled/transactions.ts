@@ -87,6 +87,7 @@ import { readMaybeLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
 import {
+  labelBasisRead,
   markReadAsAttemptedWrite,
   writeDestinationRead,
 } from "../storage/reactivity-log.ts";
@@ -5707,7 +5708,14 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** Reads a document whole in `tx`, so that its commit depends on it. */
   readWhole(tx: IExtendedStorageTransaction, doc: string): void {
-    tx.readValueOrThrow(this.#address(doc, []));
+    // The commit depends on what the document holds, and the run consumes
+    // nothing of it: the basis affirms each document a run of the piece
+    // wrote that the storage has not confirmed yet, the documents of the
+    // runs for other scope keys among them, so a read the flow label took
+    // gave this run's writes the clauses of what another principal's run
+    // stored (`labelBasisRead`: a dependency of the commit that adds no
+    // flow label).
+    tx.readValueOrThrow(this.#address(doc, []), { meta: labelBasisRead });
   }
 
   /**

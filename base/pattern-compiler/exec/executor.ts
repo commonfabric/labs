@@ -4726,7 +4726,20 @@ export class Instance {
           argument,
       ),
     );
-    this.store.create(this.id, "result", this.#heldResult());
+    // The result of an instance a body makes is a record from its
+    // creation, in the transaction the body runs in, as today's runtime
+    // writes a child's result cell where the child is made. Its first
+    // derivation then writes the members, each under the record of its
+    // output, and not the record itself: a write of the record would be
+    // under no record of the plan and take the join of what that
+    // derivation read, which a derivation run for one scope key holds of
+    // that key, in a document every principal reads.
+    const held = this.#heldResult();
+    this.store.create(
+      this.id,
+      "result",
+      held === undefined && options.parent !== undefined ? {} : held,
+    );
     if (creation !== undefined) this.root.#end(creation, true);
     this.#load();
     this.#sideWriters();
@@ -7387,6 +7400,15 @@ export class Instance {
           names.every((name) => Object.hasOwn(held, name))
         ) {
           for (const name of names) put([...at, name], form[name], held[name]);
+          return;
+        }
+        // The result of an instance a body made holds the empty record it
+        // was made with until its first derivation: each member is
+        // written at its own path, under the record of its output, and
+        // the record itself is left as the transaction that made it
+        // wrote it.
+        if (at.length === 0 && names.length > 0 && were.length === 0) {
+          for (const name of names) put([...at, name], form[name], undefined);
           return;
         }
         // The record of the buckets of an index whose buckets are
@@ -16462,11 +16484,24 @@ export class Instance {
     // element's hold names that element's inputs: the template gives both
     // the same label, and the runtime is given one record for the two.
     const held = this.store.peek(doc, at);
-    const shared = pairs.length === 0 ? undefined : this.#shareKey(
-      output,
-      keyed,
-      held === undefined || isLink(held) || isStream(held),
-    );
+    // A position of a document of the space that holds the reference to
+    // the place of a value of a scope key (P451, P455, P474) holds what is
+    // the same for every key: a reader reads the value through the
+    // reference, in the scope instance of its own key, where the place
+    // carries the value's label (`#valueWrites`, `#rowsWrites`). The
+    // position takes the label of the reference, which depends on nothing
+    // a key reads, and not the value's label for the key whose run stored
+    // it, which the display ceiling of another key's principal refuses.
+    const scopedReference = isLink(held) &&
+      scopeOfDocument(held.$link.doc).scope !== undefined &&
+      scopeOfDocument(doc).scope === undefined;
+    const shared = pairs.length === 0 || scopedReference
+      ? undefined
+      : this.#shareKey(
+        output,
+        keyed,
+        held === undefined || isLink(held) || isStream(held),
+      );
     const sharing = shared === undefined
       ? undefined
       : `${this.id}\n${stored?.bound === true}\n${shared}`;
@@ -16488,6 +16523,9 @@ export class Instance {
         ),
         held,
       );
+      if (scopedReference) {
+        given = { ...given, inputs: this.#withoutLabel(given.inputs, 0) };
+      }
       if (sharing !== undefined && first === undefined) {
         this.root.#sharedInputs.set(
           sharing,
@@ -16572,35 +16610,49 @@ export class Instance {
       ? undefined
       : place.outputs?.[index.output];
     if (index === undefined || named === undefined) return inputs;
-    // A chain of outputs is as long as the plan is deep.
-    const without = (at: number, depth: number): number => {
-      const { slots, selections, picks, elements, dynamic, outputs } =
-        table.inputs[at];
-      const each = <T, U>(of: Record<number, T>, to: (value: T) => U) =>
-        Object.fromEntries(
-          Object.entries(of).map(([name, value]) => [name, to(value)]),
-        );
-      const constant = table.binding({ constant: true });
-      return table.place({
-        slots: each(slots, () => constant),
-        ...(selections === undefined ? {} : { selections }),
-        ...(picks === undefined ? {} : { picks: each(picks, () => null) }),
-        ...(dynamic === undefined ? {} : { dynamic: each(dynamic, () => []) }),
-        ...(outputs === undefined || depth > 64 ? {} : {
-          outputs: each(outputs, (below) => without(below, depth + 1)),
-        }),
-        ...(elements === undefined ? {} : {
-          elements: each(elements, (): FoldElements => ({ groups: [] })),
-        }),
-      });
-    };
     return {
       ...inputs,
       inputs: table.place({
         ...place,
-        outputs: { ...place.outputs, [index.output]: without(named, 0) },
+        outputs: {
+          ...place.outputs,
+          [index.output]: this.#withoutLabel(named, 0),
+        },
       }),
     };
+  }
+
+  /**
+   * The inputs `at` of the root's table with every input replaced by one
+   * under which a template has no label: every slot a constant, every
+   * pick and every read of a `dynamic` node empty, every `fold` without an
+   * element, and the inputs of each output named so in turn.
+   */
+  #withoutLabel(at: number, depth: number): number {
+    const table = this.root.#inputsTable;
+    const { slots, selections, picks, elements, dynamic, outputs } =
+      table.inputs[at];
+    const each = <T, U>(of: Record<number, T>, to: (value: T) => U) =>
+      Object.fromEntries(
+        Object.entries(of).map(([name, value]) => [name, to(value)]),
+      );
+    const constant = table.binding({ constant: true });
+    return table.place({
+      slots: each(slots, () => constant),
+      ...(selections === undefined ? {} : { selections }),
+      ...(picks === undefined ? {} : { picks: each(picks, () => null) }),
+      ...(dynamic === undefined ? {} : { dynamic: each(dynamic, () => []) }),
+      // A chain of outputs is as long as the plan is deep.
+      ...(outputs === undefined || depth > 64 ? {} : {
+        outputs: each(
+          outputs,
+          (below) => this.#withoutLabel(below, depth + 1),
+        ),
+      }),
+      ...(elements === undefined ? {} : {
+        elements: each(elements, (): FoldElements => ({ groups: [] })),
+      }),
+    });
   }
 
   /**

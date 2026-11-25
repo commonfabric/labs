@@ -231,6 +231,9 @@ installFakeClock({
     "relay-send",
     // The same, for an instance a handler made, which a client addresses.
     "made-verbs",
+    // The same, for an instance a handler made whose view two principals
+    // read.
+    "hidden-made",
   ],
 });
 
