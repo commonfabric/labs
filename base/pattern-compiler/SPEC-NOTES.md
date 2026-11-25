@@ -28154,3 +28154,164 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    not to the target; whether a reference passed through an event owes the
    receiver the label of the position it was read from in the sender was not
    checked.
+
+## Round twenty-eight, continued: the owner's answer, and the board on the compiled path
+
+The coordinator relayed the owner's answer to the 25 refusals note 1097 left
+open (the library modules and the rest of `topic.tsx`), verbatim: "Fix both
+here". The notes continue from 1103 and the provisional decisions from P483;
+they supersede the first finding of note 1095 and notes 1098, 1100 and 1101
+where they differ.
+
+1103. **Findings, first.**
+      - _Works:_ the board's whole program passes `pattern-compiler check` over
+        its seven files (exit 0, four warnings), and
+        `cf piece new --root patterns patterns/apps/topics/main.tsx` prints
+        `Created on the compiled path.` On the compiled path three `addTopic`
+        calls commit, and the board reads `Topics (3)`, three index rows
+        numbered 1 to 3 and one `crossrefs` row per topic, with 0 error states
+        over 1,169 documents.
+      - _Not working end to end on the compiled path, a topic's own verbs and
+        cells from the CLI._ A topic that `addTopic` makes is an instance inside
+        the board's compiled piece. `cf piece call` of its `setTitle` or
+        `mention` fails with `piece missing argument cell` (its result document
+        names no argument), the same verb through the board's path
+        (`topics/1/setTitle`) is dropped as in note 1095, and
+        `cf cell set … title` fails with
+        `updated result write destination has
+        no durable schema contract`.
+        So the title edit and the mentions of step 2 ran on today's path alone.
+      - _Not working on the compiled path, a verb's result:_ the CLI prints
+        `addTopic`'s receipt with no `result`, where today's path prints the
+        topic's link and its number.
+      - _Different, the reads of a topic through the board:_ on the compiled
+        path `cf cell get crossrefs` prints each row's `topic` as the whole
+        topic, view included, where today's path prints `{}`: the compiled
+        piece's result document carries no schema metadata (note 1087).
+      - _Fixed (P483):_ a compiled piece answered no `cellFromUrl`, which every
+        topic asks for each link, so the CLI created the board on the standard
+        path even with the check passing; and a request that named an element of
+        an array of plain values in place by its key reached the runtime's
+        built-in as a link it cannot follow.
+      - _The upgrade path holds (note 1105):_ a board and its topics created
+        from the source of `e157bd950b` on today's path take this head's source
+        with `cf piece setsrc --check` reporting that it can replace each, and
+        then with `cf piece setsrc`; their verbs work after it.
+      - _Open, a web page's resolution:_ on the compiled path the `cell` of a
+        `cellFromUrl` resolution of a URL that names no cell reads `null` in a
+        `lift` where today's path reads `undefined`; `mentionsOf` of `topic.tsx`
+        drops both, a reader that tests `!== undefined` does not.
+
+1104. **The whole program (the owner's answer; P484).** No stored input schema
+      changes: `createdByName` and a comment's `authorName` stay `unknown`, and
+      the reader contract `TOPIC_UPGRADE_SCHEMA` (the `["string", "unknown"]`
+      union, the `Partial<TopicAuthor>` projections) is unchanged.
+      - `topic.tsx`: the handles of `TopicUpgradeState` declare the stored
+        types, `createdBy: Writable<TopicAuthor | undefined>` and
+        `comments: Writable<StoredTopicComment[]>`; `TopicUpgradeComment` is
+        gone. Handlers take `upgrade: TopicUpgradeState`, the record itself,
+        where they took a cell of it (`asCell` dropped from 17 state schemas,
+        `upgrade.get()` written as `upgrade` 30 times): the crate accepts a
+        record of handles where a cell of a record is declared only when a cell
+        of the record's type would be assignable, which needs the same type. The
+        lift `migrateTopicState` is given the reader contract as a `JSONSchema`
+        (`TOPIC_UPGRADE_READER`), since its schema overload derives the state's
+        type from the schema, which declares the legacy view. A legacy name is
+        read as text by `legacyText()` before `.trim()` (the crate does not
+        narrow a data position typed `unknown`). The schema module is imported
+        by a named binding (`Schema`, under a `deno-lint-ignore no-unused-vars`
+        that says it brings in the overloads of `lift`), and `StampsRead` is
+        `Readonly<Record<…>>`.
+      - `product/collection-naming/`: `NamesMapCell` is `Writable<NamesMap>`;
+        `recordNames<M extends NamedMember>(members: Writable<M[]>, names)` asks
+        each member's verb through the member as a `Writable<NamedMember>` (a
+        generic member type would not type the event); `mentionableRowsOf` takes
+        `ReadonlyCell<{…} | undefined>`. A `ReadonlyCell` of the list would have
+        done for the crate, but the published typings give a `ReadonlyCell` no
+        `resolveAsCell()` and no `send()`.
+      - `system/profile-face/profile-face.ts`: `profileFace` takes
+        `ReadonlyCell<ProfileFaceFields>`.
+      - The tests that handed plain stand-ins hand cells (`topics.test.tsx`, the
+        mention index), or declare the stand-in where it is handed over
+        (`allocator.test.ts`, which a plain `deno test` runs, and
+        `collection-naming-concurrency.test.ts`).
+      - `deno task cfcheck` passes for the board, `product/collection-naming`,
+        `system/profile-face` and every importer of the changed modules (34
+        files, `fabrichat` included). The board's tests give 203 and 10 as in
+        note 1095; the other importers' tests give 302 passed and 1 failed,
+        `topics-shape.test.tsx` assertion 2 of `product/collection-naming`,
+        which fails the same way at `e157bd950b` (68 and 1 there; it reads
+        `createdBy.name` as the five board tests do). `state-upgrades.md`, the
+        collection-naming README and the language subset say what changed.
+
+1105. **The upgrade path (`upgrade-walk.sh` in the session's scratch folder).**
+      On the round's toolshed, today's path: a board created from the tree of
+      `e157bd950b` (`git archive`), two topics, a comment and a mention.
+      `cf piece setsrc --check --root patterns` of the board prints
+      `patterns/apps/topics/main.tsx can replace the source for piece …` (exit
+      0), and so does each topic's check with `topic.tsx`; `cf piece setsrc`
+      commits for the board and for both topics. After it, `addTopic`,
+      `setTitle` and `addComment` commit, the index reads three rows with the
+      renamed title and a count of 3 comments, the topic stays at state version
+      2, and the space holds 0 error states over 1,429 documents. The `$link`
+      that `addTopic` returns names a topic's result document; `cf piece setsrc`
+      given it fails with
+      `does not hold pattern … the source update did not commit`, for the old
+      source as for the new, and `cf piece inspect` of it names the piece id
+      that the update takes.
+
+1106. **The board on both paths (step 2).**
+      `topics-walk.sh <label> <true|false>` reads the topics' addresses from the
+      board's own list (the compiled path returns no `addTopic` result). Today's
+      path, as in note 1098. The compiled path: the board starts compiled, three
+      creates commit, the board's `$NAME`, `topicCount`, `index` and `names`
+      read as on today's path before the edit; `setTitle` and the four mention
+      calls fail (note 1103), so the titles and the `crossrefs` sources stay as
+      created; 0 error states over 1,169 documents.
+
+1107. **`cellFromUrl` and requests (P483).** `RuntimeWishes` answers
+      `cellFromUrl` with the runtime's own built-in, as it answers the fetches;
+      its outcome is `{ pending, cell }`. An operation's request is read by the
+      built-in through the runtime, which resolves no reference by key, so
+      `Instance.#resolvableRequest` gives a reference by key, to an element of
+      an array of plain values in place or below one, as the value it reads now,
+      on which the request's cone depends; every other reference stays a link. A
+      positional link would have pointed at another element after a move, since
+      the request is not stored again when an element keeps its key. Test
+      `runtime/runner/test/compiled/url-cells.test.ts` over
+      `compare/fixtures/url-cells.tsx`, seen failing first: the program was
+      refused as requesting an unanswered effect; over an array of references
+      the cell was not held; over an array of plain values in place neither was
+      it, after the effect was answered. The corpus in its four modes at
+      `20ccfa2603` against `0a851b3808` (note 1099): the board
+      (`apps/topics/main.tsx`) is now in it, and runs with 3 of 3 events, no
+      refusal and equal in the runner mode and after a resume, and is skipped
+      under the serving loop (it needs a `wish`); `topic.tsx` is skipped (the
+      corpus's own list of answered effects has no `cellFromUrl`), and
+      `mentionable.ts` exports no pattern. Equal to the executor in memory: 236,
+      234, 216 and 214. Otherwise `apps/agent/agent.tsx` after a resume lists
+      conflict refusals at other sequence numbers, and `apps/reward-spinner`
+      differs at another path, unequal before and after.
+
+1108. **Planned, not built; provisional decisions; not verified.**
+      - _Planned:_ a topic made by a handler of a compiled piece callable and
+        writable from the CLI (an argument link and schema metadata for the
+        instances a function body makes, as note 1093 plans for the root); a
+        verb's result in its receipt; the `null` read of an empty outcome cell;
+        the corpus's list of answered effects to include `cellFromUrl`.
+      - _Provisional decisions:_ P483 (note 1107); P484 (note 1104: the record
+        of upgrade handles in place of a cell of it, the reader contract given
+        to the lift as a plain `JSONSchema`, `legacyText()`, `NamedMember` with
+        `Writable<M[]>`).
+      - _Not verified:_ anything in a browser; a topic's verbs and mentions on
+        the compiled path; the compiled path reading a partially populated
+        stored author, where its reader is derived from the declared types and
+        not from `TOPIC_UPGRADE_SCHEMA`; the integration test
+        `collection-naming-concurrency.test.ts`, type-checked only.
+
+### CFC questions deferred, round twenty-eight, continued
+
+3. Note 1107: a request operand that named an element in place by its key is
+   stored as the value it read, where a link was stored; the request's label is
+   then the template's for a copy rather than that of a link to the element.
+   Whether the two store the same clauses was not checked.
