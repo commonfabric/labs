@@ -77,6 +77,7 @@ import { assemblyLanguage } from "./assembly/language.ts";
 import { sqlLanguage } from "./sql/language.ts";
 import { authorizedKeysLanguage } from "./authorized-keys/language.ts";
 import { jinjaSyntax } from "./jinja/jinja.ts";
+import { terraformTemplateSyntax } from "./terraform-template/terraform-template.ts";
 import {
   templateHostName,
   templateLanguage,
@@ -599,7 +600,10 @@ function allLanguages(): readonly Language[] {
  * registered over plain text, and selection builds the others as names call
  * for them.
  */
-const TEMPLATE_SYNTAXES: readonly TemplateSyntax[] = [jinjaSyntax];
+const TEMPLATE_SYNTAXES: readonly TemplateSyntax[] = [
+  jinjaSyntax,
+  terraformTemplateSyntax,
+];
 
 /** Incrementally select any byte language from streamed content. */
 export function createByteLanguageDetector(): {

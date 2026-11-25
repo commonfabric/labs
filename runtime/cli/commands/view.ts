@@ -36,10 +36,12 @@ shebangs select Python, 'swift' and 'xcrun swift' shebangs select Swift,
 shell, and 'make' and 'gmake' shebangs select the makefile language. Node, Deno
 and Bun shebangs select the TypeScript and JavaScript language family. For a
 name no language claims, source that starts with an XML declaration ('<?xml'),
-after any byte order mark, selects XML. Known binary filenames, NUL-containing
-input and invalid UTF-8 select the binary language. Its rendered view is a
-read-only hex dump with control pictures for bytes that have no printable ASCII
-character.
+after any byte order mark, selects XML. A Jinja ('.j2', '.jinja', '.jinja2') or
+Terraform ('.tftpl') template is colored as the language the rest of its name
+selects, with the template's own syntax colored inside it. Known binary
+filenames, NUL-containing input and invalid UTF-8 select the binary language.
+Its rendered view is a read-only hex dump with control pictures for bytes that
+have no printable ASCII character.
 Filename-free compiler output keeps TypeScript highlighting when its
 transformed-module header identifies it. Other unnamed source and named files
 with unrecognized syntax remain plain text. Piped source can select syntax

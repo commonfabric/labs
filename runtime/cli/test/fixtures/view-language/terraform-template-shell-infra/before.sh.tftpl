@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Boot-time entry point for a CI spot runner VM.
+#
+# Baked images (image/provision.sh) already have the runner user, toolchain
+# and runner binary, so this script only fetches a one-time JIT config from
+# the controller and runs exactly one job. On the stock Ubuntu image every
+# install step below runs for real, which is slow but correct.
+set -euo pipefail
+exec > >(tee -a /dev/console | logger -t ci-runner) 2>&1
+
+CONTROLLER_URL="${controller_url}"
+TOKEN_AUDIENCE="${token_audience}"
+INSTALL_DOCKER="${install_docker}"
+RUNNER_USER="runner"
+RUNNER_DIR="/opt/actions-runner"
+TOOL_CACHE="/opt/hostedtoolcache"
+METADATA="http://metadata.google.internal/computeMetadata/v1"
+JIT_MAX_ATTEMPTS=120
+
+# stderr: request_jit_config runs inside a command substitution, and its
+# log lines must not end up in the captured JSON.
+log() { printf '[ci-runner] %s\n' "$1" >&2; }
+
+metadata() {
+  curl -fsS -H 'Metadata-Flavor: Google' "$${METADATA}/$1"
+}
+
+identity_token() {
+  # format=full puts the instance name, id, zone and project in the token;
+  # the controller trusts those, not the request body.
+  metadata "instance/service-accounts/default/identity?audience=$${TOKEN_AUDIENCE}&format=full"
+}
+
+request_jit_config() {
+  local token instance_name zone out hdr code wait attempt=0
+  token="$(identity_token)"
+  out="$(mktemp)"
+  hdr="$(mktemp)"
+  # (The doubled percent sign is templatefile's escape for curl's -w format.)
+  while :; do
+    attempt=$((attempt + 1))
+    code="$(curl -sS -o "$${out}" -D "$${hdr}" -w '%%{http_code}' --max-time 120 \
+      -X POST "$${CONTROLLER_URL}/jit-config" \
+      -H "Authorization: Bearer $${token}" -H 'Content-Type: application/json' --data '{}' 2>/dev/null || true)"
+    if [[ "$${code}" == "200" ]]; then
+      cat "$${out}"
+      rm -f "$${out}" "$${hdr}"
+      return 0
+    fi
+    sleep "$${wait:-5}"
+  done
+}
+
+run_in_runner_unit() {
+  local unit="$1"
+  shift
+  systemd-run --unit="$${unit}" --wait --collect \
+    --description='GitHub Actions runner (one job)' \
+    -p KillSignal=SIGINT -p TimeoutStopSec=25 \
+    -p After=network-online.target -p After=google-guest-agent.service \
+    -p Wants=network-online.target \
+    -p OOMPolicy=continue \
+    "$@"
+}
+
+run_one_job() {
+  local config_json="$1" jit
+  jit="$(jq -r .encoded_jit_config <<<"$${config_json}")"
+  log 'Starting runner with one-time JIT config.'
+  run_in_runner_unit actions-runner \
+    --uid="$${RUNNER_USER}" --gid="$${RUNNER_USER}" \
+    --working-directory="$${RUNNER_DIR}" \
+    -E HOME="/home/$${RUNNER_USER}" \
+    -E AGENT_TOOLSDIRECTORY="$${TOOL_CACHE}" \
+    -E RUNNER_TOOL_CACHE="$${TOOL_CACHE}" \
+    -E PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    "$${RUNNER_DIR}/run.sh" --jitconfig "$${jit}" || true
+}
+
+main() {
+  # A failed boot has no usable runner. Recycle even when the controller
+  # cannot recover its identity (for example a failed JIT identity write).
+  trap 'rc=$?; if (( rc != 0 )); then log "Boot failed ($rc); shutting down."; shutdown -h now; fi' EXIT
+  local config_json
+  config_json="$(request_jit_config)"
+  ensure_runner_binary "$${config_json}"
+  run_one_job "$${config_json}"
+  unset config_json
+}
+
+main "$@"
