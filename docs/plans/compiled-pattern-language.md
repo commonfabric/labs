@@ -6722,11 +6722,9 @@ is relitigated.
   am fixing all other patterns". The compiler's check
   (`subset-type:mismatch`) stays as it is. The real Topics board
   (`patterns/apps/topics/main.tsx`) declared `mentionListsOf` and
-  `cardRowsOf` that way so its tests could pass plain stand-ins. Round
-  twenty-eight changed those two parameters and the tests on the local
-  branch `claude/compiled-pattern-scoped-rows` (`31089788f4`, not pushed;
-  this branch's copy of the board is unchanged), and the owner changes the
-  other patterns. Checked as a whole program, the board drew 35
+  `cardRowsOf` that way so its tests could pass plain stand-ins; those two
+  parameters and the board's tests are to be changed on the build branch,
+  and the owner changes the other patterns. Checked as a whole program, the board drew 35
   more refusals: the same kind of parameter in `topic.tsx`, in
   `product/collection-naming/naming.ts` and `mentionable.ts`, and in
   `system/profile-face/profile-face.ts`, and in `topic.tsx` a writable view
@@ -6734,10 +6732,11 @@ is relitigated.
   §7.5.1), `unknown` reads of the legacy author name, an import form and a
   mapped type. Asked whether to change those modules and the rest of
   `topic.tsx` on the build branch, the owner answered "Fix both here"
-  (2026-11-25). Round twenty-eight made those changes on the local branch
-  `claude/compiled-pattern-scoped-rows` (`ab5c0bac9d`, P484, notes 1103 to
-  1105, not pushed): the whole program passes the check with no stored
-  schema changed, and an existing board updates to the new source.
+  (2026-11-25): those modules and the rest of `topic.tsx` are to be changed
+  on the build branch too, keeping the board's upgrade path from an existing
+  board. Where that work stands is recorded in
+  [compiled-pattern-language-handoff.md](compiled-pattern-language-handoff.md),
+  not here.
 
 - The stream-events sidecar of server execution (`of:stream-events:`,
   `STREAM_ENTRIES_DOC_PREFIX` in `runtime/memory/v2.ts`) is internal state of
@@ -6745,7 +6744,12 @@ is relitigated.
   writer fit, on the compiled path and on today's path (2026-11-25, Z99). The
   owner's words: "i don't think that needs labels at all then. in fact i
   think we should make a note to rewrite that to be a sqlite table instead.
-  it is purely internal state machine." It answers why a FabriChat send was
+  it is purely internal state machine." This is the rule to reach, not what
+  the runtime does today: today the sidecar's ids are an undeclarable class
+  (`isUndeclarableIdClass` in `runtime/runner/src/cfc/prepare.ts`), the
+  sidecar still receives a flow label, and the writer-fit measurement is
+  skipped only for some writes to it, so a write outside those is measured
+  and can be refused. It answers why a FabriChat send was
   refused after round twenty-eight: the send handler's append of
   `{ messageAct: true }` to the room's `tellJoined` stream was given the label
   of what the handler read. The owner added: "(that said events themselves
