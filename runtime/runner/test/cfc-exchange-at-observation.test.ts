@@ -22,6 +22,7 @@ import type {
   LabelMapEntry,
 } from "../src/cfc/types.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
+import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -34,6 +35,7 @@ const space = signer.did();
 
 const ALICE = "did:key:alice";
 const BOB = "did:key:bob";
+const EVE = "did:key:eve";
 
 // The sealed clause names the documents' own space, so a write that carries
 // it fits the store it lands in.
@@ -708,6 +710,186 @@ describe("exchange at observation", () => {
         await derive(runtime, ["tally"], "derived");
         expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
       }, { evaluation: "observe" });
+    });
+  });
+
+  describe("a forged viewer stamp under the card-table rule", () => {
+    // ATTACK (threat-model probes #3, #5, #7). The card-table release rule
+    // matches a `TransformedBy{identity: viewFor, inputWitness: move,
+    // viewer}` atom and adds `User(viewer)`. These cases ask the evaluator
+    // what it checks about that atom before it releases. The atom is plain
+    // stored data: the runtime that minted it, the document it is stored in,
+    // and the principal the document's scope key names are all absent from
+    // the atom and from the rule. So the only protection against a forged
+    // stamp is whatever stops the bytes from being stored under the sealed
+    // clause in the first place. `seedStamped` writes the label through the
+    // privileged persistence scope, standing in for a writer that is not the
+    // honest runner write chokepoint (a direct memory-protocol client under
+    // specs#95, or a serving-runtime bug). Given such a write, the rule
+    // honors the viewer the atom names with no further question, which is
+    // the leak these cases show.
+
+    const MOVE = verified("move");
+
+    /** The two-part stamp the card-table rule matches, `viewer` and all. */
+    const witnessed = (
+      identity: ImplementationIdentity,
+      witness: ImplementationIdentity,
+      viewer?: string,
+    ): CfcAtom =>
+      ({
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity,
+        inputWitness: { type: CFC_ATOM_TYPE.TransformedBy, identity: witness },
+        ...(viewer === undefined ? {} : { viewer }),
+      }) as CfcAtom;
+
+    /** The card-table rule as the pattern ships it: viewFor + move + viewer. */
+    const CARD_TABLE_RULES: CfcPolicyRecordInput[] = [{
+      id: "table",
+      rules: [{
+        id: "release-own-view",
+        appliesTo: SEALED,
+        preCondition: {
+          integrity: [{
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: {
+              kind: "verified",
+              moduleIdentity: "module:table",
+              symbol: "viewFor",
+            },
+            inputWitness: {
+              type: CFC_ATOM_TYPE.TransformedBy,
+              identity: {
+                kind: "verified",
+                moduleIdentity: "module:table",
+                symbol: "move",
+              },
+            },
+            viewer: { var: "$viewer" },
+          }],
+        },
+        post: {
+          addAlternatives: [{
+            type: CFC_ATOM_TYPE.User,
+            subject: { var: "$viewer" },
+          }],
+        },
+      }],
+    }];
+
+    const withTable = (body: (runtime: Runtime) => Promise<void>) =>
+      withRuntime(body, { rules: CARD_TABLE_RULES });
+
+    it("releases to the viewer a forged stamp names", async () => {
+      // LEAK. A forged `viewFor`+`move`+`viewer: EVE` stamp on a sealed
+      // document releases the document to EVE, though no run ever computed
+      // it for her: the atom is the whole evidence, and it was authored, not
+      // earned.
+
+      await withTable(async (runtime) => {
+        await seedStamped(runtime, "forged", { hand: ["AS", "KH"] }, [
+          witnessed(VIEW, MOVE, EVE),
+        ]);
+        await derive(runtime, ["forged"], "derived");
+        expect(clausesOf(runtime, "derived")).toEqual([releasedTo(EVE)]);
+      });
+    });
+
+    it("releases to a principal unrelated to the value or its location", async () => {
+      // LEAK. The viewer need not be a seat, a reader, or anyone the value
+      // mentions. Nothing ties `viewer` to the document's scope key, so a
+      // space-scoped (shared) document stamped for EVE releases to EVE.
+
+      await withTable(async (runtime) => {
+        await seedStamped(runtime, "shared", { secret: "every hand" }, [
+          witnessed(VIEW, MOVE, EVE),
+        ]);
+        await derive(runtime, ["shared"], "derived");
+        expect(clausesOf(runtime, "derived")).toEqual([releasedTo(EVE)]);
+      });
+    });
+
+    it("withholds a stamp carrying no move witness", async () => {
+      // REFUSED. The rule's `inputWitness: move` conjunct bites: a
+      // `viewFor`+`viewer` stamp with no move witness is not matched, so the
+      // sealed clause stays. The conjunct is itself forgeable data, so it
+      // raises the bar on a forger by one atom and no more.
+
+      await withTable(async (runtime) => {
+        await seedStamped(runtime, "unwitnessed", { hand: ["AS"] }, [
+          transformedBy(VIEW, EVE),
+        ]);
+        await derive(runtime, ["unwitnessed"], "derived");
+        expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
+      });
+    });
+
+    it("withholds a stamp whose code is not the released function", async () => {
+      // REFUSED. The rule names `viewFor`. A stamp of other code (`peek`)
+      // carrying a move witness and a viewer is not matched.
+
+      await withTable(async (runtime) => {
+        await seedStamped(runtime, "wrong-code", "every hand", [
+          witnessed(OTHER, MOVE, EVE),
+        ]);
+        await derive(runtime, ["wrong-code"], "derived");
+        expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
+      });
+    });
+  });
+
+  describe("the viewer mint serves exactly one principal", () => {
+    // ATTACK (threat-model probe #6). The mint names a viewer only when the
+    // transaction recorded exactly one (`deriveFlowJoin`'s
+    // `viewers.length === 1 ? viewers[0] : undefined`). These cases record
+    // the viewers on the deriving transaction directly, as a run accruing a
+    // second viewer would, and show one viewer releases and two viewers
+    // release nothing: a run that stands for two demanders mints no atom and
+    // widens no audience.
+
+    /**
+     * A computation under `VIEW` that reads a sealed input and writes a value
+     * of it to `output`, having recorded `viewers` on its transaction under
+     * the runtime's own authorization.
+     */
+    const deriveForViewers = async (
+      runtime: Runtime,
+      viewers: readonly string[],
+      output: string,
+    ): Promise<void> => {
+      const tx = runtime.edit();
+      setCfcImplementationIdentity(tx, VIEW);
+      for (const viewer of viewers) {
+        tx.recordCfcViewer(viewer, runtimeWritePolicyAuthorization);
+      }
+      const value = runtime.getCell(space, "sealed-in", undefined, tx).getRaw();
+      tx.writeOrThrow({
+        space,
+        scope: "space",
+        id: idOf(runtime, output, tx),
+        path: ["value"],
+      }, JSON.stringify(value));
+      tx.prepareCfc();
+      expect((await tx.commit().settled).error).toBeUndefined();
+    };
+
+    it("releases what a one-viewer run wrote to that viewer", async () => {
+      await withRuntime(async (runtime) => {
+        await seedStamped(runtime, "sealed-in", { hand: ["AS"] }, []);
+        await deriveForViewers(runtime, [ALICE], "stamped");
+        await derive(runtime, ["stamped"], "seen");
+        expect(clausesOf(runtime, "seen")).toEqual([releasedTo(ALICE)]);
+      });
+    });
+
+    it("releases nothing of what a two-viewer run wrote", async () => {
+      await withRuntime(async (runtime) => {
+        await seedStamped(runtime, "sealed-in", { hand: ["AS"] }, []);
+        await deriveForViewers(runtime, [ALICE, BOB], "stamped");
+        await derive(runtime, ["stamped"], "seen");
+        expect(clausesOf(runtime, "seen")).toEqual([SEALED]);
+      });
     });
   });
 });

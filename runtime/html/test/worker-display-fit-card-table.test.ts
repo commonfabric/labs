@@ -193,6 +193,10 @@ const refusal = (
   cell: Cell<unknown>,
   space: string,
   holder: Seat = viewer,
+  // The spaces the reader is a member of. Defaults to the table's space, as
+  // every player here is. An attack probing whether the release rests on
+  // space membership passes `[]` to render the reader as an outsider.
+  memberSpaces: string[] = [space],
 ) => {
   const policy: RenderPolicy = {
     declassifyConfidentiality: [],
@@ -200,7 +204,7 @@ const refusal = (
   };
   const resolveConfidentiality = createRenderConfidentialityResolver({
     actingPrincipal: viewer.did,
-    memberSpaces: [space],
+    memberSpaces,
     modulePolicyResolver:
       createRuntimeCfcModulePolicySource(holder.runtime).resolve,
   });
@@ -868,5 +872,105 @@ Deno.test(
           .toBeDefined();
       });
     }, true);
+  },
+);
+
+Deno.test(
+  "release of the card table does not rest on space membership (attack)",
+  async (t) => {
+    // ATTACK (threat-model probe #2). The released clause is
+    // `Policy ∨ User(viewer)`. `User(viewer)` names a principal, not a
+    // reader of the space, so the release carries no space-membership
+    // requirement. These cases strip the reader's membership (`memberSpaces:
+    // []`) and show the view still reaches them when they are the named
+    // viewer, and still does not when they are not.
+
+    await atTable(async ({ space, alice, bob, carol, table, join }) => {
+      const bobsTable = await join(bob, table);
+      const carolsTable = await join(carol, table);
+      const moves = await play({ alice, bob }, table, bobsTable, true);
+      await seen(carolsTable, moves);
+
+      await t.step(
+        "releases a player their hand though they are no space member",
+        () => {
+          // Bob holds a hand. With no space membership at all he is still
+          // released his own instance: being the viewer the stamp names is
+          // the whole of what the clause asks.
+
+          expect(handOf(bobsTable).length).toBe(3);
+          expect(refusal(bob, viewOf(bobsTable), space)).toBeUndefined();
+          expect(refusal(bob, viewOf(bobsTable), space, bob, []))
+            .toBeUndefined();
+        },
+      );
+
+      await t.step(
+        "releases a watcher their view though they are no space member",
+        () => {
+          // Carol only watches; her view holds no hand. It, too, reaches her
+          // with no space membership. So a principal with no READ on the
+          // space whose stamped instance exists would be released the
+          // watcher view under specs#95: the label is the whole gate.
+
+          expect(viewOf(carolsTable).get()).toMatchObject({ seat: -1 });
+          expect(refusal(carol, viewOf(carolsTable), space, carol, []))
+            .toBeUndefined();
+        },
+      );
+
+      await t.step(
+        "still refuses a non-viewer, membership or none",
+        () => {
+          // Dropping membership opens nothing for a principal the stamp does
+          // not name: Bob's ceiling refuses Alice's instance either way.
+
+          expect(refusal(bob, viewOf(table), space, alice)).toBeDefined();
+          expect(refusal(bob, viewOf(table), space, alice, [])).toBeDefined();
+          expect(refusal(bob, viewOf(table), space, alice, [space, "other"]))
+            .toBeDefined();
+        },
+      );
+    });
+  },
+);
+
+Deno.test(
+  "a reader cannot demand another principal's view at the boundary (attack)",
+  async (t) => {
+    // ATTACK (threat-model probe #1). What authenticates the demand at the
+    // display boundary is the render config's `actingPrincipal` and the
+    // `maxConfidentiality` ceiling it builds, both the reader's own
+    // authenticated identity (on a serving runtime, the demander's session;
+    // `createRenderConfidentialityResolver`, and the ceiling
+    // `[User(actingPrincipal)]`). A reader cannot present another
+    // principal's identity for themselves: `refusal(bob, ...)` always fits
+    // Bob's own ceiling. These cases read the bytes of Alice's stored
+    // instance in Alice's own runtime (`holder = alice`) and show Bob's
+    // ceiling refuses them, down to a single card.
+
+    await atTable(async ({ space, alice, bob, table, join }) => {
+      const bobsTable = await join(bob, table);
+      await play({ alice, bob }, table, bobsTable, true);
+
+      await t.step("refuses Bob Alice's whole view", () => {
+        expect(viewOf(table).get()).toMatchObject({ seat: 0 });
+        expect(refusal(bob, viewOf(table), space, alice)).toBeDefined();
+      });
+
+      await t.step("refuses Bob a single card of Alice's hand", () => {
+        expect(refusal(bob, at(table, "view", "hand"), space, alice))
+          .toBeDefined();
+        expect(refusal(bob, at(table, "view", "hand", "0"), space, alice))
+          .toBeDefined();
+      });
+
+      await t.step("refuses even the table owner a player's hand", () => {
+        // Alice owns the space, yet her own ceiling `User(alice)` does not
+        // satisfy `Policy ∨ User(bob)`: ownership is not viewership.
+
+        expect(refusal(alice, viewOf(bobsTable), space, bob)).toBeDefined();
+      });
+    });
   },
 );
