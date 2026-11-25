@@ -3,9 +3,10 @@ import { handler, pattern, type Stream, Writable } from "commonfabric";
 
 // The Topics board's topics reduced to their verbs: the handler `add` makes
 // an instance of `Item`, as the board's `addTopic` makes a topic, and adds
-// it to the list, an array of references. Each item has a title of its
-// argument and a verb of its own that renames it, and the board maps the
-// list to the titles.
+// it to the list, an array of references, and returns the item and its
+// title, as `addTopic` returns the topic and its number. Each item has a
+// title of its argument and a verb of its own that renames it, and the
+// board maps the list to the titles.
 
 interface ItemResult {
   title: string;
@@ -24,9 +25,12 @@ const Item = pattern<{ title: Writable<string> }, ItemResult>(
 
 const add = handler<
   { title: string },
-  { items: Writable<ItemResult[]> }
+  { items: Writable<ItemResult[]> },
+  { item: ItemResult; title: string }
 >((event, { items }) => {
-  items.push(Item({ title: event.title }));
+  const item = Item({ title: event.title });
+  items.push(item);
+  return { item, title: event.title };
 });
 
 interface Output {

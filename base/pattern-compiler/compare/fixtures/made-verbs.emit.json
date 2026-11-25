@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "made-verbs.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst rename = $rt.data(handler(\n  (event, { title }) => {\n    title.set(event.title);\n  },\n));\nconst Item = $rt.data(pattern(\n  \"sha256:cd39a037cd4fdba0f5ba43ad73728874031a8beb70a81a29bd913ba1283cb4bb\",\n));\nconst add = $rt.data(handler((event, { items }) => {\n  items.push(Item({ title: event.title }));\n}));\n\nconst $default = $rt.data((pattern(\n  \"sha256:6edcfbbf768119b7b9a42877711e830438cc44a8db1f2b43838cd6fcea70bda1\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(2), rename: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { title }) => {\n    title.set(event.title);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst rename = $rt.data(handler(\n  (event, { title }) => {\n    title.set(event.title);\n  },\n));\nconst Item = $rt.data(pattern(\n  \"sha256:1ad089fceb3ca85501e83e664287e17866afcdfb08dfef525a29e7861c9f177b\",\n));\nconst add = $rt.data(handler((event, { items }) => {\n  const item = Item({ title: event.title });\n  items.push(item);\n  return { item, title: event.title };\n}));\n\nconst $default = $rt.data((pattern(\n  \"sha256:54de7785ff1b2a274bb9f44811b34c6071334fbb202bde5907cf5ff232ddfe2b\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(2), rename: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { title }) => {\n    title.set(event.title);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -28,7 +28,7 @@
           "values": [],
           "valuesWithoutOutput": []
         },
-        "line": 21,
+        "line": 22,
         "name": "Item",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -152,7 +152,7 @@
             }
           ],
           "patterns": [
-            "sha256:cd39a037cd4fdba0f5ba43ad73728874031a8beb70a81a29bd913ba1283cb4bb"
+            "sha256:1ad089fceb3ca85501e83e664287e17866afcdfb08dfef525a29e7861c9f177b"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -291,7 +291,7 @@
             {
               "module": 0,
               "path": "made-verbs.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst rename = $rt.data(handler(\n  (event, { title }) => {\n    title.set(event.title);\n  },\n));\nconst Item = $rt.data(pattern(\n  \"sha256:cd39a037cd4fdba0f5ba43ad73728874031a8beb70a81a29bd913ba1283cb4bb\",\n));\nconst add = $rt.data(handler((event, { items }) => {\n  items.push(Item({ title: event.title }));\n}));\n\nconst $default = $rt.data((pattern(\n  \"sha256:6edcfbbf768119b7b9a42877711e830438cc44a8db1f2b43838cd6fcea70bda1\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\nreturn $rt.thunk(($h) => (({ items: $h.slot(4), titles: $h.output(0), add: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { items }) => {\n  items.push(Item({ title: event.title }));\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst rename = $rt.data(handler(\n  (event, { title }) => {\n    title.set(event.title);\n  },\n));\nconst Item = $rt.data(pattern(\n  \"sha256:1ad089fceb3ca85501e83e664287e17866afcdfb08dfef525a29e7861c9f177b\",\n));\nconst add = $rt.data(handler((event, { items }) => {\n  const item = Item({ title: event.title });\n  items.push(item);\n  return { item, title: event.title };\n}));\n\nconst $default = $rt.data((pattern(\n  \"sha256:54de7785ff1b2a274bb9f44811b34c6071334fbb202bde5907cf5ff232ddfe2b\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\nreturn $rt.thunk(($h) => (({ items: $h.slot(4), titles: $h.output(0), add: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { items }) => {\n  const item = Item({ title: event.title });\n  items.push(item);\n  return { item, title: event.title };\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -308,7 +308,7 @@
           ],
           "valuesWithoutOutput": []
         },
-        "line": 38,
+        "line": 42,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -429,7 +429,7 @@
             {
               "at": {
                 "file": "made-verbs.tsx",
-                "start": 1126
+                "start": 1312
               },
               "bodies": [],
               "entry": "map",
@@ -506,7 +506,7 @@
             }
           ],
           "patterns": [
-            "sha256:6edcfbbf768119b7b9a42877711e830438cc44a8db1f2b43838cd6fcea70bda1"
+            "sha256:54de7785ff1b2a274bb9f44811b34c6071334fbb202bde5907cf5ff232ddfe2b"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

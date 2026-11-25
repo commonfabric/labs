@@ -3282,6 +3282,13 @@ export type Outcome = {
   /** Whether the handler's body ran to its end. */
   committed: boolean;
   error?: string;
+  /**
+   * What the body returned, where it ran to its end and returned
+   * something, in stored form (`Instance.stored`): a handle and a value
+   * the body was handed with its address are each a link to that
+   * address, as in what a body writes (ES §2.4).
+   */
+  result?: unknown;
 };
 
 /**
@@ -17314,8 +17321,9 @@ export class Instance {
     this.#handlerHost = host;
     // What the body writes is the handler's own (SS §5.6).
     root.#evaluating.push({ instance: this, key: HANDLER });
+    let returned: unknown;
     try {
-      this.during(
+      returned = this.during(
         { handling: { parent: root.id, event: root.#events } },
         () => run(event, state),
       );
@@ -17327,7 +17335,13 @@ export class Instance {
       this.#handlerHost = outer;
       root.#evaluating.pop();
     }
-    return { binding, committed: true };
+    return returned === undefined
+      ? { binding, committed: true }
+      : {
+        binding,
+        committed: true,
+        result: this.stored(this.returned(returned)),
+      };
   }
 
   /**

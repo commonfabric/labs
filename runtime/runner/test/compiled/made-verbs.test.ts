@@ -4,13 +4,14 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.ts";
-import type { Cell, MemorySpace } from "../../src/cell.ts";
+import { type Cell, type MemorySpace, sendEvent } from "../../src/cell.ts";
 import {
   type CompiledServingMemoryServer,
   listenCompiledServingMemoryServer,
 } from "../../src/compiled/serving-memory-server.deno.ts";
 import { setUpCompiledPiece } from "../../src/compiled/setup.ts";
 import { getMetaLink, parseLink } from "../../src/link-utils.ts";
+import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { readResultSchemaMeta } from "../../src/result-schema-meta.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
@@ -156,6 +157,37 @@ describe("an instance a handler of a compiled piece made, addressed by a client 
     verb.send({ title: "Renamed" });
 
     await titles(read, ["Renamed"]);
+    expect(serving.pieces()[0].refusals).toEqual([]);
+  });
+  it("returns what the handler returned in the receipt of the handling", async () => {
+    const { read } = await withItem();
+    const { promise, resolve } = Promise.withResolvers<
+      NormalizedFullLink | undefined
+    >();
+
+    sendEvent(
+      read.key("add") as unknown as Cell<{ title: string }>,
+      { title: "Second" },
+      (tx) => resolve(tx.handlingReceiptLink),
+      // The client runs no handler of a compiled piece, so the append is
+      // the whole of its send, as `cf piece call` sends it.
+      { echo: false },
+    );
+    const at = await promise;
+    expect(at).toBeDefined();
+    await titles(read, ["First", "Second"]);
+
+    const receipt = client.getCellFromLink<
+      { item?: unknown; title?: string }
+    >(at!);
+    cancels.push(receipt.sink(() => {}));
+    const held = await waitForCellValue<{ item?: unknown; title?: string }>(
+      client,
+      receipt,
+      (value) => value?.title === "Second",
+      { stuckLabel: "the client reads the result in the receipt" },
+    );
+    expect(held.item).toBeDefined();
     expect(serving.pieces()[0].refusals).toEqual([]);
   });
 });

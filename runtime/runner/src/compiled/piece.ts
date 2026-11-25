@@ -52,7 +52,13 @@ import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
 import { scopeRank } from "../scope.ts";
 import { stampWaveRunContext, waveRunContextOf } from "../executor/wave.ts";
-import { deriveEventKey } from "../scheduler/event-identity.ts";
+import {
+  deriveEventKey,
+  handlingReceiptLink,
+} from "../scheduler/event-identity.ts";
+import { receiptShapeSchema } from "../receipt-shape.ts";
+import { ignoreReadForScheduling } from "../scheduler.ts";
+import { writeResultSchemaMeta } from "../result-schema-meta.ts";
 import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
 import {
@@ -994,6 +1000,7 @@ export class CompiledPiece {
         this.#counts.ownMs += performance.now() - began;
       }
       if (!outcome.committed) this.#counts.eventsRefused += 1;
+      else this.#writeReceipt(tx, entity, outcome.result);
       this.#keepMinted(tx);
       // An event a handler sends to a stream of the piece is sent through
       // the cell of the stream in the handler's transaction, as a handler
@@ -1022,6 +1029,49 @@ export class CompiledPiece {
         scope: "space",
       }),
     );
+  }
+
+  /**
+   * Writes the receipt of the handling a serving runtime ran in `tx`, of an
+   * event to the stream whose marker `entity` holds, as the runner writes a
+   * served handling's (`Runner.#handleJavaScriptHandlerResult`): what the
+   * handler returned, `result`, where `plainResultReceipts` is on and it
+   * returned something, and `{}` otherwise, with the shape of that value
+   * as the receipt's `schema` metadata. A caller reads the verb's result
+   * back by the receipt's address. A receipt that holds a value already is
+   * left as it is: the handling of the event landed it before.
+   */
+  #writeReceipt(
+    tx: IExtendedStorageTransaction,
+    entity: URI,
+    result: unknown,
+  ): void {
+    const eventId = tx.dispatchedEventId;
+    if (
+      eventId === undefined ||
+      this.#runtime.experimental.serverExecution !== true ||
+      waveRunContextOf(tx)?.kind !== "event-handler" ||
+      tx.dispatchedHandlerNotRun !== undefined
+    ) return;
+    const { space } = this.transactions;
+    const receipt = this.#runtime.getCellFromLink(
+      handlingReceiptLink(eventId, {
+        space,
+        id: entity,
+        path: [],
+        scope: "space",
+      }),
+      undefined,
+      tx,
+    );
+    if (receipt.getRaw({ meta: ignoreReadForScheduling }) !== undefined) return;
+    const value = this.#runtime.experimental.plainResultReceipts === true &&
+        result !== undefined
+      ? this.transactions.encode(result)
+      : {};
+    receipt.set(value as never);
+    const shape = receiptShapeSchema(value);
+    if (shape !== undefined) writeResultSchemaMeta(receipt, shape);
   }
 
   /**
