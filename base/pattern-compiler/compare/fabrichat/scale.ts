@@ -33,8 +33,10 @@
  *   and their size as JSON after the commit (`changedDocuments`,
  *   `changedBytes`).
  * - `read`: the messages of the result are read, and the step says how
- *   many the room holds, the text of the last, and for how many the
- *   result holds the reader's rights, with those of the last.
+ *   many the room holds, the text of the last, for how many the result
+ *   holds the reader's rights, with those of the last, and how many error
+ *   states the documents of the executor hold, with the message of each
+ *   (`errors`).
  *
  * `manager` and `home` are started, and the step says how many members the
  * result has and which cones ended in an error state. `home` then takes
@@ -120,6 +122,7 @@ import {
   StorageManager,
 } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
+import { isErrorState } from "../../exec/store.ts";
 import { startCpuProfile } from "../cpu-profile.ts";
 import { homeStubs, memoryHome, PROFILE, seedHome } from "../wish-home.ts";
 
@@ -615,6 +618,26 @@ const print = (step: Record<string, unknown>) =>
   console.log(JSON.stringify(step));
 
 /** The counters of the executor that a step is charged with. */
+/**
+ * The error states the documents of the executor hold, counted by their
+ * message.
+ */
+const errorsIn = (instance: Instance): Record<string, number> => {
+  const counts: Record<string, number> = {};
+  const visit = (value: unknown) => {
+    if (isErrorState(value)) {
+      const { message } = value.$error;
+      counts[message] = (counts[message] ?? 0) + 1;
+    } else if (Array.isArray(value)) {
+      for (const member of value) visit(member);
+    } else if (typeof value === "object" && value !== null) {
+      for (const member of Object.values(value)) visit(member);
+    }
+  };
+  for (const { value } of instance.store.docs.values()) visit(value);
+  return counts;
+};
+
 /** The counts of the executor and the containers its reads copied. */
 const countsOf = (instance: Instance) => ({
   ...instance.counts,
@@ -991,6 +1014,7 @@ for (
       last: messages.latest.messages.at(-1)?.body,
       rights: messageRights.length,
       lastRights: messageRights.at(-1),
+      errors: errorsIn(instance),
     });
   }
   await stop();

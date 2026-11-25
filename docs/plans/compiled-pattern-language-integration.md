@@ -1352,7 +1352,8 @@ Built with it:
   template folds over (`Instance.#noteRecord`). After a commit changed labels
   and no value, the adapter tells the executor (`watchLabels`, with `alone`),
   and the executor gives again the records whose inputs read a position at,
-  above or below a changed entry and those that fold over a collection with an
+  above or below a changed entry where a read of the position consumes another
+  label than before, and those that fold over a collection with an
   element whose group changed (`Instance.#recordsReading`), in a derivation
   transaction of its own (`Instance.#relabel`). Each is marked
   `PlanWrite.relabel`: the runtime stores the label at the record's path and

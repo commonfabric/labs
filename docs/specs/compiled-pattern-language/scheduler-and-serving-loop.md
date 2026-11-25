@@ -1411,15 +1411,18 @@ records all take new inputs of one content is changed where the positions
 differ, so noting a record again costs what changed in the content of its
 inputs (`Instance.#flushReads`). After a commit changed a label and no
 value, it gives again, in a derivation transaction of its own, the records whose
-inputs read a position at, above or below the changed entry and those that fold
+inputs read a position at, above or below the changed entry where a read of the
+position consumes another label than before in some class, and those that fold
 over a collection with an element whose group changed
-(`Instance.#recordsReading`, `Instance.#relabel`). One changed label among 10
+(`Instance.#recordsReading`, `Instance.#relabel`). A position elsewhere in the
+document is not asked about, and the work is the positions on the changed paths
+and the records that read one whose label changed. One changed label among 10
 elements and among 1,000 gives the same records again, measured over an array of
 references; an array of plain values in place and the result of another
 per-element construct were not measured. The records are found by position and
 not by the class of the slot, so an output that holds a link is given again when
-any label of the document the link names changes, although its slot reads the
-reference alone. The rule above limits the work further, to the demanded outputs
+a label of the document the link names changes at, above or below what it read,
+although its slot reads the reference alone. The rule above limits the work further, to the demanded outputs
 whose template reaches the changed slot in a class that the change concerns.
 
 The rule changes when a label is derived again, not what it is. It is
