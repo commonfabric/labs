@@ -243,15 +243,16 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 5, event: {} },
     ],
   }],
-  // A `set` on a cell that holds a link: `pick` stores the link, `star`
-  // writes a member below the cell, and `replace` a plain value to the
-  // cell. The values are compared after each event.
+  // A `set` on a cell that holds a link: `pick` stores the link, and
+  // `star` writes a member below the cell. The values are compared after
+  // each event. The event of `replace`, which writes a plain value to the
+  // cell, is not sent: the compiled path replaces the link the cell holds
+  // (decision P471), and today's runtime writes the record the link names.
   "set-over-link": [{
     argument: { first: { title: "a", stars: 1 } },
     events: [
       { binding: 0, event: {} },
       { binding: 1, event: {} },
-      { binding: 2, event: {} },
     ],
   }],
   // A constant at a position of handle type: `increment` reads it

@@ -200,9 +200,10 @@ describe("the value code of a compiled piece", () => {
       )
     );
 
-    // The cell of `last` has no document: the write before the assignment
-    // that threw was not committed.
-    expect(await lastAfterAnEvent(artifact)).toBeUndefined();
+    // The cell of `last` has no document, and the result's write redirect
+    // to it reads the cell's default: the write before the assignment that
+    // threw was not committed.
+    expect(await lastAfterAnEvent(artifact)).toBe("");
     expect(Object.isFrozen(Handle.prototype)).toBe(true);
   });
 
@@ -214,7 +215,7 @@ describe("the value code of a compiled piece", () => {
       )
     );
 
-    expect(await lastAfterAnEvent(artifact)).toBeUndefined();
+    expect(await lastAfterAnEvent(artifact)).toBe("");
   });
 
   it("commits nothing of a handler body that replaces a method of every deferred value", async () => {
@@ -225,7 +226,7 @@ describe("the value code of a compiled piece", () => {
       )
     );
 
-    expect(await lastAfterAnEvent(artifact)).toBeUndefined();
+    expect(await lastAfterAnEvent(artifact)).toBe("");
   });
 
   it("gives a handler body the time of its event, to the second", async () => {

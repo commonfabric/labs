@@ -6379,8 +6379,11 @@ describe("an element of a plain array generated from scratch inside an element b
 
 // What a `set` does on a cell that holds a link
 // (`fixtures/set-over-link.tsx`). The comparison of values runs the same
-// events on today's runtime, which gives the same value at every point
-// (`compare/values-fixtures.ts`).
+// events on today's runtime up to `replace`, and gives the same value at
+// every point (`compare/values-fixtures.ts`). Today's runtime writes the
+// plain value of `replace` over the record that the link names, since it
+// gives the handler that record's cell; the compiled path gives the handler
+// the state cell, and the value replaces the link (decision P471).
 describe("a `set` on a cell that holds a link", () => {
   type Result = Record<
     "firstTitle" | "firstStars" | "pickedTitle" | "pickedStars",
@@ -6398,6 +6401,14 @@ describe("a `set` on a cell that holds a link", () => {
   const cell = (instance: Instance) =>
     instance.store.docs.get(instance.stateCellDocument(0))?.value;
 
+  it("keeps the link when the same record is stored again", async () => {
+    const instance = await start();
+
+    instance.send(PICK, {});
+
+    expect(cell(instance)).toEqual(link);
+  });
+
   it("writes a member below the cell into the record that the link names", async () => {
     const instance = await start();
     expect(cell(instance)).toEqual(link);
@@ -6408,18 +6419,18 @@ describe("a `set` on a cell that holds a link", () => {
     expect(instance.result()).toMatchObject({ firstStars: 9, pickedStars: 9 });
   });
 
-  it("writes a plain value over the record that the link names, and the cell keeps the link", async () => {
+  it("replaces the link with a plain value written to the cell, and leaves the record that the link named as it was", async () => {
     const instance = await start();
 
     instance.send(REPLACE, {});
 
-    expect(cell(instance)).toEqual(link);
+    expect(cell(instance)).toEqual({ title: "plain", stars: 0 });
     expect(instance.store.docs.get(ARGUMENT)?.value).toEqual({
-      first: { title: "plain", stars: 0 },
+      first: { title: "a", stars: 1 },
     });
     expect(instance.result() as Result).toMatchObject({
-      firstTitle: "plain",
-      firstStars: 0,
+      firstTitle: "a",
+      firstStars: 1,
       pickedTitle: "plain",
       pickedStars: 0,
     });

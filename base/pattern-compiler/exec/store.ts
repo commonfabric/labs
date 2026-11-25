@@ -825,7 +825,14 @@ export type Handed = {
   bounded: boolean;
 };
 
-type StoredLink = { $link: { doc: string; path: string[]; schema?: Schema } };
+/**
+ * A stored link. `redirect`: the link is a write redirect, the form today's
+ * runtime stores a cell a pattern returns in: a write at its position lands
+ * where it leads, whatever the write is (`Store.write`).
+ */
+type StoredLink = {
+  $link: { doc: string; path: string[]; schema?: Schema; redirect?: true };
+};
 type StoredStream = {
   $stream: { binding: number; keys: string[]; instance?: string };
 };
@@ -1921,6 +1928,28 @@ export class Store {
   }
 
   /**
+   * The position whose value a read of `ref` gives (`Handle.get`): past
+   * each write redirect at `ref`, past the one link the position then
+   * holds, and past each write redirect after that link. It is found with
+   * no read reported: what calls it has read through `ref` already, and
+   * went through these positions then.
+   */
+  oneLinkPast(ref: Ref): Located {
+    const { onRead, reader } = this;
+    this.onRead = undefined;
+    this.reader = undefined;
+    try {
+      const at = this.locate(ref, "redirects");
+      if (!isLink(at.value)) return at;
+      const { doc, path, schema } = at.value.$link;
+      return this.locate(new Ref(doc, path, schema ?? ref.schema), "redirects");
+    } finally {
+      this.onRead = onRead;
+      this.reader = reader;
+    }
+  }
+
+  /**
    * The first position of the members that additions at the end of the
    * stored array at `ref` placed, with no member removed, moved or
    * replaced since (`appended`), or `undefined` where there is none or
@@ -2193,6 +2222,46 @@ export class Store {
     this.journal?.push({ doc: id, whole: true, old });
     this.docs.set(id, { kind, value });
     this.#changed(id, [], old?.value);
+  }
+
+  /**
+   * Where a write of `value` at `ref` lands. A write follows the links on
+   * its path and each write redirect at its position, and replaces any
+   * other link there; a write redirect replaces what the position holds.
+   * So does today's runtime (`normalizeAndDiff` in
+   * `runtime/runner/src/data-updating.ts`).
+   */
+  landing(ref: Ref, value?: unknown, reads?: Position[]): Located {
+    return this.locate(
+      ref,
+      isLink(value) && value.$link.redirect === true ? false : "redirects",
+      reads,
+    );
+  }
+
+  /**
+   * The cell an input names, for `ref` at a position of an argument
+   * document: past each write redirect at the position, and past the link
+   * the argument then holds to the cell the instance was given. A link
+   * that a position of another document holds is part of what the cell
+   * holds, and is not passed.
+   */
+  pastBinding(ref: Ref): Ref {
+    let at = ref;
+    for (let hops = 0; hops < MAX_LINKS; hops++) {
+      const { value, ref: position } = this.locate(at, false);
+      if (!isLink(value)) return at;
+      const next = new Ref(
+        value.$link.doc,
+        value.$link.path,
+        value.$link.schema ?? at.schema,
+      );
+      if (value.$link.redirect !== true) {
+        return position.doc === ref.doc ? next : at;
+      }
+      at = next;
+    }
+    return at;
   }
 
   /** Names a place that gets its document with the first write. */
@@ -2794,7 +2863,11 @@ export class Store {
    */
   locate(
     ref: Ref,
-    through: boolean,
+    /**
+     * Whether a link at the position itself is followed: every link, or
+     * with `redirects` each write redirect and no other link.
+     */
+    through: boolean | "redirects",
     reads?: Position[],
     /** Stop at a key: the reference is named and no key is resolved. */
     names = false,
@@ -2825,7 +2898,11 @@ export class Store {
     let inPlace = false;
     let crossed: Located["crossed"] = [];
     for (;;) {
-      while (isLink(value) && (rest.length > 0 || through)) {
+      while (
+        isLink(value) &&
+        (rest.length > 0 || through === true ||
+          (through === "redirects" && value.$link.redirect === true))
+      ) {
         links += 1;
         if (links > MAX_LINKS) {
           return {
@@ -3180,6 +3257,9 @@ export class Store {
     if (located.value === undefined && isStreamSchema(located.ref.schema)) {
       return { $stream: true };
     }
+    // A reference by key whose key no position holds reads as nothing
+    // (ruling Z24), whatever default a link on the way to it declares.
+    if (located.missing && located.value === undefined) return undefined;
     const shape = bound ?? located.ref.schema;
     if (
       !copies && this.plain(located.value) &&
@@ -3419,7 +3499,7 @@ export class Store {
    */
   write(ref: Ref, given: unknown): void {
     const value = this.#keep(given);
-    const located = this.locate(ref, !isLink(value) && !isStream(value));
+    const located = this.landing(ref, value);
     // A write through a reference by key whose key no position holds is
     // refused (`plan-and-label-templates.md` §1.3, assumed there under
     // question 112).
@@ -3429,14 +3509,21 @@ export class Store {
     if (document?.kind === OUTPUT) throw new ComputedOutput();
     if (document === undefined) {
       // The first write of a declared place makes its document. A write
-      // below the root starts from the default the place read as.
+      // below the root starts from the default the place read as. So does
+      // the first write of a document no place of the instance declares,
+      // as the state cell of another instance that nothing wrote yet,
+      // which a link leads to: today's runtime makes the document a write
+      // reaches, and the write is not lost. A write below its root starts
+      // from nothing, and a reader takes the members it lacks from the
+      // schema it reads under.
       const declared = this.declared.get(doc);
-      if (declared === undefined) return;
       this.onWrite?.(doc, path);
       this.journal?.push({ doc, whole: true, old: undefined });
       document = {
-        kind: declared.kind,
-        value: path.length === 0 ? undefined : copyOfData(declared.default),
+        kind: declared?.kind ?? "external",
+        value: path.length === 0 || declared === undefined
+          ? undefined
+          : copyOfData(declared.default),
       };
       this.docs.set(doc, document);
     } else if (sameStored(located.value, value)) {

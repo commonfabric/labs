@@ -46,11 +46,12 @@ import {
 } from "../link-utils.ts";
 import { rawMetaWriteAuthorization } from "../meta-seam.ts";
 import { isPrimitiveCellLink, type NormalizedFullLink } from "../link-types.ts";
-import type { JSONSchema } from "../builder/types.ts";
+import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import {
   type MemorySpace,
   recordRelevantSchemaWritePolicyInput,
 } from "../cell.ts";
+import { ContextualFlowControl } from "../cfc.ts";
 import type { CompiledPlan } from "../cfc/compiled-plans.ts";
 import {
   appliesAtItsPathOnly,
@@ -1025,11 +1026,15 @@ export class RuntimeTransactions implements TransactionHooks {
               if (!own) labelsByOther = true;
             }
             // A document of a row is one the executor holds as the row, at
-            // its position in the array.
+            // its position in the array. A place the executor declared and
+            // has not written, as a state cell that a result holds a write
+            // redirect to, gets its document from another writer's first
+            // write, which the executor takes as it takes a later one.
             const row = this.#rowDocuments.get(doc);
             if (
               own || this.#onChanges === undefined ||
-              (!this.#documents.has(doc) && row === undefined) ||
+              (!this.#documents.has(doc) && row === undefined &&
+                this.#store?.declared.has(doc) !== true) ||
               (address.path.length > 0 && address.path[0] !== "value")
             ) continue;
             // A change names its path below the member `value` of what the
@@ -1098,6 +1103,7 @@ export class RuntimeTransactions implements TransactionHooks {
                   undefined,
                   notification.space,
                   address.scope ?? "space",
+                  doc,
                 ),
               });
               continue;
@@ -1114,6 +1120,7 @@ export class RuntimeTransactions implements TransactionHooks {
                     undefined,
                     notification.space,
                     address.scope ?? "space",
+                    doc,
                   )
                 ),
               },
@@ -1930,6 +1937,7 @@ export class RuntimeTransactions implements TransactionHooks {
             tx,
             this.#spaceOf(doc),
             cellScopeOf(doc),
+            doc,
           ),
           ...(acting === undefined ? {} : { acting }),
         });
@@ -4518,7 +4526,13 @@ export class RuntimeTransactions implements TransactionHooks {
           doc,
         ) => [
           doc,
-          this.#decode(tx.readValueOrThrow(this.#address(doc, [])), tx),
+          this.#decode(
+            tx.readValueOrThrow(this.#address(doc, [])),
+            tx,
+            this.#space,
+            "space",
+            doc,
+          ),
         ]),
       );
     } finally {
@@ -4887,7 +4901,11 @@ export class RuntimeTransactions implements TransactionHooks {
           // executor reads typed (`Schema` of `exec/store.ts`).
           ...(schema === undefined ? {} : { schema: schema as JSONSchema }),
         },
-        { includeSchema: true },
+        // A write redirect stays one: a write at its position, by today's
+        // runtime or by a piece, lands where it leads.
+        value.$link.redirect === true
+          ? { includeSchema: true, overwrite: "redirect" }
+          : { includeSchema: true },
       );
     }
     if (Array.isArray(value)) {
@@ -5058,7 +5076,7 @@ export class RuntimeTransactions implements TransactionHooks {
     // one that names no scope to an instance of its own scope.
     return {
       kind: "external",
-      value: this.#decode(value, undefined, this.#spaceOf(id), scope),
+      value: this.#decode(value, undefined, this.#spaceOf(id), scope, id),
     };
   }
 
@@ -5078,7 +5096,13 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#heldBefore.add(id);
     return {
       kind: "held",
-      value: this.#decode(value, undefined, this.#space, cellScopeOf(id)),
+      value: this.#decode(
+        value,
+        undefined,
+        this.#space,
+        cellScopeOf(id),
+        id,
+      ),
     };
   }
 
@@ -5517,6 +5541,11 @@ export class RuntimeTransactions implements TransactionHooks {
      * no scope leads to an instance of that scope.
      */
     scope: CellScope = "space",
+    /**
+     * The document the value is of: a link in it that names no entity
+     * leads into that document.
+     */
+    of?: string,
   ): unknown {
     if (isPrimitiveCellLink(value)) {
       const link = parseLink(value);
@@ -5528,11 +5557,15 @@ export class RuntimeTransactions implements TransactionHooks {
       // A link into another space than the piece's leads to a document of
       // that space, which the executor holds under a name that names the
       // space (`documentAt`), and a link of the scope `user` or `session`
-      // to the document the executor names for that scope.
-      const at = this.documentAt({
-        space: link.space ?? within,
-        id: link.id ?? "",
-      });
+      // to the document the executor names for that scope. A link that
+      // names no entity leads into the document it is of, whose instances
+      // of every scope are of one entity.
+      const at = link.id === undefined && of !== undefined
+        ? (of.indexOf("~") < 0 ? of : scopeOfDocument(of).base)
+        : this.documentAt({
+          space: link.space ?? within,
+          id: link.id ?? "",
+        });
       const row = to === "space" ? at : scopedDocument(at, to);
       if (
         rows !== undefined &&
@@ -5573,24 +5606,36 @@ export class RuntimeTransactions implements TransactionHooks {
           );
         }
       }
+      // A schema the storage holds by reference is handed as the schema
+      // it names, so that a reader takes the default it declares where the
+      // target holds nothing, as today's runtime does.
+      const byReference = typeof link.schema === "object" &&
+        link.schema !== null &&
+        typeof (link.schema as { $ref?: unknown }).$ref === "string";
+      const schema = byReference
+        ? ContextualFlowControl.resolveSchemaRefs(
+          link.schema as JSONSchemaObj,
+        ) ?? link.schema
+        : link.schema;
       return {
         $link: {
           doc: row,
           path: [...link.path],
-          ...(link.schema === undefined
-            ? {}
-            : { schema: link.schema as Schema }),
+          ...(schema === undefined ? {} : { schema: schema as Schema }),
+          ...(link.overwrite === "redirect" ? { redirect: true as const } : {}),
         },
       };
     }
     if (Array.isArray(value)) {
-      return value.map((member) => this.#decode(member, rows, within, scope));
+      return value.map((member) =>
+        this.#decode(member, rows, within, scope, of)
+      );
     }
     if (isWalkableObjectNotArray(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [
           name,
-          this.#decode(member, rows, within, scope),
+          this.#decode(member, rows, within, scope, of),
         ]),
       );
     }

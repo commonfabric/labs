@@ -1680,7 +1680,8 @@ export class Handle {
     const { store } = this.#instance;
     // A plain value in place that the body reads is a copy (ruling Z25).
     if (!declaresHandle(schema, depth)) {
-      return store.read(ref, reads, true, schema);
+      const value = store.read(ref, reads, true, schema);
+      return depth === 0 ? this.#fromPosition(ref, value) : value;
     }
     const declared = declaredMembers(schema);
     const located = store.locate(ref, true, reads, false, declared);
@@ -1725,6 +1726,25 @@ export class Handle {
       );
     }
     return store.read(ref, reads, true);
+  }
+
+  /**
+   * `value`, read at `ref`, with the address of the position a read
+   * follows one link to: past the write redirects at `ref`, the one link
+   * the position then holds, and the write redirects after it
+   * (`Store.oneLinkPast`). What writes the value elsewhere stores a link
+   * to that position, and a read of a cell of cells gives one level per
+   * read. A value at that position that is a plain value in place stays a
+   * copy with no address (ruling Z25).
+   */
+  #fromPosition(ref: Ref, value: unknown): unknown {
+    if (typeof value !== "object" || value === null) return value;
+    const { store } = this.#instance;
+    const at = store.oneLinkPast(ref);
+    if (at.missing || (at.inPlace && !isLink(at.value))) return value;
+    store.copies.delete(value);
+    store.addresses.set(value, at.named);
+    return value;
   }
 
   key(segment: string | number): Handle {
@@ -2038,8 +2058,31 @@ export class Handle {
     return this.#instance.same(this, other);
   }
 
+  /**
+   * The handle to the position the handle's links lead to: every link on
+   * the way is followed, as `resolveAsCell()` of today's runtime follows
+   * them. The positions that hold those links are read, and no member of
+   * what the last one leads to.
+   */
   resolveAsCell(): Handle {
-    return this;
+    if (this.#target instanceof StreamRef) return this;
+    const located = this.#instance.store.locate(
+      this.#target,
+      true,
+      this.#host?.reads,
+      false,
+      [],
+    );
+    if (located.missing || located.named === this.#target) return this;
+    return new Handle(
+      this.#instance,
+      located.named,
+      this.#host,
+      undefined,
+      [],
+      this.#declared,
+      this.#fixed,
+    );
   }
 
   for(): Handle {
@@ -5205,6 +5248,27 @@ export class Instance {
   }
 
   /**
+   * The cell a handle at `ref` is to. An input's position in the argument
+   * document holds a link to the cell the instance was given, and the
+   * handle is to that cell (`Store.pastBinding`). A link that another
+   * position holds is part of what the cell holds: the handle is to the
+   * position, a write replaces the link there, and a read follows it once
+   * (`Handle.#fromPosition`).
+   */
+  #givenCell(ref: Ref): Ref {
+    return ref.doc === this.argument ? this.store.pastBinding(ref) : ref;
+  }
+
+  /**
+   * The state cell of the instance whose document is `doc`, by its index
+   * in `Plan.stateCells`, or nothing for another document.
+   */
+  #cellOf(doc: string): number | undefined {
+    return (this.#cells.get(doc) ??
+      this.#cells.get(this.store.scopes?.resolve(doc) ?? doc))?.cell;
+  }
+
+  /**
    * The identifier of the document that holds what an output returned
    * whole, under the element keys of its cone (`#generated()`). The
    * name is that of an interim output, and the index of another.
@@ -5990,6 +6054,12 @@ export class Instance {
      * below it is formed.
      */
     previous?: { was: unknown; same: (path: string[]) => void },
+    /**
+     * Whether the value is the form of the result or of a row of it,
+     * where a reference to a state cell of the instance (`#cellOf`) or to
+     * a position of its argument is stored as a write redirect.
+     */
+    ofResult = false,
   ): unknown {
     // An index is compared by which bucket each element is in.
     if (value instanceof Index) return { $index: [...value.of] };
@@ -6007,11 +6077,30 @@ export class Instance {
       // A reference by key that the writer holds is stored with the key
       // the element has now (ruling Z24).
       const now = this.store.current(value);
+      // The result holds a state cell of the instance as a write redirect
+      // to the cell's document, with the cell's schema, as today's runtime
+      // holds a cell a pattern returns (`getAsWriteRedirectLink`): a write
+      // through the result's position lands in the cell, and a reader
+      // through it reads the cell's default where nothing is stored yet
+      // (provisional decision P470).
+      // So is a position of the argument that the result, or a row of it,
+      // returns as one of its members or whole, as today's runtime holds an
+      // input a pattern returns as an alias: a write through the result's
+      // position lands in the argument. A link inside a member, as a child
+      // of a view node, stays a plain link, as today's view nodes hold one.
+      const cell = ofResult ? this.#cellOf(now.doc) : undefined;
+      const passed = ofResult && now.doc === this.argument && path.length <= 1;
+      const schema = now.schema ??
+        (cell === undefined ? undefined : now.path.reduce(
+          schemaBelow,
+          this.schemaOf(this.plan.stateCells[cell].schema),
+        ));
       return {
         $link: {
           doc: now.doc,
           path: [...now.path],
-          ...(now.schema === undefined ? {} : { schema: now.schema }),
+          ...(schema === undefined ? {} : { schema }),
+          ...(cell === undefined && !passed ? {} : { redirect: true as const }),
         },
       };
     }
@@ -6027,7 +6116,16 @@ export class Instance {
     // The link to the stream a marker stands for, in the marker's place
     // (ES §2.2, "The replacement").
     if (value instanceof StreamMarker) return this.stored(streamOf(value));
-    if (value instanceof Handle) return this.stored(targetOf(value));
+    if (value instanceof Handle) {
+      return this.stored(
+        targetOf(value),
+        assembled,
+        path,
+        placed,
+        undefined,
+        ofResult,
+      );
+    }
     if (value instanceof Thunk) return undefined;
     if (typeof value === "function") return undefined;
     if (Array.isArray(value)) {
@@ -6044,6 +6142,7 @@ export class Instance {
           [...path, `${index}`],
           placed,
           previous,
+          ofResult,
         )
       );
     }
@@ -6058,6 +6157,7 @@ export class Instance {
           [...path, name],
           placed,
           previous,
+          ofResult,
         );
         if (kept !== undefined) members[name] = kept;
       }
@@ -6092,9 +6192,10 @@ export class Instance {
     path: string[],
     placed: ((array: readonly unknown[]) => Ref | undefined) | undefined,
     previous: { was: unknown; same: (path: string[]) => void } | undefined,
+    ofResult: boolean,
   ): unknown {
     if (previous === undefined) {
-      return this.stored(member, assembled, path, placed);
+      return this.stored(member, assembled, path, placed, undefined, ofResult);
     }
     if (member === was && (Array.isArray(member) || isRecord(member))) {
       previous.same(path);
@@ -6103,7 +6204,7 @@ export class Instance {
     return this.stored(member, assembled, path, placed, {
       was,
       same: previous.same,
-    });
+    }, ofResult);
   }
 
   /**
@@ -6221,7 +6322,12 @@ export class Instance {
       );
       return standIn;
     }
-    if (value instanceof Ref || value instanceof StreamRef) {
+    // A handle for an input is to the cell the instance was given
+    // (`#givenCell`), for a handler and for value code alike.
+    if (value instanceof Ref) {
+      return new Handle(this, this.#givenCell(value), host, slot, [], declared);
+    }
+    if (value instanceof StreamRef) {
       return new Handle(this, value, host, slot, [], declared);
     }
     if (
@@ -6299,10 +6405,11 @@ export class Instance {
    * A value about to be stored at `target`, with each link in it that
    * leads into what the write replaces put as the value stored there now:
    * a list written back in another order holds its members and not links
-   * to its own positions.
+   * to its own positions. What the write replaces is what the position it
+   * lands at holds (`Store.landing`).
    */
   detached(target: Ref, value: unknown): unknown {
-    const at = this.store.locate(target, true).ref;
+    const at = this.store.landing(target, value).ref;
     const inside = (link: { doc: string; path: string[] }) =>
       link.doc === at.doc &&
       at.path.every((segment, index) => segment === link.path[index]);
@@ -6625,6 +6732,7 @@ export class Instance {
         was: previous.was,
         same: (path) => previous.same([...below, ...path]),
       },
+      true,
     );
   }
 
@@ -11598,10 +11706,16 @@ export class Instance {
   /**
    * Writes through the reference the result document holds at a path, as
    * the rendered tree does at an attribute bound both ways, and evaluates
-   * what read the position written.
+   * what read the position written. The link the position holds binds the
+   * attribute to its cell, and the write is of that cell
+   * (`Store.pastBinding`), as a write of today's rendered tree is of the
+   * cell the attribute names.
    */
   writeThrough(path: string[], value: unknown): void {
-    this.store.write(new Ref(this.id, path), this.stored(value));
+    this.store.write(
+      this.store.pastBinding(new Ref(this.id, path)),
+      this.stored(value),
+    );
     this.settle();
   }
 
@@ -16355,7 +16469,8 @@ export class Instance {
   #declaredWrite(through: Handle): { declared?: DeclaredWrite } {
     const { target, declared } = partsOf(through);
     if (!(target instanceof Ref) || typeof declared !== "object") return {};
-    const located = this.store.locate(target, true);
+    // The position a write of a value through the handle lands at.
+    const located = this.store.landing(target);
     if (located.missing) return {};
     const { doc, path } = located.ref;
     return { declared: { doc, path, schema: declared } };
@@ -16718,7 +16833,11 @@ export class Instance {
         read.observes !== "value" &&
         this.gives(read.observes, state, read.path);
       let given = read.observes === "identity"
-        ? this.handleOf(found, undefined, slot)
+        ? this.handleOf(
+          found,
+          undefined,
+          slot,
+        )
         : host.v(found, givesWay ? CHILDREN_UNREAD : undefined);
       if (read.observes !== "identity") handed.note(given);
       // A write through a handle to a value the instance computes fails

@@ -1739,6 +1739,61 @@ For a slot with `resolved` the handle is the resolved reference.
   and a write through it is refused by the ruling above, because a
   literal is a value the instance produces and no reference.
 
+**What a handle names, and where its reads and writes go.** *Provisional
+(decision P471 of the prototype):*
+
+- A handle for an input names the cell the instance was given. The
+  input's position in the argument holds a link to that cell, the
+  binding, and the handle is past it. A link that any other position
+  holds is part of what the cell holds, and the handle names the
+  position that holds it. This holds for a handler's state and for value
+  code alike.
+- `get()` and `sample()` follow the write redirects at the handle's
+  position, then the one link the position holds, if it holds one, then
+  the write redirects after it, and give the value at the position
+  reached. That value carries the position: a write of it elsewhere
+  stores a link to it. Each read of a cell of cells gives one level. A
+  plain value in place reached this way is a copy with no address, by
+  the ruling of section 2.5.
+- `resolveAsCell()` follows every link and gives a handle to the position
+  where they end. It reads the positions that hold the links and no
+  member of that position.
+- `set(v)` writes at the handle's position past its write redirects, and
+  replaces what the position holds, a plain link included; a write
+  redirect written replaces what the position holds. A write at a path
+  below the handle, through `key`, `update` or `push`, follows the links
+  on that path. A write of a member bound both ways from the rendered
+  tree passes the link that binds the attribute to its cell, as a
+  binding.
+- A handle stored elsewhere is stored as a link to the position it names.
+
+So a handler given a state cell that holds a link to an item can store
+the item it holds now, with `kept.set({ current: selected.get() })` or
+`resolveAsCell()`, and point the cell at another item with
+`selected.set(other)`, which leaves the first item as it was. A write of
+a plain value replaces the link: `selected.set({ ...selected.get(), title })`
+leaves the item as it was, where `selected.key("title").set(title)` and
+`selected.update({ title })` write it.
+
+The runtime of today makes the cell of every handle one link past its
+position, after the write redirects (`validateAndTransform` in
+`runtime/runner/src/schema.ts`), and not past a binding alone. A handler
+given such a state cell is then given the item: `selected.set(other)`
+writes a link to `other` into the first item, and a plain value written to
+the cell lands in the item. Its `get()` gives a value that carries the
+handle's own position past its write redirects (`toCell` in
+`runtime/runner/src/back-to-cell.ts`), so for an input bound to a
+position that holds a link, a value read and stored elsewhere names that
+position and not the item. Its `resolveAsCell()` of an element in place
+gives a snapshot of the element, whose value a write stores.
+
+The crate emits a read that value code returns, as `computed(() => x.get())`
+or a member `current: x.get()` of a record it returns, as the input
+itself, and the result then holds a link to the input's position in the
+argument. The value is the same, and value code is evaluated again when
+what the position leads to changes, so where the link points matters to
+no reader of the value.
+
 **A handle or a reference from a computed input.** A handle or a container
 can reach a body in a value the instance computed, such as one another
 body returned or one a `pick` chose. It has no slot, and the body's record
@@ -3593,8 +3648,29 @@ the document that stores the path holds one of four things.
 | --- | --- |
 | A value the instance computed, stored in place | The value |
 | A value the instance computed, stored in a part document | A storage link to the part document (section 4.10) |
-| A reference passed through: a state cell, a part of the argument, a cell an element links to, a cell a body created, a child's result, a stream | A link to that address. The target keeps its own label (section 4.3) |
+| A reference passed through: a state cell, a part of the argument, a cell an element links to, a cell a body created, a child's result, a stream | A link to that address. The target keeps its own label (section 4.3). A state cell of the instance, and a position of the argument that the result returns as a member or whole, is held as a write redirect (below) |
 | An output of narrower scope than this scope instance | A storage link to the same document and path in the narrower declared scope (below) |
+
+**A state cell or an input the result holds.** *Provisional (decision
+P470 of the prototype):* the link at a path of the result to a state cell
+of the instance is a write redirect, and carries the cell's schema, as
+today's runtime stores a cell a pattern returns (`getAsWriteRedirectLink`
+in `runtime/runner/src/cell.ts`). So is the link to a position of the
+argument that the result, or a row of it, returns as one of its members
+or whole, as today's runtime holds an input a pattern returns as an
+alias. A link inside a member, as a child of a view node, stays a plain
+link, as today's view nodes hold one. Another pattern's handler that
+writes through such a path, on today's path or as a compiled piece,
+writes the cell or the argument: a write follows a write redirect at its
+position and replaces any other link there (section 2.4, "What a handle
+names"; `normalizeAndDiff` in `runtime/runner/src/data-updating.ts`). A
+write through the path of a protected input is then checked against the
+input's policy, as today. The schema gives a reader through the link the
+cell's default where the cell has no document yet, as for a cell whose
+first value is a constant (ruling Z3), and not where the link leads to a
+reference by key that no position holds: that reads as nothing (section
+2.5). The first write of such a cell by another writer makes its
+document, and the instance takes that write as it takes a later one.
 
 **The paths of the rendered tree.** The rendered tree is stored under
 the key `$UI` of the result, the string the API's `UI` constant holds
@@ -8161,4 +8237,30 @@ From the prototype's executor, for this document to decide:
     given, and a body that exchanges members between two stored
     arrays of plain values in place and sets both stores the values,
     as the runtime of today does (`plan-and-label-templates.md` §8,
-    question 115).
+    question 115). What the write replaces is what the position the write
+    lands at holds (section 2.4, "What a handle names"): where a handler
+    stores again the record that its cell holds a link to, that link is
+    no part of what the write replaces, and the record is stored as a
+    link and not as its value.
+85. **What a handle's reads and writes follow** (section 2.4). The owner
+    proposed the rule on 2026-11-24, and the prototype takes it as a
+    provisional decision, P471: a handle for an input names the cell the
+    instance was given; `get()` follows one link past the write redirects
+    and gives a value that carries the position it reached;
+    `resolveAsCell()` follows every link; and `set()` replaces what the
+    handle's position holds past its write redirects. It differs from
+    the runtime of today, which makes the cell of every handle one link
+    past its position, in three places: a handler given a state cell
+    that holds a link writes to the cell and not to what the link names;
+    a value it reads through an input bound to a position that holds a
+    link carries the position the link names; and a plain value written
+    to such a cell replaces the link.
+86. **How the result holds a state cell or an input it returns**
+    (section 4.2). Open; the prototype takes a provisional decision,
+    P470, which follows the runtime of today: a write redirect, which a
+    write through the result's path follows into the cell or the
+    argument. The crate emits a read that value code returns of an input
+    as the input itself, so an output such as `computed(() => x.get())`
+    is held as such a redirect too, and a write through its path lands
+    in the argument, where the runtime of today writes the output of the
+    computation.
