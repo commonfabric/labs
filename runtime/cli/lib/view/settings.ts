@@ -5,6 +5,7 @@
  */
 
 import { isAbsolute, join } from "@std/path";
+import { clamp } from "./actions.ts";
 import type { GitQuery } from "./push.ts";
 
 /**
@@ -42,6 +43,14 @@ export interface ViewSettings {
   readonly quitOnPullRequest: boolean;
 
   /**
+   * How many milliseconds the task dialog gives the pull request's address,
+   * saying it is quitting, before the viewer quits for it: from the first of
+   * {@link QUIT_DELAYS} to the last. The first, {@link NO_QUIT_DELAY}, means
+   * that the viewer quits at once.
+   */
+  readonly quitDelay: number;
+
+  /**
    * The `host:port` of the GitHub webhook relay's subscriber listener, which
    * tells the viewer when the pull request is opened or merged, or "" for
    * none.
@@ -52,6 +61,7 @@ export interface ViewSettings {
 const PULL_REQUEST_TOOL = "cf-view.pullRequestTool";
 const TOUCH_GATE_TOKEN = "cf-view.touchGateToken";
 const QUIT_ON_PULL_REQUEST = "cf-view.quitOnPullRequest";
+const QUIT_DELAY = "cf-view.quitDelay";
 const WEBHOOK_RELAY = "cf-view.webhookRelay";
 
 /** Each git configuration variable, and the value it holds for settings. */
@@ -61,22 +71,52 @@ const VARIABLES: ReadonlyArray<
   [PULL_REQUEST_TOOL, (settings) => settings.pullRequestTool],
   [TOUCH_GATE_TOKEN, (settings) => settings.touchGateToken],
   [QUIT_ON_PULL_REQUEST, (settings) => String(settings.quitOnPullRequest)],
+  [QUIT_DELAY, (settings) => String(settings.quitDelay)],
   [WEBHOOK_RELAY, (settings) => settings.webhookRelay],
 ];
 
 /**
+ * The delays before quitting for a pull request that the settings dialog's
+ * slider stops at, in milliseconds, on a logarithmic scale from 16 to
+ * 10,000: 10 to the power i / 10 for each whole i from 12 to 40, rounded to
+ * two significant digits.
+ */
+export const QUIT_DELAYS: readonly number[] = Array.from(
+  { length: 29 },
+  (_, i) => Number((10 ** ((i + 12) / 10)).toPrecision(2)),
+);
+
+/**
+ * The longest delay before quitting for a pull request that counts as none,
+ * so that the viewer quits at once: the first of {@link QUIT_DELAYS}.
+ */
+export const NO_QUIT_DELAY = QUIT_DELAYS[0];
+
+/** The delay before quitting for a pull request when nothing sets one. */
+export const DEFAULT_QUIT_DELAY = 2000;
+
+/**
  * Returns the settings git's configuration holds, as the repository `git`
  * runs in sees them. A setting nothing sets is off, or empty, except that
- * the pull request tool is "browser" unless it is set to another.
+ * the pull request tool is "browser" unless it is set to another, and the
+ * delay before quitting is {@link DEFAULT_QUIT_DELAY} unless it is set to a
+ * whole number, as git reads one, which is brought into the range
+ * {@link QUIT_DELAYS} spans.
  */
 export function readSettings(git: GitQuery): ViewSettings {
   const tool = git(["config", "--get", PULL_REQUEST_TOOL])?.trim();
+  const delay = git(["config", "--type=int", "--get", QUIT_DELAY])?.trim();
   return {
     pullRequestTool: PULL_REQUEST_TOOLS.find((t) => t === tool) ?? "browser",
     touchGateToken: git(["config", "--get", TOUCH_GATE_TOKEN])?.trim() ?? "",
     quitOnPullRequest:
       git(["config", "--type=bool", "--get", QUIT_ON_PULL_REQUEST])?.trim() ===
         "true",
+    quitDelay: delay === undefined ? DEFAULT_QUIT_DELAY : clamp(
+      Number(delay),
+      QUIT_DELAYS[0],
+      QUIT_DELAYS[QUIT_DELAYS.length - 1],
+    ),
     webhookRelay: git(["config", "--get", WEBHOOK_RELAY])?.trim() ?? "",
   };
 }

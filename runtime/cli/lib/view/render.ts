@@ -10,7 +10,7 @@
  * gutter and the structure guide bar are all column maths over that grid.
  */
 
-import { diffContentRowCount, maxPagerTop, maxTop } from "./actions.ts";
+import { clamp, diffContentRowCount, maxPagerTop, maxTop } from "./actions.ts";
 import {
   cpLen,
   ESCAPE_SPLIT,
@@ -539,8 +539,32 @@ export interface DialogRadioButtons {
   readonly selected: number;
 }
 
+/** A slider: a label whose first letter matching {@link hotkey} is drawn
+ * highlighted, followed by the value the slider sets, and under them a track
+ * as wide as the dialog, with a thumb at the stop the value is at. The
+ * stops are evenly spaced along the track, the first at its left end and the
+ * last at its right end. */
+export interface DialogSlider {
+  readonly kind: "slider";
+  readonly label: string;
+  readonly hotkey: string;
+
+  /** How many stops the track has. */
+  readonly stopCount: number;
+
+  /** The index of the stop the thumb is drawn at. */
+  readonly stop: number;
+
+  /** The value the slider sets, as the label row shows it. */
+  readonly text: string;
+}
+
 /** A control in a dialog other than a button. */
-export type DialogField = DialogCheckBox | DialogInputLine | DialogRadioButtons;
+export type DialogField =
+  | DialogCheckBox
+  | DialogInputLine
+  | DialogRadioButtons
+  | DialogSlider;
 
 interface Cell {
   ch: string;
@@ -1776,20 +1800,27 @@ function buttonRowOf(dialog: DialogState, innerH: number): number {
 }
 
 /** The text of the rows of a field that set how wide it is: a check box's
- * mark and label, an input line's label, or the label of a set of radio
- * buttons and each button's mark and label. */
+ * mark and label, an input line's label, the label of a set of radio
+ * buttons and each button's mark and label, or a slider's label and
+ * value. */
 function fieldTexts(field: DialogField): string[] {
   if (field.kind === "checkBox") return [`[X] ${field.label}`];
   if (field.kind === "inputLine") return [field.label];
+  if (field.kind === "slider") return [sliderLabel(field)];
   return [field.label, ...field.buttons.map((b) => `(•) ${b.label}`)];
 }
 
-/** The rows a field takes: a check box's one, an input line's label and the
- * line under it, or the label of a set of radio buttons and a row for each
- * button. */
+/** The row of a slider above its track: its label and its value. */
+function sliderLabel(field: DialogSlider): string {
+  return `${field.label}: ${field.text}`;
+}
+
+/** The rows a field takes: a check box's one, an input line's or a
+ * slider's label and the line under it, or the label of a set of radio
+ * buttons and a row for each button. */
 function fieldHeight(field: DialogField): number {
   if (field.kind === "checkBox") return 1;
-  if (field.kind === "inputLine") return 2;
+  if (field.kind === "inputLine" || field.kind === "slider") return 2;
   return 1 + field.buttons.length;
 }
 
@@ -1980,6 +2011,31 @@ export function radioButtonAt(
     : null;
 }
 
+/**
+ * Returns the index of the stop of slider `index` of `dialog` nearest the
+ * zero-based screen column `x`, when `y` is the row its track is drawn on,
+ * or null otherwise. A column past either end of the track counts as that
+ * end. Throws when field `index` is not a slider.
+ */
+export function sliderStopAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  index: number,
+  x: number,
+  y: number,
+): number | null {
+  const field = dialog.fields?.[index];
+  if (field?.kind !== "slider") {
+    throw new Error(`field ${index} of the dialog is not a slider`);
+  }
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  if (row == null || y !== box.y + 1 + row + 1) return null;
+  const last = box.innerW - 2 * DIALOG_HMARGIN - 1;
+  const column = clamp(x - box.x - 1 - DIALOG_HMARGIN, 0, last);
+  return Math.round(column / Math.max(1, last) * (field.stopCount - 1));
+}
+
 /** The index in `chars`, the cells of a label, of the highlighted shortcut
  * letter, its first that matches `hotkey` in either case, or -1 when none
  * does. */
@@ -2132,11 +2188,11 @@ function placeText(
 
 /**
  * Draws row `row` of `field` in `cells`, after the dialog's margin: a check
- * box's mark and label, an input line's label and then its line, or the label
- * of a set of radio buttons and then each button's mark and label. The
- * focused check box is drawn highlighted, as are the label of the focused
- * input line and the label and selected button of the focused set of radio
- * buttons.
+ * box's mark and label, an input line's label and then its line, the label
+ * of a set of radio buttons and then each button's mark and label, or a
+ * slider's label and value and then its track. The focused check box is
+ * drawn highlighted, as are the label of the focused input line or slider
+ * and the label and selected button of the focused set of radio buttons.
  */
 function placeField(
   cells: Cell[],
@@ -2189,6 +2245,19 @@ function placeField(
   }
   if (row === 0) {
     label(0, field.label, field.hotkey);
+    if (field.kind === "slider") {
+      const at = shownCells(field.label).length;
+      put(at, shownCells(sliderLabel(field)).slice(at), () => textStyle);
+    }
+    return;
+  }
+  if (field.kind === "slider") {
+    const last = width - 1;
+    const thumb = Math.round(
+      field.stop / Math.max(1, field.stopCount - 1) * last,
+    );
+    put(0, [..."▒".repeat(Math.max(0, width))], () => ui.sliderTrack);
+    put(thumb, ["■"], () => ui.sliderThumb);
     return;
   }
   if (field.kind === "radioButtons") {

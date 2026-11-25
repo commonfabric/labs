@@ -2080,7 +2080,7 @@ describe("view-push", () => {
       expect(session.exitMessage).toBeNull();
       expect(session.pullRequestQuitPending).toBe(false);
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       expect(session.pullRequestQuitPending).toBe(true);
       expect(session.taskDialogUp).toBe(true);
@@ -2103,7 +2103,7 @@ describe("view-push", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       expect(session.pullRequestQuitPending).toBe(false);
       expect(session.view().dialog!.body.join("\n")).not.toContain("Quitting");
       session.finishTask(PUSHED);
@@ -2115,11 +2115,37 @@ describe("view-push", () => {
       expect(session.exitMessage).toBe(PULL_REQUEST);
     });
 
+    it("quits for the pull request at once, without saying it is quitting, when its delay is 16 ms or less, waiting for a push still running to end", () => {
+      const ended = editableSession();
+      ended.beginTask("Push", () => {});
+      ended.finishTask(PUSHED);
+      const running = editableSession();
+      running.beginTask("Push", () => {});
+      const longer = editableSession();
+      longer.beginTask("Push", () => {});
+      longer.finishTask(PUSHED);
+
+      ended.quitForPullRequest(PULL_REQUEST, 16);
+      running.quitForPullRequest(PULL_REQUEST, 5);
+      longer.quitForPullRequest(PULL_REQUEST, 17);
+
+      expect(ended.quit).toBe(true);
+      expect(ended.exitMessage).toBe(PULL_REQUEST);
+      expect(running.quit).toBe(false);
+      expect(running.view().dialog!.body.join("\n")).not.toContain("Quitting");
+      running.finishTask(PUSHED);
+      expect(running.quit).toBe(true);
+      expect(running.exitMessage).toBe(PULL_REQUEST);
+      expect(longer.quit).toBe(false);
+      expect(longer.pullRequestQuitDelay).toBe(17);
+      expect(longer.view().dialog!.body.join("\n")).toContain("Quitting");
+    });
+
     it("quits for the pull request, keeping the address to print, when Quit is pressed while the dialog says it is quitting", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       session.handleKey({ name: "Q", char: "Q" });
 
@@ -2137,7 +2163,7 @@ describe("view-push", () => {
         }
         session.beginTask("Push", () => {});
         session.finishTask(PUSHED);
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(session.requestQuitFromSignal()).toBe(edited);
 
@@ -2154,7 +2180,7 @@ describe("view-push", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       session.handleKey({ name: "c", char: "c" });
       session.completePullRequestQuit();
@@ -2169,7 +2195,7 @@ describe("view-push", () => {
       session.finishTask(PUSHED);
       session.handleKey({ name: "c", char: "c" });
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       expect(session.quit).toBe(false);
       session.beginTask("Push", () => {});
@@ -2185,12 +2211,30 @@ describe("view-push", () => {
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       session.completePullRequestQuit();
 
       expect(session.quit).toBe(false);
       expect(session.view().dialog?.title).toBe("Save Changes");
       session.handleKey({ name: "d", char: "d" });
+      expect(session.exitMessage).toBe(PULL_REQUEST);
+    });
+
+    it("asks at once to save unsaved edits when the pull request opens with a delay of 16 ms or less", () => {
+      const session = editableSession();
+      session.handleKey({ name: "e", char: "e" });
+      session.handleKey({ name: "X", char: "X" });
+      session.handleKey({ name: "escape" });
+      session.beginTask("Push", () => {});
+      session.finishTask(PUSHED);
+
+      session.quitForPullRequest(PULL_REQUEST, 16);
+
+      expect(session.quit).toBe(false);
+      expect(session.pullRequestQuitDelay).toBeNull();
+      expect(session.view().dialog?.title).toBe("Save Changes");
+      session.handleKey({ name: "d", char: "d" });
+      expect(session.quit).toBe(true);
       expect(session.exitMessage).toBe(PULL_REQUEST);
     });
 
@@ -2201,7 +2245,7 @@ describe("view-push", () => {
       session.handleKey({ name: "escape" });
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       session.completePullRequestQuit();
 
       session.handleKey({ name: "c", char: "c" });
@@ -2315,7 +2359,7 @@ describe("view-push", () => {
         session.beginWatchStep(say`Waiting for the pull request to open`);
         session.finishTask(PUSHED);
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session)).toEqual([
           "Pushed feature to origin.",
@@ -2336,7 +2380,7 @@ describe("view-push", () => {
         session.handleKey({ name: "home" });
         expect(shown(session)).not.toContain("Quitting... ◐");
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session).at(-1)).toBe("Quitting... ◐");
       });
@@ -2347,7 +2391,7 @@ describe("view-push", () => {
         session.beginTask("Push", () => {});
         session.beginWatchStep(say`Waiting for the pull request to open`);
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session)).toEqual([
           "Waiting for the pull request to open... ✓",
@@ -2520,7 +2564,7 @@ describe("view-push", () => {
         session.beginTask("Push", () => {});
         session.appendTaskOutput(`See ${PULL_REQUEST}.\n${LONG}\n`);
         session.finishTask(say`Done.`);
-        session.quitForPullRequest(OCTO_PULL_REQUEST);
+        session.quitForPullRequest(OCTO_PULL_REQUEST, 2000);
         return session;
       }
 
@@ -3391,7 +3435,7 @@ describe("view-push", () => {
             },
           }),
           {
-            git: viewerGit(),
+            git: viewerGit({ ...QUITTING, "cf-view.quitDelay": "6300" }),
             relay: (address) => address === RELAY ? relay.connect : undefined,
           },
         );
@@ -3412,6 +3456,8 @@ describe("view-push", () => {
         expect(connectedBeforePage).toBe(true);
         const shown = harness.writes.find((text) => text.includes(" Close "))!;
         expect(shown).toContain("Waiting for the pull request to open");
+        expect(harness.timers).toContain(6300);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${PULL_REQUEST}\\n$`),
         );
@@ -3990,12 +4036,16 @@ describe("view-push", () => {
         }
       });
 
-      it("gives the created pull request's address in the dialog, saying it is quitting, for two seconds before it quits", async () => {
+      it("gives the created pull request's address in the dialog, saying it is quitting, for the delay the settings set before it quits", async () => {
         const harness = pagerHarness(
           () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
           {
             git: viewerGit(
-              { "cf-view.pullRequestTool": "api", ...QUITTING },
+              {
+                "cf-view.pullRequestTool": "api",
+                "cf-view.quitDelay": "250",
+                ...QUITTING,
+              },
               UPSTREAM,
             ),
             github: {
@@ -4015,10 +4065,43 @@ describe("view-push", () => {
           `Pull request: ${OCTO_PULL_REQUEST}`,
         );
         expect(harness.writes[quitting]).toContain(" Close ");
-        expect(harness.timers).toContain(2000);
+        expect(harness.timers).toContain(250);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );
+      });
+
+      it("quits for the created pull request at once, without saying it is quitting, when the settings set a delay of 16 ms or less", async () => {
+        for (const delay of ["16", "5"]) {
+          const harness = pagerHarness(
+            () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+            {
+              git: viewerGit(
+                {
+                  "cf-view.pullRequestTool": "api",
+                  "cf-view.quitDelay": delay,
+                  ...QUITTING,
+                },
+                UPSTREAM,
+              ),
+              github: {
+                ...unusedGitHub,
+                create: () => Promise.resolve(OCTO_PULL_REQUEST),
+              },
+            },
+          );
+
+          await harness.run(["P", forever]);
+
+          expect(harness.writes.join("")).toContain(OCTO_PULL_REQUEST);
+          expect(harness.writes.join("")).not.toContain("Quitting...");
+          expect(harness.timers).not.toContain(16);
+          expect(harness.timers).not.toContain(2000);
+          expect(harness.writes.at(-1)).toMatch(
+            new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
+          );
+        }
       });
 
       it("creates it with touch-gate and the token the settings name, showing what the touch approves, and stays up while quitting is off", async () => {
@@ -4857,12 +4940,13 @@ describe("view-push", () => {
           .toContain(`Merged ${OCTO_PULL_REQUEST}`);
       });
 
-      it("gives the merged pull request's address in the dialog, saying it is quitting, for two seconds before it quits, when the settings say to", async () => {
+      it("gives the merged pull request's address in the dialog, saying it is quitting, for the delay the settings set before it quits, when the settings say to", async () => {
         const harness = pagerHarness(() => fakeIo().io, {
           git: viewerGit(
             {
               "cf-view.pullRequestTool": "touch-gate",
               "cf-view.touchGateToken": "mine",
+              "cf-view.quitDelay": "7900",
               ...QUITTING,
             },
             UPSTREAM,
@@ -4881,7 +4965,8 @@ describe("view-push", () => {
         )!;
         expect(quitting).toContain(" Land ");
         expect(quitting).toContain(`Pull request: ${OCTO_PULL_REQUEST}`);
-        expect(harness.timers).toContain(2000);
+        expect(harness.timers).toContain(7900);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );

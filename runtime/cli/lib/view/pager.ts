@@ -105,10 +105,6 @@ const MESSAGE_LINGER_MS = 2000;
  * dialog. */
 const SPINNER_FRAME_MS = 150;
 
-/** How long the task dialog gives the address of the pull request that quits
- * the viewer, saying it is quitting, before the viewer closes. */
-const PULL_REQUEST_QUIT_MS = 2000;
-
 export type PagerOptions = SessionOptions & {
   /** Whole-file parses the view left for the pager to finish while it takes
    * keys, whose file sides it shows as plain text until then. */
@@ -638,7 +634,8 @@ export async function runPager(
 
   // The task dialog quits the viewer from outside the key loop when the pull
   // request opens or merges, or when a task ends after it did, once it has
-  // given the pull request's address for a moment.
+  // given the pull request's address for the delay the settings set. With no
+  // delay, the session has already quit by the time this runs.
   let cancelQuit: (() => void) | undefined;
   const drawOrQuit = () => {
     if (session.quit) {
@@ -646,12 +643,13 @@ export async function runPager(
       return;
     }
     draw();
-    if (session.pullRequestQuitPending) {
+    const delay = session.pullRequestQuitDelay;
+    if (delay !== null) {
       cancelQuit ??= deps.setTimer(() => {
         cancelQuit = undefined;
         session.completePullRequestQuit();
         drawOrQuit();
-      }, PULL_REQUEST_QUIT_MS);
+      }, delay);
     }
   };
 
@@ -711,7 +709,7 @@ export async function runPager(
         ready.resolve();
       }).then((url) => {
         if (controller.signal.aborted) return;
-        session.quitForPullRequest(url);
+        session.quitForPullRequest(url, settings.quitDelay);
         drawOrQuit();
       }, (error) => {
         task.removeEventListener("abort", abandon);
@@ -896,7 +894,7 @@ export async function runPager(
       );
       creating();
       if (settings.quitOnPullRequest && PULL_REQUEST_URL.test(url)) {
-        session.quitForPullRequest(url);
+        session.quitForPullRequest(url, settings.quitDelay);
       }
       return PULL_REQUEST_URL.test(url)
         ? say`Created ${link(url)}`
@@ -1061,7 +1059,9 @@ export async function runPager(
       );
       await service(settings).merge(request, serviceStep, signal);
       merging();
-      if (settings.quitOnPullRequest) session.quitForPullRequest(url);
+      if (settings.quitOnPullRequest) {
+        session.quitForPullRequest(url, settings.quitDelay);
+      }
       return say`Merged ${link(url)}`;
     } catch (error) {
       if (retryable(error)) {
