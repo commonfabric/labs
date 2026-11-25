@@ -22,7 +22,7 @@ occurrences.
 
 ## Remaining Occurrences
 
-### chatbot.tsx
+### chatbot/main.tsx
 
 **Location**: `patterns/system/chatbot/main.tsx`
 
