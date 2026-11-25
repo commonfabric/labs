@@ -882,7 +882,6 @@ function commentSyntaxFor(path: string, language: Language): CommentSyntax {
     addLine("//");
     addBlock("/*", "*/");
   }
-  if (/\.css$/.test(lower)) addBlock("/*", "*/");
   if (/\.(?:html?|xml|svg|md|markdown|mdown|mkd|mdx|vue|svelte)$/.test(lower)) {
     addBlock("<!--", "-->");
   }

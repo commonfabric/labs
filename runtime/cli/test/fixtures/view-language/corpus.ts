@@ -898,6 +898,46 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "race", className: "interfaceName" },
   },
   {
+    languageId: "css",
+    surveyRepository: "loom",
+    surveyCommit: "e59fb2d59de6ae579b1c3855a76c473fd66e555d",
+    surveyPath: "src/services/local-loom-ui/app.css",
+    before: new URL("./css-loom/before.css", import.meta.url),
+    after: new URL("./css-loom/after.css", import.meta.url),
+    incomplete: new URL("./css-loom/incomplete.css", import.meta.url),
+    selection: {
+      filenames: [
+        "src/services/local-loom-ui/app.css",
+        "loom-style/src/suggestions.css",
+        "runtime/shell/public/styles/index.css",
+        "docs/assets/index-BnPhQyRe.css",
+        "shared/assets/LoomStyles/themes/midwater.css",
+      ],
+      aliases: ["css"],
+    },
+    beforeEvidence: { text: ".cm-prose-wikilink", className: "interfaceName" },
+    afterEvidence: { text: ".ob-button", className: "interfaceName" },
+    incompleteEvidence: { text: ".ob-button", className: "interfaceName" },
+  },
+  {
+    languageId: "css",
+    surveyRepository: "dynabook",
+    surveyCommit: "c34089a1032e8a9200edb4e841b307d5d64548a5",
+    surveyPath: "loom-style/src/suggestions.css",
+    before: new URL("./css-dynabook/before.css", import.meta.url),
+    after: new URL("./css-dynabook/after.css", import.meta.url),
+    incomplete: new URL("./css-dynabook/incomplete.css", import.meta.url),
+    beforeEvidence: { text: ".sg-agenda-item", className: "interfaceName" },
+    afterEvidence: {
+      text: ".sg-agenda-item--travel",
+      className: "interfaceName",
+    },
+    incompleteEvidence: {
+      text: ".sg-agenda-item--travel",
+      className: "interfaceName",
+    },
+  },
+  {
     languageId: "shell",
     // `local` is also a Lean declaration modifier, which Lean colors as shell
     // colors the declaration.
@@ -1366,6 +1406,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "linker-script",
+    // CSS reads a section name such as `.text` as a class selector, and colors
+    // it as the name a rule styles, as linker scripts color an output section.
+    highlightingPeers: ["css"],
     surveyRepository: "gvisor",
     surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
     surveyPath: "vdso/vdso_amd64.lds",
@@ -1392,6 +1435,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "linker-script",
+    // CSS reads a section name such as `.text` as a class selector, and colors
+    // it as the name a rule styles, as linker scripts color an output section.
+    highlightingPeers: ["css"],
     surveyRepository: "gvisor",
     surveyCommit: "dc7baff57a0eeec4aa0de4246ae8d690ae4d29f6",
     surveyPath: "pkg/sentry/platform/systrap/sysmsg/pie.lds.S",

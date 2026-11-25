@@ -11,7 +11,7 @@ files. Transformed TypeScript is parsed with the same parser the transformer
 uses, so blocks, closures, schemas, type positions and Common Fabric builders
 (pattern/lift/handler/…) are colored exactly as the compiler sees them.
 Markdown, JSON, JSONC, YAML, Python, Go, Swift, Kotlin, Rust, TOML, HCL,
-Starlark, Bazel rc, Lean, C, C++, CUDA, shell, makefile, Dockerfile, Java
+Starlark, Bazel rc, Lean, C, C++, CUDA, CSS, shell, makefile, Dockerfile, Java
 properties, INI, dotenv, Graphviz DOT, ProGuard, Git attributes, Git
 configuration, GNU linker script, XML, CSV, TSV, assembly and SQL files use
 syntax highlighting selected from language metadata, as do Go's 'go.mod',
