@@ -1632,6 +1632,33 @@ describe("piece pull materialization", () => {
       }),
     ).toThrow(/comments\.0\.author/);
 
+    // A link at a place the candidate cannot put a contract to, here below
+    // a field it types as text, is not known to be read as a value. The
+    // element keeps the proof without the policy, which this candidate
+    // passes: it only widens a field.
+    const widened = (schema: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        createdBy: authorWith({}),
+        comments: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { author: authorWith({}), body: schema },
+            required: ["body"],
+          },
+        },
+      },
+      required: ["comments"],
+    });
+    expect(
+      await overElement(
+        { author: ada, body: { deep: comment.key("body") } },
+        widened({ type: ["string", "number", "object"] }),
+        widened({ type: ["string", "object"] }),
+      ),
+    ).not.toThrow();
+
     // A position whose handle wrappers the candidate cannot settle is not
     // known to be read as a value.
     const eitherScope = (author: JSONSchema): JSONSchema =>
