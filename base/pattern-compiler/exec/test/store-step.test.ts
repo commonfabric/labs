@@ -162,6 +162,16 @@ describe("the store step of a result that holds a tree", () => {
     ]);
   });
 
+  it("registers the readers of labels for an append at as many positions at 10 items as at 100", async () => {
+    const [small, large] = [
+      (await started(10)).append(),
+      (await started(100)).append(),
+    ];
+
+    expect(large.recordRegistrations).toBe(small.recordRegistrations);
+    expect(large.recordsNoted).toBe(small.recordsNoted);
+  });
+
   it("forms again after an append the labels of the records that read a label that changed alone", async () => {
     const { append, relabeled } = await started(10);
     append();

@@ -1210,8 +1210,53 @@ type MemberGroups = {
   membership: number;
   /** The members that have a position in each document other than `doc`. */
   byDoc: Map<string, Set<string>>;
-  /** The records of outputs whose bindings name the container. */
-  records: Set<string>;
+  /**
+   * The sets of positions of the records of outputs whose bindings name
+   * the container.
+   */
+  records: Set<ReadSet>;
+};
+
+/**
+ * The positions that the inputs of records given to the transaction hooks
+ * read, with the keys of those records (`Instance.#noteRecord`): the
+ * records whose inputs hold equal content share one, which is registered
+ * once as a reader of its positions (`Instance.#recordReaders`).
+ */
+type ReadSet = {
+  /** What names the content: the instance and the number of the inputs. */
+  id: string;
+  /** The positions, by their text. */
+  positions: Map<string, Address>;
+  /**
+   * The folds over the elements of a collection whose groups the inputs
+   * read, each as the instance and the collection.
+   */
+  folds: Set<string>;
+  /** The tables of the groups of members of containers bindings name. */
+  groups: Set<MemberGroups>;
+  /** The keys of the records whose inputs these are. */
+  keys: Set<string>;
+};
+
+/** The sets of positions that read a path, and those of its children. */
+type RecordReaders = {
+  readers: Set<ReadSet>;
+  children: Map<string, RecordReaders>;
+};
+
+/**
+ * A record noted since the sets of positions were brought up to date: what
+ * names the content of its inputs, the instance, and the table and index
+ * of its inputs, or the positions of its own element where it names the
+ * inputs of another element.
+ */
+type PendingRead = {
+  id: string;
+  instance: string;
+  table: InputsTable;
+  inputs: number;
+  own?: Address[];
 };
 
 /**
@@ -4669,6 +4714,9 @@ export class Instance {
     this.#tx = undefined;
     this.store.journal = undefined;
     this.#transactions.push(open.record);
+    // The records the transaction gave read what its table of inputs
+    // names, which the next transaction replaces.
+    this.root.#flushReads();
     // What the hooks report of labels while they end the transaction is
     // what it stored, which the records it gave hold already.
     this.root.#ending = true;
@@ -11694,21 +11742,31 @@ export class Instance {
   }
 
   /**
-   * On the root: the records of outputs given to the transaction hooks, by
-   * what the inputs of each read: for each document, the paths read, each
-   * with the keys of the records that read it (`#recordKey`). A path may
-   * hold `*` at the position of an element.
+   * On the root: the sets of positions the inputs of the records given to
+   * the transaction hooks read, by what each read: for each document, the
+   * paths read, each with the sets that read it. A path may hold `*` at the
+   * position of an element.
    */
-  readonly #recordReaders = new Map<string, LabelReaders>();
+  readonly #recordReaders = new Map<string, RecordReaders>();
 
-  /** On the root: the positions each record in `#recordReaders` is at. */
-  readonly #recordReads = new Map<string, Address[]>();
+  /** On the root: each set of positions in `#recordReaders`, by its name. */
+  readonly #readSets = new Map<string, ReadSet>();
+
+  /** On the root: the set of positions each record's inputs read, by key. */
+  readonly #readSetOf = new Map<string, ReadSet>();
 
   /**
-   * On the root: the records whose template folds over the elements of a
-   * collection of an instance, by the instance and the collection.
+   * On the root: the records noted since the sets were last brought up to
+   * date (`#flushReads`), each with what names the content of its inputs
+   * and where to find them.
    */
-  readonly #recordFolds = new Map<string, Set<string>>();
+  readonly #pendingReads = new Map<string, PendingRead>();
+
+  /**
+   * On the root: the sets of positions whose inputs fold over the elements
+   * of a collection of an instance, by the instance and the collection.
+   */
+  readonly #recordFolds = new Map<string, Set<ReadSet>>();
 
   /**
    * On the root: the records whose inputs read a label that changed while
@@ -11746,36 +11804,191 @@ export class Instance {
   /**
    * On the root: keeps what the inputs of a record given for an output
    * read, in place of what the record given for it before read, so that a
-   * change of a label finds the records that read it.
+   * change of a label finds the records that read it. Records whose inputs
+   * hold equal content share one set of positions, registered once
+   * (`ReadSet`), and the sets are brought up to date when they are next
+   * asked for (`#flushReads`): a record whose inputs are those it had costs
+   * nothing more, and a set whose records all moved to other inputs is
+   * changed where the positions differ.
    */
   #noteRecord(key: string, instance: string, write: PlanWrite): void {
     this.counts.recordsNoted += 1;
     this.#givenNow.add(key);
     this.#relabels.delete(key);
-    this.#recordDigests.set(
-      key,
-      this.#digests.of(this.#inputsTable, write.inputs, write.keys),
+    const digest = this.#digests.of(
+      this.#inputsTable,
+      write.inputs,
+      write.keys,
     );
-    for (const { doc, path } of this.#recordReads.get(key) ?? []) {
-      let node = this.#recordReaders.get(doc);
-      for (const segment of path) node = node?.children.get(segment);
-      node?.readers.delete(key);
-      this.counts.recordRegistrations += 1;
+    this.#recordDigests.set(key, digest);
+    // A record that names the inputs of another element read its own
+    // element's positions, and none of that element's: a change of a label
+    // there changes the label of that element's record alone.
+    const own = this.#ownReads.get(key);
+    this.#ownReads.delete(key);
+    const id = own === undefined
+      ? `${instance}\n${digest}`
+      : `${instance}\nown ${JSON.stringify(own)}`;
+    if (this.#readSetOf.get(key)?.id === id) {
+      this.#pendingReads.delete(key);
+      return;
     }
-    const positions: Address[] = [];
-    const seen = new Set<string>();
+    this.#pendingReads.set(key, {
+      id,
+      instance,
+      table: this.#inputsTable,
+      inputs: write.inputs,
+      ...(own === undefined ? {} : { own }),
+    });
+  }
+
+  /**
+   * On the root: brings the sets of positions up to date with the records
+   * noted since (`#pendingReads`). The records that take inputs of one
+   * content share a set. A set none of whose records keeps its inputs, all
+   * of them taking the same new ones, is changed where the positions
+   * differ; any other new content gets a set of its own, and a set no
+   * record names any more is dropped.
+   */
+  #flushReads(): void {
+    if (this.#pendingReads.size === 0) return;
+    const byId = new Map<string, { pending: PendingRead; keys: string[] }>();
+    for (const [key, pending] of this.#pendingReads) {
+      const group = byId.get(pending.id);
+      if (group === undefined) byId.set(pending.id, { pending, keys: [key] });
+      else group.keys.push(key);
+    }
+    this.#pendingReads.clear();
+    for (const [id, { pending, keys }] of byId) {
+      let set = this.#readSets.get(id);
+      if (set === undefined) {
+        const read = this.#readsOf(pending);
+        // The number of each set's records that take these inputs.
+        const moving = new Map<ReadSet, number>();
+        for (const key of keys) {
+          const old = this.#readSetOf.get(key);
+          if (old !== undefined) moving.set(old, (moving.get(old) ?? 0) + 1);
+        }
+        set = [...moving].find(([old, count]) => old.keys.size === count)?.[0];
+        if (set === undefined) {
+          set = {
+            id,
+            positions: new Map(),
+            folds: new Set(),
+            groups: new Set(),
+            keys: new Set(),
+          };
+          this.#readSets.set(id, set);
+        }
+        this.#retarget(set, id, read);
+      }
+      for (const key of keys) {
+        const old = this.#readSetOf.get(key);
+        if (old === set) continue;
+        if (old !== undefined) {
+          old.keys.delete(key);
+          if (old.keys.size === 0) this.#dropReadSet(old);
+        }
+        set.keys.add(key);
+        this.#readSetOf.set(key, set);
+      }
+    }
+  }
+
+  /**
+   * On the root, helper for `#flushReads()`, which gives a set of positions
+   * the name `id` and what `read` holds, registering and unregistering it
+   * where the positions, the folds and the tables of member groups differ
+   * from those it held.
+   */
+  #retarget(
+    set: ReadSet,
+    id: string,
+    read: Pick<ReadSet, "positions" | "folds" | "groups">,
+  ): void {
+    if (this.#readSets.get(set.id) === set) this.#readSets.delete(set.id);
+    set.id = id;
+    this.#readSets.set(id, set);
+    for (const [text, address] of set.positions) {
+      if (!read.positions.has(text)) this.#readAt(set, address, false);
+    }
+    for (const [text, address] of read.positions) {
+      if (!set.positions.has(text)) this.#readAt(set, address, true);
+    }
+    set.positions = read.positions;
+    for (const fold of set.folds) {
+      if (!read.folds.has(fold)) this.#recordFolds.get(fold)?.delete(set);
+    }
+    for (const fold of read.folds) {
+      const held = this.#recordFolds.get(fold) ?? new Set();
+      held.add(set);
+      this.#recordFolds.set(fold, held);
+    }
+    set.folds = read.folds;
+    for (const groups of set.groups) {
+      if (!read.groups.has(groups)) groups.records.delete(set);
+    }
+    for (const groups of read.groups) groups.records.add(set);
+    set.groups = read.groups;
+  }
+
+  /** On the root: forgets a set of positions no record names any more. */
+  #dropReadSet(set: ReadSet): void {
+    this.#retarget(set, set.id, {
+      positions: new Map(),
+      folds: new Set(),
+      groups: new Set(),
+    });
+    this.#readSets.delete(set.id);
+  }
+
+  /**
+   * On the root: registers `set` as a reader of the position `address`, or
+   * unregisters it where `add` is false.
+   */
+  #readAt(set: ReadSet, { doc, path }: Address, add: boolean): void {
+    this.counts.recordRegistrations += 1;
+    const held = this.#recordReaders.get(doc);
+    if (held === undefined && !add) return;
+    let node: RecordReaders = held ??
+      { readers: new Set(), children: new Map() };
+    if (held === undefined) this.#recordReaders.set(doc, node);
+    for (const segment of path) {
+      const child = node.children.get(segment);
+      if (child !== undefined) {
+        node = child;
+        continue;
+      }
+      if (!add) return;
+      const made: RecordReaders = { readers: new Set(), children: new Map() };
+      node.children.set(segment, made);
+      node = made;
+    }
+    if (add) node.readers.add(set);
+    else node.readers.delete(set);
+  }
+
+  /**
+   * On the root: what the inputs of a noted record read: each position, by
+   * its text, the folds over the elements of a collection it reads the
+   * groups of, and the tables of the groups of members of the containers
+   * its bindings name.
+   */
+  #readsOf(
+    pending: PendingRead,
+  ): Pick<ReadSet, "positions" | "folds" | "groups"> {
+    const positions = new Map<string, Address>();
+    const folds = new Set<string>();
+    const groups = new Set<MemberGroups>();
     const read = (address: Address) => {
-      const id = JSON.stringify([address.doc, address.path]);
-      if (seen.has(id)) return;
-      seen.add(id);
-      positions.push(address);
+      const text = JSON.stringify([address.doc, address.path]);
+      if (!positions.has(text)) positions.set(text, address);
     };
-    for (const groups of this.#recordGroups.get(key) ?? []) {
-      groups.records.delete(key);
+    if (pending.own !== undefined) {
+      for (const address of pending.own) read(address);
+      return { positions, folds, groups };
     }
-    const reading = new Set<MemberGroups>();
-    this.#recordGroups.set(key, reading);
-    const table = this.#inputsTable;
+    const { table, instance } = pending;
     const bindings = (slots: SlotBindings) => {
       for (const at of Object.values(slots)) {
         const binding = table.bindings[at];
@@ -11788,13 +12001,11 @@ export class Instance {
         // table of the container's groups finds.
         for (const { container } of binding.members ?? []) {
           for (
-            const groups of this.#memberGroupsAt.get(
+            const table of this.#memberGroupsAt.get(
               memberGroupsPlace(container.doc, container.path),
             ) ?? []
           ) {
-            if (groups.observes !== binding.observes) continue;
-            groups.records.add(key);
-            reading.add(groups);
+            if (table.observes === binding.observes) groups.add(table);
           }
         }
         for (const address of binding.chain) read(address);
@@ -11822,37 +12033,24 @@ export class Instance {
         // A `fold` that is given no element reads no group of the
         // collection (`#heldByReference`).
         if ("groups" in elements && elements.groups.length === 0) continue;
-        const folds = `${instance}\n${collection}`;
-        const held = this.#recordFolds.get(folds) ?? new Set();
-        held.add(key);
-        this.#recordFolds.set(folds, held);
+        folds.add(`${instance}\n${collection}`);
         if ("uniform" in elements) visit(elements.uniform);
         else for (const group of elements.groups) visit(group.inputs);
       }
       for (const inputs of Object.values(place.outputs ?? {})) visit(inputs);
     };
-    // A record that names the inputs of another element read its own
-    // element's positions, and none of that element's: a change of a label
-    // there changes the label of that element's record alone.
-    const own = this.#ownReads.get(key);
-    this.#ownReads.delete(key);
-    if (own === undefined) visit(write.inputs);
-    else for (const address of own) read(address);
-    this.#recordReads.set(key, positions);
-    this.counts.recordRegistrations += positions.length;
-    for (const { doc, path } of positions) {
-      const root: LabelReaders = this.#recordReaders.get(doc) ??
-        { readers: new Set(), children: new Map() };
-      this.#recordReaders.set(doc, root);
-      let node = root;
-      for (const segment of path) {
-        const child: LabelReaders = node.children.get(segment) ??
-          { readers: new Set(), children: new Map() };
-        node.children.set(segment, child);
-        node = child;
-      }
-      node.readers.add(key);
-    }
+    visit(pending.inputs);
+    return { positions, folds, groups };
+  }
+
+  /**
+   * On the root: the positions the inputs of the record of `key` read, as
+   * the records noted so far have them.
+   */
+  #readsOfRecord(key: string): Address[] | undefined {
+    this.#flushReads();
+    const set = this.#readSetOf.get(key);
+    return set === undefined ? undefined : [...set.positions.values()];
   }
 
   /**
@@ -11862,17 +12060,18 @@ export class Instance {
    * position a record read there.
    */
   #recordsReading(changes: readonly LabelChange[]): Set<string> {
-    const found = new Set<string>();
-    const collect = (node: LabelReaders) => {
-      for (const reader of node.readers) found.add(reader);
+    this.#flushReads();
+    const sets = new Set<ReadSet>();
+    const collect = (node: RecordReaders) => {
+      for (const reader of node.readers) sets.add(reader);
       for (const child of node.children.values()) collect(child);
     };
-    const walk = (node: LabelReaders, rest: readonly string[]) => {
+    const walk = (node: RecordReaders, rest: readonly string[]) => {
       if (rest.length === 0) {
         collect(node);
         return;
       }
-      for (const reader of node.readers) found.add(reader);
+      for (const reader of node.readers) sets.add(reader);
       const [segment, ...more] = rest;
       if (segment === "*") {
         for (const child of node.children.values()) walk(child, more);
@@ -11888,6 +12087,8 @@ export class Instance {
       if (root === undefined) continue;
       for (const path of paths) walk(root, path);
     }
+    const found = new Set<string>();
+    for (const set of sets) for (const key of set.keys) found.add(key);
     return found;
   }
 
@@ -11898,7 +12099,7 @@ export class Instance {
    * (`LabelChange.unchanged`), and at a path that names every element.
    */
   #readsChangedLabel(key: string, changes: readonly LabelChange[]): boolean {
-    const read = this.#recordReads.get(key) ?? [];
+    const read = this.#readsOfRecord(key) ?? [];
     for (const { doc, unchanged } of changes) {
       for (const position of read) {
         if (position.doc !== doc) continue;
@@ -11978,7 +12179,7 @@ export class Instance {
     this.#createdStale.delete(key);
     this.#noteRecord(key, instance.id, writes[0]);
     created.labels = instance.#labelsRead(
-      this.#recordReads.get(key) ?? [],
+      this.#readsOfRecord(key) ?? [],
       undefined,
       undefined,
       true,
@@ -12657,7 +12858,7 @@ export class Instance {
     const before = root.#createdRows.get(key);
     const relabeling = root.#relabels.has(key);
     const stale = root.#createdStale.delete(key) || relabeling;
-    const readBefore = root.#recordReads.get(key);
+    const readBefore = root.#readsOfRecord(key);
     // The rows are readers of the labels of what the body read, as the
     // record of an output is.
     root.#noteRecord(key, this.id, {
@@ -12665,7 +12866,7 @@ export class Instance {
       record,
       ...inputs,
     });
-    const read = root.#recordReads.get(key) ?? [];
+    const read = root.#readsOfRecord(key) ?? [];
     const labels = this.#labelsRead(read, readBefore, before?.labels, stale);
     // Every row has the label of everything the body read. Where that is
     // the label the rows were last given, a row that holds what it held
@@ -13111,6 +13312,9 @@ export class Instance {
     stored = false,
   ): void {
     this.#evaluateStoredReaders(changes.map(({ doc }) => doc));
+    // The folds and the tables of member groups below name the sets of
+    // positions as the records noted so far have them.
+    this.#flushReads();
     const regrouped = new Set<string>();
     for (const instance of new Set([this, ...this.#instances.values()])) {
       for (const key of instance.#regroupReaders(changes)) regrouped.add(key);
@@ -13186,10 +13390,12 @@ export class Instance {
       // label they were given.
       if (!this.#regroupKey(at.collection, at.around, at.key)) continue;
       for (
-        const key of this.root.#recordFolds.get(
+        const set of this.root.#recordFolds.get(
           `${this.id}\n${at.collection}`,
         ) ?? []
-      ) regrouped.add(key);
+      ) {
+        for (const key of set.keys) regrouped.add(key);
+      }
     }
     return regrouped;
   }
@@ -13674,8 +13880,6 @@ export class Instance {
    * container or one a member's link leads to.
    */
   readonly #memberGroupsOf = new Map<string, Set<MemberGroups>>();
-  /** On the root: the tables each record of an output reads. */
-  readonly #recordGroups = new Map<string, Set<MemberGroups>>();
 
   /**
    * What a read of the class `observes` that went through `addresses`
@@ -14080,7 +14284,9 @@ export class Instance {
         !covers || table.unknown.size !== unknown ||
         canonical([...table.groups.keys()].sort()) !== before
       ) {
-        for (const key of table.records) found.add(key);
+        for (const set of table.records) {
+          for (const key of set.keys) found.add(key);
+        }
       }
     }
     return found;
