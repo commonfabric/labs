@@ -2605,9 +2605,10 @@ function provePreservedContracts(
 }
 
 /**
- * The most links {@link holdsOwnPlainInput} follows from one element. An
- * element that links into another is one deep; the bound ends a chain a write
- * built on purpose.
+ * The most documents {@link holdsOwnPlainInput} reads on the way from one
+ * element to a value, the element among them and every document that only
+ * links on. An element that links into another reads two; the bound ends a
+ * chain a write built on purpose.
  */
 const MAX_OWN_INPUT_DEPTH = 8;
 
@@ -2658,7 +2659,8 @@ function carriesPieceMetadata(
  * the candidate reads as a value, which `readsAsValue` decides from the path
  * below the link being proved. Setup reads only the top level behind a
  * position typed as a cell handle. Links that lead back to a value on the
- * way to itself reach nothing for setup to read.
+ * way to itself reach nothing for setup to read. No more than
+ * {@link MAX_OWN_INPUT_DEPTH} documents are read on the way to any one value.
  */
 function holdsOwnPlainInput(
   linkedCell: Cell<unknown>,
@@ -2679,12 +2681,17 @@ function holdsOwnPlainInput(
     path: readonly (string | number)[],
     depth: number,
   ): boolean => {
-    const read = readStoredLinkChainRaw(tx, start, new Set(), ownPlainDocument);
+    // Every document on the way counts against the bound, and the reader
+    // asks before each one, so the count is kept where it asks.
+    let read = depth;
+    const within = (link: NormalizedFullLink) =>
+      ++read <= MAX_OWN_INPUT_DEPTH && ownPlainDocument(link);
+    const reached = readStoredLinkChainRaw(tx, start, new Set(), within);
     if (
-      read.outside === true || read.cyclic === true ||
-      read.value === undefined
+      reached.outside === true || reached.cyclic === true ||
+      reached.value === undefined
     ) return false;
-    const at = read.base;
+    const at = reached.base;
     const key = JSON.stringify([at.id, at.path, path]);
     if (reading.has(key)) return false;
     if (judged.has(key)) return true;
@@ -2694,11 +2701,9 @@ function holdsOwnPlainInput(
       undefined,
       tx,
     );
-    for (const nested of suppliedLinks(read.value)) {
+    for (const nested of suppliedLinks(reached.value)) {
       const nestedPath = [...path, ...nested.path];
-      if (depth === MAX_OWN_INPUT_DEPTH || !readsAsValue(nestedPath)) {
-        return false;
-      }
+      if (!readsAsValue(nestedPath)) return false;
       let from = holder;
       for (const segment of nested.path) {
         from = from.key(segment as keyof unknown) as Cell<unknown>;
@@ -2713,7 +2718,7 @@ function holdsOwnPlainInput(
       } catch {
         return false;
       }
-      if (!plain(target, nestedPath, depth + 1)) return false;
+      if (!plain(target, nestedPath, read)) return false;
     }
     reading.delete(key);
     judged.add(key);
@@ -2913,43 +2918,6 @@ export function assertSuppliedLinkSchemasCompatible(
         displayPath,
       );
     }
-    // A metadata-less document is held to the piece's prior input contract,
-    // so the proof below compares that contract with the candidate's at this
-    // path. Where the link is also the one already committed, at a position
-    // the candidate reads as a value, and what it reaches is the piece's own
-    // plain input one hop away, the update judges that input as it judges
-    // the same value written inline: under the piece-evolution policy. A link
-    // staged by this update, or one a caller rebuilds, is a new binding and
-    // keeps the proof without it, as does a handle and anything setup's
-    // validation of the stored input does not read in full.
-    const pieceEvolution = heldToPriorContract &&
-      targetOuter === undefined &&
-      options.linksPreservedVerbatim === true &&
-      options.destinationIsStream !== true &&
-      linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
-      holdsOwnPlainInput(linkedCell, baseCell, pieces, (below) => {
-        // A position the candidate reads as a value localizes without an
-        // issue and has no outer Cell wrapper. One whose wrappers it cannot
-        // settle, or that it cannot place, is not known to be read as a
-        // value.
-        try {
-          const localized = localizeUniformOuter(
-            deriveTargetContracts(
-              destinationSchema,
-              options.destinationRoot ?? destinationSchema,
-              false,
-              basePath,
-              [...suppliedLink.path, ...below],
-              displayPath,
-            ),
-            "destination Cell constraints disagree",
-          );
-          return localized.issue === undefined &&
-            localized.outer === undefined;
-        } catch {
-          return false;
-        }
-      });
     if (preservedOuter === undefined) {
       // When the contract is also unchanged, the proof can only refuse what
       // new-link default insertion refuses, and a link carried over byte for
@@ -2966,6 +2934,45 @@ export function assertSuppliedLinkSchemasCompatible(
           targetContracts,
         )
       ) continue;
+      // A metadata-less document is held to the piece's prior input contract,
+      // so the proof below compares that contract with the candidate's at this
+      // path. Where the link is also the one already committed, at a position
+      // the candidate reads as a value, and what it reaches is the piece's own
+      // plain input one hop away, the update judges that input as it judges the
+      // same value written inline: under the piece-evolution policy. A link
+      // staged by this update, or one a caller rebuilds, is a new binding and
+      // keeps the proof without it, as does a handle and anything setup's
+      // validation of the stored input does not read in full. This is decided
+      // only here, past the unchanged-contract case above, since deciding it
+      // reads what the link reaches.
+      const pieceEvolution = heldToPriorContract &&
+        targetOuter === undefined &&
+        options.linksPreservedVerbatim === true &&
+        options.destinationIsStream !== true &&
+        linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
+        holdsOwnPlainInput(linkedCell, baseCell, pieces, (below) => {
+          // A position the candidate reads as a value localizes without an
+          // issue and has no outer Cell wrapper. One whose wrappers it cannot
+          // settle, or that it cannot place, is not known to be read as a
+          // value.
+          try {
+            const localized = localizeUniformOuter(
+              deriveTargetContracts(
+                destinationSchema,
+                options.destinationRoot ?? destinationSchema,
+                false,
+                basePath,
+                [...suppliedLink.path, ...below],
+                displayPath,
+              ),
+              "destination Cell constraints disagree",
+            );
+            return localized.issue === undefined &&
+              localized.outer === undefined;
+          } catch {
+            return false;
+          }
+        });
       proveRebuiltContracts(
         sourceContracts,
         targetContracts,

@@ -1604,6 +1604,38 @@ describe("piece pull materialization", () => {
       ),
     ).toThrow(/comments\.0\.author\.pictureBlob/);
 
+    // The documents read on the way to a value are bounded, and a chain of
+    // documents that each only link on counts every one of them. Eight are
+    // read: the element, six that link on, and the comment at the end. One
+    // more and the element keeps the proof without the policy.
+    const aliased = async (aliases: number) => {
+      let target = comment as Cell<unknown>;
+      for (let index = 0; index < aliases; index++) {
+        const alias = runtime.getCell(
+          pieces.getSpace(),
+          "alias-comment-" + crypto.randomUUID(),
+        ) as Cell<unknown>;
+        const next = target;
+        await runtime.editWithRetry((tx) => {
+          alias.withTx(tx).set(next);
+        });
+        target = alias;
+      }
+      return target;
+    };
+    expect(
+      await overElement({
+        author: (await aliased(6)).key("author" as never),
+        body: "x",
+      }),
+    ).not.toThrow();
+    expect(
+      await overElement({
+        author: (await aliased(7)).key("author" as never),
+        body: "x",
+      }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
     // A path that starts in the piece's own data can cross a link partway
     // into a document in another space. Setup reads one document at a time
     // and stops there, so the element is not read in full.
